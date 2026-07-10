@@ -1,0 +1,39 @@
+// Main module - demonstrates module system
+
+import graphics
+import input
+
+let screen: Screen = null
+let keyboard: Keyboard = null
+
+func print(msg: char*) {
+    if screen != null {
+        screen.write(msg)
+    }
+}
+
+func kernel_main() {
+    // Initialize graphics
+    let color: char = 15  // White on black
+    screen = new Screen(color)
+    screen.clear()
+
+    // Initialize keyboard
+    keyboard = new Keyboard()
+
+    // Print welcome message
+    print("LLPL Kernel v0.2 - 64-bit with Modules\n")
+    print("======================================\n")
+    print("\n")
+    print("Module system features:\n")
+    print("  - Multiple file imports\n")
+    print("  - Circular dependency support\n")
+    print("  - Automatic dependency resolution\n")
+    print("\n")
+    print("System ready.\n")
+
+    // Infinite loop
+    while true {
+        // Nothing
+    }
+}

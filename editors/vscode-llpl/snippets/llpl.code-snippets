@@ -1,0 +1,96 @@
+{
+    "Function": {
+        "prefix": "func",
+        "body": [
+            "func ${1:name}(${2:param}: ${3:int}) -> ${4:int} {",
+            "\t$0",
+            "\treturn 0",
+            "}"
+        ],
+        "description": "Function declaration"
+    },
+    "Class": {
+        "prefix": "class",
+        "body": [
+            "class ${1:Name} {",
+            "\tlet ${2:field}: ${3:int}",
+            "",
+            "\tconstructor(${2:field}: ${3:int}) {",
+            "\t\tself.${2:field} = ${2:field}",
+            "\t}",
+            "",
+            "\tdestructor() {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Class with constructor and destructor"
+    },
+    "Namespace": {
+        "prefix": "namespace",
+        "body": [
+            "namespace ${1:Name} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Namespace block"
+    },
+    "If": {
+        "prefix": "if",
+        "body": [
+            "if ${1:condition} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "If statement"
+    },
+    "If Else": {
+        "prefix": "ifelse",
+        "body": [
+            "if ${1:condition} {",
+            "\t$2",
+            "} else {",
+            "\t$0",
+            "}"
+        ],
+        "description": "If/else statement"
+    },
+    "While": {
+        "prefix": "while",
+        "body": [
+            "while ${1:condition} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "While loop"
+    },
+    "For": {
+        "prefix": "for",
+        "body": [
+            "for let ${1:i}: int = 0, ${1:i} < ${2:count}, ${1:i} = ${1:i} + 1 {",
+            "\t$0",
+            "}"
+        ],
+        "description": "For loop"
+    },
+    "Extern Function": {
+        "prefix": "extern",
+        "body": "extern func ${1:name}(${2:param}: ${3:int}) -> ${4:void}",
+        "description": "Extern function declaration"
+    },
+    "Import": {
+        "prefix": "import",
+        "body": "import \"${1:module}.llpl\"",
+        "description": "Import a module"
+    },
+    "Inline Asm": {
+        "prefix": "asm",
+        "body": "asm(\"${1:instruction}\" : ${2:\"=r\"(output)} : ${3:\"r\"(input)})",
+        "description": "Inline assembly (GCC extended-asm style)"
+    },
+    "Bitfield": {
+        "prefix": "bitfield",
+        "body": "let ${1:name}: ${2:uint32} : ${3:1}",
+        "description": "Class field with a bit-field width"
+    }
+}

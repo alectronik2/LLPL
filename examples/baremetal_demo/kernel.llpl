@@ -1,0 +1,90 @@
+// Bare-metal demo: modules + namespaces + inline asm + structs + interrupts
+// + vararg logging, all authored in LLPL.
+//
+//   - modules:     imports hal, console, gdt and idt
+//   - namespaces:  HAL, HAL.Serial, HAL.Pic, HAL.Log (nested), GDT, IDT, Console
+//   - inline asm:  port I/O, cli/sti/hlt, lgdt/lidt, and the CS far-return
+//                  reload are all direct asm() blocks
+//   - structs:     packed value types (GDT.Entry, IDT.Entry, ...) give the
+//                  exact byte layout the CPU expects for descriptor tables
+//   - interrupts:  `interrupt func` handlers compile to GCC's
+//                  __attribute__((interrupt)), returning via iretq
+//   - varargs:     HAL.Log.ksnprintf is a real vararg extern func, backed by
+//                  the runtime's printf-style formatter (runtime/runtime.c)
+//   - alias:       `logf` below is a short name for HAL.Log.ksnprintf,
+//                  resolved to a #define so it works for a vararg function
+
+import hal
+import console
+import gdt
+import idt
+
+alias logf = HAL.Log.ksnprintf
+
+let screen: Console.Screen = null
+
+func print(msg: char*) {
+    if screen != null {
+        screen.write(msg)
+    }
+}
+
+func kernel_main() {
+    HAL.disable_interrupts()
+    HAL.Serial.init()
+
+    let color: char = 15 // white on black
+    screen = new Console.Screen(color)
+    screen.clear()
+
+    print("LLPL Bare-Metal Demo\n")
+    print("=====================\n")
+    print("\n")
+    print("namespace HAL      -> inline asm (outb/inb/cli/sti/hlt)\n")
+    print("namespace HAL.Serial -> nested namespace, built on HAL\n")
+    print("namespace HAL.Pic  -> 8259 PIC remap/EOI\n")
+    print("namespace GDT      -> packed structs + lgdt + CS reload\n")
+    print("namespace IDT      -> packed structs + lidt + interrupt func\n")
+    print("namespace Console  -> VGA text output, its own module\n")
+    print("\n")
+
+    HAL.Serial.write("Loading a fresh GDT from LLPL...\n")
+    GDT.init()
+    logf(HAL.Log.buffer as char*, 128,
+        "GDT reloaded: base=0x%x limit=%d\n", GDT.pointer.base, GDT.pointer.limit as int)
+    print(HAL.Log.buffer as char*)
+
+    HAL.Serial.write("Installing IDT and remapping the PIC...\n")
+    HAL.Pic.remap(0x20, 0x28) // move IRQ0-15 to vectors 0x20-0x2F
+    IDT.init()
+    print("IDT installed.\n")
+
+    print("\n")
+    print("Triggering a breakpoint exception (int3)...\n")
+    asm("int3")
+    print("...resumed after the fault handler returned via iretq.\n")
+
+    print("\n")
+    print("Enabling interrupts and waiting for timer ticks...\n")
+    HAL.Pic.unmask_irq0()
+    HAL.enable_interrupts()
+
+    let last_reported: uint = 0
+    while timer_ticks < 3 {
+        HAL.halt()
+        if timer_ticks != last_reported {
+            last_reported = timer_ticks
+            logf(HAL.Log.buffer as char*, 128, "  tick %d\n", last_reported as int)
+            print(HAL.Log.buffer as char*)
+            HAL.Log.flush()
+        }
+    }
+
+    HAL.disable_interrupts()
+    print("\n")
+    print("Timer interrupts confirmed working. System halted safely.\n")
+
+    while true {
+        HAL.halt()
+    }
+}

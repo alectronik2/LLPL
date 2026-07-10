@@ -1,0 +1,14 @@
+{
+    "name": "llpl",
+    "description": "Low Level Programming Language - Swift/JS-like syntax compiling to bare metal",
+    "authors": ["LLPL Team"],
+    "license": "MIT",
+    "targetType": "executable",
+    "mainSourceFile": "source/main.d",
+    "sourcePaths": ["source"],
+    "buildTypes": {
+        "release": {
+            "buildOptions": ["releaseMode", "optimize", "inline"]
+        }
+    }
+}

@@ -1,0 +1,76 @@
+// GDT (Global Descriptor Table) module.
+//
+// boot64.asm already installs a minimal GDT to get the CPU into long mode.
+// This module defines and loads a fresh one entirely from LLPL, to
+// demonstrate `packed struct` (the exact hardware byte layout the CPU reads
+// via `lgdt`) together with inline asm for `lgdt` and the far-return CS
+// reload every OS needs after replacing the descriptor table.
+
+namespace GDT {
+    // One 8-byte GDT descriptor. `packed` is essential here: without it the
+    // compiler could insert padding and the CPU would read garbage.
+    packed struct Entry {
+        let limit_low: uint16
+        let base_low: uint16
+        let base_mid: char
+        let access: char
+        let granularity: char
+        let base_high: char
+    }
+
+    // The 10-byte operand `lgdt`/`sgdt` read/write directly. `packed` is
+    // required here too: a bare uint16 followed by a uint would otherwise be
+    // padded to put the uint on an 8-byte boundary, breaking the layout.
+    packed struct Pointer {
+        let limit: uint16
+        let base: uint
+    }
+
+    let entries: Entry[3]
+    let pointer: Pointer
+
+    func set_entry(index: int, limit_low: uint16, base_low: uint16, base_mid: char,
+                    access: char, granularity: char, base_high: char) {
+        entries[index].limit_low = limit_low
+        entries[index].base_low = base_low
+        entries[index].base_mid = base_mid
+        entries[index].access = access
+        entries[index].granularity = granularity
+        entries[index].base_high = base_high
+    }
+
+    func init() {
+        set_entry(0, 0, 0, 0, 0, 0, 0)           // null descriptor
+        set_entry(1, 0xFFFF, 0, 0, 0x9A, 0xAF, 0) // 64-bit code segment, selector 0x08
+        set_entry(2, 0xFFFF, 0, 0, 0x92, 0xCF, 0) // 64-bit data segment, selector 0x10
+
+        pointer.limit = (3 * 8) - 1
+        pointer.base = entries as uint
+
+        asm("lgdt (%0)" : : "r"(&pointer))
+        reload_segments()
+    }
+
+    // After `lgdt`, the CPU keeps using its cached CS descriptor until an
+    // explicit segment reload (far jump/call/return). `target_%=` is a
+    // GCC-assigned unique label name so this asm block is safe to inline
+    // even if another one elsewhere also needs a local label.
+    func reload_segments() {
+        // Note: the "i" constraint already prints its own "$" prefix, so the
+        // template references %0 directly rather than writing "$%0".
+        asm("pushq %0"
+            "leaq target_%=(%%rip), %%rax"
+            "pushq %%rax"
+            "lretq"
+            "target_%=:"
+            : : "i"(0x08) : "rax")
+
+        asm("movw %0, %%ax"
+            "movw %%ax, %%ds"
+            "movw %%ax, %%es"
+            "movw %%ax, %%fs"
+            "movw %%ax, %%gs"
+            "movw %%ax, %%ss"
+            : : "i"(0x10) : "ax")
+    }
+}

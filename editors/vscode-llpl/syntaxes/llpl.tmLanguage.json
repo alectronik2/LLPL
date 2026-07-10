@@ -1,0 +1,272 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "LLPL",
+    "scopeName": "source.llpl",
+    "fileTypes": ["llpl"],
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#namespace-declaration" },
+        { "include": "#class-declaration" },
+        { "include": "#function-declaration" },
+        { "include": "#control-keywords" },
+        { "include": "#other-keywords" },
+        { "include": "#asm-statement" },
+        { "include": "#asm-keyword" },
+        { "include": "#language-constants" },
+        { "include": "#self-variable" },
+        { "include": "#type-annotation" },
+        { "include": "#return-type" },
+        { "include": "#new-expression" },
+        { "include": "#as-expression" },
+        { "include": "#primitive-types" },
+        { "include": "#function-call" },
+        { "include": "#member-access" },
+        { "include": "#operators" },
+        { "include": "#punctuation" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.block.llpl",
+                    "begin": "/\\*",
+                    "end": "\\*/"
+                },
+                {
+                    "name": "comment.line.double-slash.llpl",
+                    "begin": "//",
+                    "end": "$"
+                }
+            ]
+        },
+        "strings": {
+            "name": "string.quoted.double.llpl",
+            "begin": "\"",
+            "end": "\"",
+            "patterns": [
+                {
+                    "name": "constant.character.escape.llpl",
+                    "match": "\\\\[nrt0\\\\\"]"
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.hex.llpl",
+                    "match": "\\b0[xX][0-9a-fA-F]+\\b"
+                },
+                {
+                    "name": "constant.numeric.binary.llpl",
+                    "match": "\\b0[bB][01]+\\b"
+                },
+                {
+                    "name": "constant.numeric.octal.llpl",
+                    "match": "\\b0[oO][0-7]+\\b"
+                },
+                {
+                    "name": "constant.numeric.decimal.llpl",
+                    "match": "\\b[0-9]+\\b"
+                }
+            ]
+        },
+        "namespace-declaration": {
+            "match": "\\b(namespace)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.namespace.llpl" },
+                "2": { "name": "entity.name.namespace.llpl" }
+            }
+        },
+        "class-declaration": {
+            "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.class.llpl" },
+                "2": { "name": "entity.name.class.llpl" }
+            }
+        },
+        "function-declaration": {
+            "match": "\\b(func)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.function.llpl" },
+                "2": { "name": "entity.name.function.llpl" }
+            }
+        },
+        "control-keywords": {
+            "match": "\\b(if|else|while|for|return|defer)\\b",
+            "name": "keyword.control.llpl"
+        },
+        "other-keywords": {
+            "match": "\\b(import|let|const|extern|constructor|destructor)\\b",
+            "name": "keyword.other.llpl"
+        },
+        "asm-keyword": {
+            "match": "\\basm\\b",
+            "name": "keyword.other.asm.llpl support.function.asm.llpl"
+        },
+        "asm-statement": {
+            "comment": "asm(\"template\" : outputs : inputs : clobbers) - owns everything through its matching close-paren so the ':' section separators aren't misread as type annotations.",
+            "name": "meta.asm.llpl",
+            "begin": "\\b(asm)\\b\\s*(?=\\()",
+            "beginCaptures": {
+                "1": { "name": "keyword.other.asm.llpl support.function.asm.llpl" }
+            },
+            "end": "(?<=\\))",
+            "patterns": [
+                { "include": "#asm-parens" }
+            ]
+        },
+        "asm-parens": {
+            "begin": "\\(",
+            "beginCaptures": {
+                "0": { "name": "punctuation.definition.parameters.begin.llpl" }
+            },
+            "end": "\\)",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.parameters.end.llpl" }
+            },
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#strings" },
+                { "include": "#numbers" },
+                { "include": "#self-variable" },
+                {
+                    "match": ":",
+                    "name": "punctuation.separator.asm.llpl"
+                },
+                {
+                    "match": ",",
+                    "name": "punctuation.separator.comma.llpl"
+                },
+                { "include": "#member-access" },
+                { "include": "#function-call" },
+                { "include": "#operators" },
+                { "include": "#asm-parens" },
+                {
+                    "match": "[A-Za-z_][A-Za-z0-9_]*",
+                    "name": "variable.other.llpl"
+                }
+            ]
+        },
+        "language-constants": {
+            "match": "\\b(true|false|null)\\b",
+            "name": "constant.language.llpl"
+        },
+        "self-variable": {
+            "match": "\\bself\\b",
+            "name": "variable.language.self.llpl"
+        },
+        "primitive-types": {
+            "match": "\\b(int|uint|int16|uint16|int32|uint32|char|bool|void)\\b",
+            "name": "storage.type.primitive.llpl"
+        },
+        "type-name": {
+            "patterns": [
+                {
+                    "match": "\\b(int|uint|int16|uint16|int32|uint32|char|bool|void)\\b",
+                    "name": "storage.type.primitive.llpl"
+                },
+                {
+                    "match": "[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*",
+                    "name": "entity.name.type.llpl"
+                },
+                {
+                    "match": "\\*",
+                    "name": "keyword.operator.pointer.llpl"
+                },
+                {
+                    "match": "\\[|\\]",
+                    "name": "punctuation.definition.array.llpl"
+                },
+                {
+                    "match": "(:)\\s*([0-9]+)",
+                    "captures": {
+                        "1": { "name": "punctuation.separator.bitfield.llpl" },
+                        "2": { "name": "constant.numeric.decimal.llpl" }
+                    }
+                }
+            ]
+        },
+        "type-annotation": {
+            "begin": "(:)(?!:)\\s*",
+            "beginCaptures": {
+                "1": { "name": "punctuation.separator.annotation.llpl" }
+            },
+            "end": "(?=[,\\)\\{=;\\n]|$)",
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#type-name" }
+            ]
+        },
+        "return-type": {
+            "begin": "(->)\\s*",
+            "beginCaptures": {
+                "1": { "name": "keyword.operator.arrow.llpl" }
+            },
+            "end": "(?=[\\{;\\n]|$)",
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#type-name" }
+            ]
+        },
+        "new-expression": {
+            "match": "\\b(new)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.new.llpl" },
+                "2": { "name": "entity.name.type.llpl" }
+            }
+        },
+        "as-expression": {
+            "match": "\\b(as)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)(\\*)?",
+            "captures": {
+                "1": { "name": "keyword.other.as.llpl" },
+                "2": { "name": "storage.type.primitive.llpl entity.name.type.llpl" },
+                "3": { "name": "keyword.operator.pointer.llpl" }
+            }
+        },
+        "function-call": {
+            "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+            "name": "entity.name.function.call.llpl"
+        },
+        "member-access": {
+            "match": "(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b(?!\\s*\\()",
+            "captures": {
+                "1": { "name": "punctuation.accessor.llpl" },
+                "2": { "name": "variable.other.property.llpl" }
+            }
+        },
+        "operators": {
+            "match": "(==|!=|<=|>=|&&|\\|\\||<<|>>|->|[+\\-*/%=<>!&|^~])",
+            "name": "keyword.operator.llpl"
+        },
+        "punctuation": {
+            "patterns": [
+                {
+                    "match": "[{}]",
+                    "name": "punctuation.definition.block.llpl"
+                },
+                {
+                    "match": "[\\[\\]]",
+                    "name": "punctuation.definition.array.llpl"
+                },
+                {
+                    "match": "[()]",
+                    "name": "punctuation.definition.parameters.llpl"
+                },
+                {
+                    "match": ",",
+                    "name": "punctuation.separator.comma.llpl"
+                },
+                {
+                    "match": ":",
+                    "name": "punctuation.separator.colon.llpl"
+                },
+                {
+                    "match": "\\.",
+                    "name": "punctuation.accessor.llpl"
+                }
+            ]
+        }
+    }
+}

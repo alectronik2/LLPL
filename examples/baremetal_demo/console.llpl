@@ -1,0 +1,74 @@
+// Console module - VGA text-mode output.
+//
+// Kept independent of the HAL module (it just writes to the memory-mapped
+// VGA buffer) to show that modules and namespaces compose freely: kernel.llpl
+// imports this alongside hal.llpl and uses both without them knowing about
+// each other.
+
+namespace Console {
+    let VGA_BUFFER: uint = 753664 // 0xB8000
+    let VGA_WIDTH: int = 80
+    let VGA_HEIGHT: int = 25
+
+    class Screen {
+        let row: int
+        let col: int
+        let color: char
+
+        constructor(color: char) {
+            self.row = 0
+            self.col = 0
+            self.color = color
+        }
+
+        destructor() {
+            // Nothing to clean up
+        }
+
+        func clear() {
+            let buffer: char* = VGA_BUFFER as char*
+            let total: int = VGA_WIDTH * VGA_HEIGHT * 2
+            for let i: int = 0, i < total, i = i + 2 {
+                buffer[i] = 0
+                buffer[i + 1] = self.color
+            }
+            self.row = 0
+            self.col = 0
+        }
+
+        func putchar(c: char) {
+            if c == 10 {
+                self.newline()
+                return
+            }
+
+            if self.col >= VGA_WIDTH {
+                self.newline()
+            }
+
+            let buffer: char* = VGA_BUFFER as char*
+            let index: int = (self.row * VGA_WIDTH + self.col) * 2
+
+            buffer[index] = c
+            buffer[index + 1] = self.color
+
+            self.col = self.col + 1
+        }
+
+        func write(str: char*) {
+            let i: int = 0
+            while str[i] != 0 {
+                self.putchar(str[i])
+                i = i + 1
+            }
+        }
+
+        func newline() {
+            self.col = 0
+            self.row = self.row + 1
+            if self.row >= VGA_HEIGHT {
+                self.row = VGA_HEIGHT - 1
+            }
+        }
+    }
+}

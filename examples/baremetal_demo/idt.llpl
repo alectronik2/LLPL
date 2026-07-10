@@ -1,0 +1,97 @@
+// IDT (Interrupt Descriptor Table) module.
+//
+// Installs real handlers for a few CPU exceptions plus the PIT timer IRQ,
+// so `HAL.enable_interrupts()` is actually safe to call - the bug that used
+// to send this demo into a reboot loop. Handlers are `interrupt func`s,
+// compiled to GCC's __attribute__((interrupt)) so they return via `iretq`
+// with the correct stack handling instead of a normal `ret`.
+
+import hal
+
+let timer_ticks: uint = 0
+
+// Handlers are defined before `namespace IDT` references their addresses:
+// LLPL doesn't forward-declare plain functions yet, so this file's order is
+// its C declaration order too.
+
+interrupt func isr_divide_by_zero() {
+    HAL.Serial.write("FAULT: divide by zero (#DE) - halting\n")
+    HAL.disable_interrupts()
+    while true {
+        HAL.halt()
+    }
+}
+
+interrupt func isr_breakpoint() {
+    HAL.Serial.write("Breakpoint (int3) handled, resuming...\n")
+}
+
+interrupt func isr_general_protection(error_code: uint) {
+    HAL.Serial.write("FAULT: general protection (#GP) - halting\n")
+    HAL.disable_interrupts()
+    while true {
+        HAL.halt()
+    }
+}
+
+interrupt func isr_page_fault(error_code: uint) {
+    HAL.Serial.write("FAULT: page fault (#PF) - halting\n")
+    HAL.disable_interrupts()
+    while true {
+        HAL.halt()
+    }
+}
+
+interrupt func isr_timer() {
+    timer_ticks = timer_ticks + 1
+    HAL.Pic.send_eoi(0)
+}
+
+namespace IDT {
+    // One 16-byte interrupt gate descriptor (long mode).
+    packed struct Entry {
+        let offset_low: uint16
+        let selector: uint16
+        let ist: char
+        let type_attr: char
+        let offset_mid: uint16
+        let offset_high: uint32
+        let zero: uint32
+    }
+
+    packed struct Pointer {
+        let limit: uint16
+        let base: uint
+    }
+
+    let entries: Entry[256]
+    let pointer: Pointer
+
+    // flags: 0x8E = present, ring 0, 64-bit interrupt gate.
+    func set_gate(vector: int, handler_addr: uint, selector: uint, flags: char) {
+        entries[vector].offset_low = (handler_addr & 0xFFFF) as uint16
+        entries[vector].selector = selector as uint16
+        entries[vector].ist = 0
+        entries[vector].type_attr = flags
+        entries[vector].offset_mid = ((handler_addr >> 16) & 0xFFFF) as uint16
+        entries[vector].offset_high = ((handler_addr >> 32) & 0xFFFFFFFF) as uint32
+        entries[vector].zero = 0
+    }
+
+    func init() {
+        for let i: int = 0, i < 256, i = i + 1 {
+            set_gate(i, 0, 0, 0)
+        }
+
+        set_gate(0, isr_divide_by_zero as uint, 0x08, 0x8E)
+        set_gate(3, isr_breakpoint as uint, 0x08, 0x8E)
+        set_gate(13, isr_general_protection as uint, 0x08, 0x8E)
+        set_gate(14, isr_page_fault as uint, 0x08, 0x8E)
+        set_gate(32, isr_timer as uint, 0x08, 0x8E) // IRQ0 after PIC remap
+
+        pointer.limit = (256 * 16) - 1
+        pointer.base = entries as uint
+
+        asm("lidt (%0)" : : "r"(&pointer))
+    }
+}

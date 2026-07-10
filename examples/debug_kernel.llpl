@@ -1,0 +1,57 @@
+// Debug kernel with serial output
+
+extern func outb(port: uint, value: char)
+extern func inb(port: uint) -> char
+
+let COM1: uint = 1016  // 0x3F8
+let VGA_BUFFER: uint = 753664  // 0xB8000
+
+func serial_init() {
+    outb(COM1 + 1, 0)
+    outb(COM1 + 3, 128)
+    outb(COM1 + 0, 3)
+    outb(COM1 + 1, 0)
+    outb(COM1 + 3, 3)
+    outb(COM1 + 2, 199)
+    outb(COM1 + 4, 11)
+}
+
+func serial_write(c: char) {
+    while (inb(COM1 + 5) & 32) == 0 {
+        // Wait
+    }
+    outb(COM1, c)
+}
+
+func serial_print(msg: char*) {
+    let i: int = 0
+    while msg[i] != 0 {
+        serial_write(msg[i])
+        i = i + 1
+    }
+}
+
+func kernel_main() {
+    // Initialize serial
+    serial_init()
+
+    // Send test messages
+    serial_print("=== LLPL 64-bit Kernel Debug ===\n")
+    serial_print("Serial port initialized\n")
+    serial_print("Testing VGA write...\n")
+
+    // Write to VGA
+    let buffer: char* = VGA_BUFFER as char*
+    buffer[0] = 79   // 'O'
+    buffer[1] = 15   // White
+    buffer[2] = 75   // 'K'
+    buffer[3] = 15
+
+    serial_print("VGA write complete\n")
+    serial_print("Entering infinite loop\n")
+
+    // Infinite loop
+    while true {
+        // Hang
+    }
+}

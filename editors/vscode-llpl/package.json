@@ -1,0 +1,42 @@
+{
+    "name": "llpl-language",
+    "displayName": "LLPL Language Support",
+    "description": "Syntax highlighting and language configuration for LLPL (Low Level Programming Language)",
+    "version": "0.1.0",
+    "publisher": "llpl-team",
+    "license": "MIT",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "llpl",
+                "aliases": [
+                    "LLPL",
+                    "llpl"
+                ],
+                "extensions": [
+                    ".llpl"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "llpl",
+                "scopeName": "source.llpl",
+                "path": "./syntaxes/llpl.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "llpl",
+                "path": "./snippets/llpl.code-snippets"
+            }
+        ]
+    }
+}

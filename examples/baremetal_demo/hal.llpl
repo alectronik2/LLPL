@@ -1,0 +1,131 @@
+// HAL (Hardware Abstraction Layer) module
+//
+// Demonstrates inline asm: every primitive here compiles straight to a
+// GCC-style extended asm block, with no dependency on externally-linked
+// assembly helpers (compare to ../kernel.llpl, which declares `extern func
+// outb`/`inb` implemented in boot64.asm instead).
+
+namespace HAL {
+    // `port` is LLPL's 64-bit `uint` (the language has no 16-bit integer
+    // type), but the x86 variable-port form of in/out only accepts DX. The
+    // %w operand modifier tells GCC to print operand 1 as its 16-bit
+    // sub-register (dx) regardless of the C-level operand width.
+    func outb(port: uint, value: char) {
+        asm("outb %0, %w1" : : "a"(value), "Nd"(port))
+    }
+
+    func inb(port: uint) -> char {
+        let result: char = 0
+        asm("inb %w1, %0" : "=a"(result) : "Nd"(port))
+        return result
+    }
+
+    func disable_interrupts() {
+        asm("cli")
+    }
+
+    func enable_interrupts() {
+        asm("sti")
+    }
+
+    func halt() {
+        asm("hlt")
+    }
+
+    // Nested namespace: a serial (COM1) driver built on the port I/O
+    // primitives above. Its unqualified calls to outb/inb resolve outward
+    // to HAL.outb/HAL.inb - sibling lookup walks enclosing namespace scopes,
+    // so code inside HAL.Serial doesn't need to write HAL.outb every time.
+    namespace Serial {
+        let PORT: uint = 1016 // 0x3F8, COM1
+
+        func init() {
+            outb(PORT + 1, 0)   // Disable interrupts
+            outb(PORT + 3, 128) // Enable DLAB (set baud rate divisor)
+            outb(PORT, 3)       // Divisor low byte (38400 baud)
+            outb(PORT + 1, 0)   // Divisor high byte
+            outb(PORT + 3, 3)   // 8 bits, no parity, one stop bit
+            outb(PORT + 2, 199) // Enable FIFO, clear, 14-byte threshold
+            outb(PORT + 4, 11)  // IRQs enabled, RTS/DSR set
+        }
+
+        func transmit_ready() -> char {
+            return inb(PORT + 5) & 32
+        }
+
+        func write_char(c: char) {
+            while transmit_ready() == 0 {
+                // Wait for the transmit buffer to empty
+            }
+            outb(PORT, c)
+        }
+
+        func write(str: char*) {
+            let i: int = 0
+            while str[i] != 0 {
+                write_char(str[i])
+                i = i + 1
+            }
+        }
+    }
+
+    // 8259 PIC (Programmable Interrupt Controller) driver. By default IRQ0-7
+    // are wired to interrupt vectors 0x08-0x0F, colliding with the CPU's own
+    // exception vectors (0x08 is #DF, 0x0D is #GP, ...) - this is why
+    // enabling interrupts without remapping the PIC first reliably crashes.
+    // remap() moves IRQ0-7/IRQ8-15 to a caller-chosen, non-colliding range.
+    namespace Pic {
+        let COMMAND1: uint = 0x20
+        let DATA1: uint = 0x21
+        let COMMAND2: uint = 0xA0
+        let DATA2: uint = 0xA1
+
+        func remap(offset1: char, offset2: char) {
+            outb(COMMAND1, 0x11) // ICW1: init, expect ICW4
+            outb(COMMAND2, 0x11)
+            outb(DATA1, offset1) // ICW2: master vector offset
+            outb(DATA2, offset2) // ICW2: slave vector offset
+            outb(DATA1, 4)       // ICW3: slave PIC lives on master's IRQ2
+            outb(DATA2, 2)       // ICW3: slave's cascade identity
+            outb(DATA1, 1)       // ICW4: 8086 mode
+            outb(DATA2, 1)
+
+            // Mask everything for now; callers unmask specific IRQs.
+            outb(DATA1, 0xFF)
+            outb(DATA2, 0xFF)
+        }
+
+        func unmask_irq0() {
+            outb(DATA1, 0xFE) // clear bit 0 (timer), leave the rest masked
+        }
+
+        func send_eoi(irq: int) {
+            if irq >= 8 {
+                outb(COMMAND2, 0x20)
+            }
+            outb(COMMAND1, 0x20)
+        }
+    }
+
+    // Printf-style logging, built on the runtime's vararg formatter
+    // (runtime/runtime.c) and this demo's vararg *function declaration*
+    // support (`extern func ... (...)`, plus the codegen that widens each
+    // variadic-tail argument to a full 8 bytes at the call site to match
+    // what the runtime reads - see variadicPromote in codegen.d).
+    //
+    // LLPL functions can't themselves be variadic - there's no va_list to
+    // forward through - so callers format into the shared scratch buffer
+    // (with however many arguments this call needs) and then flush it:
+    //
+    //   HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128, "tick %d\n", n)
+    //   HAL.Log.flush()
+    namespace Log {
+        let buffer: char[128]
+
+        extern func ksnprintf(buf: char*, size: uint, fmt: char*, ...) -> int
+
+        func flush() {
+            Serial.write(buffer as char*)
+        }
+    }
+}

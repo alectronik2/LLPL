@@ -1,0 +1,29 @@
+# D build artifacts
+llpl
+*.o
+*.obj
+.dub/
+dub.selections.json
+
+# C artifacts
+*.c
+!runtime/*.c
+*.bin
+*.iso
+
+# Example build artifacts
+examples/*.o
+examples/*.c
+examples/kernel.bin
+examples/kernel.iso
+examples/isodir/
+
+# Editor files
+*.swp
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

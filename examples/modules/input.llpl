@@ -1,0 +1,36 @@
+// Input module - handles keyboard input
+
+import graphics  // Circular import back to graphics
+
+extern func inb(port: uint) -> char
+extern func outb(port: uint, value: char)
+
+let KEYBOARD_DATA: uint = 96
+let KEYBOARD_STATUS: uint = 100
+
+class Keyboard {
+    let shift_pressed: int
+
+    constructor() {
+        self.shift_pressed = 0
+    }
+
+    destructor() {
+        // Nothing
+    }
+
+    func read_key() -> char {
+        // Wait for key
+        while (inb(KEYBOARD_STATUS) & 1) == 0 {
+            // Wait
+        }
+
+        let scancode: char = inb(KEYBOARD_DATA)
+        return scancode
+    }
+
+    func has_key() -> int {
+        let status: char = inb(KEYBOARD_STATUS)
+        return (status & 1) as int
+    }
+}
