@@ -15,6 +15,7 @@ enum NodeType {
     IfStmt,
     WhileStmt,
     ForStmt,
+    ForeachStmt,
     ReturnStmt,
     DeferStmt,
     AsmStmt,
@@ -350,6 +351,25 @@ class ForStmt : ASTNode {
         this.initializer = initializer;
         this.condition = condition;
         this.update = update;
+        this.body_ = body_;
+    }
+}
+
+// `foreach let varName in iterable { body }` - iterable is either a
+// fixed-size array (`T[N]`, N known at compile time) or a class instance
+// implementing the iterator protocol (see codegen.d's ITER_HAS_NEXT/
+// ITER_NEXT/ITER_RESET method names). varName's type is inferred, never
+// explicitly annotated - from the array's element type, or from
+// iter_next()'s return type.
+class ForeachStmt : ASTNode {
+    string varName;
+    ASTNode iterable;
+    Block body_;
+
+    this(string varName, ASTNode iterable, Block body_, int line = 0, int column = 0) {
+        super(NodeType.ForeachStmt, line, column);
+        this.varName = varName;
+        this.iterable = iterable;
         this.body_ = body_;
     }
 }

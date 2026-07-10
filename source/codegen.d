@@ -1150,6 +1150,8 @@ class CodeGenerator {
             code ~= indent() ~ "}\n";
             indentLevel--;
             code ~= indent() ~ "}\n";
+        } else if (auto foreachStmt = cast(ForeachStmt)node) {
+            code ~= generateForeachStmt(foreachStmt, isDeferred);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             // Execute deferred statements before return
             if (!isDeferred && deferredStatements.length > 0) {
@@ -1267,6 +1269,9 @@ class CodeGenerator {
         } else if (auto forStmt = cast(ForStmt)node) {
             return new ForStmt(cloneNode(forStmt.initializer, subs), cloneNode(forStmt.condition, subs),
                 cloneNode(forStmt.update, subs), cloneBlock(forStmt.body_, subs));
+        } else if (auto foreachStmt = cast(ForeachStmt)node) {
+            return new ForeachStmt(foreachStmt.varName, cloneNode(foreachStmt.iterable, subs),
+                cloneBlock(foreachStmt.body_, subs), foreachStmt.line, foreachStmt.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             return new ReturnStmt(cloneNode(returnStmt.value, subs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
@@ -1387,6 +1392,9 @@ class CodeGenerator {
             return new ForStmt(expandQuotedNode(forStmt.initializer, subs),
                 expandQuotedNode(forStmt.condition, subs), expandQuotedNode(forStmt.update, subs),
                 expandQuotedBlock(forStmt.body_, subs));
+        } else if (auto foreachStmt = cast(ForeachStmt)node) {
+            return new ForeachStmt(foreachStmt.varName, expandQuotedNode(foreachStmt.iterable, subs),
+                expandQuotedBlock(foreachStmt.body_, subs), foreachStmt.line, foreachStmt.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
@@ -1845,6 +1853,133 @@ class CodeGenerator {
             }
         }
         return null;
+    }
+
+    // The iterator protocol a class opts into to support `foreach let x in
+    // instance { ... }` - mirrors operatorMethodName's op_* naming (ast.d):
+    // a fixed method name codegen looks up by string, not a language-level
+    // interface/trait mechanism. ITER_HAS_NEXT/ITER_NEXT are mandatory (a
+    // class needs both to be foreach-able at all); ITER_RESET is optional -
+    // called automatically before the loop if present, letting an object
+    // be foreach-ed more than once (e.g. two separate loops over the same
+    // String) without the caller manually resetting iteration state, but
+    // not required for a single-use iterator that's naturally exhausted.
+    private static immutable string ITER_HAS_NEXT = "iter_has_next";
+    private static immutable string ITER_NEXT = "iter_next";
+    private static immutable string ITER_RESET = "iter_reset";
+
+    private FunctionDecl findIterMethod(ClassDecl classDecl, string name) {
+        foreach (method; classDecl.methods) {
+            if (method.name == name) return method;
+        }
+        return null;
+    }
+
+    // `foreach let x in iterable { ... }` desugars to either a counted
+    // index loop (iterable is a fixed-size array) or a has_next/next loop
+    // (iterable is a class implementing the iterator protocol above) -
+    // whichever matches is decided purely from iterable's inferred type,
+    // the same way operator overloading is resolved from an operand's type.
+    private string generateForeachStmt(ForeachStmt foreachStmt, bool isDeferred) {
+        Type iterType;
+        try {
+            iterType = inferType(foreachStmt.iterable);
+            resolveType(iterType);
+        } catch (Exception e) {
+            throw new CompileError(
+                format("Cannot infer the type of this foreach expression: %s", e.msg),
+                currentModulePath, foreachStmt.line, foreachStmt.column);
+        }
+
+        if (iterType.isArray) {
+            if (iterType.arraySize <= 0) {
+                throw new CompileError(
+                    "foreach needs a fixed-size array (e.g. 'T[8]') - this array's size isn't known " ~
+                    "at compile time (it's an unsized 'T[]', typically a function parameter)",
+                    currentModulePath, foreachStmt.line, foreachStmt.column);
+            }
+            return generateArrayForeach(foreachStmt, iterType, isDeferred);
+        }
+
+        if (auto classDecl = iterType.name in classRegistry) {
+            FunctionDecl hasNextMethod = findIterMethod(*classDecl, ITER_HAS_NEXT);
+            FunctionDecl nextMethod = findIterMethod(*classDecl, ITER_NEXT);
+            if (hasNextMethod !is null && nextMethod !is null) {
+                return generateClassForeach(foreachStmt, *classDecl, nextMethod, isDeferred);
+            }
+        }
+
+        throw new CompileError(
+            format("'%s' can't be used with foreach: it's neither a fixed-size array nor a class " ~
+                "implementing the iterator protocol (%s() -> bool and %s() -> T methods)",
+                iterType.toString(), ITER_HAS_NEXT, ITER_NEXT),
+            currentModulePath, foreachStmt.line, foreachStmt.column);
+    }
+
+    private string generateArrayForeach(ForeachStmt foreachStmt, Type arrType, bool isDeferred) {
+        Type elemType = new Type(arrType.name, false, false, 0);
+
+        tempVarCounter++;
+        string idxName = format("__foreach_i%d", tempVarCounter);
+
+        string code = indent() ~ "{\n";
+        indentLevel++;
+        code ~= indent() ~ format("int64_t %s = 0;\n", idxName);
+        code ~= indent() ~ format("while (%s < %d) {\n", idxName, arrType.arraySize);
+        indentLevel++;
+        code ~= indent() ~ format("%s %s = %s[%s];\n",
+            typeToC(elemType), foreachStmt.varName, generateExpression(foreachStmt.iterable), idxName);
+
+        variableTypes[foreachStmt.varName] = elemType;
+        foreach (stmt; foreachStmt.body_.statements) {
+            code ~= generateStatement(stmt, isDeferred);
+        }
+        variableTypes.remove(foreachStmt.varName);
+
+        code ~= indent() ~ format("%s = %s + 1;\n", idxName, idxName);
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        return code;
+    }
+
+    private string generateClassForeach(ForeachStmt foreachStmt, ClassDecl classDecl, FunctionDecl nextMethod,
+            bool isDeferred) {
+        string cName = mangledClass(classDecl);
+        Type elemType = nextMethod.returnType;
+
+        tempVarCounter++;
+        // Evaluated into a local once, not re-evaluated for every has_next/
+        // next/reset call - `foreachStmt.iterable` could be an arbitrary
+        // (possibly side-effecting) expression, not just a bare variable.
+        string objName = format("__foreach_obj%d", tempVarCounter);
+
+        string code = indent() ~ "{\n";
+        indentLevel++;
+        code ~= indent() ~ format("%s %s = %s;\n",
+            typeToC(new Type(cName)), objName, generateExpression(foreachStmt.iterable));
+
+        if (findIterMethod(classDecl, ITER_RESET) !is null) {
+            code ~= indent() ~ format("%s_%s(%s);\n", cName, ITER_RESET, objName);
+        }
+
+        code ~= indent() ~ format("while (%s_%s(%s)) {\n", cName, ITER_HAS_NEXT, objName);
+        indentLevel++;
+        code ~= indent() ~ format("%s %s = %s_%s(%s);\n",
+            typeToC(elemType), foreachStmt.varName, cName, ITER_NEXT, objName);
+
+        variableTypes[foreachStmt.varName] = elemType;
+        foreach (stmt; foreachStmt.body_.statements) {
+            code ~= generateStatement(stmt, isDeferred);
+        }
+        variableTypes.remove(foreachStmt.varName);
+
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        return code;
     }
 
     // Decides whether member access on `object` should use "." (a value

@@ -28,6 +28,8 @@ enum TokenType {
     Else,
     While,
     For,
+    Foreach,
+    In,
     Return,
     Defer,
     Asm,
@@ -145,6 +147,8 @@ class Lexer {
             "else": "Else",
             "while": "While",
             "for": "For",
+            "foreach": "Foreach",
+            "in": "In",
             "return": "Return",
             "defer": "Defer",
             "asm": "Asm",
@@ -402,6 +406,8 @@ class Lexer {
                 case "Else": type = TokenType.Else; break;
                 case "While": type = TokenType.While; break;
                 case "For": type = TokenType.For; break;
+                case "Foreach": type = TokenType.Foreach; break;
+                case "In": type = TokenType.In; break;
                 case "Return": type = TokenType.Return; break;
                 case "Defer": type = TokenType.Defer; break;
                 case "Asm": type = TokenType.Asm; break;

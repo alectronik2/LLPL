@@ -645,6 +645,8 @@ class Parser {
             return whileStmt();
         } else if (check(TokenType.For)) {
             return forStmt();
+        } else if (check(TokenType.Foreach)) {
+            return foreachStmt();
         } else if (check(TokenType.Return)) {
             return returnStmt();
         } else if (check(TokenType.Defer)) {
@@ -872,6 +874,23 @@ class Parser {
 
         Block body_ = block();
         return new ForStmt(initializer, condition, update, body_);
+    }
+
+    // `foreach let x in iterable { ... }` - always `let` (no `const` form;
+    // the loop variable is a fresh binding each iteration, not something
+    // there's a meaningful "don't reassign" guarantee for) and never an
+    // explicit type annotation - see ForeachStmt's doc comment for how
+    // codegen infers it.
+    private ForeachStmt foreachStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Foreach);
+        expect(TokenType.Let);
+        string varName = expect(TokenType.Identifier).value;
+        expect(TokenType.In);
+        ASTNode iterable = expression();
+        Block body_ = block();
+        return new ForeachStmt(varName, iterable, body_, startLine, startColumn);
     }
 
     private ReturnStmt returnStmt() {
