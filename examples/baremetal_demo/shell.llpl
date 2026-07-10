@@ -479,7 +479,7 @@ namespace Shell {
     }
 
     func cmd_kheap() {
-        log("<WHITE>arenas: \(KHeap.arena_count) (\(KHeap.total_bytes()) bytes)\n</>")
+        log("<WHITE>arenas: \(KHeap.arena_count()) (\(KHeap.total_bytes()) bytes)\n</>")
         log("<WHITE>used:   \(KHeap.used_bytes()) bytes\n</>")
         log("<WHITE>free:   \(KHeap.free_bytes()) bytes\n</>")
     }

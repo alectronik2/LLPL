@@ -34,6 +34,15 @@ namespace PageAlloc {
     let total_pages: uint = 0
     let free_pages: uint = 0
 
+    // Protects the bitmap and the two counters above - init/alloc/free/
+    // alloc_contiguous (the entry points below) all acquire it before
+    // touching any of that state and release it (via `defer`) before
+    // returning. The internal helpers just below (set_used, set_free,
+    // is_free, mark_available, mark_reserved) don't lock themselves - a
+    // spinlock isn't reentrant, and they're only ever called from within
+    // one of those already-locked entry points.
+    let lock: HAL.SpinLock // zero-initialized -> starts unlocked, see HAL.SpinLock
+
     func set_used(page: uint) {
         let byte: uint = page / 8
         let bit: int = (page % 8) as int
@@ -122,6 +131,9 @@ namespace PageAlloc {
     }
 
     func init(multiboot_ptr: uint) {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let byte_count: uint = MAX_PAGES / 8
         let b: uint = 0
         while b < byte_count {
@@ -172,6 +184,9 @@ namespace PageAlloc {
     // none are free - 0 is never a valid result otherwise (it's always
     // inside the low-1MB reservation above).
     func alloc() -> uint {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let p: uint = 0
         while p < MAX_PAGES {
             if is_free(p) {
@@ -186,6 +201,9 @@ namespace PageAlloc {
     // Returns `addr` (which must be a page-aligned address previously
     // handed out by alloc()) to the free pool.
     func free(addr: uint) {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let p: uint = addr / PAGE_SIZE
         if p < MAX_PAGES {
             set_free(p)
@@ -200,6 +218,9 @@ namespace PageAlloc {
     // all of them used and returning the run's base address, or 0 if no
     // such run exists (including count == 0, which is never valid).
     func alloc_contiguous(count: uint) -> uint {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         if count == 0 {
             return 0
         }

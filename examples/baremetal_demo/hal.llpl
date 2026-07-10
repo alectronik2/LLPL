@@ -37,6 +37,71 @@ namespace HAL {
         asm("hlt")
     }
 
+    // A spinlock protecting some shared mutable state (see PageAlloc.lock,
+    // KHeap.lock) from concurrent access. `locked` is 0/1 rather than
+    // `bool` so its C representation is a predictable full-width `uint64_t`
+    // for atomic_exchange below, not `bool`'s narrower/less-portable C
+    // `int` mapping. Global `SpinLock` variables come out unlocked for
+    // free: C zero-initializes .bss, and 0 is the unlocked state - no
+    // separate init() call needed (spinlock_init below exists for a lock
+    // embedded in memory that *isn't* implicitly zeroed, e.g. inside a
+    // future heap-allocated object).
+    struct SpinLock {
+        let locked: uint
+    }
+
+    func spinlock_init(lock: SpinLock*) {
+        lock.locked = 0
+    }
+
+    // Atomically stores `value` at `addr` and returns what was there
+    // before - `xchg` with a memory operand is implicitly a locked
+    // (atomic) operation on x86, unlike most other read-modify-write
+    // instructions, which need an explicit `lock` prefix.
+    func atomic_exchange(addr: uint*, value: uint) -> uint {
+        let old: uint = value
+        asm("xchg %0, (%1)" : "+r"(old) : "r"(addr))
+        return old
+    }
+
+    func read_flags() -> uint {
+        let flags: uint = 0
+        asm("pushfq; pop %0" : "=r"(flags))
+        return flags
+    }
+
+    func write_flags(flags: uint) {
+        asm("push %0; popfq" : : "r"(flags))
+    }
+
+    // Disables interrupts (saving the prior on/off state for
+    // spinlock_release to restore, rather than unconditionally turning
+    // them back on - the correct behavior if a lock is ever acquired while
+    // interrupts are already off for some other reason) and spins on an
+    // atomic exchange until `lock` is free.
+    //
+    // On this single-core kernel, it's the interrupt-disable that actually
+    // prevents a deadlock: without it, an interrupt handler that wanted
+    // the same lock could fire *while* this code holds it, and then spin
+    // forever - there's no second CPU to ever release it. The atomic
+    // exchange is what makes this correct beyond that: a plain
+    // check-then-set (not atomic) would race with itself if this kernel
+    // ever grew real multi-core support, where disabling interrupts on
+    // *one* core doesn't stop another core from running concurrently.
+    func spinlock_acquire(lock: SpinLock*) -> uint {
+        let flags: uint = read_flags()
+        disable_interrupts()
+        while atomic_exchange(&lock.locked, 1) != 0 {
+            // spin
+        }
+        return flags
+    }
+
+    func spinlock_release(lock: SpinLock*, saved_flags: uint) {
+        atomic_exchange(&lock.locked, 0)
+        write_flags(saved_flags)
+    }
+
     // ANSI SGR color codes for the serial side of colored logging. A
     // terminal attached to the serial port (e.g. QEMU's `-serial stdio`)
     // interprets these; a dumb terminal just shows the raw escape bytes,

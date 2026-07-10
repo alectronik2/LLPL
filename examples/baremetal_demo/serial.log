@@ -1,0 +1,18 @@
+PageAlloc: 64940/65407 pages free
+[36mLLPL Bare-Metal Demo
+[0m[36m=====================
+[0mcolors: [31mred[0m [32mgreen[0m [33myellow[0m [36mcyan[0m - a single log() call, tags inline
+[37mLoading a fresh GDT from LLPL...
+[0m[32mGDT reloaded: base=0x0000000000132610 limit=0x17
+[0m[37mInstalling IDT and remapping the PIC...
+[0m[32mIDT installed (timer on IRQ0, keyboard on IRQ1).
+[0m[33mTriggering a breakpoint exception (int3)...
+[0mBreakpoint (int3) handled, resuming...
+Backtrace:
+  #00 rbp=0x0000000000110fc0 rip=0x00000000001059ec
+  <stopped: unaligned frame pointer>
+[32m...resumed after the fault handler returned via iretq.
+[0m[37mEnabling interrupts...
+[0m[32mInterrupts enabled.
+[0m[36mStarting the shell. Type 'help' for a list of commands.
+[0m[32mllpl[0m [37m$[0m 

@@ -7,33 +7,49 @@
 // Design: a set of independent "arenas", each some whole number of pages
 // obtained in one physically-contiguous run from PageAlloc.alloc_contiguous
 // - one page for an ordinary small request, more for anything bigger than
-// a page can hold. Within an arena, blocks form an implicit singly-linked
-// list purely through address arithmetic - no `next` field needed, since a
-// live block's footprint (header + size) always says where the following
-// block starts:
+// a page can hold. Arenas themselves form a singly-linked list threaded
+// through their own memory (an ArenaHeader at the very start of each one,
+// see below) rather than a fixed-size registry array - so there's no cap
+// on how many arenas the heap can grow to beyond physical memory itself.
+// Within an arena, blocks similarly form an implicit list purely through
+// address arithmetic - no `next` field needed, since a live block's
+// footprint (header + size) always says where the following block starts:
 //
-//   [[BlockHeader][ payload... ]][[BlockHeader][ payload... ]]...
-//   ^ arena_base                 ^ this = prev.size bytes after prev's payload starts
+//   [ArenaHeader][[BlockHeader][ payload... ]][[BlockHeader][ payload... ]]...
+//                ^ this = prev.size bytes after prev's payload starts
 //
 // This keeps every operation (find-fit, split, coalesce) a straight
-// address walk from arena_base to arena_base + arena_size, no pointer
-// bookkeeping to keep in sync.
+// address walk, no separate pointer bookkeeping to keep in sync with the
+// blocks it describes.
 //
 // Arenas are never returned to PageAlloc, even if they become entirely
 // free again - only individual blocks are tracked as free/used within an
-// arena. There's no hard per-allocation size cap: a request just grows the
-// arena it lands in to fit, bounded only by how much physically-contiguous
+// arena. There's no hard per-allocation size cap either: a request just
+// grows a new arena to fit, bounded only by how much physically-contiguous
 // memory PageAlloc.alloc_contiguous can still find (fragmentation can
-// defeat a very large request even with plenty of free memory overall) and
-// by MAX_ARENAS (the fixed-size registry below, not the heap's total size).
+// defeat a very large request even with plenty of free memory overall).
+//
+// `lock` (HAL.SpinLock) protects the arena list and every block header
+// reachable from it - kmalloc/kfree/init/*_bytes() all acquire it before
+// touching any of that state and release it (via `defer`, so every return
+// path is covered) before returning; the internal helpers below them
+// (find_free_block, split_block, coalesce_arena, init_arena) don't lock
+// themselves, since they're only ever called from within a function that
+// already holds it - a spinlock isn't reentrant, so double-acquiring it
+// from the same call chain would deadlock.
 
 import hal
 import pagealloc
 
 namespace KHeap {
     const PAGE_SIZE = 4096
-    const HEADER_SIZE = 16 // sizeof(BlockHeader): two 8-byte fields, packed
-    const MAX_ARENAS = 64 // registry size, not a size cap - see header comment
+    const HEADER_SIZE = 16      // sizeof(BlockHeader): two 8-byte fields, packed
+    const ARENA_HEADER_SIZE = 16 // sizeof(ArenaHeader): two 8-byte fields, packed
+
+    packed struct ArenaHeader {
+        let page_count: uint
+        let next: uint // address of the next arena's ArenaHeader, or 0
+    }
 
     packed struct BlockHeader {
         let size: uint    // payload size in bytes, excluding this header
@@ -42,17 +58,35 @@ namespace KHeap {
                            // matching HEADER_SIZE exactly
     }
 
-    let arenas: uint[64]      // base address of each arena
-    let arena_pages: uint[64] // page count of each arena (parallel array)
-    let arena_count: int = 0
+    let first_arena: uint = 0 // address of the first arena's ArenaHeader, 0 = none yet
+    let lock: HAL.SpinLock    // zero-initialized -> starts unlocked, see HAL.SpinLock
 
     func init() {
-        arena_count = 0
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+        first_arena = 0
     }
 
-    func init_arena(base: uint, pages: uint) {
-        let hdr: BlockHeader* = base as BlockHeader*
-        hdr.size = pages * PAGE_SIZE - HEADER_SIZE
+    // `blocks_base`/`blocks_size` describe the *block list* region of an
+    // arena - i.e. everything after its ArenaHeader - which is what every
+    // helper below actually walks.
+    func blocks_base(arena: uint) -> uint {
+        return arena + ARENA_HEADER_SIZE
+    }
+
+    func blocks_size(arena: uint) -> uint {
+        let ahdr: ArenaHeader* = arena as ArenaHeader*
+        return ahdr.page_count * PAGE_SIZE - ARENA_HEADER_SIZE
+    }
+
+    func init_arena(arena: uint, pages: uint) {
+        let ahdr: ArenaHeader* = arena as ArenaHeader*
+        ahdr.page_count = pages
+        ahdr.next = first_arena
+        first_arena = arena
+
+        let hdr: BlockHeader* = blocks_base(arena) as BlockHeader*
+        hdr.size = pages * PAGE_SIZE - ARENA_HEADER_SIZE - HEADER_SIZE
         hdr.is_free = 1
     }
 
@@ -74,11 +108,13 @@ namespace KHeap {
         }
     }
 
-    // First-fit search within one arena; returns the payload address, or 0.
-    func find_free_block(arena_base: uint, arena_size: uint, size: uint) -> uint {
-        let arena_end: uint = arena_base + arena_size
-        let addr: uint = arena_base
-        while addr < arena_end {
+    // First-fit search within one arena's block list; returns the payload
+    // address, or 0.
+    func find_free_block(arena: uint, size: uint) -> uint {
+        let base: uint = blocks_base(arena)
+        let end: uint = base + blocks_size(arena)
+        let addr: uint = base
+        while addr < end {
             let hdr: BlockHeader* = addr as BlockHeader*
             if hdr.is_free == 1 && hdr.size >= size {
                 split_block(addr, size)
@@ -90,16 +126,17 @@ namespace KHeap {
         return 0
     }
 
-    // Merges every run of adjacent free blocks in one arena into single
-    // blocks, undoing split_block's fragmentation after frees.
-    func coalesce_arena(arena_base: uint, arena_size: uint) {
-        let arena_end: uint = arena_base + arena_size
-        let addr: uint = arena_base
-        while addr < arena_end {
+    // Merges every run of adjacent free blocks in one arena's block list
+    // into single blocks, undoing split_block's fragmentation after frees.
+    func coalesce_arena(arena: uint) {
+        let base: uint = blocks_base(arena)
+        let end: uint = base + blocks_size(arena)
+        let addr: uint = base
+        while addr < end {
             let hdr: BlockHeader* = addr as BlockHeader*
             let next_addr: uint = addr + HEADER_SIZE + hdr.size
             let merged: bool = false
-            if hdr.is_free == 1 && next_addr < arena_end {
+            if hdr.is_free == 1 && next_addr < end {
                 let next_hdr: BlockHeader* = next_addr as BlockHeader*
                 if next_hdr.is_free == 1 {
                     hdr.size = hdr.size + HEADER_SIZE + next_hdr.size
@@ -118,106 +155,135 @@ namespace KHeap {
     // failure - never a valid payload address itself, since it always
     // falls inside PageAlloc's low-1MB reservation.
     func kmalloc(size: uint) -> uint {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let aligned: uint = (size + 7) & ~7
         if aligned == 0 {
             aligned = 8
         }
 
-        let i: int = 0
-        while i < arena_count {
-            let found: uint = find_free_block(arenas[i], arena_pages[i] * PAGE_SIZE, aligned)
+        let arena: uint = first_arena
+        while arena != 0 {
+            let found: uint = find_free_block(arena, aligned)
             if found != 0 {
                 return found
             }
-            i = i + 1
+            let ahdr: ArenaHeader* = arena as ArenaHeader*
+            arena = ahdr.next
         }
 
-        if arena_count >= MAX_ARENAS {
-            return 0
-        }
-        let pages_needed: uint = (aligned + HEADER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE
+        let pages_needed: uint = (aligned + HEADER_SIZE + ARENA_HEADER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE
         let base: uint = PageAlloc.alloc_contiguous(pages_needed)
         if base == 0 {
             return 0
         }
-        arenas[arena_count] = base
-        arena_pages[arena_count] = pages_needed
-        arena_count = arena_count + 1
         init_arena(base, pages_needed)
-        return find_free_block(base, pages_needed * PAGE_SIZE, aligned)
+        return find_free_block(base, aligned)
     }
 
     func kfree(addr: uint) {
         if addr == 0 {
             return
         }
+
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let hdr_addr: uint = addr - HEADER_SIZE
         let hdr: BlockHeader* = hdr_addr as BlockHeader*
         hdr.is_free = 1
 
-        // Arenas are no longer uniformly one page, so the owning arena
-        // can't be recovered by page-aligning `addr` - search the
-        // registry for the arena whose range contains it instead.
-        let i: int = 0
+        // Arenas can be different sizes now, so the owning arena can't be
+        // recovered by address arithmetic alone - walk the list to find
+        // the one whose block-list range contains this header.
+        let arena: uint = first_arena
         let done: bool = false
-        while i < arena_count && !done {
-            let arena_base: uint = arenas[i]
-            let arena_size: uint = arena_pages[i] * PAGE_SIZE
-            if hdr_addr >= arena_base && hdr_addr < arena_base + arena_size {
-                coalesce_arena(arena_base, arena_size)
+        while arena != 0 && !done {
+            let base: uint = blocks_base(arena)
+            let end: uint = base + blocks_size(arena)
+            if hdr_addr >= base && hdr_addr < end {
+                coalesce_arena(arena)
                 done = true
             }
-            i = i + 1
+            let ahdr: ArenaHeader* = arena as ArenaHeader*
+            arena = ahdr.next
         }
     }
 
+    func arena_count() -> int {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
+        let count: int = 0
+        let arena: uint = first_arena
+        while arena != 0 {
+            count = count + 1
+            let ahdr: ArenaHeader* = arena as ArenaHeader*
+            arena = ahdr.next
+        }
+        return count
+    }
+
     func total_bytes() -> uint {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let total: uint = 0
-        let i: int = 0
-        while i < arena_count {
-            total = total + arena_pages[i] * PAGE_SIZE
-            i = i + 1
+        let arena: uint = first_arena
+        while arena != 0 {
+            let ahdr: ArenaHeader* = arena as ArenaHeader*
+            total = total + ahdr.page_count * PAGE_SIZE
+            arena = ahdr.next
         }
         return total
     }
 
     // Payload bytes currently handed out (excludes header overhead) -
     // total_bytes() != used_bytes() + free_bytes() because of that
-    // per-block HEADER_SIZE overhead, not a bug.
+    // per-block and per-arena header overhead, not a bug.
     func used_bytes() -> uint {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let total: uint = 0
-        let a: int = 0
-        while a < arena_count {
-            let arena_base: uint = arenas[a]
-            let arena_end: uint = arena_base + arena_pages[a] * PAGE_SIZE
-            let addr: uint = arena_base
-            while addr < arena_end {
+        let arena: uint = first_arena
+        while arena != 0 {
+            let base: uint = blocks_base(arena)
+            let end: uint = base + blocks_size(arena)
+            let addr: uint = base
+            while addr < end {
                 let hdr: BlockHeader* = addr as BlockHeader*
                 if hdr.is_free == 0 {
                     total = total + hdr.size
                 }
                 addr = addr + HEADER_SIZE + hdr.size
             }
-            a = a + 1
+            let ahdr: ArenaHeader* = arena as ArenaHeader*
+            arena = ahdr.next
         }
         return total
     }
 
     func free_bytes() -> uint {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
         let total: uint = 0
-        let a: int = 0
-        while a < arena_count {
-            let arena_base: uint = arenas[a]
-            let arena_end: uint = arena_base + arena_pages[a] * PAGE_SIZE
-            let addr: uint = arena_base
-            while addr < arena_end {
+        let arena: uint = first_arena
+        while arena != 0 {
+            let base: uint = blocks_base(arena)
+            let end: uint = base + blocks_size(arena)
+            let addr: uint = base
+            while addr < end {
                 let hdr: BlockHeader* = addr as BlockHeader*
                 if hdr.is_free == 1 {
                     total = total + hdr.size
                 }
                 addr = addr + HEADER_SIZE + hdr.size
             }
-            a = a + 1
+            let ahdr: ArenaHeader* = arena as ArenaHeader*
+            arena = ahdr.next
         }
         return total
     }
