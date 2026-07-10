@@ -24,7 +24,7 @@ all: $(ISO)
 # Compile LLPL to C (module resolution picks up every imported file
 # automatically via the `import` statements in kernel.llpl; listed here
 # too just so `make` knows to recompile when any of them change)
-$(C_SRC): $(LLPL_SRC) hal.llpl console.llpl gdt.llpl idt.llpl backtrace.llpl fb.llpl kbd.llpl pagealloc.llpl shell.llpl ../../prelude.llpl
+$(C_SRC): $(LLPL_SRC) hal.llpl console.llpl gdt.llpl idt.llpl backtrace.llpl fb.llpl kbd.llpl pagealloc.llpl kheap.llpl shell.llpl ../../prelude.llpl
 	@echo "Compiling LLPL..."
 	cd ../.. && dub build
 	$(LLPL) $(LLPL_SRC) -o $(C_SRC)

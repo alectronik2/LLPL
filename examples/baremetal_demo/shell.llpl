@@ -18,6 +18,7 @@ import console
 import kbd
 import backtrace
 import pagealloc
+import kheap
 
 namespace Shell {
     const LINE_MAX = 128
@@ -391,6 +392,9 @@ namespace Shell {
         print("  alloc         - reserve one 4KB physical page frame\n")
         print("  free ADDR     - return a page frame to the allocator\n")
         print("  meminfo       - show physical page allocator stats\n")
+        print("  kmalloc SIZE  - allocate SIZE (hex) bytes from the kernel heap\n")
+        print("  kfree ADDR    - free a kernel heap block\n")
+        print("  kheap         - show kernel heap stats\n")
         print("\n")
         print("Up/down arrows recall previous commands; left/right move\n")
         print("the cursor within the current line.\n")
@@ -449,6 +453,36 @@ namespace Shell {
         log("<WHITE>used:  \(used) pages (\(used * 4) KB)\n</>")
     }
 
+    // "kmalloc SIZE" - unlike `alloc` (whole 4KB physical pages), this
+    // reserves an arbitrary byte-sized block from the kernel heap
+    // (kheap.llpl), which grows by requesting pages from PageAlloc as
+    // needed.
+    func cmd_kmalloc(args: char*) {
+        let size: uint = parse_hex(args)
+        let addr: uint = KHeap.kmalloc(size)
+        if addr == 0 {
+            log("<LIGHT_RED>out of heap memory (or size too large - see kheap.llpl's MAX_ALLOC)\n</>")
+        } else {
+            log("<WHITE>kmalloc(\(size:hex)) = \(addr:016:hex)\n</>")
+        }
+    }
+
+    // "kfree ADDR" - returns a block previously handed out by `kmalloc`.
+    // Same "trust the caller" spirit as `free`/peek/poke: no bookkeeping
+    // of who owns what, so freeing a bogus address corrupts the heap just
+    // like it would in C.
+    func cmd_kfree(args: char*) {
+        let addr: uint = parse_hex(args)
+        KHeap.kfree(addr)
+        log("<WHITE>kfree(\(addr:016:hex))\n</>")
+    }
+
+    func cmd_kheap() {
+        log("<WHITE>arenas: \(KHeap.arena_count) (\(KHeap.total_bytes()) bytes)\n</>")
+        log("<WHITE>used:   \(KHeap.used_bytes()) bytes\n</>")
+        log("<WHITE>free:   \(KHeap.free_bytes()) bytes\n</>")
+    }
+
     func run_line(line: char*) {
         match line {
             case "" => {
@@ -478,6 +512,9 @@ namespace Shell {
             case "meminfo" => {
                 cmd_meminfo()
             }
+            case "kheap" => {
+                cmd_kheap()
+            }
             default => {
                 if starts_with(line, "echo ") {
                     print(line + 5)
@@ -488,6 +525,10 @@ namespace Shell {
                     cmd_poke(line + 5)
                 } else if starts_with(line, "dump ") {
                     cmd_dump(line + 5)
+                } else if starts_with(line, "kmalloc ") {
+                    cmd_kmalloc(line + 8)
+                } else if starts_with(line, "kfree ") {
+                    cmd_kfree(line + 6)
                 } else if starts_with(line, "free ") {
                     cmd_free(line + 5)
                 } else {
