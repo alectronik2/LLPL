@@ -37,4 +37,8 @@ Backtrace:
 [0m[37mused:  468 pages (1872 KB)
 [0m[32mllpl[0m [37m$[0m kmalloc 50
 [37mkmalloc(0x50) = 0x0000000000235020
-[0m[32mllpl[0m [37m$[0m kh
+[0m[32mllpl[0m [37m$[0m kheap
+[37marenas: 1 (4096 bytes)
+[0m[37mused:   80 bytes
+[0m[37mfree:   3968 bytes
+[0m[32mllpl[0m [37m$[0m 
