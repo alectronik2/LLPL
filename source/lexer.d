@@ -42,6 +42,11 @@ enum TokenType {
     Alias,
     Operator,
     Enum,
+    Macro,
+    Unless,
+    Quote,
+    Unquote,
+    InterpolatedString,
 
     // Operators
     Plus,
@@ -67,6 +72,16 @@ enum TokenType {
     RightShift,
     Arrow,
     FatArrow,
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
+    PercentEqual,
+    AmpEqual,
+    PipeEqual,
+    CaretEqual,
+    ShlEqual,
+    ShrEqual,
 
     // Delimiters
     LeftParen,
@@ -90,6 +105,12 @@ struct Token {
     string value;
     int line;
     int column;
+
+    // Only populated for InterpolatedString tokens: alternating literal
+    // text and raw (unparsed) embedded-expression source, always starting
+    // and ending on a literal ("lit", "expr", "lit", "expr", ..., "lit") -
+    // see Lexer.string_ and Parser.primary's InterpolatedString case.
+    string[] interpParts;
 
     string toString() const {
         return format("Token(%s, '%s', %d:%d)", type, value, line, column);
@@ -136,7 +157,11 @@ class Lexer {
             "default": "Default",
             "alias": "Alias",
             "operator": "Operator",
-            "enum": "Enum"
+            "enum": "Enum",
+            "macro": "Macro",
+            "unless": "Unless",
+            "quote": "Quote",
+            "unquote": "Unquote"
         ];
     }
 
@@ -233,11 +258,64 @@ class Lexer {
         return Token(TokenType.Integer, num, startLine, startColumn);
     }
 
+    // Called right after consuming the '(' of a `\(...)` interpolation -
+    // `current` is the first character of the embedded expression. Captures
+    // the raw source text up to (but not including) the matching ')',
+    // tracking paren depth and copying any nested string literal verbatim
+    // (backslash escapes and all) so a ')' or '"' inside one doesn't end
+    // the capture early. The captured text is re-lexed/re-parsed as an
+    // ordinary expression later, by the parser - so a nested interpolation
+    // inside a nested string (`\(f("x \(y)"))`) works too, recursively.
+    private string captureInterpolationExpr() {
+        string raw = "";
+        int depth = 1;
+
+        while (current != '\0') {
+            if (current == '"') {
+                raw ~= current;
+                advance();
+                while (current != '\0' && current != '"') {
+                    if (current == '\\') {
+                        raw ~= current;
+                        advance();
+                        if (current != '\0') {
+                            raw ~= current;
+                            advance();
+                        }
+                        continue;
+                    }
+                    raw ~= current;
+                    advance();
+                }
+                if (current == '"') {
+                    raw ~= current;
+                    advance();
+                }
+                continue;
+            }
+
+            if (current == '(') {
+                depth++;
+            } else if (current == ')') {
+                depth--;
+                if (depth == 0) {
+                    advance(); // consume the matching ')' - not part of raw
+                    break;
+                }
+            }
+            raw ~= current;
+            advance();
+        }
+
+        return raw;
+    }
+
     private Token string_() {
         int startLine = line;
         int startColumn = column;
         advance(); // skip opening quote
 
+        string[] parts; // set only once a `\(` is found; see below
         string str = "";
         while (current != '\0' && current != '"') {
             if (current == '\\') {
@@ -250,6 +328,13 @@ class Lexer {
                     case '"': str ~= '"'; break;
                     case '0': str ~= '\0'; break;
                     case 'e': str ~= '\x1b'; break; // ESC, e.g. for ANSI color codes
+                    case '(': {
+                        advance(); // consume '(' itself
+                        parts ~= str;
+                        str = "";
+                        parts ~= captureInterpolationExpr();
+                        continue; // already advanced past the whole \(...) span
+                    }
                     case 'x': {
                         // \xHH - exactly two hex digits.
                         advance();
@@ -275,7 +360,14 @@ class Lexer {
             advance(); // skip closing quote
         }
 
-        return Token(TokenType.String, str, startLine, startColumn);
+        if (parts.length == 0) {
+            return Token(TokenType.String, str, startLine, startColumn);
+        }
+
+        parts ~= str;
+        Token tok = Token(TokenType.InterpolatedString, "", startLine, startColumn);
+        tok.interpParts = parts;
+        return tok;
     }
 
     private Token identifier() {
@@ -322,6 +414,10 @@ class Lexer {
                 case "Alias": type = TokenType.Alias; break;
                 case "Operator": type = TokenType.Operator; break;
                 case "Enum": type = TokenType.Enum; break;
+                case "Macro": type = TokenType.Macro; break;
+                case "Unless": type = TokenType.Unless; break;
+                case "Quote": type = TokenType.Quote; break;
+                case "Unquote": type = TokenType.Unquote; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);
@@ -391,6 +487,16 @@ class Lexer {
                 advance(); advance();
                 return Token(TokenType.Or, "||", startLine, startColumn);
             }
+            // Three-character operators - checked before their two-character
+            // prefixes (<< and >>) below, or they'd never be reached.
+            if (current == '<' && peek() == '<' && peek(2) == '=') {
+                advance(); advance(); advance();
+                return Token(TokenType.ShlEqual, "<<=", startLine, startColumn);
+            }
+            if (current == '>' && peek() == '>' && peek(2) == '=') {
+                advance(); advance(); advance();
+                return Token(TokenType.ShrEqual, ">>=", startLine, startColumn);
+            }
             if (current == '<' && peek() == '<') {
                 advance(); advance();
                 return Token(TokenType.LeftShift, "<<", startLine, startColumn);
@@ -410,6 +516,44 @@ class Lexer {
             if (current == '.' && peek(1) == '.' && peek(2) == '.') {
                 advance(); advance(); advance();
                 return Token(TokenType.Ellipsis, "...", startLine, startColumn);
+            }
+            // Compound assignment operators (`+=`, `-=`, ...) - each is its
+            // plain operator's single-character token plus `=`, so these
+            // need to be checked before the single-character switch below
+            // falls through to Plus/Minus/.../BitwiseXor. `-=` is checked
+            // ahead of `->` implicitly since they key off different peek()
+            // characters, so there's no ordering conflict between them.
+            if (current == '+' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.PlusEqual, "+=", startLine, startColumn);
+            }
+            if (current == '-' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.MinusEqual, "-=", startLine, startColumn);
+            }
+            if (current == '*' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.StarEqual, "*=", startLine, startColumn);
+            }
+            if (current == '/' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.SlashEqual, "/=", startLine, startColumn);
+            }
+            if (current == '%' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.PercentEqual, "%=", startLine, startColumn);
+            }
+            if (current == '&' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.AmpEqual, "&=", startLine, startColumn);
+            }
+            if (current == '|' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.PipeEqual, "|=", startLine, startColumn);
+            }
+            if (current == '^' && peek() == '=') {
+                advance(); advance();
+                return Token(TokenType.CaretEqual, "^=", startLine, startColumn);
             }
 
             // Single-character tokens

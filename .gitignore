@@ -24,6 +24,14 @@ examples/isodir/
 .vscode/
 .idea/
 
+# VS Code extension (LSP client + server) build artifacts
+editors/vscode-llpl/node_modules/
+editors/vscode-llpl/out/
+editors/vscode-llpl/server/node_modules/
+editors/vscode-llpl/server/out/
+editors/vscode-llpl/*.vsix
+editors/vscode-llpl/**/.llpl-lsp-*.llpl
+
 # OS files
 .DS_Store
 Thumbs.db

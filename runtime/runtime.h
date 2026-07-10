@@ -25,12 +25,30 @@ void* memcpy(void* dest, const void* src, size_t count);
 size_t strlen(const char* str);
 int strcmp(const char* a, const char* b);
 
+// LLPL-callable wrappers around the above, typed to exactly match what an
+// `extern func` declaration generates for LLPL's fixed-width types (`uint`
+// -> uint64_t, `int` -> int64_t, `char*` -> char*, plain - not `const char*`,
+// since LLPL has no way to write "pointer to const"). Redeclaring strlen/
+// strcmp/rc_alloc themselves under LLPL's types would conflict with the
+// prototypes above (size_t vs uint64_t are the same width but different
+// types - a hard "conflicting types" error), the same trap documented on
+// ksnprintf below - hence separate wrappers instead of reusing the names.
+uint64_t llpl_strlen(char* s);
+int64_t llpl_strcmp(char* a, char* b);
+char* llpl_alloc(uint64_t size);
+void llpl_free(char* ptr);
+void llpl_memcpy(char* dest, char* src, uint64_t count);
+
 // Minimal printf-style formatter for kernel logging. Deliberately not named
 // snprintf/vsnprintf: it isn't ISO C compatible (notably %d/%u/%x read a
 // 64-bit value, matching LLPL's `int`/`uint`, not C's 32-bit `int`), and
 // this project never links a host libc, so there's no risk of colliding
 // with the real thing - the "k" prefix just makes that difference obvious.
-// Supported specifiers: %d %i %u %x %X %s %c %p %%.
+// Supported specifiers: %d %i %u %x %X %o %b %s %c %p %%, each optionally
+// preceded by a printf-style minimum-field-width (%08x, %4d, ...): a
+// leading '0' zero-pads instead of space-padding. (%o/%b - octal and
+// binary - aren't ISO C; both they and the width prefix exist here for
+// LLPL's string-interpolation format hints, e.g. "\(n:016:hex)".)
 //
 // Both always NUL-terminate `buf` (if size > 0) and return the number of
 // characters the *unclamped* output would have needed, like real snprintf -

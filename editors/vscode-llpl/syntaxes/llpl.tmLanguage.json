@@ -14,6 +14,7 @@
         { "include": "#class-declaration" },
         { "include": "#function-declaration" },
         { "include": "#alias-declaration" },
+        { "include": "#macro-declaration" },
         { "include": "#control-keywords" },
         { "include": "#other-keywords" },
         { "include": "#modifier-keywords" },
@@ -26,6 +27,7 @@
         { "include": "#new-expression" },
         { "include": "#as-expression" },
         { "include": "#primitive-types" },
+        { "include": "#macro-invocation" },
         { "include": "#function-call" },
         { "include": "#member-access" },
         { "include": "#operators" },
@@ -51,10 +53,55 @@
             "begin": "\"",
             "end": "\"",
             "patterns": [
+                { "include": "#string-interpolation" },
                 {
                     "name": "constant.character.escape.llpl",
-                    "match": "\\\\[nrt0\\\\\"]"
+                    "match": "\\\\(x[0-9a-fA-F]{1,2}|[nrt0\\\\\"ex])"
                 }
+            ]
+        },
+        "string-interpolation": {
+            "comment": "\\(expr) inside a string literal - LLPL's string interpolation. The delimiter's own '\\(' / ')' consume one level of nesting; #interp-parens (mirroring #asm-parens below) recurses for any further '(...)' inside the embedded expression, e.g. \\(foo(1, 2)).",
+            "name": "meta.interpolation.llpl",
+            "begin": "\\\\\\(",
+            "beginCaptures": {
+                "0": { "name": "punctuation.section.embedded.begin.llpl" }
+            },
+            "end": "\\)",
+            "endCaptures": {
+                "0": { "name": "punctuation.section.embedded.end.llpl" }
+            },
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#strings" },
+                { "include": "#numbers" },
+                { "include": "#language-constants" },
+                { "include": "#self-variable" },
+                { "include": "#as-expression" },
+                { "include": "#macro-invocation" },
+                { "include": "#function-call" },
+                { "include": "#member-access" },
+                { "include": "#operators" },
+                { "include": "#interp-parens" },
+                { "include": "#punctuation" }
+            ]
+        },
+        "interp-parens": {
+            "begin": "\\(",
+            "end": "\\)",
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#strings" },
+                { "include": "#numbers" },
+                { "include": "#language-constants" },
+                { "include": "#self-variable" },
+                { "include": "#as-expression" },
+                { "include": "#macro-invocation" },
+                { "include": "#function-call" },
+                { "include": "#member-access" },
+                { "include": "#operators" },
+                { "include": "#interp-parens" },
+                { "include": "#punctuation" }
             ]
         },
         "numbers": {
@@ -128,8 +175,23 @@
                 "2": { "name": "entity.name.function.llpl" }
             }
         },
+        "macro-declaration": {
+            "match": "\\b(macro)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.macro.llpl" },
+                "2": { "name": "entity.name.function.macro.llpl" }
+            }
+        },
+        "macro-invocation": {
+            "comment": "NAME!(...) or Ns.NAME!(...) - the '!' right before '(' is what marks this as a macro call rather than a plain function call.",
+            "match": "\\b([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\s*(!)\\s*(?=\\()",
+            "captures": {
+                "1": { "name": "entity.name.function.macro.llpl" },
+                "2": { "name": "keyword.operator.macro.llpl" }
+            }
+        },
         "control-keywords": {
-            "match": "\\b(if|else|while|for|return|defer|match|case|default)\\b",
+            "match": "\\b(if|else|while|for|return|defer|match|case|default|unless)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {

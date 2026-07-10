@@ -3,6 +3,7 @@ module parser;
 import std.stdio;
 import std.format;
 import std.conv;
+import std.string : strip, endsWith;
 import lexer;
 import ast;
 import errors;
@@ -31,6 +32,26 @@ class Parser {
         return current.type == type;
     }
 
+    // Token at `pos + offset`, clamped to the last token (EOF) if out of range.
+    private Token peek(int offset) {
+        size_t idx = pos + offset;
+        return idx < tokens.length ? tokens[idx] : tokens[$ - 1];
+    }
+
+    // A macro invocation (`NAME!(...)` or `Ns.NAME!(...)`) is the only
+    // construct where `!` follows an identifier/dotted-path directly, so
+    // spotting it just means scanning past the dotted path and checking
+    // for `! (` - no ambiguity with unary `!`, which never follows a name
+    // like that (there's no postfix operator in the grammar).
+    private bool isMacroInvocationAhead() {
+        if (!check(TokenType.Identifier)) return false;
+        int offset = 1;
+        while (peek(offset).type == TokenType.Dot && peek(offset + 1).type == TokenType.Identifier) {
+            offset += 2;
+        }
+        return peek(offset).type == TokenType.Not && peek(offset + 1).type == TokenType.LeftParen;
+    }
+
     private bool match(TokenType[] types...) {
         foreach (type; types) {
             if (check(type)) {
@@ -57,6 +78,68 @@ class Parser {
 
     private void errorAt(int line, int column, string message) {
         throw new CompileError(message, filePath, line, column);
+    }
+
+    // Strips a trailing `:radix` and/or `:width` format hint off one
+    // interpolation's raw captured source, e.g. "n:hex" -> ("n", hex),
+    // "n:016" -> ("n", width 16, zero-padded), "n:016:hex" -> ("n", width
+    // 16 zero-padded, hex). Order is fixed (width before radix, as
+    // written) since a bare digit run is unambiguous - it can't also be
+    // "hex"/"oct"/"bin" - so this just peels the radix off the end first,
+    // then the width off whatever's left. Colon is safe as the delimiter
+    // here (unlike, say, a comma) because it never otherwise appears at
+    // the tail of a bare LLPL expression - no ternary, no slicing, no
+    // trailing type ascription - so this can't misfire on a real
+    // expression that happens to end in a name like "hex" or in digits.
+    private void splitInterpolationFormat(string raw, out string exprSource, out InterpFormat spec) {
+        string trimmed = raw.strip();
+
+        static immutable string[3] kinds = ["hex", "oct", "bin"];
+        foreach (kind; kinds) {
+            string suffix = ":" ~ kind;
+            if (trimmed.endsWith(suffix)) {
+                spec.radix = kind;
+                trimmed = trimmed[0 .. $ - suffix.length];
+                break;
+            }
+        }
+
+        ptrdiff_t lastColon = -1;
+        foreach_reverse (i, c; trimmed) {
+            if (c == ':') { lastColon = i; break; }
+        }
+        if (lastColon >= 0) {
+            string candidate = trimmed[lastColon + 1 .. $];
+            bool allDigits = candidate.length > 0;
+            foreach (c; candidate) {
+                if (c < '0' || c > '9') { allDigits = false; break; }
+            }
+            if (allDigits) {
+                spec.zeroPad = candidate.length > 1 && candidate[0] == '0';
+                spec.width = to!int(candidate);
+                trimmed = trimmed[0 .. lastColon];
+            }
+        }
+
+        exprSource = trimmed;
+    }
+
+    // Parses one `\(...)` interpolation's raw captured source (see
+    // Lexer.captureInterpolationExpr) as a standalone expression, by
+    // re-lexing and re-parsing just that substring. The sub-lexer's own
+    // line/column numbering restarts at 1:1 within the substring rather
+    // than the enclosing file, so the result is re-stamped to the position
+    // of the string literal itself - not perfectly precise for an error
+    // deep inside a multi-part interpolated expression, but close enough
+    // to find, and far better than losing the position entirely.
+    private ASTNode parseInterpolationExpr(string raw, int line, int column) {
+        auto subLexer = new Lexer(raw);
+        Token[] subTokens = subLexer.tokenize();
+        auto subParser = new Parser(subTokens, filePath);
+        ASTNode expr = subParser.expression();
+        expr.line = line;
+        expr.column = column;
+        return expr;
     }
 
     // Converts the raw text of an Integer token (as produced by the lexer,
@@ -89,6 +172,8 @@ class Parser {
             return namespaceDecl();
         } else if (check(TokenType.Enum)) {
             return enumDecl();
+        } else if (check(TokenType.Macro)) {
+            return macroDecl();
         } else if (check(TokenType.Alias)) {
             return aliasDecl();
         } else if (check(TokenType.Interrupt) || check(TokenType.Function)) {
@@ -169,6 +254,29 @@ class Parser {
         return new NamespaceDecl(name, members, startLine, startColumn);
     }
 
+    // `macro NAME(param, ...) { statements }` - params are plain names (no
+    // types: substitution is purely syntactic, so whatever's inferred at
+    // each call site applies). The body is parsed like any other block;
+    // expansion happens later, in the code generator.
+    private MacroDecl macroDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Macro);
+        string name = expect(TokenType.Identifier).value;
+        expect(TokenType.LeftParen);
+
+        string[] params;
+        if (!check(TokenType.RightParen)) {
+            do {
+                params ~= expect(TokenType.Identifier).value;
+            } while (match(TokenType.Comma));
+        }
+        expect(TokenType.RightParen);
+
+        Block body_ = block();
+        return new MacroDecl(name, params, body_, startLine, startColumn);
+    }
+
     private AliasDecl aliasDecl() {
         int startLine = current.line;
         int startColumn = current.column;
@@ -181,7 +289,25 @@ class Parser {
             targetPath ~= expect(TokenType.Identifier).value;
         }
 
-        return new AliasDecl(name, targetPath, startLine, startColumn);
+        // A trailing `*`/`[...]` (or a bare primitive name with neither)
+        // marks this as a *type* alias rather than a symbol alias - see
+        // the AliasDecl doc comment.
+        bool isPointer = false;
+        bool isArray = false;
+        int arraySize = 0;
+        if (match(TokenType.Star)) {
+            isPointer = true;
+        }
+        if (match(TokenType.LeftBracket)) {
+            isArray = true;
+            if (check(TokenType.Integer)) {
+                arraySize = to!int(current.value);
+                advance();
+            }
+            expect(TokenType.RightBracket);
+        }
+
+        return new AliasDecl(name, targetPath, isPointer, isArray, arraySize, startLine, startColumn);
     }
 
     private ImportStmt importStmt() {
@@ -234,6 +360,8 @@ class Parser {
     }
 
     private FunctionDecl externDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
         expect(TokenType.Extern);
         expect(TokenType.Function);
         string name = expect(TokenType.Identifier).value;
@@ -248,7 +376,7 @@ class Parser {
             returnType = parseType();
         }
 
-        return new FunctionDecl(name, params, returnType, null, true, false, isVariadic);
+        return new FunctionDecl(name, params, returnType, null, true, false, isVariadic, startLine, startColumn);
     }
 
     // Operator tokens that can appear after `operator` in a method
@@ -269,6 +397,8 @@ class Parser {
     }
 
     private FunctionDecl functionDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
         bool isInterrupt = match(TokenType.Interrupt);
         expect(TokenType.Function);
 
@@ -279,11 +409,18 @@ class Parser {
         string rawOp;
         if (match(TokenType.Operator)) {
             isOperator = true;
-            if (!isOverloadableOperatorToken()) {
+            if (match(TokenType.LeftBracket)) {
+                // `operator[]` (subscript) - the only overloadable operator
+                // that's a token pair rather than a single token, so it
+                // can't go through isOverloadableOperatorToken.
+                expect(TokenType.RightBracket);
+                rawOp = "[]";
+            } else if (isOverloadableOperatorToken()) {
+                rawOp = current.value;
+                advance();
+            } else {
                 error("Expected an overloadable operator after 'operator'");
             }
-            rawOp = current.value;
-            advance();
             name = rawOp; // placeholder; resolved to its C-safe name below
         } else {
             name = expect(TokenType.Identifier).value;
@@ -312,10 +449,13 @@ class Parser {
             name = resolved;
         }
 
-        return new FunctionDecl(name, params, returnType, body_, false, isInterrupt, isVariadic);
+        return new FunctionDecl(name, params, returnType, body_, false, isInterrupt, isVariadic,
+            startLine, startColumn);
     }
 
     private ClassDecl classDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
         expect(TokenType.Class);
         string name = expect(TokenType.Identifier).value;
         expect(TokenType.LeftBrace);
@@ -340,10 +480,12 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new ClassDecl(name, fields, constructor, destructor, methods);
+        return new ClassDecl(name, fields, constructor, destructor, methods, startLine, startColumn);
     }
 
     private StructDecl structDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
         bool packed = match(TokenType.Packed);
         expect(TokenType.Struct);
         string name = expect(TokenType.Identifier).value;
@@ -359,10 +501,12 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new StructDecl(name, fields, packed);
+        return new StructDecl(name, fields, packed, startLine, startColumn);
     }
 
     private FunctionDecl constructorDecl(string className) {
+        int startLine = current.line;
+        int startColumn = current.column;
         expect(TokenType.Constructor);
         expect(TokenType.LeftParen);
 
@@ -378,16 +522,20 @@ class Parser {
         expect(TokenType.RightParen);
 
         Block body_ = block();
-        return new FunctionDecl(className ~ "_constructor", params, new Type("void"), body_);
+        return new FunctionDecl(className ~ "_constructor", params, new Type("void"), body_,
+            false, false, false, startLine, startColumn);
     }
 
     private FunctionDecl destructorDecl(string className) {
+        int startLine = current.line;
+        int startColumn = current.column;
         expect(TokenType.Destructor);
         expect(TokenType.LeftParen);
         expect(TokenType.RightParen);
 
         Block body_ = block();
-        return new FunctionDecl(className ~ "_destructor", [], new Type("void"), body_);
+        return new FunctionDecl(className ~ "_destructor", [], new Type("void"), body_,
+            false, false, false, startLine, startColumn);
     }
 
     private VarDecl varDecl() {
@@ -470,7 +618,25 @@ class Parser {
         return new Block(statements);
     }
 
+    // `<statement> unless <condition>` - a trailing modifier accepted after
+    // any statement, desugaring to `if !(<condition>) { <statement> }`.
+    // Checked after the statement is fully parsed (so it applies to the
+    // whole thing, including e.g. an if/else chain's trailing else), which
+    // keeps this a single check here rather than something every
+    // statement-parsing function needs to know about.
     private ASTNode statement() {
+        ASTNode stmt = statementInner();
+        if (match(TokenType.Unless)) {
+            int condLine = current.line;
+            int condColumn = current.column;
+            ASTNode condition = expression();
+            ASTNode negated = new UnaryExpr("!", condition, condLine, condColumn);
+            return new IfStmt(negated, new Block([stmt]));
+        }
+        return stmt;
+    }
+
+    private ASTNode statementInner() {
         if (check(TokenType.If)) {
             return ifStmt();
         } else if (check(TokenType.While)) {
@@ -489,9 +655,70 @@ class Parser {
             return varDecl();
         } else if (check(TokenType.LeftBrace)) {
             return block();
+        } else if (check(TokenType.Quote)) {
+            return quoteExpr();
+        } else if (isMacroInvocationAhead()) {
+            return macroInvocationStmt();
         } else {
             return exprStmt();
         }
+    }
+
+    private MacroInvocation macroInvocationStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        string name = expect(TokenType.Identifier).value;
+        while (match(TokenType.Dot)) {
+            name ~= "_" ~ expect(TokenType.Identifier).value;
+        }
+        expect(TokenType.Not);
+        expect(TokenType.LeftParen);
+
+        ASTNode[] args;
+        if (!check(TokenType.RightParen)) {
+            do {
+                args ~= expression();
+            } while (match(TokenType.Comma));
+        }
+        expect(TokenType.RightParen);
+
+        return new MacroInvocation(name, args, startLine, startColumn);
+    }
+
+    private ASTNode[] argumentList() {
+        ASTNode[] args;
+        if (!check(TokenType.RightParen)) {
+            do {
+                args ~= expression();
+            } while (match(TokenType.Comma));
+        }
+        expect(TokenType.RightParen);
+        return args;
+    }
+
+    private QuoteExpr quoteExpr() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Quote);
+
+        if (check(TokenType.LeftBrace)) {
+            return new QuoteExpr(block(), true, startLine, startColumn);
+        }
+
+        expect(TokenType.LeftParen, "Expected '{' or '(' after quote");
+        ASTNode expr = expression();
+        expect(TokenType.RightParen);
+        return new QuoteExpr(expr, false, startLine, startColumn);
+    }
+
+    private UnquoteExpr unquoteExpr() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Unquote);
+        expect(TokenType.LeftParen);
+        ASTNode expr = expression();
+        expect(TokenType.RightParen);
+        return new UnquoteExpr(expr, startLine, startColumn);
     }
 
     private AsmStmt asmStmt() {
@@ -669,12 +896,48 @@ class Parser {
         return assignment();
     }
 
+    // Maps a compound-assignment token to the plain binary operator it
+    // desugars around (`+=` -> "+", so `x += y` parses as `x = x + y`).
+    // Returns "" for anything that isn't one.
+    private string compoundAssignOp(TokenType type) {
+        switch (type) {
+            case TokenType.PlusEqual: return "+";
+            case TokenType.MinusEqual: return "-";
+            case TokenType.StarEqual: return "*";
+            case TokenType.SlashEqual: return "/";
+            case TokenType.PercentEqual: return "%";
+            case TokenType.AmpEqual: return "&";
+            case TokenType.PipeEqual: return "|";
+            case TokenType.CaretEqual: return "^";
+            case TokenType.ShlEqual: return "<<";
+            case TokenType.ShrEqual: return ">>";
+            default: return "";
+        }
+    }
+
     private ASTNode assignment() {
         ASTNode expr = logicalOr();
 
         if (match(TokenType.Assign)) {
             ASTNode value = assignment();
             return new BinaryExpr("=", expr, value, expr.line, expr.column);
+        }
+
+        string op = compoundAssignOp(current.type);
+        if (op.length > 0) {
+            advance();
+            ASTNode value = assignment();
+            // Desugars to `expr = expr op value` - reusing the same `expr`
+            // node as both the assignment target and the left operand of
+            // `op` (rather than parsing/allocating it twice) means a
+            // side-effecting target - `arr[f()] += 1` - evaluates `f()`
+            // twice in the generated C, once per occurrence. Harmless for
+            // the common case (a plain variable, field, or index by a pure
+            // expression); documented here rather than guarded against, in
+            // keeping with this compiler's other simple-over-exhaustive
+            // trade-offs (see e.g. codegen.d's memberAccessor).
+            ASTNode combined = new BinaryExpr(op, expr, value, expr.line, expr.column);
+            return new BinaryExpr("=", expr, combined, expr.line, expr.column);
         }
 
         return expr;
@@ -880,25 +1143,70 @@ class Parser {
         if (match(TokenType.String)) {
             return new StringLiteral(tokens[pos - 1].value, tokLine, tokColumn);
         }
+        if (match(TokenType.InterpolatedString)) {
+            string[] interpParts = tokens[pos - 1].interpParts;
+            string[] literalParts;
+            ASTNode[] expressions;
+            InterpFormat[] specs;
+            foreach (i, part; interpParts) {
+                if (i % 2 == 0) {
+                    literalParts ~= part;
+                } else {
+                    string exprSource;
+                    InterpFormat spec;
+                    splitInterpolationFormat(part, exprSource, spec);
+                    expressions ~= parseInterpolationExpr(exprSource, tokLine, tokColumn);
+                    specs ~= spec;
+                }
+            }
+            return new InterpolatedStringLiteral(literalParts, expressions, specs, tokLine, tokColumn);
+        }
         if (match(TokenType.Identifier)) {
-            return new Identifier(tokens[pos - 1].value, tokLine, tokColumn);
+            string name = tokens[pos - 1].value;
+            bool qualifiedMacro = false;
+            int offset = 0;
+            while (peek(offset).type == TokenType.Dot && peek(offset + 1).type == TokenType.Identifier) {
+                offset += 2;
+            }
+            qualifiedMacro = peek(offset).type == TokenType.Not;
+
+            if (qualifiedMacro) {
+                while (match(TokenType.Dot)) {
+                    name ~= "_" ~ expect(TokenType.Identifier).value;
+                }
+            }
+            if (match(TokenType.Not)) {
+                expect(TokenType.LeftParen);
+                return new MacroInvocation(name, argumentList(), tokLine, tokColumn);
+            }
+            return new Identifier(name, tokLine, tokColumn);
         }
         if (match(TokenType.New)) {
             Type type = parseType();
             expect(TokenType.LeftParen);
-            ASTNode[] args;
-            if (!check(TokenType.RightParen)) {
-                do {
-                    args ~= expression();
-                } while (match(TokenType.Comma));
-            }
-            expect(TokenType.RightParen);
+            ASTNode[] args = argumentList();
             return new NewExpr(type, args, tokLine, tokColumn);
+        }
+        if (check(TokenType.Quote)) {
+            return quoteExpr();
+        }
+        if (check(TokenType.Unquote)) {
+            return unquoteExpr();
         }
         if (match(TokenType.LeftParen)) {
             ASTNode expr = expression();
             expect(TokenType.RightParen);
             return expr;
+        }
+        if (match(TokenType.LeftBracket)) {
+            ASTNode[] elements;
+            if (!check(TokenType.RightBracket)) {
+                do {
+                    elements ~= expression();
+                } while (match(TokenType.Comma));
+            }
+            expect(TokenType.RightBracket);
+            return new ArrayLiteral(elements, tokLine, tokColumn);
         }
 
         error(format("Unexpected token: %s", current.type));

@@ -2,7 +2,7 @@
     "name": "llpl-language",
     "displayName": "LLPL Language Support",
     "description": "Syntax highlighting and language configuration for LLPL (Low Level Programming Language)",
-    "version": "0.2.0",
+    "version": "0.5.0",
     "publisher": "llpl-team",
     "license": "MIT",
     "engines": {
@@ -11,6 +11,19 @@
     "categories": [
         "Programming Languages"
     ],
+    "main": "./out/extension.js",
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ."
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/vscode": "^1.75.0",
+        "typescript": "^5.4.0"
+    },
     "contributes": {
         "languages": [
             {
@@ -37,6 +50,16 @@
                 "language": "llpl",
                 "path": "./snippets/llpl.code-snippets"
             }
-        ]
+        ],
+        "configuration": {
+            "title": "LLPL",
+            "properties": {
+                "llpl.compilerPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the llpl compiler binary. Leave empty to auto-detect (walks up from the workspace root looking for an 'llpl' executable, falling back to PATH)."
+                }
+            }
+        }
     }
 }

@@ -10,6 +10,7 @@ A low-level programming language with Swift/JavaScript-like syntax that compiles
 - **Classes**: Object-oriented programming with constructors and destructors
 - **Automatic Reference Counting**: Memory management without manual malloc/free
 - **Defer Statement**: Resource cleanup similar to Swift
+- **Macros**: Compile-time expansion with `quote`/`unquote`
 - **C FFI**: Easy interoperability with C code
 - **Bare Metal**: Compiles to efficient C code for kernel development
 
@@ -91,6 +92,31 @@ func open_file() {
 
     // File will be automatically closed when function returns
     // even on early returns or errors
+}
+```
+
+### Macros
+
+Macros expand at compile time. A macro can use `quote { ... }` to produce
+statements, or `quote(expr)` to produce an expression. Inside quoted syntax,
+macro arguments are inserted explicitly with `unquote(...)`.
+
+```swift
+macro assignTwice(target, value) {
+    quote {
+        unquote(target) = unquote(value)
+        unquote(target) = unquote(target) + 1
+    }
+}
+
+macro square(value) {
+    quote(unquote(value) * unquote(value))
+}
+
+func compute() -> int {
+    let x: int = 0
+    assignTwice!(x, 41)
+    return square!(x)
 }
 ```
 

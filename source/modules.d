@@ -141,3 +141,28 @@ class ModuleResolver {
         return result;
     }
 }
+
+// `prelude.llpl` ships as a sibling of the compiler binary itself (not
+// relative to the current working directory, so `llpl foo.llpl` behaves
+// the same no matter where it's run from) - see prelude.llpl for what it
+// contains and why. Returns "" if there isn't one there, so building
+// without a prelude present is a silent no-op rather than an error: it's
+// an optional convenience, not a required part of every LLPL toolchain.
+string findPreludePath() {
+    string candidate = buildNormalizedPath(dirName(thisExePath()), "prelude.llpl");
+    return exists(candidate) ? candidate : "";
+}
+
+// Resolves `entryPath` and everything it imports, exactly like
+// `ModuleResolver.resolveAll`, except prelude.llpl (if present) is
+// resolved first and unconditionally, so its declarations are visible
+// everywhere without needing an explicit `import` - regardless of whether
+// the entry file, or anything it imports, ever mentions it.
+Program[] resolveWithPrelude(string entryPath) {
+    auto resolver = new ModuleResolver();
+    string preludePath = findPreludePath();
+    if (preludePath.length > 0) {
+        resolver.resolveAll(preludePath);
+    }
+    return resolver.resolveAll(entryPath);
+}

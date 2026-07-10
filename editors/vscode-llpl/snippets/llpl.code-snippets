@@ -72,6 +72,15 @@
         "body": "alias ${1:name} = ${2:a.b.c}",
         "description": "Alias declaration"
     },
+    "Macro": {
+        "prefix": "macro",
+        "body": [
+            "macro ${1:NAME}(${2:param}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Macro declaration (expanded inline at each NAME!(args) call site)"
+    },
     "If": {
         "prefix": "if",
         "body": [
@@ -80,6 +89,11 @@
             "}"
         ],
         "description": "If statement"
+    },
+    "Unless": {
+        "prefix": "unless",
+        "body": "${1:statement} unless ${2:condition}",
+        "description": "Statement modifier - runs the statement only when the condition is false"
     },
     "If Else": {
         "prefix": "ifelse",

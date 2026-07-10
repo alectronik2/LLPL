@@ -10,6 +10,35 @@ import std.range;
 import ast;
 import errors;
 
+// Declaration-site info for one top-level symbol (function, class, struct,
+// macro, global var/const/enum-member) or one class method/field (`name`
+// is dotted, e.g. "Console_Screen.write", for the latter). Built by
+// CodeGenerator.generateMultiple as a side effect of normal codegen, for
+// LSP-style tooling (see lspquery.d) - hover text, go-to-definition, and
+// completion all come from this list.
+struct SymbolInfo {
+    string name;
+    string kind; // "function", "class", "struct", "macro", "variable", "field", "method"
+    string file;
+    int line;
+    int column;
+    string signature;
+}
+
+// One resolved reference to a symbol at a source location - e.g. a call,
+// a bare variable read, a `new Foo(...)`, a qualified `Ns.CONST` access.
+// `name` matches a SymbolInfo.name. Also built as a side effect of normal
+// codegen (see the various generateExpression branches and
+// generateMacroExpansion). Powers go-to-definition (map cursor position ->
+// usage -> resolved name -> SymbolInfo) and find-references (collect every
+// usage with a given name).
+struct UsageInfo {
+    string name;
+    string file;
+    int line;
+    int column;
+}
+
 class CodeGenerator {
     private int indentLevel;
     private string[] deferredStatements;
@@ -22,6 +51,15 @@ class CodeGenerator {
     private FunctionDecl[string] functionRegistry; // Functions, by mangled (namespace-prefixed) name
     private ClassDecl[string] classRegistry; // Classes, by mangled (namespace-prefixed) name
     private StructDecl[string] structRegistry; // Structs, by mangled (namespace-prefixed) name
+    private MacroDecl[string] macroRegistry; // Macros, by mangled (namespace-prefixed) name
+    private VarDecl[string] globalVarRegistry; // Global lets/consts (incl. enum members), by mangled name
+    private Type[string] typeAliases; // Type aliases (`alias string = char*`), by mangled alias name
+    private int macroExpansionDepth; // Guards against (possibly indirect) macro self-recursion
+    private SymbolInfo[] collectedSymbols; // Declaration-site symbol table, built by generateMultiple; see symbols()
+    private UsageInfo[] usageRecords; // Resolved reference sites, recorded via recordUsage; see usages()
+    private int interpStringCounter; // Numbers each `\(...)` call site's scratch buffer uniquely
+    private string[] interpBufferDecls; // `static char __llpl_interpN[SIZE];` decls, emitted up front
+    private enum interpBufferSize = 256; // Scratch buffer size for one interpolated string's result
 
     this() {
         indentLevel = 0;
@@ -66,8 +104,200 @@ class CodeGenerator {
         return result;
     }
 
+    // Picks the ksnprintf format specifier for one `\(expr[:width][:radix])`'s
+    // inferred type. Only scalar/pointer types that ksnprintf actually
+    // knows how to format are allowed - a bare struct or class value (not
+    // a pointer) has no sensible textual form, so that's a compile error
+    // rather than silently printing raw bytes or an address.
+    //
+    // `spec.radix` is "" (plain decimal - the default), "hex", "oct", or
+    // "bin" from a trailing `\(n:hex)`-style suffix; a radix's 0x/0o/0b
+    // prefix is literal text outside the width (so `\(n:016:hex)` pads the
+    // hex *digits* to 16, then still shows "0x" in front - the natural
+    // reading for e.g. a zero-padded 64-bit address). `spec.width`/
+    // `zeroPad` come from a `:016`-style suffix (see
+    // Parser.splitInterpolationFormat); only integers accept either.
+    private string interpFormatSpecifier(ASTNode expr, InterpFormat spec) {
+        Type t = inferType(expr);
+        resolveType(t);
+
+        bool isPlainInt = !t.isPointer && !t.isArray &&
+            (t.name == "int" || t.name == "uint" ||
+             t.name == "int16" || t.name == "uint16" ||
+             t.name == "int32" || t.name == "uint32");
+        bool isUnsigned = t.name == "uint" || t.name == "uint16" || t.name == "uint32";
+
+        if (spec.radix.length > 0 || spec.width > 0) {
+            if (!isPlainInt) {
+                string what = spec.radix.length > 0 ? format("':%s'", spec.radix) : "width";
+                throw new CompileError(
+                    format("Cannot use %s formatting on a value of type '%s' - only integers support it",
+                        what, t.toString()),
+                    currentModulePath, expr.line, expr.column);
+            }
+
+            string widthPrefix = spec.width > 0 ? format("%s%d", spec.zeroPad ? "0" : "", spec.width) : "";
+            switch (spec.radix) {
+                case "hex": return "0x%" ~ widthPrefix ~ "x";
+                case "oct": return "0o%" ~ widthPrefix ~ "o";
+                case "bin": return "0b%" ~ widthPrefix ~ "b";
+                case "":    return "%" ~ widthPrefix ~ (isUnsigned ? "u" : "d");
+                default: assert(0, "splitInterpolationFormat only ever produces hex/oct/bin/\"\"");
+            }
+        }
+
+        if (t.isPointer && t.name == "char") return "%s";
+        if (!t.isPointer && !t.isArray && t.name == "char") return "%c";
+        if (!t.isPointer && !t.isArray && t.name == "bool") return "%d";
+        if (t.isPointer) return "%p";
+
+        switch (t.name) {
+            case "int": case "int16": case "int32": return "%d";
+            case "uint": case "uint16": case "uint32": return "%u";
+            default:
+                throw new CompileError(
+                    format("Cannot interpolate a value of type '%s' inside a string - only " ~
+                        "integers, char, bool, char* and other pointers are supported", t.toString()),
+                    currentModulePath, expr.line, expr.column);
+        }
+    }
+
+    // Builds a printf-style format string out of the literal segments (with
+    // any literal '%' escaped to '%%', so user text is never misread as a
+    // format specifier) and one specifier per embedded expression, then
+    // formats it into a scratch buffer unique to this call site and yields
+    // that buffer as a `char*` - all as a single GCC statement-expression,
+    // so it can be used anywhere an expression can (a `let` initializer, a
+    // call argument, ...). The buffer is `static`, not stack-local: a
+    // statement-expression's own locals go out of scope when it ends, so a
+    // stack buffer would leave the result pointing at a dead stack slot
+    // (real UB, worse under -O2). `static` costs reentrancy - two
+    // evaluations of the same call site (e.g. across loop iterations)
+    // overwrite the same memory - but that's already exactly how this
+    // codebase's other sprintf-into-shared-buffer helper (HAL.Log.buffer)
+    // behaves, and there's no allocator to do better in a freestanding build.
+    private string generateInterpolatedString(InterpolatedStringLiteral interp) {
+        string fmt = "";
+        string args = "";
+
+        foreach (i, part; interp.literalParts) {
+            fmt ~= escapeCString(part).replace("%", "%%");
+            if (i < interp.expressions.length) {
+                ASTNode expr = interp.expressions[i];
+                fmt ~= interpFormatSpecifier(expr, interp.specs[i]);
+                args ~= ", " ~ variadicPromote(expr, generateExpression(expr));
+            }
+        }
+
+        string bufName = format("__llpl_interp%d", interpStringCounter++);
+        interpBufferDecls ~= format("static char %s[%d];\n", bufName, interpBufferSize);
+
+        return format("({ ksnprintf(%s, %d, \"%s\"%s); (char*)%s; })",
+            bufName, interpBufferSize, fmt, args, bufName);
+    }
+
     string generate(Program program) {
         return generateMultiple([program]);
+    }
+
+    // Populated as a side effect of generateMultiple(); only meaningful
+    // after it's been called. See SymbolInfo/UsageInfo above and lspquery.d.
+    SymbolInfo[] symbols() { return collectedSymbols; }
+    UsageInfo[] usages() { return usageRecords; }
+
+    private void recordUsage(string name, int line, int column) {
+        usageRecords ~= UsageInfo(name, currentModulePath, line, column);
+    }
+
+    private string functionSignature(FunctionDecl fn, string displayName) {
+        string sig = "";
+        if (fn.isExtern) sig ~= "extern ";
+        if (fn.isInterrupt) sig ~= "interrupt ";
+        sig ~= "func " ~ displayName ~ "(";
+        foreach (i, p; fn.params) {
+            if (i > 0) sig ~= ", ";
+            sig ~= p.name ~ ": " ~ p.type.toString();
+        }
+        if (fn.isVariadic) {
+            if (fn.params.length > 0) sig ~= ", ";
+            sig ~= "...";
+        }
+        sig ~= ")";
+        if (fn.returnType.name != "void" || fn.returnType.isPointer) {
+            sig ~= " -> " ~ fn.returnType.toString();
+        }
+        return sig;
+    }
+
+    private string classSignature(ClassDecl cls, string displayName) {
+        return format("class %s (%d field(s), %d method(s))", displayName, cls.fields.length, cls.methods.length);
+    }
+
+    private string structSignature(StructDecl st, string displayName) {
+        return format("%sstruct %s (%d field(s))", st.packed ? "packed " : "", displayName, st.fields.length);
+    }
+
+    private string macroSignature(MacroDecl m, string displayName) {
+        return format("macro %s(%s)", displayName, m.params.join(", "));
+    }
+
+    private string varSignature(VarDecl v, string displayName) {
+        return format("%s%s: %s", v.isConst ? "const " : "let ", displayName,
+            v.type !is null ? v.type.toString() : "?");
+    }
+
+    private string fieldSignature(VarDecl f, string ownerName) {
+        return format("%s.%s: %s", ownerName, f.name, f.type !is null ? f.type.toString() : "?");
+    }
+
+    private string methodSignature(FunctionDecl m, string ownerName) {
+        return functionSignature(m, ownerName ~ "." ~ m.name);
+    }
+
+    // Builds the flat, declaration-only symbol table (see SymbolInfo) from
+    // every module's top-level declarations. Called at the end of
+    // generateMultiple, after the main generation pass, so every field/
+    // global-var type that started out null (inferred from an initializer)
+    // has already been resolved in place - see generateGlobalVar and the
+    // class/struct field-inference pass earlier in generateMultiple.
+    private void collectSymbolTable(Program[] programs) {
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto funcDecl = cast(FunctionDecl)decl) {
+                    string dname = mangledFunc(funcDecl);
+                    collectedSymbols ~= SymbolInfo(dname, "function", prog.modulePath,
+                        funcDecl.line, funcDecl.column, functionSignature(funcDecl, dname));
+                } else if (auto classDecl = cast(ClassDecl)decl) {
+                    string dname = mangledClass(classDecl);
+                    collectedSymbols ~= SymbolInfo(dname, "class", prog.modulePath,
+                        classDecl.line, classDecl.column, classSignature(classDecl, dname));
+                    foreach (field; classDecl.fields) {
+                        collectedSymbols ~= SymbolInfo(dname ~ "." ~ field.name, "field", prog.modulePath,
+                            field.line, field.column, fieldSignature(field, dname));
+                    }
+                    foreach (method; classDecl.methods) {
+                        collectedSymbols ~= SymbolInfo(dname ~ "." ~ method.name, "method", prog.modulePath,
+                            method.line, method.column, methodSignature(method, dname));
+                    }
+                } else if (auto structDecl = cast(StructDecl)decl) {
+                    string dname = mangledStruct(structDecl);
+                    collectedSymbols ~= SymbolInfo(dname, "struct", prog.modulePath,
+                        structDecl.line, structDecl.column, structSignature(structDecl, dname));
+                    foreach (field; structDecl.fields) {
+                        collectedSymbols ~= SymbolInfo(dname ~ "." ~ field.name, "field", prog.modulePath,
+                            field.line, field.column, fieldSignature(field, dname));
+                    }
+                } else if (auto macroDecl = cast(MacroDecl)decl) {
+                    string dname = mangled(macroDecl.namespaceSegments, macroDecl.name);
+                    collectedSymbols ~= SymbolInfo(dname, "macro", prog.modulePath,
+                        macroDecl.line, macroDecl.column, macroSignature(macroDecl, dname));
+                } else if (auto varDecl = cast(VarDecl)decl) {
+                    string dname = mangled(varDecl.namespaceSegments, varDecl.name);
+                    collectedSymbols ~= SymbolInfo(dname, "variable", prog.modulePath,
+                        varDecl.line, varDecl.column, varSignature(varDecl, dname));
+                }
+            }
+        }
     }
 
     // Joins namespace path segments into a declaration's mangled C identifier,
@@ -114,6 +344,9 @@ class CodeGenerator {
             } else if (auto aliasDecl = cast(AliasDecl)decl) {
                 aliasDecl.namespaceSegments = segments;
                 result ~= aliasDecl;
+            } else if (auto macroDecl = cast(MacroDecl)decl) {
+                macroDecl.namespaceSegments = segments;
+                result ~= macroDecl;
             } else {
                 result ~= decl;
             }
@@ -132,6 +365,25 @@ class CodeGenerator {
 
         // Register functions, classes and structs from all modules up front so
         // type inference can resolve calls/fields regardless of declaration order.
+        // Type aliases (see generateAlias) are registered here too, and before
+        // anything else in this loop touches types, since resolveType() needs
+        // to see them no matter where `alias string = char*` sits relative to
+        // its uses - unlike a symbol alias, which can only ever point at
+        // something already in one of these same registries anyway.
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto aliasDecl = cast(AliasDecl)decl) {
+                    bool isTypeAlias = aliasDecl.targetIsPointer || aliasDecl.targetIsArray ||
+                        (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
+                    if (isTypeAlias) {
+                        string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
+                        string baseName = aliasDecl.targetPath.join("_");
+                        typeAliases[mangledName] = new Type(baseName, aliasDecl.targetIsPointer,
+                            aliasDecl.targetIsArray, aliasDecl.targetArraySize);
+                    }
+                }
+            }
+        }
         foreach (prog; programs) {
             foreach (decl; prog.declarations) {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
@@ -140,6 +392,10 @@ class CodeGenerator {
                     classRegistry[mangledClass(classDecl)] = classDecl;
                 } else if (auto structDecl = cast(StructDecl)decl) {
                     structRegistry[mangledStruct(structDecl)] = structDecl;
+                } else if (auto macroDecl = cast(MacroDecl)decl) {
+                    macroRegistry[mangled(macroDecl.namespaceSegments, macroDecl.name)] = macroDecl;
+                } else if (auto varDecl = cast(VarDecl)decl) {
+                    globalVarRegistry[mangled(varDecl.namespaceSegments, varDecl.name)] = varDecl;
                 }
             }
         }
@@ -173,6 +429,30 @@ class CodeGenerator {
                             checkBitfield(field);
                         }
                     }
+                }
+            }
+        }
+
+        // Resolve global variable types up front too, for the same reason
+        // as class/struct fields just above: with multiple modules merged
+        // into one compile, a global can easily be *used* (e.g. a method
+        // call, which needs to know its class name) by a file that's
+        // processed before the file declaring it - generateGlobalVar
+        // alone, which only runs later per-declaration, would leave
+        // variableTypes empty for it until too late. Harmless to redo the
+        // inference/resolution there afterward; varDecl.type is simply
+        // already set by then.
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                if (auto varDecl = cast(VarDecl)decl) {
+                    currentNamespaceSegments = varDecl.namespaceSegments;
+                    if (varDecl.type is null) {
+                        varDecl.type = inferType(varDecl.initializer);
+                    }
+                    resolveType(varDecl.type);
+                    checkArrayLiteralInit(varDecl);
+                    variableTypes[mangled(varDecl.namespaceSegments, varDecl.name)] = varDecl.type;
                 }
             }
         }
@@ -270,20 +550,103 @@ class CodeGenerator {
         }
         code ~= "\n";
 
-        // Generate declarations from all modules (skip import statements)
+        // Forward declarations for global variables from all modules: even
+        // though the registries above already make a global resolvable by
+        // *name* regardless of which file declares it, C itself still needs
+        // an `extern` declaration textually before a function body in some
+        // other (earlier-processed) file can reference it - the same
+        // problem forward-declaring functions/classes above already solves
+        // for those. The real definition (with its initializer) is emitted
+        // later, in each variable's normal position; a prior `extern`
+        // declaration doesn't conflict with that.
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto varDecl = cast(VarDecl)decl) {
+                    currentNamespaceSegments = varDecl.namespaceSegments;
+                    string cName = mangled(varDecl.namespaceSegments, varDecl.name);
+                    // Must match the real definition's `const`-ness exactly -
+                    // GCC treats an extern declaration and its later
+                    // definition disagreeing on a type qualifier as a
+                    // conflicting redeclaration, not just a style nit.
+                    string constPrefix = varDecl.isConst ? "const " : "";
+                    bool isStructOrClassElement = !varDecl.type.isPointer &&
+                        (isStructTypeName(varDecl.type.name) || isClassTypeName(varDecl.type.name));
+                    if (varDecl.type.isArray && varDecl.type.arraySize > 0 && isStructOrClassElement) {
+                        // An array of struct/class values (not pointers) needs
+                        // its element type *complete* even just to declare the
+                        // array's size - but struct/class bodies aren't defined
+                        // until later in the file (after all these forward
+                        // declarations). Skip it: this only matters for a
+                        // global that's used by a file processed earlier than
+                        // the one declaring it, which none of these are (e.g.
+                        // GDT.entries/IDT.entries are only ever used from
+                        // within their own file).
+                    } else if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
+                        string baseType = primitiveToC(varDecl.type.name);
+                        if (varDecl.type.isPointer) baseType ~= "*";
+                        code ~= format("extern %s%s %s[%d];\n", constPrefix, baseType, cName, varDecl.type.arraySize);
+                    } else {
+                        code ~= format("extern %s%s %s;\n", constPrefix, typeToC(varDecl.type), cName);
+                    }
+                }
+            }
+        }
+        code ~= "\n";
+
+        // Alias `#define`s are emitted early too, for the same reason as
+        // the forward declarations above: the C preprocessor is purely
+        // positional, so a #define must appear before any C code that
+        // uses the alias name - which, once multiple files' declarations
+        // are merged into one compile, could easily be in a file
+        // processed earlier than the one declaring the alias.
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                if (auto aliasDecl = cast(AliasDecl)decl) {
+                    code ~= generateAlias(aliasDecl);
+                }
+            }
+        }
+        code ~= "\n";
+
+        // Generate declarations from all modules (skip import statements).
+        // Collected into declCode, not appended to code directly, because
+        // generating these bodies is what discovers this module's `\(...)`
+        // string interpolations (interpBufferDecls) - and those scratch
+        // buffers need to land *before* any code that might reference them.
+        string declCode = "";
         foreach (prog; programs) {
             currentModulePath = prog.modulePath;
             if (prog.modulePath.length > 0) {
-                code ~= format("// Module: %s\n", prog.modulePath);
+                declCode ~= format("// Module: %s\n", prog.modulePath);
             }
             foreach (decl; prog.declarations) {
                 if (cast(ImportStmt)decl) {
                     continue;  // Skip import statements in code generation
                 }
-                code ~= generateDeclaration(decl);
-                code ~= "\n";
+                if (cast(MacroDecl)decl) {
+                    continue;  // A macro is a compile-time template, not real C - it only
+                               // ever appears inline at its NAME!(...) call sites.
+                }
+                if (cast(AliasDecl)decl) {
+                    continue;  // Already emitted above, ahead of everything that might use it.
+                }
+                declCode ~= generateDeclaration(decl);
+                declCode ~= "\n";
             }
         }
+
+        if (interpBufferDecls.length > 0) {
+            code ~= "// String-interpolation scratch buffers (one per `\\(...)` call site)\n";
+            foreach (bufDecl; interpBufferDecls) {
+                code ~= bufDecl;
+            }
+            code ~= "\n";
+        }
+
+        code ~= declCode;
+
+        collectSymbolTable(programs);
 
         return code;
     }
@@ -341,6 +704,19 @@ class CodeGenerator {
                 currentModulePath, aliasDecl.line, aliasDecl.column);
         }
 
+        // A `*`/`[...]` suffix, or a bare primitive name (which isn't a
+        // registered symbol at all), means there's no symbol to #define
+        // against - this is a *type* alias instead (`alias string =
+        // char*`, `alias Bytes = char[256]`, `alias Cell = int`). Already
+        // registered into typeAliases up front (see generateMultiple), so
+        // resolveType() substitutes it correctly regardless of where this
+        // declaration sits relative to its uses - nothing left to do here.
+        bool isTypeAlias = aliasDecl.targetIsPointer || aliasDecl.targetIsArray ||
+            (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
+        if (isTypeAlias) {
+            return "";
+        }
+
         string target = resolveAliasTarget(aliasDecl.targetPath, aliasDecl.line, aliasDecl.column);
 
         // Register the alias so later references to it resolve exactly like
@@ -383,6 +759,7 @@ class CodeGenerator {
             varDecl.type = inferType(varDecl.initializer);
         }
         resolveType(varDecl.type);
+        checkArrayLiteralInit(varDecl);
         string cName = mangled(varDecl.namespaceSegments, varDecl.name);
         variableTypes[cName] = varDecl.type;
         if (varDecl.isConst) {
@@ -483,6 +860,18 @@ class CodeGenerator {
         // Restore previous context
         currentClassName = prevClassName;
 
+        // Un-bind the constructor's own params (and self) from
+        // variableTypes now that its body is done - otherwise their bare,
+        // unqualified names would keep resolving here for every
+        // subsequently-generated function/method, permanently shadowing
+        // any later global/field that happens to share one of those names
+        // (resolveName checks a bare name before any namespace-qualified
+        // candidate - see enclosingQualifications).
+        foreach (param; constructor.params) {
+            variableTypes.remove(param.name);
+        }
+        variableTypes.remove("self");
+
         return code;
     }
 
@@ -559,6 +948,13 @@ class CodeGenerator {
         // Restore previous context
         currentClassName = prevClassName;
 
+        // See generateConstructor's matching comment: params (and self)
+        // are only valid names inside this method's own body.
+        foreach (param; method.params) {
+            variableTypes.remove(param.name);
+        }
+        variableTypes.remove("self");
+
         return code;
     }
 
@@ -604,8 +1000,25 @@ class CodeGenerator {
             }
         }
 
+        // Replay deferred statements for a fall-off-the-end return (every
+        // *explicit* `return` already replays them inline - see
+        // generateStatement's ReturnStmt case - but a void function that
+        // never writes one needs this too, the same as generateMethod
+        // already does).
+        if (deferredStatements.length > 0) {
+            foreach_reverse (deferStmt; deferredStatements) {
+                code ~= deferStmt;
+            }
+        }
+
         indentLevel--;
         code ~= "}\n";
+
+        // See generateConstructor's matching comment: params are only
+        // valid names inside this function's own body.
+        foreach (param; funcDecl.params) {
+            variableTypes.remove(param.name);
+        }
 
         return code;
     }
@@ -666,6 +1079,7 @@ class CodeGenerator {
                 varDecl.type = inferType(varDecl.initializer);
             }
             resolveType(varDecl.type);
+            checkArrayLiteralInit(varDecl);
 
             // Track the variable type
             variableTypes[varDecl.name] = varDecl.type;
@@ -765,8 +1179,347 @@ class CodeGenerator {
             code ~= generateAsm(asmStmt);
         } else if (auto matchStmt = cast(MatchStmt)node) {
             code ~= generateMatch(matchStmt, isDeferred);
+        } else if (auto macroInvocation = cast(MacroInvocation)node) {
+            code ~= generateMacroExpansion(macroInvocation, isDeferred);
+        } else if (cast(QuoteExpr)node || cast(UnquoteExpr)node) {
+            throw new CompileError("'quote'/'unquote' can only be used to build macro expansions",
+                currentModulePath, node.line, node.column);
         }
 
+        return code;
+    }
+
+    private Type cloneType(Type t) {
+        if (t is null) return null;
+        auto copy = new Type(t.name, t.isPointer, t.isArray, t.arraySize);
+        copy.genericArgs = t.genericArgs.dup;
+        return copy;
+    }
+
+    private ASTNode[] cloneNodes(ASTNode[] nodes, ASTNode[string] subs) {
+        ASTNode[] result;
+        foreach (n; nodes) {
+            result ~= cloneNode(n, subs);
+        }
+        return result;
+    }
+
+    private Block cloneBlock(Block b, ASTNode[string] subs) {
+        if (b is null) return null;
+        return new Block(cloneNodes(b.statements, subs));
+    }
+
+    // Deep-copies an AST subtree, replacing any Identifier whose name is a
+    // macro parameter with a fresh clone of the argument it was called
+    // with. Everything else (locals the macro body declares itself,
+    // references to outer/global names) is copied unchanged and left to
+    // resolve normally at the call site - macros are deliberately
+    // unhygienic about names they didn't introduce, same as C's #define.
+    private ASTNode cloneNode(ASTNode node, ASTNode[string] subs) {
+        if (node is null) return null;
+
+        if (auto ident = cast(Identifier)node) {
+            if (auto sub = ident.name in subs) {
+                return cloneNode(*sub, null); // substitution itself is never re-substituted
+            }
+            return new Identifier(ident.name, ident.line, ident.column);
+        } else if (auto intLit = cast(IntLiteral)node) {
+            return new IntLiteral(intLit.value, intLit.line, intLit.column);
+        } else if (auto strLit = cast(StringLiteral)node) {
+            return new StringLiteral(strLit.value, strLit.line, strLit.column);
+        } else if (auto interp = cast(InterpolatedStringLiteral)node) {
+            return new InterpolatedStringLiteral(interp.literalParts.dup, cloneNodes(interp.expressions, subs),
+                interp.specs.dup, interp.line, interp.column);
+        } else if (auto arrLit = cast(ArrayLiteral)node) {
+            return new ArrayLiteral(cloneNodes(arrLit.elements, subs), arrLit.line, arrLit.column);
+        } else if (auto boolLit = cast(BoolLiteral)node) {
+            return new BoolLiteral(boolLit.value, boolLit.line, boolLit.column);
+        } else if (cast(NullLiteral)node) {
+            return new NullLiteral(node.line, node.column);
+        } else if (auto binExpr = cast(BinaryExpr)node) {
+            return new BinaryExpr(binExpr.op, cloneNode(binExpr.left, subs), cloneNode(binExpr.right, subs),
+                binExpr.line, binExpr.column);
+        } else if (auto unaryExpr = cast(UnaryExpr)node) {
+            return new UnaryExpr(unaryExpr.op, cloneNode(unaryExpr.operand, subs), unaryExpr.line, unaryExpr.column);
+        } else if (auto callExpr = cast(CallExpr)node) {
+            return new CallExpr(cloneNode(callExpr.callee, subs), cloneNodes(callExpr.args, subs),
+                callExpr.line, callExpr.column);
+        } else if (auto memberExpr = cast(MemberExpr)node) {
+            return new MemberExpr(cloneNode(memberExpr.object, subs), memberExpr.member,
+                memberExpr.line, memberExpr.column);
+        } else if (auto indexExpr = cast(IndexExpr)node) {
+            return new IndexExpr(cloneNode(indexExpr.array, subs), cloneNode(indexExpr.index, subs),
+                indexExpr.line, indexExpr.column);
+        } else if (auto newExpr = cast(NewExpr)node) {
+            return new NewExpr(cloneType(newExpr.type), cloneNodes(newExpr.args, subs), newExpr.line, newExpr.column);
+        } else if (auto castExpr = cast(CastExpr)node) {
+            return new CastExpr(cloneType(castExpr.type), cloneNode(castExpr.expression, subs),
+                castExpr.line, castExpr.column);
+        } else if (auto varDecl = cast(VarDecl)node) {
+            return new VarDecl(varDecl.name, cloneType(varDecl.type), cloneNode(varDecl.initializer, subs),
+                varDecl.isConst, varDecl.line, varDecl.column, varDecl.bitWidth);
+        } else if (auto ifStmt = cast(IfStmt)node) {
+            return new IfStmt(cloneNode(ifStmt.condition, subs), cloneBlock(ifStmt.thenBlock, subs),
+                cloneBlock(ifStmt.elseBlock, subs));
+        } else if (auto whileStmt = cast(WhileStmt)node) {
+            return new WhileStmt(cloneNode(whileStmt.condition, subs), cloneBlock(whileStmt.body_, subs));
+        } else if (auto forStmt = cast(ForStmt)node) {
+            return new ForStmt(cloneNode(forStmt.initializer, subs), cloneNode(forStmt.condition, subs),
+                cloneNode(forStmt.update, subs), cloneBlock(forStmt.body_, subs));
+        } else if (auto returnStmt = cast(ReturnStmt)node) {
+            return new ReturnStmt(cloneNode(returnStmt.value, subs));
+        } else if (auto deferStmt = cast(DeferStmt)node) {
+            return new DeferStmt(cloneNode(deferStmt.statement, subs));
+        } else if (auto block = cast(Block)node) {
+            return cloneBlock(block, subs);
+        } else if (auto exprStmt = cast(ExprStmt)node) {
+            return new ExprStmt(cloneNode(exprStmt.expression, subs));
+        } else if (auto asmStmt = cast(AsmStmt)node) {
+            AsmOperand[] cloneOperands(AsmOperand[] ops) {
+                AsmOperand[] result;
+                foreach (op; ops) {
+                    result ~= new AsmOperand(op.constraint, cloneNode(op.expr, subs));
+                }
+                return result;
+            }
+            return new AsmStmt(asmStmt.templateLines.dup, cloneOperands(asmStmt.outputs),
+                cloneOperands(asmStmt.inputs), asmStmt.clobbers.dup, asmStmt.line, asmStmt.column);
+        } else if (auto matchStmt = cast(MatchStmt)node) {
+            MatchCase[] cases;
+            foreach (c; matchStmt.cases) {
+                cases ~= new MatchCase(cloneNodes(c.patterns, subs), cloneBlock(c.body_, subs));
+            }
+            return new MatchStmt(cloneNode(matchStmt.subject, subs), cases, matchStmt.line, matchStmt.column);
+        } else if (auto macroInvocation = cast(MacroInvocation)node) {
+            return new MacroInvocation(macroInvocation.name, cloneNodes(macroInvocation.args, subs),
+                macroInvocation.line, macroInvocation.column);
+        } else if (auto quoteExpr = cast(QuoteExpr)node) {
+            return new QuoteExpr(cloneNode(quoteExpr.body, subs), quoteExpr.isBlock,
+                quoteExpr.line, quoteExpr.column);
+        } else if (auto unquoteExpr = cast(UnquoteExpr)node) {
+            return new UnquoteExpr(cloneNode(unquoteExpr.expression, subs),
+                unquoteExpr.line, unquoteExpr.column);
+        }
+
+        throw new CompileError("Internal error: this construct can't appear inside a macro body",
+            currentModulePath, node.line, node.column);
+    }
+
+    private ASTNode unquoteValue(UnquoteExpr unquoteExpr, ASTNode[string] subs) {
+        ASTNode value = cloneNode(unquoteExpr.expression, subs);
+        if (auto quoteExpr = cast(QuoteExpr)value) {
+            return cloneNode(quoteExpr.body, null);
+        }
+        return value;
+    }
+
+    private ASTNode[] expandQuotedNodes(ASTNode[] nodes, ASTNode[string] subs) {
+        ASTNode[] result;
+        foreach (n; nodes) {
+            result ~= expandQuotedNode(n, subs);
+        }
+        return result;
+    }
+
+    private Block expandQuotedBlock(Block b, ASTNode[string] subs) {
+        if (b is null) return null;
+        return new Block(expandQuotedNodes(b.statements, subs));
+    }
+
+    // Deep-copies quoted syntax. Unlike cloneNode(), plain identifiers are
+    // copied literally; only explicit unquote(...) nodes substitute macro
+    // arguments. This is the key difference between old template-style LLPL
+    // macros and Elixir-style quoted macros.
+    private ASTNode expandQuotedNode(ASTNode node, ASTNode[string] subs) {
+        if (node is null) return null;
+
+        if (auto unquoteExpr = cast(UnquoteExpr)node) {
+            return unquoteValue(unquoteExpr, subs);
+        } else if (auto ident = cast(Identifier)node) {
+            return new Identifier(ident.name, ident.line, ident.column);
+        } else if (auto intLit = cast(IntLiteral)node) {
+            return new IntLiteral(intLit.value, intLit.line, intLit.column);
+        } else if (auto strLit = cast(StringLiteral)node) {
+            return new StringLiteral(strLit.value, strLit.line, strLit.column);
+        } else if (auto interp = cast(InterpolatedStringLiteral)node) {
+            return new InterpolatedStringLiteral(interp.literalParts.dup,
+                expandQuotedNodes(interp.expressions, subs), interp.specs.dup,
+                interp.line, interp.column);
+        } else if (auto arrLit = cast(ArrayLiteral)node) {
+            return new ArrayLiteral(expandQuotedNodes(arrLit.elements, subs), arrLit.line, arrLit.column);
+        } else if (auto boolLit = cast(BoolLiteral)node) {
+            return new BoolLiteral(boolLit.value, boolLit.line, boolLit.column);
+        } else if (cast(NullLiteral)node) {
+            return new NullLiteral(node.line, node.column);
+        } else if (auto binExpr = cast(BinaryExpr)node) {
+            return new BinaryExpr(binExpr.op, expandQuotedNode(binExpr.left, subs),
+                expandQuotedNode(binExpr.right, subs), binExpr.line, binExpr.column);
+        } else if (auto unaryExpr = cast(UnaryExpr)node) {
+            return new UnaryExpr(unaryExpr.op, expandQuotedNode(unaryExpr.operand, subs),
+                unaryExpr.line, unaryExpr.column);
+        } else if (auto callExpr = cast(CallExpr)node) {
+            return new CallExpr(expandQuotedNode(callExpr.callee, subs),
+                expandQuotedNodes(callExpr.args, subs), callExpr.line, callExpr.column);
+        } else if (auto memberExpr = cast(MemberExpr)node) {
+            return new MemberExpr(expandQuotedNode(memberExpr.object, subs), memberExpr.member,
+                memberExpr.line, memberExpr.column);
+        } else if (auto indexExpr = cast(IndexExpr)node) {
+            return new IndexExpr(expandQuotedNode(indexExpr.array, subs),
+                expandQuotedNode(indexExpr.index, subs), indexExpr.line, indexExpr.column);
+        } else if (auto newExpr = cast(NewExpr)node) {
+            return new NewExpr(cloneType(newExpr.type), expandQuotedNodes(newExpr.args, subs),
+                newExpr.line, newExpr.column);
+        } else if (auto castExpr = cast(CastExpr)node) {
+            return new CastExpr(cloneType(castExpr.type), expandQuotedNode(castExpr.expression, subs),
+                castExpr.line, castExpr.column);
+        } else if (auto varDecl = cast(VarDecl)node) {
+            return new VarDecl(varDecl.name, cloneType(varDecl.type),
+                expandQuotedNode(varDecl.initializer, subs), varDecl.isConst,
+                varDecl.line, varDecl.column, varDecl.bitWidth);
+        } else if (auto ifStmt = cast(IfStmt)node) {
+            return new IfStmt(expandQuotedNode(ifStmt.condition, subs),
+                expandQuotedBlock(ifStmt.thenBlock, subs), expandQuotedBlock(ifStmt.elseBlock, subs));
+        } else if (auto whileStmt = cast(WhileStmt)node) {
+            return new WhileStmt(expandQuotedNode(whileStmt.condition, subs),
+                expandQuotedBlock(whileStmt.body_, subs));
+        } else if (auto forStmt = cast(ForStmt)node) {
+            return new ForStmt(expandQuotedNode(forStmt.initializer, subs),
+                expandQuotedNode(forStmt.condition, subs), expandQuotedNode(forStmt.update, subs),
+                expandQuotedBlock(forStmt.body_, subs));
+        } else if (auto returnStmt = cast(ReturnStmt)node) {
+            return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
+        } else if (auto deferStmt = cast(DeferStmt)node) {
+            return new DeferStmt(expandQuotedNode(deferStmt.statement, subs));
+        } else if (auto block = cast(Block)node) {
+            return expandQuotedBlock(block, subs);
+        } else if (auto exprStmt = cast(ExprStmt)node) {
+            return new ExprStmt(expandQuotedNode(exprStmt.expression, subs));
+        } else if (auto asmStmt = cast(AsmStmt)node) {
+            AsmOperand[] cloneOperands(AsmOperand[] ops) {
+                AsmOperand[] result;
+                foreach (op; ops) {
+                    result ~= new AsmOperand(op.constraint, expandQuotedNode(op.expr, subs));
+                }
+                return result;
+            }
+            return new AsmStmt(asmStmt.templateLines.dup, cloneOperands(asmStmt.outputs),
+                cloneOperands(asmStmt.inputs), asmStmt.clobbers.dup, asmStmt.line, asmStmt.column);
+        } else if (auto matchStmt = cast(MatchStmt)node) {
+            MatchCase[] cases;
+            foreach (c; matchStmt.cases) {
+                cases ~= new MatchCase(expandQuotedNodes(c.patterns, subs), expandQuotedBlock(c.body_, subs));
+            }
+            return new MatchStmt(expandQuotedNode(matchStmt.subject, subs), cases,
+                matchStmt.line, matchStmt.column);
+        } else if (auto macroInvocation = cast(MacroInvocation)node) {
+            return new MacroInvocation(macroInvocation.name, expandQuotedNodes(macroInvocation.args, subs),
+                macroInvocation.line, macroInvocation.column);
+        } else if (auto quoteExpr = cast(QuoteExpr)node) {
+            return new QuoteExpr(cloneNode(quoteExpr.body, null), quoteExpr.isBlock,
+                quoteExpr.line, quoteExpr.column);
+        }
+
+        throw new CompileError("Internal error: this construct can't appear inside quoted macro syntax",
+            currentModulePath, node.line, node.column);
+    }
+
+    private enum maxMacroExpansionDepth = 64;
+
+    private MacroDecl resolveMacroInvocation(MacroInvocation inv) {
+        string mangledName = resolveName(inv.name, (n) => (n in macroRegistry) !is null);
+        auto declPtr = mangledName in macroRegistry;
+        if (declPtr is null) {
+            throw new CompileError(format("Unknown macro '%s'", inv.name),
+                currentModulePath, inv.line, inv.column);
+        }
+        MacroDecl decl = *declPtr;
+        recordUsage(mangledName, inv.line, inv.column);
+
+        if (inv.args.length != decl.params.length) {
+            throw new CompileError(
+                format("Macro '%s' expects %d argument(s), got %d",
+                    decl.name, decl.params.length, inv.args.length),
+                currentModulePath, inv.line, inv.column);
+        }
+
+        if (macroExpansionDepth >= maxMacroExpansionDepth) {
+            throw new CompileError(
+                format("Macro '%s' exceeded the maximum expansion depth (%d) - " ~
+                    "check for (possibly indirect) self-recursion", decl.name, maxMacroExpansionDepth),
+                currentModulePath, inv.line, inv.column);
+        }
+
+        return decl;
+    }
+
+    private ASTNode[string] macroSubstitutions(MacroDecl decl, MacroInvocation inv) {
+        ASTNode[string] subs;
+        foreach (i, param; decl.params) {
+            subs[param] = inv.args[i];
+        }
+        return subs;
+    }
+
+    private QuoteExpr macroQuoteBody(MacroDecl decl) {
+        if (decl.body_.statements.length != 1) return null;
+        ASTNode stmt = decl.body_.statements[0];
+        if (auto quoteExpr = cast(QuoteExpr)stmt) return quoteExpr;
+        if (auto exprStmt = cast(ExprStmt)stmt) {
+            return cast(QuoteExpr)exprStmt.expression;
+        }
+        if (auto returnStmt = cast(ReturnStmt)stmt) {
+            return cast(QuoteExpr)returnStmt.value;
+        }
+        return null;
+    }
+
+    // Expands `inv` inline: substitutes each parameter with the argument it
+    // was called with, splices the resulting statements into a fresh `{ }`
+    // block (so repeated/nested expansions never collide over locals the
+    // macro body declares), and generates code for them in place.
+    private string generateMacroExpansion(MacroInvocation inv, bool isDeferred) {
+        MacroDecl decl = resolveMacroInvocation(inv);
+        ASTNode[string] subs = macroSubstitutions(decl, inv);
+        QuoteExpr quoteExpr = macroQuoteBody(decl);
+
+        Block expanded;
+        if (quoteExpr !is null) {
+            if (!quoteExpr.isBlock) {
+                throw new CompileError(
+                    format("Macro '%s' expands to an expression, but was used as a statement", decl.name),
+                    currentModulePath, inv.line, inv.column);
+            }
+            expanded = cast(Block)expandQuotedNode(quoteExpr.body, subs);
+        } else {
+            expanded = cloneBlock(decl.body_, subs);
+        }
+
+        macroExpansionDepth++;
+        string code = indent() ~ "{\n";
+        indentLevel++;
+        foreach (stmt; expanded.statements) {
+            code ~= generateStatement(stmt, isDeferred);
+        }
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        macroExpansionDepth--;
+
+        return code;
+    }
+
+    private string generateMacroExpression(MacroInvocation inv) {
+        MacroDecl decl = resolveMacroInvocation(inv);
+        QuoteExpr quoteExpr = macroQuoteBody(decl);
+        if (quoteExpr is null || quoteExpr.isBlock) {
+            throw new CompileError(
+                format("Macro '%s' does not expand to an expression", decl.name),
+                currentModulePath, inv.line, inv.column);
+        }
+
+        macroExpansionDepth++;
+        ASTNode expanded = expandQuotedNode(quoteExpr.body, macroSubstitutions(decl, inv));
+        string code = generateExpression(expanded);
+        macroExpansionDepth--;
         return code;
     }
 
@@ -963,6 +1716,32 @@ class CodeGenerator {
         }
     }
 
+    // Fills in `varDecl.type.arraySize` from an array-literal initializer
+    // when none was given (`let arr: char[] = [1, 2, 3]`), or checks it
+    // matches when one was (`let arr: char[8] = [...]` needs exactly 8
+    // elements) - called for both local (generateStatement) and global
+    // (generateGlobalVar) `let`/`const` declarations. A no-op unless the
+    // initializer is actually an ArrayLiteral.
+    private void checkArrayLiteralInit(VarDecl varDecl) {
+        auto lit = cast(ArrayLiteral)varDecl.initializer;
+        if (lit is null) return;
+
+        if (!varDecl.type.isArray) {
+            throw new CompileError(
+                format("Cannot assign an array literal to '%s': declared type is '%s', not an array",
+                    varDecl.name, varDecl.type.toString()),
+                currentModulePath, varDecl.initializer.line, varDecl.initializer.column);
+        }
+        if (varDecl.type.arraySize == 0) {
+            varDecl.type.arraySize = cast(int)lit.elements.length;
+        } else if (varDecl.type.arraySize != lit.elements.length) {
+            throw new CompileError(
+                format("Array literal has %d element(s), but '%s' is declared as %s[%d]",
+                    lit.elements.length, varDecl.name, varDecl.type.name, varDecl.type.arraySize),
+                currentModulePath, varDecl.initializer.line, varDecl.initializer.column);
+        }
+    }
+
     // Structs are plain value types with no constructor/allocator; `new`
     // only makes sense for classes.
     private void checkNotStruct(NewExpr newExpr) {
@@ -1001,6 +1780,18 @@ class CodeGenerator {
     // are already fully qualified/unresolvable.
     private void resolveType(Type t) {
         if (t is null) return;
+        if (auto aliased = t.name in typeAliases) {
+            // Substitute the alias's own type in place. `||`/best-effort
+            // merge, not a proper multi-level pointer: if the use site
+            // *also* wrote `*`/`[...]` on an already-pointer/array alias
+            // (`string*` where `string` is `char*`), there's no way to
+            // represent "pointer to pointer" in this single-flag Type
+            // model - same limitation as everywhere else in the language.
+            t.name = aliased.name;
+            t.isPointer = t.isPointer || aliased.isPointer;
+            t.isArray = t.isArray || aliased.isArray;
+            if (aliased.arraySize > 0) t.arraySize = aliased.arraySize;
+        }
         if (isPrimitiveTypeName(t.name)) return;
         if (t.name in classRegistry || t.name in structRegistry) return;
         foreach (candidate; enclosingQualifications(t.name)) {
@@ -1111,6 +1902,20 @@ class CodeGenerator {
         return format("%s_%s(%s)", selfType.name, method.name, generateExpression(unaryExpr.operand));
     }
 
+    // Same idea as tryBinaryOperatorOverloadCall, for `arr[index]` where
+    // `arr` is a class instance defining `operator[]` (op_index). Read-only:
+    // there's no op_index= counterpart, so this never fires for the left
+    // side of an assignment in a way that would need an lvalue - see
+    // ast.operatorMethodName's doc comment.
+    private string tryIndexOperatorOverloadCall(IndexExpr indexExpr) {
+        FunctionDecl method = findOperatorMethod(indexExpr.array, "[]", false);
+        if (method is null) return "";
+        Type selfType = inferType(indexExpr.array);
+        resolveType(selfType);
+        return format("%s_%s(%s, %s)", selfType.name, method.name,
+            generateExpression(indexExpr.array), generateExpression(indexExpr.index));
+    }
+
     // Tries to resolve a dotted chain as a namespace-qualified reference
     // (checked via `exists`, e.g. against functionRegistry or variableTypes)
     // rather than instance member access. Returns "" if it isn't one.
@@ -1186,6 +1991,7 @@ class CodeGenerator {
                     qualifiedFunc = tryResolveExternFunctionMember(memberExpr);
                 }
                 if (qualifiedFunc.length > 0) {
+                    recordUsage(qualifiedFunc, memberExpr.line, memberExpr.column);
                     FunctionDecl qualifiedDecl = functionRegistry[qualifiedFunc];
                     string qargs = "";
                     foreach (i, arg; callExpr.args) {
@@ -1202,12 +2008,17 @@ class CodeGenerator {
                 string objectExpr = generateExpression(memberExpr.object);
                 string methodName = memberExpr.member;
 
-                // Try to determine the class type
+                // Try to determine the class type - inferType handles far
+                // more than a bare identifier (a `new Foo(...)` receiver, a
+                // chained call like `a.trim().to_upper()`, an indexed or
+                // field-accessed instance, ...), so a method call works on
+                // any expression it can type, not just `x.method()`.
                 string className = "";
-                if (auto objIdent = cast(Identifier)memberExpr.object) {
-                    if (objIdent.name in variableTypes) {
-                        className = variableTypes[objIdent.name].name;
-                    }
+                try {
+                    className = inferType(memberExpr.object).name;
+                } catch (Exception e) {
+                    // fall through - className stays "", falls back to the
+                    // CLASS_ placeholder below
                 }
 
                 // Generate method call with object as first parameter
@@ -1217,11 +2028,15 @@ class CodeGenerator {
                 }
 
                 if (className.length > 0) {
+                    recordUsage(className ~ "." ~ methodName, memberExpr.line, memberExpr.column);
                     return format("%s_%s(%s)", className, methodName, args);
                 } else {
                     return format("CLASS_%s(%s)", methodName, args);
                 }
             } else {
+                // generateExpression(callExpr.callee) already records this as a
+                // plain Identifier usage (see that branch below) - no separate
+                // recordUsage needed here.
                 string callee = generateExpression(callExpr.callee);
                 FunctionDecl calleeDecl = resolveCalledFunction(callExpr.callee);
                 string args = "";
@@ -1240,21 +2055,43 @@ class CodeGenerator {
             // takes priority over instance field access.
             string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
             if (qualifiedVar.length > 0) {
+                recordUsage(qualifiedVar, memberExpr.line, memberExpr.column);
                 return qualifiedVar;
+            }
+
+            if (auto objIdent = cast(Identifier)memberExpr.object) {
+                if (auto objType = objIdent.name in variableTypes) {
+                    recordUsage(objType.name ~ "." ~ memberExpr.member, memberExpr.line, memberExpr.column);
+                }
             }
 
             string accessor = memberAccessor(memberExpr.object);
             return format("%s%s%s", generateExpression(memberExpr.object), accessor, memberExpr.member);
         } else if (auto indexExpr = cast(IndexExpr)node) {
+            string overloadCall = tryIndexOperatorOverloadCall(indexExpr);
+            if (overloadCall.length > 0) {
+                return overloadCall;
+            }
             return format("%s[%s]", generateExpression(indexExpr.array),
                          generateExpression(indexExpr.index));
         } else if (auto ident = cast(Identifier)node) {
-            return resolveName(ident.name,
+            string resolved = resolveName(ident.name,
                 (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null);
+            recordUsage(resolved, ident.line, ident.column);
+            return resolved;
         } else if (auto intLit = cast(IntLiteral)node) {
             return to!string(intLit.value);
         } else if (auto strLit = cast(StringLiteral)node) {
             return format("\"%s\"", escapeCString(strLit.value));
+        } else if (auto interp = cast(InterpolatedStringLiteral)node) {
+            return generateInterpolatedString(interp);
+        } else if (auto arrLit = cast(ArrayLiteral)node) {
+            string elems = "";
+            foreach (i, elem; arrLit.elements) {
+                if (i > 0) elems ~= ", ";
+                elems ~= generateExpression(elem);
+            }
+            return format("{ %s }", elems);
         } else if (auto boolLit = cast(BoolLiteral)node) {
             return boolLit.value ? "1" : "0";
         } else if (auto nullLit = cast(NullLiteral)node) {
@@ -1262,6 +2099,7 @@ class CodeGenerator {
         } else if (auto newExpr = cast(NewExpr)node) {
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
+            recordUsage(newExpr.type.name, newExpr.line, newExpr.column);
             string args = "";
             foreach (i, arg; newExpr.args) {
                 if (i > 0) args ~= ", ";
@@ -1271,6 +2109,11 @@ class CodeGenerator {
         } else if (auto castExpr = cast(CastExpr)node) {
             resolveType(castExpr.type);
             return format("((%s)%s)", typeToC(castExpr.type), generateExpression(castExpr.expression));
+        } else if (auto macroInvocation = cast(MacroInvocation)node) {
+            return generateMacroExpression(macroInvocation);
+        } else if (cast(QuoteExpr)node || cast(UnquoteExpr)node) {
+            throw new CompileError("'quote'/'unquote' can only be used to build macro expansions",
+                currentModulePath, node.line, node.column);
         }
 
         return "";
@@ -1287,10 +2130,16 @@ class CodeGenerator {
             return new Type("int");
         } else if (cast(StringLiteral)expr) {
             return new Type("char", true);
+        } else if (cast(InterpolatedStringLiteral)expr) {
+            return new Type("char", true);
         } else if (cast(BoolLiteral)expr) {
             return new Type("bool");
         } else if (cast(NullLiteral)expr) {
             throw inferError(expr, "Cannot infer type from 'null'; add an explicit type annotation");
+        } else if (cast(ArrayLiteral)expr) {
+            throw inferError(expr,
+                "Cannot infer type of an array literal; declare an explicit array type " ~
+                "(e.g. 'let arr: char[3] = [1, 2, 3]')");
         } else if (auto newExpr = cast(NewExpr)expr) {
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
@@ -1394,7 +2243,21 @@ class CodeGenerator {
             if (arrType.isArray || arrType.isPointer) {
                 return new Type(arrType.name, false, false, 0);
             }
+            if (auto classDecl = arrType.name in classRegistry) {
+                string methodName = operatorMethodName("[]", false);
+                foreach (method; classDecl.methods) {
+                    if (method.name == methodName) return method.returnType;
+                }
+            }
             throw inferError(expr, "Cannot infer type: indexing a non-array, non-pointer value");
+        } else if (auto macroInvocation = cast(MacroInvocation)expr) {
+            MacroDecl decl = resolveMacroInvocation(macroInvocation);
+            QuoteExpr quoteExpr = macroQuoteBody(decl);
+            if (quoteExpr is null || quoteExpr.isBlock) {
+                throw inferError(expr, format("Macro '%s' does not expand to an expression", decl.name));
+            }
+            ASTNode expanded = expandQuotedNode(quoteExpr.body, macroSubstitutions(decl, macroInvocation));
+            return inferType(expanded);
         }
 
         throw inferError(expr, "Cannot infer type of this expression; add an explicit type annotation");

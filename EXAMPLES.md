@@ -171,6 +171,33 @@ func clamp(value: int, min: int, max: int) -> int {
 }
 ```
 
+## Macros
+
+### Quote and Unquote
+
+```swift
+macro assignTwice(target, value) {
+    quote {
+        unquote(target) = unquote(value)
+        unquote(target) = unquote(target) + 1
+    }
+}
+
+macro twice(value) {
+    quote(unquote(value) + unquote(value))
+}
+
+func main() -> int {
+    let x: int = 0
+    assignTwice!(x, 20)
+    return twice!(x)
+}
+```
+
+`quote { ... }` expands to statements. `quote(expr)` expands to an expression.
+Identifiers inside `quote` are copied literally; use `unquote(arg)` where a
+macro argument should be spliced into the generated syntax.
+
 ## Bitwise Operations
 
 ### Flag Management

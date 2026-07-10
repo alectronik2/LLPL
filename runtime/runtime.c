@@ -81,6 +81,26 @@ int strcmp(const char* a, const char* b) {
     return (int)(unsigned char)(*a) - (int)(unsigned char)(*b);
 }
 
+uint64_t llpl_strlen(char* s) {
+    return (uint64_t)strlen(s);
+}
+
+int64_t llpl_strcmp(char* a, char* b) {
+    return (int64_t)strcmp(a, b);
+}
+
+char* llpl_alloc(uint64_t size) {
+    return (char*)rc_alloc((size_t)size);
+}
+
+void llpl_free(char* ptr) {
+    rc_free((void*)ptr);
+}
+
+void llpl_memcpy(char* dest, char* src, uint64_t count) {
+    memcpy(dest, src, (size_t)count);
+}
+
 // Appends one character, tracking how many characters the *unclamped*
 // output would need in *pos while only actually writing while there's room.
 static void kfmt_putc(char* buf, size_t size, size_t* pos, char c) {
@@ -97,7 +117,17 @@ static void kfmt_puts(char* buf, size_t size, size_t* pos, const char* s) {
     }
 }
 
-static void kfmt_putuint(char* buf, size_t size, size_t* pos, uint64_t value, int base, int uppercase) {
+static void kfmt_pad(char* buf, size_t size, size_t* pos, char c, int count) {
+    for (int i = 0; i < count; i++) {
+        kfmt_putc(buf, size, pos, c);
+    }
+}
+
+// `width`/`zero_pad` implement printf's minimum-field-width flag, e.g.
+// %08x: if the rendered digits are shorter than `width`, left-pad with
+// '0' (zero_pad) or ' ' first. `width` <= 0 means no padding.
+static void kfmt_putuint(char* buf, size_t size, size_t* pos, uint64_t value, int base, int uppercase,
+                          int width, int zero_pad) {
     static const char lower[] = "0123456789abcdef";
     static const char upper[] = "0123456789ABCDEF";
     const char* digits = uppercase ? upper : lower;
@@ -113,20 +143,58 @@ static void kfmt_putuint(char* buf, size_t size, size_t* pos, uint64_t value, in
         }
     }
 
+    if (n < width) {
+        kfmt_pad(buf, size, pos, zero_pad ? '0' : ' ', width - n);
+    }
     while (n > 0) {
         kfmt_putc(buf, size, pos, tmp[--n]);
     }
 }
 
-static void kfmt_putint(char* buf, size_t size, size_t* pos, int64_t value) {
+static void kfmt_putint(char* buf, size_t size, size_t* pos, int64_t value, int width, int zero_pad) {
+    // Negate via uint64_t so INT64_MIN doesn't overflow.
+    uint64_t magnitude = value < 0 ? (uint64_t)(-(value + 1)) + 1 : (uint64_t)value;
+
+    if (value < 0 && zero_pad) {
+        // "-0000005", not "000000-5": the sign comes first, then the
+        // magnitude is padded into whatever width is left.
+        kfmt_putc(buf, size, pos, '-');
+        kfmt_putuint(buf, size, pos, magnitude, 10, 0, width > 0 ? width - 1 : 0, 1);
+        return;
+    }
+
+    if (value < 0 && width > 0) {
+        // Space-padded: the sign is part of the field, so measure the
+        // whole "-NNN" before deciding how much padding it needs.
+        char tmp[32];
+        int n = 0;
+        uint64_t v = magnitude;
+        if (v == 0) {
+            tmp[n++] = '0';
+        } else {
+            while (v > 0) {
+                tmp[n++] = (char)('0' + (v % 10));
+                v /= 10;
+            }
+        }
+        int total = n + 1; // + the '-'
+        if (total < width) {
+            kfmt_pad(buf, size, pos, ' ', width - total);
+        }
+        kfmt_putc(buf, size, pos, '-');
+        while (n > 0) {
+            kfmt_putc(buf, size, pos, tmp[--n]);
+        }
+        return;
+    }
+
     if (value < 0) {
         kfmt_putc(buf, size, pos, '-');
-        // Negate via uint64_t so INT64_MIN doesn't overflow.
-        uint64_t magnitude = (uint64_t)(-(value + 1)) + 1;
-        kfmt_putuint(buf, size, pos, magnitude, 10, 0);
-    } else {
-        kfmt_putuint(buf, size, pos, (uint64_t)value, 10, 0);
+        kfmt_putuint(buf, size, pos, magnitude, 10, 0, 0, 0);
+        return;
     }
+
+    kfmt_putuint(buf, size, pos, (uint64_t)value, 10, 0, width, zero_pad);
 }
 
 int64_t kvsnprintf(char* buf, uint64_t size, char* fmt, va_list args) {
@@ -144,19 +212,41 @@ int64_t kvsnprintf(char* buf, uint64_t size, char* fmt, va_list args) {
             break; // trailing '%' at end of the format string
         }
 
+        // Optional minimum-field-width prefix, e.g. %08x or %4d: a leading
+        // '0' selects zero-padding (vs the default space-padding), followed
+        // by decimal digits giving the width. Feeds LLPL's string
+        // interpolation width/zero-pad hints (`\(n:016:hex)`); see
+        // CodeGenerator.interpFormatSpecifier.
+        int zero_pad = 0;
+        int width = 0;
+        if (*fmt == '0') {
+            zero_pad = 1;
+            fmt++;
+        }
+        while (*fmt >= '0' && *fmt <= '9') {
+            width = width * 10 + (*fmt - '0');
+            fmt++;
+        }
+
         switch (*fmt) {
             case 'd':
             case 'i':
-                kfmt_putint(buf, size, &pos, va_arg(args, int64_t));
+                kfmt_putint(buf, size, &pos, va_arg(args, int64_t), width, zero_pad);
                 break;
             case 'u':
-                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 10, 0);
+                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 10, 0, width, zero_pad);
                 break;
             case 'x':
-                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 16, 0);
+                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 16, 0, width, zero_pad);
                 break;
             case 'X':
-                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 16, 1);
+                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 16, 1, width, zero_pad);
+                break;
+            case 'o':
+                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 8, 0, width, zero_pad);
+                break;
+            case 'b':
+                kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 2, 0, width, zero_pad);
                 break;
             case 's': {
                 const char* s = va_arg(args, const char*);
@@ -171,7 +261,7 @@ int64_t kvsnprintf(char* buf, uint64_t size, char* fmt, va_list args) {
                 break;
             case 'p':
                 kfmt_puts(buf, size, &pos, "0x");
-                kfmt_putuint(buf, size, &pos, (uint64_t)(uintptr_t)va_arg(args, void*), 16, 0);
+                kfmt_putuint(buf, size, &pos, (uint64_t)(uintptr_t)va_arg(args, void*), 16, 0, 0, 0);
                 break;
             case '%':
                 kfmt_putc(buf, size, &pos, '%');
