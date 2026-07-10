@@ -1,8 +1,9 @@
 // Bare-metal demo: modules + namespaces + inline asm + structs + interrupts
-// + vararg logging, all authored in LLPL.
+// + vararg logging + colors, all authored in LLPL.
 //
 //   - modules:     imports hal, console, gdt and idt
-//   - namespaces:  HAL, HAL.Serial, HAL.Pic, HAL.Log (nested), GDT, IDT, Console
+//   - namespaces:  HAL, HAL.Serial, HAL.Pic, HAL.Log, HAL.Ansi (nested),
+//                  GDT, IDT, Console, Console.Color
 //   - inline asm:  port I/O, cli/sti/hlt, lgdt/lidt, and the CS far-return
 //                  reload are all direct asm() blocks
 //   - structs:     packed value types (GDT.Entry, IDT.Entry, ...) give the
@@ -13,6 +14,9 @@
 //                  the runtime's printf-style formatter (runtime/runtime.c)
 //   - alias:       `logf` below is a short name for HAL.Log.ksnprintf,
 //                  resolved to a #define so it works for a vararg function
+//   - colors:      log() below writes each message in the same color on
+//                  both outputs: a VGA attribute byte (Console.Color) and
+//                  an ANSI escape sequence (HAL.Ansi) for a serial terminal
 
 import hal
 import console
@@ -29,6 +33,15 @@ func print(msg: char*) {
     }
 }
 
+// Writes `msg` in `vga_color`/`ansi_code` to whichever outputs are live,
+// without disturbing the screen's default color for anything printed after.
+func log(msg: char*, vga_color: char, ansi_code: char*) {
+    if screen != null {
+        screen.write_colored(msg, vga_color)
+    }
+    HAL.Serial.write_colored(msg, ansi_code)
+}
+
 func kernel_main() {
     HAL.disable_interrupts()
     HAL.Serial.init()
@@ -37,8 +50,8 @@ func kernel_main() {
     screen = new Console.Screen(color)
     screen.clear()
 
-    print("LLPL Bare-Metal Demo\n")
-    print("=====================\n")
+    log("LLPL Bare-Metal Demo\n", Console.Color.CYAN, HAL.Ansi.CYAN)
+    log("=====================\n", Console.Color.CYAN, HAL.Ansi.CYAN)
     print("\n")
     print("namespace HAL      -> inline asm (outb/inb/cli/sti/hlt)\n")
     print("namespace HAL.Serial -> nested namespace, built on HAL\n")
@@ -48,24 +61,24 @@ func kernel_main() {
     print("namespace Console  -> VGA text output, its own module\n")
     print("\n")
 
-    HAL.Serial.write("Loading a fresh GDT from LLPL...\n")
+    log("Loading a fresh GDT from LLPL...\n", Console.Color.WHITE, HAL.Ansi.WHITE)
     GDT.init()
     logf(HAL.Log.buffer as char*, 128,
         "GDT reloaded: base=0x%x limit=%d\n", GDT.pointer.base, GDT.pointer.limit as int)
-    print(HAL.Log.buffer as char*)
+    log(HAL.Log.buffer as char*, Console.Color.GREEN, HAL.Ansi.GREEN)
 
-    HAL.Serial.write("Installing IDT and remapping the PIC...\n")
+    log("Installing IDT and remapping the PIC...\n", Console.Color.WHITE, HAL.Ansi.WHITE)
     HAL.Pic.remap(0x20, 0x28) // move IRQ0-15 to vectors 0x20-0x2F
     IDT.init()
-    print("IDT installed.\n")
+    log("IDT installed.\n", Console.Color.GREEN, HAL.Ansi.GREEN)
 
     print("\n")
-    print("Triggering a breakpoint exception (int3)...\n")
+    log("Triggering a breakpoint exception (int3)...\n", Console.Color.YELLOW, HAL.Ansi.YELLOW)
     asm("int3")
-    print("...resumed after the fault handler returned via iretq.\n")
+    log("...resumed after the fault handler returned via iretq.\n", Console.Color.GREEN, HAL.Ansi.GREEN)
 
     print("\n")
-    print("Enabling interrupts and waiting for timer ticks...\n")
+    log("Enabling interrupts and waiting for timer ticks...\n", Console.Color.WHITE, HAL.Ansi.WHITE)
     HAL.Pic.unmask_irq0()
     HAL.enable_interrupts()
 
@@ -75,14 +88,14 @@ func kernel_main() {
         if timer_ticks != last_reported {
             last_reported = timer_ticks
             logf(HAL.Log.buffer as char*, 128, "  tick %d\n", last_reported as int)
-            print(HAL.Log.buffer as char*)
-            HAL.Log.flush()
+            log(HAL.Log.buffer as char*, Console.Color.LIGHT_CYAN, HAL.Ansi.CYAN)
         }
     }
 
     HAL.disable_interrupts()
     print("\n")
-    print("Timer interrupts confirmed working. System halted safely.\n")
+    log("Timer interrupts confirmed working. System halted safely.\n",
+        Console.Color.LIGHT_GREEN, HAL.Ansi.GREEN)
 
     while true {
         HAL.halt()

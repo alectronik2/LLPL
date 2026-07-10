@@ -35,6 +35,43 @@
         ],
         "description": "Namespace block"
     },
+    "Enum": {
+        "prefix": "enum",
+        "body": [
+            "enum ${1:Name}${2::int} {",
+            "\t${3:FIRST},",
+            "\t${4:SECOND}",
+            "}"
+        ],
+        "description": "Enum declaration"
+    },
+    "Struct": {
+        "prefix": "struct",
+        "body": [
+            "struct ${1:Name} {",
+            "\tlet ${2:field}: ${3:int}",
+            "}"
+        ],
+        "description": "Struct (plain value type) declaration"
+    },
+    "Match": {
+        "prefix": "match",
+        "body": [
+            "match ${1:value} {",
+            "\tcase ${2:pattern}: {",
+            "\t\t$0",
+            "\t}",
+            "\tdefault: {",
+            "\t}",
+            "}"
+        ],
+        "description": "Match statement"
+    },
+    "Alias": {
+        "prefix": "alias",
+        "body": "alias ${1:name} = ${2:a.b.c}",
+        "description": "Alias declaration"
+    },
     "If": {
         "prefix": "if",
         "body": [

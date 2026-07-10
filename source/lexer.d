@@ -41,6 +41,7 @@ enum TokenType {
     Default,
     Alias,
     Operator,
+    Enum,
 
     // Operators
     Plus,
@@ -134,7 +135,8 @@ class Lexer {
             "case": "Case",
             "default": "Default",
             "alias": "Alias",
-            "operator": "Operator"
+            "operator": "Operator",
+            "enum": "Enum"
         ];
     }
 
@@ -168,6 +170,13 @@ class Lexer {
             return source[peekPos];
         }
         return '\0';
+    }
+
+    private int hexDigitValue(char c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return 0;
     }
 
     private void skipWhitespace() {
@@ -240,6 +249,20 @@ class Lexer {
                     case '\\': str ~= '\\'; break;
                     case '"': str ~= '"'; break;
                     case '0': str ~= '\0'; break;
+                    case 'e': str ~= '\x1b'; break; // ESC, e.g. for ANSI color codes
+                    case 'x': {
+                        // \xHH - exactly two hex digits.
+                        advance();
+                        int value = 0;
+                        int digits = 0;
+                        while (digits < 2 && isHexDigit(current)) {
+                            value = value * 16 + hexDigitValue(current);
+                            advance();
+                            digits++;
+                        }
+                        str ~= cast(char)value;
+                        continue; // already advanced past the digits
+                    }
                     default: str ~= current; break;
                 }
             } else {
@@ -298,6 +321,7 @@ class Lexer {
                 case "Default": type = TokenType.Default; break;
                 case "Alias": type = TokenType.Alias; break;
                 case "Operator": type = TokenType.Operator; break;
+                case "Enum": type = TokenType.Enum; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);

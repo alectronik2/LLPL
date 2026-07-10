@@ -32,6 +32,21 @@ namespace HAL {
         asm("hlt")
     }
 
+    // ANSI SGR color codes for the serial side of colored logging. A
+    // terminal attached to the serial port (e.g. QEMU's `-serial stdio`)
+    // interprets these; a dumb terminal just shows the raw escape bytes,
+    // so keep these confined to logging helpers rather than every message.
+    namespace Ansi {
+        let RESET: char* = "\e[0m" as char*
+        let RED: char* = "\e[31m" as char*
+        let GREEN: char* = "\e[32m" as char*
+        let YELLOW: char* = "\e[33m" as char*
+        let BLUE: char* = "\e[34m" as char*
+        let MAGENTA: char* = "\e[35m" as char*
+        let CYAN: char* = "\e[36m" as char*
+        let WHITE: char* = "\e[37m" as char*
+    }
+
     // Nested namespace: a serial (COM1) driver built on the port I/O
     // primitives above. Its unqualified calls to outb/inb resolve outward
     // to HAL.outb/HAL.inb - sibling lookup walks enclosing namespace scopes,
@@ -66,6 +81,12 @@ namespace HAL {
                 write_char(str[i])
                 i = i + 1
             }
+        }
+
+        func write_colored(str: char*, ansi_code: char*) {
+            write(ansi_code)
+            write(str)
+            write(Ansi.RESET)
         }
     }
 

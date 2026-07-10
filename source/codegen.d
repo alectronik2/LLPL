@@ -36,6 +36,36 @@ class CodeGenerator {
         return result;
     }
 
+    // Escapes a decoded LLPL string (already past lexer escape processing,
+    // e.g. \x1b is a real ESC byte by this point) back into a C string
+    // literal body: named escapes for the common control characters, and
+    // \ooo (octal) for any other non-printable byte, so the generated C
+    // source never contains raw control characters. Octal, not \xHH: C's
+    // hex escapes are unbounded-width and would greedily swallow a
+    // following character that happens to look like a hex digit (e.g.
+    // "\x1bA" is one escape, not ESC followed by 'A'); \ooo is always
+    // exactly 3 digits, so nothing after it can be misread as part of it.
+    private string escapeCString(string s) {
+        string result = "";
+        foreach (c; s) {
+            switch (c) {
+                case '\\': result ~= "\\\\"; break;
+                case '"': result ~= "\\\""; break;
+                case '\n': result ~= "\\n"; break;
+                case '\t': result ~= "\\t"; break;
+                case '\r': result ~= "\\r"; break;
+                default:
+                    if (c < 0x20 || c == 0x7f) {
+                        result ~= format("\\%03o", cast(int)cast(ubyte)c);
+                    } else {
+                        result ~= c;
+                    }
+                    break;
+            }
+        }
+        return result;
+    }
+
     string generate(Program program) {
         return generateMultiple([program]);
     }
@@ -749,13 +779,7 @@ class CodeGenerator {
         indentLevel++;
 
         foreach (line; asmStmt.templateLines) {
-            string escaped = line
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\t", "\\t")
-                .replace("\r", "\\r");
-            code ~= indent() ~ format("\"%s\\n\\t\"\n", escaped);
+            code ~= indent() ~ format("\"%s\\n\\t\"\n", escapeCString(line));
         }
 
         string renderOperands(AsmOperand[] operands) {
@@ -1230,13 +1254,7 @@ class CodeGenerator {
         } else if (auto intLit = cast(IntLiteral)node) {
             return to!string(intLit.value);
         } else if (auto strLit = cast(StringLiteral)node) {
-            string escaped = strLit.value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\t", "\\t")
-                .replace("\r", "\\r");
-            return format("\"%s\"", escaped);
+            return format("\"%s\"", escapeCString(strLit.value));
         } else if (auto boolLit = cast(BoolLiteral)node) {
             return boolLit.value ? "1" : "0";
         } else if (auto nullLit = cast(NullLiteral)node) {

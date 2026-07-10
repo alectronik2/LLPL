@@ -6,9 +6,35 @@
 // each other.
 
 namespace Console {
-    let VGA_BUFFER: uint = 753664 // 0xB8000
-    let VGA_WIDTH: int = 80
-    let VGA_HEIGHT: int = 25
+    const VGA_BUFFER = 0xB8000
+    const VGA_WIDTH = 80
+    const VGA_HEIGHT = 25
+
+    // The standard 16-color VGA text-mode palette. Each text cell is one
+    // character byte plus one attribute byte: low nibble = foreground,
+    // high nibble = background (see make_color).
+    enum Color: char {
+        BLACK,
+        BLUE,
+        GREEN,
+        CYAN,
+        RED,
+        MAGENTA,
+        BROWN,
+        LIGHT_GREY,
+        DARK_GREY,
+        LIGHT_BLUE,
+        LIGHT_GREEN,
+        LIGHT_CYAN,
+        LIGHT_RED,
+        LIGHT_MAGENTA,
+        YELLOW,
+        WHITE
+    }
+
+    func make_color(fg: char, bg: char) -> char {
+        return (bg << 4) | fg
+    }
 
     class Screen {
         let row: int
@@ -61,6 +87,15 @@ namespace Console {
                 self.putchar(str[i])
                 i = i + 1
             }
+        }
+
+        // Writes in `color` without disturbing the screen's default color
+        // for whatever gets written after it.
+        func write_colored(str: char*, color: char) {
+            let saved: char = self.color
+            self.color = color
+            self.write(str)
+            self.color = saved
         }
 
         func newline() {

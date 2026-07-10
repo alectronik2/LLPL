@@ -59,6 +59,21 @@ class Parser {
         throw new CompileError(message, filePath, line, column);
     }
 
+    // Converts the raw text of an Integer token (as produced by the lexer,
+    // radix prefix and all) to its value. Shared by primary() and enum
+    // member value parsing.
+    private long parseIntegerValue(string numStr) {
+        string prefix = numStr.length > 2 ? numStr[0..2] : "";
+        if (prefix == "0x" || prefix == "0X") {
+            return to!long(numStr[2..$], 16);
+        } else if (prefix == "0b" || prefix == "0B") {
+            return to!long(numStr[2..$], 2);
+        } else if (prefix == "0o" || prefix == "0O") {
+            return to!long(numStr[2..$], 8);
+        }
+        return to!long(numStr);
+    }
+
     Program parse() {
         ASTNode[] declarations;
         while (!check(TokenType.EOF)) {
@@ -72,6 +87,8 @@ class Parser {
             return importStmt();
         } else if (check(TokenType.Namespace)) {
             return namespaceDecl();
+        } else if (check(TokenType.Enum)) {
+            return enumDecl();
         } else if (check(TokenType.Alias)) {
             return aliasDecl();
         } else if (check(TokenType.Interrupt) || check(TokenType.Function)) {
@@ -104,6 +121,52 @@ class Parser {
 
         expect(TokenType.RightBrace);
         return new NamespaceDecl(name, declarations, startLine, startColumn);
+    }
+
+    // `enum Name[: Type] { A[, B = value]*, }` desugars straight into a
+    // NamespaceDecl of const VarDecls with auto-incrementing IntLiteral
+    // values (C enum semantics: an explicit value resumes auto-increment
+    // from there). This reuses every bit of the existing namespace/const
+    // machinery in the code generator, so enums need zero new codegen -
+    // `EnumName.MEMBER` resolves exactly like any other namespaced const.
+    private NamespaceDecl enumDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Enum);
+        string name = expect(TokenType.Identifier).value;
+
+        Type backingType = new Type("int");
+        if (match(TokenType.Colon)) {
+            backingType = parseType();
+        }
+
+        expect(TokenType.LeftBrace);
+
+        ASTNode[] members;
+        long nextValue = 0;
+        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            int memberLine = current.line;
+            int memberColumn = current.column;
+            string memberName = expect(TokenType.Identifier).value;
+
+            long value = nextValue;
+            if (match(TokenType.Assign)) {
+                bool negative = match(TokenType.Minus);
+                value = parseIntegerValue(expect(TokenType.Integer).value);
+                if (negative) value = -value;
+            }
+            nextValue = value + 1;
+
+            Type memberType = new Type(backingType.name, backingType.isPointer,
+                backingType.isArray, backingType.arraySize);
+            members ~= new VarDecl(memberName, memberType, new IntLiteral(value, memberLine, memberColumn),
+                true, memberLine, memberColumn);
+
+            if (!match(TokenType.Comma)) break;
+        }
+
+        expect(TokenType.RightBrace);
+        return new NamespaceDecl(name, members, startLine, startColumn);
     }
 
     private AliasDecl aliasDecl() {
@@ -811,18 +874,7 @@ class Parser {
             return new NullLiteral(tokLine, tokColumn);
         }
         if (match(TokenType.Integer)) {
-            string numStr = tokens[pos - 1].value;
-            long value;
-            string prefix = numStr.length > 2 ? numStr[0..2] : "";
-            if (prefix == "0x" || prefix == "0X") {
-                value = to!long(numStr[2..$], 16);
-            } else if (prefix == "0b" || prefix == "0B") {
-                value = to!long(numStr[2..$], 2);
-            } else if (prefix == "0o" || prefix == "0O") {
-                value = to!long(numStr[2..$], 8);
-            } else {
-                value = to!long(numStr);
-            }
+            long value = parseIntegerValue(tokens[pos - 1].value);
             return new IntLiteral(value, tokLine, tokColumn);
         }
         if (match(TokenType.String)) {

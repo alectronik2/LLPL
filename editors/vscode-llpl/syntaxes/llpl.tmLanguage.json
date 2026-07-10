@@ -7,11 +7,16 @@
         { "include": "#comments" },
         { "include": "#strings" },
         { "include": "#numbers" },
+        { "include": "#operator-declaration" },
         { "include": "#namespace-declaration" },
+        { "include": "#enum-declaration" },
+        { "include": "#struct-declaration" },
         { "include": "#class-declaration" },
         { "include": "#function-declaration" },
+        { "include": "#alias-declaration" },
         { "include": "#control-keywords" },
         { "include": "#other-keywords" },
+        { "include": "#modifier-keywords" },
         { "include": "#asm-statement" },
         { "include": "#asm-keyword" },
         { "include": "#language-constants" },
@@ -79,11 +84,34 @@
                 "2": { "name": "entity.name.namespace.llpl" }
             }
         },
+        "enum-declaration": {
+            "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.enum.llpl" },
+                "2": { "name": "entity.name.type.llpl" }
+            }
+        },
+        "struct-declaration": {
+            "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.struct.llpl" },
+                "2": { "name": "entity.name.type.llpl" }
+            }
+        },
         "class-declaration": {
             "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
             "captures": {
                 "1": { "name": "keyword.other.class.llpl" },
                 "2": { "name": "entity.name.class.llpl" }
+            }
+        },
+        "operator-declaration": {
+            "comment": "func operator+(...) - the overloaded operator symbol isn't identifier syntax, so it needs its own rule ahead of function-declaration.",
+            "match": "\\b(func)\\s+(operator)\\s*(==|!=|<=|>=|<<|>>|[+\\-*/%=<>!&|^~])",
+            "captures": {
+                "1": { "name": "keyword.other.function.llpl" },
+                "2": { "name": "keyword.other.operator.llpl" },
+                "3": { "name": "keyword.operator.llpl" }
             }
         },
         "function-declaration": {
@@ -93,13 +121,24 @@
                 "2": { "name": "entity.name.function.llpl" }
             }
         },
+        "alias-declaration": {
+            "match": "\\b(alias)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.alias.llpl" },
+                "2": { "name": "entity.name.function.llpl" }
+            }
+        },
         "control-keywords": {
-            "match": "\\b(if|else|while|for|return|defer)\\b",
+            "match": "\\b(if|else|while|for|return|defer|match|case|default)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {
             "match": "\\b(import|let|const|extern|constructor|destructor)\\b",
             "name": "keyword.other.llpl"
+        },
+        "modifier-keywords": {
+            "match": "\\b(packed|interrupt)\\b",
+            "name": "storage.modifier.llpl"
         },
         "asm-keyword": {
             "match": "\\basm\\b",
