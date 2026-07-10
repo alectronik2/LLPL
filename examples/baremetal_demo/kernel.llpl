@@ -1,7 +1,7 @@
 // Bare-metal demo: modules + namespaces + inline asm + structs + interrupts
 // + vararg logging + colors, all authored in LLPL.
 //
-//   - modules:     imports hal, console, gdt and idt
+//   - modules:     imports hal, console, gdt, idt, backtrace and drivers
 //   - namespaces:  HAL, HAL.Serial, HAL.Pic, HAL.Log, HAL.Ansi (nested),
 //                  GDT, IDT, Console, Console.Color
 //   - inline asm:  port I/O, cli/sti/hlt, lgdt/lidt, and the CS far-return
@@ -10,20 +10,30 @@
 //                  exact byte layout the CPU expects for descriptor tables
 //   - interrupts:  `interrupt func` handlers compile to GCC's
 //                  __attribute__((interrupt)), returning via iretq
+//   - backtraces:  fatal exception handlers walk the preserved RBP chain
+//                  and print raw return addresses for offline lookup
 //   - varargs:     HAL.Log.ksnprintf is a real vararg extern func, backed by
 //                  the runtime's printf-style formatter (runtime/runtime.c)
 //   - alias:       `logf` below is a short name for HAL.Log.ksnprintf,
 //                  resolved to a #define so it works for a vararg function
-//   - colors:      log() below writes each message in the same color on
-//                  both outputs: a VGA attribute byte (Console.Color) and
-//                  an ANSI escape sequence (HAL.Ansi) for a serial terminal
+//   - colors:      log() takes a single string with inline `<NAME>...</>`
+//                  tags (e.g. `log("foo <GREEN>bar</>")`) and renders each
+//                  tagged span in that color on both outputs: a VGA
+//                  attribute byte (Console.Color) and an ANSI escape
+//                  sequence (HAL.Ansi) for a serial terminal - see
+//                  resolve_tag(), a `match` over tag names returning a
+//                  plain `struct` (LLPL structs are value types, so this
+//                  is a normal by-value return, no heap allocation).
 
 import hal
 import console
 import gdt
 import idt
-
-alias logf = HAL.Log.ksnprintf
+import backtrace
+import fb
+import kbd
+import pagealloc
+import shell
 
 let screen: Console.Screen = null
 
@@ -33,70 +43,199 @@ func print(msg: char*) {
     }
 }
 
-// Writes `msg` in `vga_color`/`ansi_code` to whichever outputs are live,
-// without disturbing the screen's default color for anything printed after.
-func log(msg: char*, vga_color: char, ansi_code: char*) {
-    if screen != null {
-        screen.write_colored(msg, vga_color)
+// Writes `s` to whichever outputs are live. When `colored` is set, wraps it
+// in `vga_color`/`ansi_code`; otherwise writes it plainly (no VGA attribute
+// override, no ANSI escapes), leaving the screen's current default color
+// alone.
+func emit(s: string, colored: bool, vga_color: char, ansi_code: string) {
+    if colored {
+        if screen != null {
+            screen.write_colored(s, vga_color)
+        }
+        HAL.Serial.write_colored(s, ansi_code)
+    } else {
+        if screen != null {
+            screen.write(s)
+        }
+        HAL.Serial.write(s)
     }
-    HAL.Serial.write_colored(msg, ansi_code)
 }
 
-func kernel_main() {
-    HAL.disable_interrupts()
-    HAL.Serial.init()
+struct TagColor {
+    let colored: bool
+    let vga_color: char
+    let ansi_code: char*
+}
 
-    let color: char = 15 // white on black
-    screen = new Console.Screen(color)
-    screen.clear()
+// Maps a `<NAME>` tag to its VGA/ANSI colors. `</>` (tag text "/") and any
+// unrecognized tag both reset to the default (untagged) color.
+func resolve_tag(tag: char*) -> TagColor {
+    let result: TagColor
+    result.colored = true
 
-    log("LLPL Bare-Metal Demo\n", Console.Color.CYAN, HAL.Ansi.CYAN)
-    log("=====================\n", Console.Color.CYAN, HAL.Ansi.CYAN)
-    print("\n")
-    print("namespace HAL      -> inline asm (outb/inb/cli/sti/hlt)\n")
-    print("namespace HAL.Serial -> nested namespace, built on HAL\n")
-    print("namespace HAL.Pic  -> 8259 PIC remap/EOI\n")
-    print("namespace GDT      -> packed structs + lgdt + CS reload\n")
-    print("namespace IDT      -> packed structs + lidt + interrupt func\n")
-    print("namespace Console  -> VGA text output, its own module\n")
-    print("\n")
-
-    log("Loading a fresh GDT from LLPL...\n", Console.Color.WHITE, HAL.Ansi.WHITE)
-    GDT.init()
-    logf(HAL.Log.buffer as char*, 128,
-        "GDT reloaded: base=0x%x limit=%d\n", GDT.pointer.base, GDT.pointer.limit as int)
-    log(HAL.Log.buffer as char*, Console.Color.GREEN, HAL.Ansi.GREEN)
-
-    log("Installing IDT and remapping the PIC...\n", Console.Color.WHITE, HAL.Ansi.WHITE)
-    HAL.Pic.remap(0x20, 0x28) // move IRQ0-15 to vectors 0x20-0x2F
-    IDT.init()
-    log("IDT installed.\n", Console.Color.GREEN, HAL.Ansi.GREEN)
-
-    print("\n")
-    log("Triggering a breakpoint exception (int3)...\n", Console.Color.YELLOW, HAL.Ansi.YELLOW)
-    asm("int3")
-    log("...resumed after the fault handler returned via iretq.\n", Console.Color.GREEN, HAL.Ansi.GREEN)
-
-    print("\n")
-    log("Enabling interrupts and waiting for timer ticks...\n", Console.Color.WHITE, HAL.Ansi.WHITE)
-    HAL.Pic.unmask_irq0()
-    HAL.enable_interrupts()
-
-    let last_reported: uint = 0
-    while timer_ticks < 3 {
-        HAL.halt()
-        if timer_ticks != last_reported {
-            last_reported = timer_ticks
-            logf(HAL.Log.buffer as char*, 128, "  tick %d\n", last_reported as int)
-            log(HAL.Log.buffer as char*, Console.Color.LIGHT_CYAN, HAL.Ansi.CYAN)
+    match tag {
+        case "RED", "LIGHT_RED" => {
+            result.vga_color = Console.Color.RED
+            result.ansi_code = HAL.Ansi.RED
+        }
+        case "GREEN", "LIGHT_GREEN" => {
+            result.vga_color = Console.Color.GREEN
+            result.ansi_code = HAL.Ansi.GREEN
+        }
+        case "YELLOW", "BROWN" => {
+            result.vga_color = Console.Color.YELLOW
+            result.ansi_code = HAL.Ansi.YELLOW
+        }
+        case "BLUE", "LIGHT_BLUE" => {
+            result.vga_color = Console.Color.BLUE
+            result.ansi_code = HAL.Ansi.BLUE
+        }
+        case "MAGENTA", "LIGHT_MAGENTA" => {
+            result.vga_color = Console.Color.MAGENTA
+            result.ansi_code = HAL.Ansi.MAGENTA
+        }
+        case "CYAN", "LIGHT_CYAN" => {
+            result.vga_color = Console.Color.CYAN
+            result.ansi_code = HAL.Ansi.CYAN
+        }
+        case "WHITE", "LIGHT_GREY", "DARK_GREY" => {
+            result.vga_color = Console.Color.WHITE
+            result.ansi_code = HAL.Ansi.WHITE
+        }
+        default => {
+            // "/" (explicit reset) or an unrecognized tag.
+            result.colored = false
         }
     }
 
-    HAL.disable_interrupts()
-    print("\n")
-    log("Timer interrupts confirmed working. System halted safely.\n",
-        Console.Color.LIGHT_GREEN, HAL.Ansi.GREEN)
+    return result
+}
 
+// Parses `<NAME>...</>` tags out of `msg`, flushing each run of text
+// through emit() in whatever color is active at that point in the string.
+func log(msg: char*) {
+    let colored: bool = false
+    let vga_color: char = 0
+    let ansi_code: char* = null
+
+    let seg: char[128]
+    let seg_len: int = 0
+    let tag: char[16]
+    let tag_len: int = 0
+
+    let i: int = 0
+    while msg[i] != 0 {
+        if msg[i] == 60 { // '<'
+            if seg_len > 0 {
+                seg[seg_len] = 0
+                emit(seg, colored, vga_color, ansi_code)
+                seg_len = 0
+            }
+
+            i = i + 1
+            tag_len = 0
+            while msg[i] != 62 && msg[i] != 0 { // '>'
+                if tag_len < 15 {
+                    tag[tag_len] = msg[i]
+                    tag_len = tag_len + 1
+                }
+                i = i + 1
+            }
+            tag[tag_len] = 0
+            if msg[i] == 62 {
+                i = i + 1
+            }
+
+            let tc: TagColor = resolve_tag(tag as char*)
+            colored = tc.colored
+            vga_color = tc.vga_color
+            ansi_code = tc.ansi_code
+        } else {
+            if seg_len < 127 {
+                seg[seg_len] = msg[i]
+                seg_len = seg_len + 1
+            }
+            i = i + 1
+        }
+    }
+
+    if seg_len > 0 {
+        seg[seg_len] = 0
+        emit(seg as char*, colored, vga_color, ansi_code)
+    }
+}
+
+// `multiboot_ptr` is handed to us by boot64.asm (RDI, System V AMD64's
+// first integer argument): the physical address of the multiboot2 info
+// structure GRUB left behind, which is where fb.llpl's Framebuffer.init
+// finds the linear framebuffer it set up to satisfy this project's
+// framebuffer request tag (see boot64.asm's multiboot header).
+func kernel_main(multiboot_ptr: uint) {
+    HAL.disable_interrupts()
+    HAL.Serial.init()
+
+    if !Framebuffer.init(multiboot_ptr) {
+        // No screen to report this on - GRUB didn't hand back a usable
+        // (32bpp) framebuffer. Serial still works regardless of video
+        // mode, so at least say why before giving up.
+        HAL.Serial.write("FATAL: no 32bpp framebuffer from GRUB - halting\n")
+        HAL.disable_interrupts()
+        while true {
+            HAL.halt()
+        }
+    }
+
+    PageAlloc.init(multiboot_ptr)
+    log("PageAlloc: \(PageAlloc.free_pages)/\(PageAlloc.total_pages) pages free\n")
+
+    let color: u8 = 15 // white on black
+    screen = new Console.Screen(color)
+    screen.clear()
+
+    log("<CYAN>LLPL Bare-Metal Demo\n</>")
+    log("<CYAN>=====================\n</>")
+    print("\n")
+    print("namespace HAL        -> inline asm (outb/inb/cli/sti/hlt)\n")
+    print("namespace HAL.Serial -> nested namespace, built on HAL\n")
+    print("namespace HAL.Pic    -> 8259 PIC remap/EOI\n")
+    print("namespace GDT        -> packed structs + lgdt + CS reload\n")
+    print("namespace IDT        -> packed structs + lidt + interrupt func\n")
+    print("namespace Backtrace  -> frame-pointer stack walking on faults\n")
+    print("namespace Console    -> framebuffer text output, its own module\n")
+    print("namespace Framebuffer-> multiboot2 tag parsing + bitmap-font text\n")
+    print("namespace Keyboard   -> PS/2 scancode driver (IRQ1)\n")
+    print("namespace PageAlloc  -> bitmap physical page-frame allocator\n")
+    print("namespace Shell      -> a tiny interactive command line\n")
+    print("\n")
+
+    log("colors: <RED>red</> <GREEN>green</> <YELLOW>yellow</> <CYAN>cyan</> - a single log() call, tags inline\n")
+    print("\n")
+
+    log("<WHITE>Loading a fresh GDT from LLPL...\n</>")
+    GDT.init()
+    log("<GREEN>GDT reloaded: base=\(GDT.pointer.base:016:hex) limit=\(GDT.pointer.limit:hex)\n</>")
+
+    log("<WHITE>Installing IDT and remapping the PIC...\n</>")
+    HAL.Pic.remap(0x20, 0x28) // move IRQ0-15 to vectors 0x20-0x2F
+    IDT.init()
+    log("<GREEN>IDT installed (timer on IRQ0, keyboard on IRQ1).\n</>")
+
+    print("\n")
+    log("<YELLOW>Triggering a breakpoint exception (int3)...\n</>")
+    asm("int3")
+    log("<GREEN>...resumed after the fault handler returned via iretq.\n</>")
+
+    print("\n")
+    log("<WHITE>Enabling interrupts...\n</>")
+    HAL.Pic.unmask_irq0()
+    HAL.Pic.unmask_irq1()
+    HAL.enable_interrupts()
+    log("<GREEN>Interrupts enabled.\n</>")
+
+    print("\n")
+    Shell.run()
+
+    HAL.disable_interrupts()
     while true {
         HAL.halt()
     }

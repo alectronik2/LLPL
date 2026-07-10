@@ -1,0 +1,65 @@
+// Minimal frame-pointer backtraces for the bare-metal demo.
+//
+// This intentionally prints raw return addresses rather than attempting
+// symbolization in the kernel. Keep the build using frame pointers
+// (-fno-omit-frame-pointer) and resolve addresses offline with objdump/nm
+// when needed.
+
+import hal
+
+namespace Backtrace {
+    const MAX_FRAMES = 16
+    const MAX_FRAME_DELTA = 16384
+
+    func print_from(frame_addr: uint) {
+        HAL.Serial.write("Backtrace:\n")
+
+        let depth: int = 0
+        let done: bool = false
+        while frame_addr != 0 && depth < MAX_FRAMES && !done {
+            let frame: uint* = frame_addr as uint*
+            let next: uint = frame[0]
+            let rip: uint = frame[1]
+
+            if rip == 0 {
+                done = true
+            } else {
+                HAL.Log.ksnprintf(
+                    HAL.Log.buffer as char*,
+                    128,
+                    "  #%02d rbp=0x%016x rip=0x%016x\n",
+                    depth,
+                    frame_addr,
+                    rip
+                )
+                HAL.Log.flush()
+
+                if next == 0 {
+                    done = true
+                } else if next <= frame_addr {
+                    HAL.Serial.write("  <stopped: non-increasing frame pointer>\n")
+                    done = true
+                } else if (next & 7) != 0 {
+                    HAL.Serial.write("  <stopped: unaligned frame pointer>\n")
+                    done = true
+                } else if next - frame_addr > MAX_FRAME_DELTA {
+                    HAL.Serial.write("  <stopped: frame pointer jump too large>\n")
+                    done = true
+                } else {
+                    frame_addr = next
+                    depth = depth + 1
+                }
+            }
+        }
+
+        if depth == MAX_FRAMES {
+            HAL.Serial.write("  <stopped: frame limit reached>\n")
+        }
+    }
+
+    func print() {
+        let rbp: uint = 0
+        asm("movq %%rbp, %0" : "=r"(rbp))
+        print_from(rbp)
+    }
+}

@@ -6,6 +6,11 @@
 // outb`/`inb` implemented in boot64.asm instead).
 
 namespace HAL {
+    // Implemented in boot64.asm, backed by the `_kernel_end` linker symbol
+    // (linker64.ld) - the physical address just past the kernel image's
+    // .bss, i.e. where pagealloc.llpl's free physical memory can start.
+    extern func get_kernel_end() -> uint
+
     // `port` is LLPL's 64-bit `uint` (the language has no 16-bit integer
     // type), but the x86 variable-port form of in/out only accepts DX. The
     // %w operand modifier tells GCC to print operand 1 as its 16-bit
@@ -37,14 +42,14 @@ namespace HAL {
     // interprets these; a dumb terminal just shows the raw escape bytes,
     // so keep these confined to logging helpers rather than every message.
     namespace Ansi {
-        let RESET: char* = "\e[0m" as char*
-        let RED: char* = "\e[31m" as char*
-        let GREEN: char* = "\e[32m" as char*
-        let YELLOW: char* = "\e[33m" as char*
-        let BLUE: char* = "\e[34m" as char*
-        let MAGENTA: char* = "\e[35m" as char*
-        let CYAN: char* = "\e[36m" as char*
-        let WHITE: char* = "\e[37m" as char*
+        const RESET = "\e[0m"
+        const RED = "\e[31m"
+        const GREEN = "\e[32m"
+        const YELLOW = "\e[33m"
+        const BLUE = "\e[34m"
+        const MAGENTA = "\e[35m"
+        const CYAN = "\e[36m"
+        const WHITE = "\e[37m"
     }
 
     // Nested namespace: a serial (COM1) driver built on the port I/O
@@ -52,7 +57,7 @@ namespace HAL {
     // to HAL.outb/HAL.inb - sibling lookup walks enclosing namespace scopes,
     // so code inside HAL.Serial doesn't need to write HAL.outb every time.
     namespace Serial {
-        let PORT: uint = 1016 // 0x3F8, COM1
+        const PORT = 0x3F8 // 0x3F8, COM1
 
         func init() {
             outb(PORT + 1, 0)   // Disable interrupts
@@ -96,10 +101,10 @@ namespace HAL {
     // enabling interrupts without remapping the PIC first reliably crashes.
     // remap() moves IRQ0-7/IRQ8-15 to a caller-chosen, non-colliding range.
     namespace Pic {
-        let COMMAND1: uint = 0x20
-        let DATA1: uint = 0x21
-        let COMMAND2: uint = 0xA0
-        let DATA2: uint = 0xA1
+        const COMMAND1 = 0x20
+        const DATA1    = 0x21
+        const COMMAND2 = 0xA0
+        const DATA2    = 0xA1
 
         func remap(offset1: char, offset2: char) {
             outb(COMMAND1, 0x11) // ICW1: init, expect ICW4
@@ -118,6 +123,15 @@ namespace HAL {
 
         func unmask_irq0() {
             outb(DATA1, 0xFE) // clear bit 0 (timer), leave the rest masked
+        }
+
+        // Read-modify-write, unlike unmask_irq0 above: this one needs to
+        // work correctly regardless of what's already been unmasked (it's
+        // always called after unmask_irq0 in this demo, and blindly
+        // writing a fixed mask here would re-mask IRQ0).
+        func unmask_irq1() {
+            let mask: char = inb(DATA1)
+            outb(DATA1, mask & 0xFD) // clear bit 1 (keyboard)
         }
 
         func send_eoi(irq: int) {

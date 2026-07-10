@@ -1,18 +1,20 @@
-// Console module - VGA text-mode output.
+// Console module - text output on top of the linear framebuffer (fb.llpl).
 //
-// Kept independent of the HAL module (it just writes to the memory-mapped
-// VGA buffer) to show that modules and namespaces compose freely: kernel.llpl
-// imports this alongside hal.llpl and uses both without them knowing about
-// each other.
+// Used to write straight to 0xB8000 (VGA text mode); now that
+// boot64.asm requests a framebuffer from GRUB, that memory can no longer
+// be assumed to hold displayable text, so this draws bitmap-font glyphs
+// through Framebuffer instead. Kept independent of the HAL module to show
+// that modules and namespaces compose freely: kernel.llpl imports this
+// alongside hal.llpl and uses both without them knowing about each other.
+
+import fb
 
 namespace Console {
-    const VGA_BUFFER = 0xB8000
-    const VGA_WIDTH = 80
-    const VGA_HEIGHT = 25
-
-    // The standard 16-color VGA text-mode palette. Each text cell is one
-    // character byte plus one attribute byte: low nibble = foreground,
-    // high nibble = background (see make_color).
+    // The classic 16-color VGA text-mode palette, kept as the public
+    // interface (kernel.llpl's color-tag system - see resolve_tag() there -
+    // deals entirely in these indices) - color_to_rgb below is the only
+    // thing that needs to know it now maps to real pixels, not attribute
+    // bytes.
     enum Color: char {
         BLACK,
         BLUE,
@@ -32,8 +34,28 @@ namespace Console {
         WHITE
     }
 
-    func make_color(fg: char, bg: char) -> char {
-        return (bg << 4) | fg
+    // Maps a Color index to its RGB value, so switching from VGA text mode
+    // to a framebuffer doesn't change how anything *looks* - same palette,
+    // just drawn as pixels instead of selected via an attribute byte.
+    func color_to_rgb(index: char) -> uint32 {
+        match index {
+            case 0 => { return 0x000000 }
+            case 1 => { return 0x0000AA }
+            case 2 => { return 0x00AA00 }
+            case 3 => { return 0x00AAAA }
+            case 4 => { return 0xAA0000 }
+            case 5 => { return 0xAA00AA }
+            case 6 => { return 0xAA5500 }
+            case 7 => { return 0xAAAAAA }
+            case 8 => { return 0x555555 }
+            case 9 => { return 0x5555FF }
+            case 10 => { return 0x55FF55 }
+            case 11 => { return 0x55FFFF }
+            case 12 => { return 0xFF5555 }
+            case 13 => { return 0xFF55FF }
+            case 14 => { return 0xFFFF55 }
+            default => { return 0xFFFFFF }
+        }
     }
 
     class Screen {
@@ -52,12 +74,7 @@ namespace Console {
         }
 
         func clear() {
-            let buffer: char* = VGA_BUFFER as char*
-            let total: int = VGA_WIDTH * VGA_HEIGHT * 2
-            for let i: int = 0, i < total, i = i + 2 {
-                buffer[i] = 0
-                buffer[i + 1] = self.color
-            }
+            Framebuffer.clear(0x000000)
             self.row = 0
             self.col = 0
         }
@@ -68,17 +85,57 @@ namespace Console {
                 return
             }
 
-            if self.col >= VGA_WIDTH {
+            if c == 8 {
+                self.backspace()
+                return
+            }
+
+            let cols: int = (Framebuffer.width as int) / Framebuffer.GLYPH_WIDTH
+            if self.col >= cols {
                 self.newline()
             }
 
-            let buffer: char* = VGA_BUFFER as char*
-            let index: int = (self.row * VGA_WIDTH + self.col) * 2
-
-            buffer[index] = c
-            buffer[index + 1] = self.color
+            let x: uint32 = (self.col * Framebuffer.GLYPH_WIDTH) as uint32
+            let y: uint32 = (self.row * Framebuffer.GLYPH_HEIGHT) as uint32
+            Framebuffer.draw_char(x, y, c, color_to_rgb(self.color), 0x000000)
 
             self.col = self.col + 1
+        }
+
+        // Moves back one cell and blanks it - used for interactive line
+        // editing (Shell.read_line). Only moves within the current row:
+        // backspacing past column 0 does nothing, rather than trying to
+        // rejoin the previous line (this console doesn't track where
+        // lines wrapped, so it can't know where that would be).
+        func backspace() {
+            if self.col > 0 {
+                self.col = self.col - 1
+                let x: uint32 = (self.col * Framebuffer.GLYPH_WIDTH) as uint32
+                let y: uint32 = (self.row * Framebuffer.GLYPH_HEIGHT) as uint32
+                Framebuffer.draw_char(x, y, 32, color_to_rgb(self.color), 0x000000)
+            }
+        }
+
+        // Pure cursor movement, one cell, within the current row - no
+        // drawing, no erasing. Used for arrow-key navigation and for
+        // repositioning after Shell.read_line redraws a line's tail
+        // following a mid-line insert/delete. Unlike backspace(), these
+        // never touch what's on screen, only where the *next* character
+        // will land. They don't cross row boundaries (a line that's
+        // wrapped past the end of a row can't be navigated back onto the
+        // previous row this way) - a known limitation, not expected to
+        // matter for a shell's line length in practice.
+        func cursor_left() {
+            if self.col > 0 {
+                self.col = self.col - 1
+            }
+        }
+
+        func cursor_right() {
+            let cols: int = (Framebuffer.width as int) / Framebuffer.GLYPH_WIDTH
+            if self.col < cols - 1 {
+                self.col = self.col + 1
+            }
         }
 
         func write(str: char*) {
@@ -101,8 +158,10 @@ namespace Console {
         func newline() {
             self.col = 0
             self.row = self.row + 1
-            if self.row >= VGA_HEIGHT {
-                self.row = VGA_HEIGHT - 1
+            let rows: int = (Framebuffer.height as int) / Framebuffer.GLYPH_HEIGHT
+            if self.row >= rows {
+                Framebuffer.scroll_up_one_row()
+                self.row = rows - 1
             }
         }
     }

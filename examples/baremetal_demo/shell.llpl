@@ -1,0 +1,511 @@
+// Shell module - a tiny interactive command line.
+//
+// Reads lines via Keyboard.read_char() (kbd.llpl) and echoes them through
+// the same dual screen+serial path kernel.llpl's log()/emit() already use
+// for colored boot messages, so shell interaction shows up identically on
+// both the framebuffer console and a serial terminal - including for
+// QEMU's headless `-serial file:...` capture, which is how this whole
+// demo gets tested without a human at the keyboard.
+//
+// `emit`/`print`/`log`/`screen` are declared in kernel.llpl, not imported
+// here: LLPL resolves symbols against the flat set of every file the
+// entry point (kernel.llpl) transitively imports, not just what each
+// individual file imports itself - kernel.llpl importing this file is
+// what makes that connection, in either direction.
+
+import hal
+import console
+import kbd
+import backtrace
+import pagealloc
+
+namespace Shell {
+    const LINE_MAX = 128
+
+    // Command history: a flat ring buffer of HISTORY_SIZE lines,
+    // HISTORY_SIZE*LINE_MAX bytes total, rather than a 2D array - LLPL
+    // doesn't have those, and this is the same "flat array + computed
+    // offset" trick fb.llpl's font table already uses.
+    const HISTORY_SIZE = 10
+
+    let history: char[1280]
+    let history_head: int = 0  // next slot history_push() will write
+    let history_count: int = 0 // how many slots are populated (caps at HISTORY_SIZE)
+
+    func echo_char(c: char) {
+        let buf: char[2]
+        buf[0] = c
+        buf[1] = 0
+        emit(buf as char*, false, 0, null)
+    }
+
+    func print_prompt() {
+        print("\n")
+        log("<LIGHT_GREEN>llpl</> <WHITE>$</> ")
+    }
+
+    func history_slot(index: int) -> char* {
+        return (history as char*) + (index * LINE_MAX)
+    }
+
+    func history_push(line: char*) {
+        if line[0] == 0 {
+            return // don't clutter history with blank lines
+        }
+        let slot: char* = history_slot(history_head)
+        let i: int = 0
+        while line[i] != 0 && i < LINE_MAX - 1 {
+            slot[i] = line[i]
+            i = i + 1
+        }
+        slot[i] = 0
+        history_head = (history_head + 1) % HISTORY_SIZE
+        if history_count < HISTORY_SIZE {
+            history_count = history_count + 1
+        }
+    }
+
+    // Backspaces over `len` already-echoed characters, on both outputs.
+    func clear_visible_line(len: int) {
+        let i: int = 0
+        while i < len {
+            echo_char(8)
+            i = i + 1
+        }
+    }
+
+    // Loads history entry `offset` back from the most recent (1 = most
+    // recent, 2 = the one before that, ...) into `buf`, echoing it, and
+    // returns its length. `offset` outside [1, history_count] clears buf
+    // instead - used for "past the oldest entry" and for returning to a
+    // blank line at offset 0.
+    func load_history_into(buf: char*, offset: int) -> int {
+        if offset < 1 || offset > history_count {
+            buf[0] = 0
+            return 0
+        }
+        let idx: int = history_head - offset
+        if idx < 0 {
+            idx = idx + HISTORY_SIZE
+        }
+        let src: char* = history_slot(idx)
+        let i: int = 0
+        while src[i] != 0 {
+            buf[i] = src[i]
+            echo_char(src[i])
+            i = i + 1
+        }
+        buf[i] = 0
+        return i
+    }
+
+    // Draws buf[from..len) at the current screen position (used to redraw
+    // whatever comes after a mid-line insert/delete), mirroring each
+    // character to serial too - unlike echo_char, this writes the
+    // framebuffer and serial sides directly rather than going through
+    // emit(), since it's drawing *content that already exists in `buf`*,
+    // not a single freshly-typed character.
+    func redraw_tail(buf: char*, from: int, len: int) {
+        let i: int = from
+        while i < len {
+            screen.putchar(buf[i])
+            HAL.Serial.write_char(buf[i])
+            i = i + 1
+        }
+    }
+
+    // Moves the cursor left by `n` cells without erasing anything - a
+    // bare backspace byte (0x08) is genuine "move left" on a real
+    // terminal, not "move left and erase", so this is exact on both
+    // outputs (unlike move_cursor_forward_silent below).
+    func move_cursor_back(n: int) {
+        let i: int = 0
+        while i < n {
+            screen.cursor_left()
+            HAL.Serial.write_char(8)
+            i = i + 1
+        }
+    }
+
+    // Moves the cursor right by `n` cells on the framebuffer only -
+    // there's no plain-ASCII byte for "move right without erasing" to
+    // mirror to a raw serial stream, so serial just doesn't track this
+    // one (a documented gap, not a crash risk: it only affects where
+    // *echoed* text lands in a serial capture, nothing about correctness).
+    func move_cursor_forward_silent(n: int) {
+        let i: int = 0
+        while i < n {
+            screen.cursor_right()
+            i = i + 1
+        }
+    }
+
+    // Reads one line of input into `buf` (NUL-terminated, at most
+    // `max_len - 1` characters), echoing as it goes. Left/right arrows
+    // move the cursor within the line; typing or backspacing there
+    // inserts/deletes at that point (shifting the rest of the line and
+    // redrawing it), not just at the end. Up/down arrows recall previous
+    // lines from history (see load_history_into); Enter finishes the line
+    // and records it.
+    func read_line(buf: char*, max_len: int) {
+        let len: int = 0
+        let cursor: int = 0
+        let nav_offset: int = 0 // 0 = live typing; 1+ = browsing history
+        while true {
+            let c: char = Keyboard.read_char()
+            if c == 10 {
+                buf[len] = 0
+                echo_char(c)
+                history_push(buf)
+                return
+            }
+            if c == 8 {
+                if cursor > 0 {
+                    if cursor == len {
+                        // Fast path: deleting the last character is just
+                        // the simple "erase what's already there" case.
+                        len = len - 1
+                        cursor = cursor - 1
+                        echo_char(8)
+                    } else {
+                        let j: int = cursor - 1
+                        while j < len - 1 {
+                            buf[j] = buf[j + 1]
+                            j = j + 1
+                        }
+                        len = len - 1
+                        cursor = cursor - 1
+                        screen.cursor_left()
+                        HAL.Serial.write_char(8)
+                        redraw_tail(buf, cursor, len)
+                        screen.putchar(32) // erase the now-stale trailing cell
+                        HAL.Serial.write_char(32)
+                        move_cursor_back(len - cursor + 1)
+                    }
+                }
+            } else if c == (Keyboard.KEY_UP as char) {
+                if nav_offset < history_count {
+                    move_cursor_forward_silent(len - cursor)
+                    clear_visible_line(len)
+                    nav_offset = nav_offset + 1
+                    len = load_history_into(buf, nav_offset)
+                    cursor = len
+                }
+            } else if c == (Keyboard.KEY_DOWN as char) {
+                if nav_offset > 0 {
+                    move_cursor_forward_silent(len - cursor)
+                    clear_visible_line(len)
+                    nav_offset = nav_offset - 1
+                    len = load_history_into(buf, nav_offset)
+                    cursor = len
+                }
+            } else if c == (Keyboard.KEY_LEFT as char) {
+                if cursor > 0 {
+                    cursor = cursor - 1
+                    screen.cursor_left()
+                    HAL.Serial.write_char(8)
+                }
+            } else if c == (Keyboard.KEY_RIGHT as char) {
+                if cursor < len {
+                    HAL.Serial.write_char(buf[cursor])
+                    screen.cursor_right()
+                    cursor = cursor + 1
+                }
+            } else {
+                if len < max_len - 1 {
+                    if cursor == len {
+                        // Fast path: appending at the end is the simple case.
+                        buf[len] = c
+                        len = len + 1
+                        cursor = cursor + 1
+                        echo_char(c)
+                    } else {
+                        let j: int = len
+                        while j > cursor {
+                            buf[j] = buf[j - 1]
+                            j = j - 1
+                        }
+                        buf[cursor] = c
+                        len = len + 1
+                        cursor = cursor + 1
+                        redraw_tail(buf, cursor - 1, len)
+                        move_cursor_back(len - cursor)
+                    }
+                }
+            }
+        }
+    }
+
+    func starts_with(s: char*, prefix: char*) -> bool {
+        let i: int = 0
+        while prefix[i] != 0 {
+            if s[i] != prefix[i] {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    // Parses a hex number (with or without a leading "0x"/"0X"), stopping
+    // at the first non-hex-digit character (or the end of the string).
+    // Not an error to stop early or parse nothing at all - "peek"/"poke"
+    // just get address/value 0 for garbage input, same as a bad address
+    // that faults: this is a raw memory-inspection tool, not a validated
+    // one.
+    func parse_hex(s: char*) -> uint {
+        let i: int = 0
+        if s[0] == 48 && (s[1] == 120 || s[1] == 88) { // "0x" or "0X"
+            i = 2
+        }
+        let value: uint = 0
+        let done: bool = false
+        while s[i] != 0 && !done {
+            let c: char = s[i]
+            let digit: int = -1
+            if c >= 48 && c <= 57 {
+                digit = (c as int) - 48
+            } else if c >= 97 && c <= 102 {
+                digit = (c as int) - 97 + 10
+            } else if c >= 65 && c <= 70 {
+                digit = (c as int) - 65 + 10
+            }
+            if digit < 0 {
+                done = true
+            } else {
+                value = value * 16 + (digit as uint)
+                i = i + 1
+            }
+        }
+        return value
+    }
+
+    func find_space(s: char*) -> int {
+        let i: int = 0
+        while s[i] != 0 && s[i] != 32 {
+            i = i + 1
+        }
+        return i
+    }
+
+    // Reads and prints one byte at a raw physical address - direct memory
+    // access, unchecked, exactly as available to any other code running
+    // in this kernel's single ring-0 address space (there's no MMU
+    // protection between "the shell" and "everything else" here).
+    func cmd_peek(args: char*) {
+        let addr: uint = parse_hex(args)
+        let p: char* = addr as char*
+        let value: int = (p[0] as int) & 255
+        log("<WHITE>[\(addr:016:hex)] = \(value:02:hex)\n</>")
+    }
+
+    // "poke ADDR VALUE" - writes one byte. `args` is split in place at the
+    // space (safe: it's a pointer into Shell.run()'s line buffer, which
+    // gets overwritten on the next read_line anyway).
+    func cmd_poke(args: char*) {
+        let sep: int = find_space(args)
+        if args[sep] == 0 {
+            log("<LIGHT_RED>usage: poke <addr> <value>\n</>")
+            return
+        }
+        args[sep] = 0
+        let addr: uint = parse_hex(args)
+        let value: uint = parse_hex(args + sep + 1)
+        let p: char* = addr as char*
+        p[0] = (value & 255) as char
+        log("<WHITE>[\(addr:016:hex)] = \(value:02:hex)\n</>")
+    }
+
+    func is_printable(c: char) -> bool {
+        let v: int = (c as int) & 255
+        return v >= 32 && v <= 126
+    }
+
+    // "dump ADDR [LEN]" - classic hexdump: 16 bytes per row, hex on the
+    // left, the same bytes as ASCII (non-printable ones shown as '.') on
+    // the right. LEN defaults to 16 (one row) if omitted or zero.
+    func cmd_dump(args: char*) {
+        let sep: int = find_space(args)
+        let addr: uint = parse_hex(args)
+        let len: uint = 16
+        if args[sep] != 0 {
+            len = parse_hex(args + sep + 1)
+        }
+        if len == 0 {
+            len = 16
+        }
+
+        let p: char* = addr as char*
+        let offset: uint = 0
+        while offset < len {
+            log("<WHITE>\(addr + offset:016:hex): </>")
+
+            let row_len: uint = len - offset
+            if row_len > 16 {
+                row_len = 16
+            }
+
+            let i: uint = 0
+            while i < row_len {
+                let b: int = (p[offset + i] as int) & 255
+                log("\(b:02:hex) ")
+                i = i + 1
+            }
+            while i < 16 { // pad short trailing rows so ASCII lines up
+                print("   ")
+                i = i + 1
+            }
+
+            print(" ")
+            i = 0
+            while i < row_len {
+                let c: char = p[offset + i]
+                if is_printable(c) {
+                    let s: char[2]
+                    s[0] = c
+                    s[1] = 0
+                    print(s as char*)
+                } else {
+                    print(".")
+                }
+                i = i + 1
+            }
+            print("\n")
+
+            offset = offset + 16
+        }
+    }
+
+    func cmd_help() {
+        print("Available commands:\n")
+        print("  help          - show this message\n")
+        print("  about         - about this demo\n")
+        print("  clear         - clear the screen\n")
+        print("  colors        - show the 16-color palette\n")
+        print("  ticks         - show the timer tick count\n")
+        print("  bt            - print a raw frame-pointer backtrace\n")
+        print("  echo T        - print T back\n")
+        print("  peek ADDR     - read one byte at a hex address\n")
+        print("  poke ADDR VAL - write one byte at a hex address\n")
+        print("  dump ADDR [N] - hexdump N bytes at a hex address (default 16)\n")
+        print("  alloc         - reserve one 4KB physical page frame\n")
+        print("  free ADDR     - return a page frame to the allocator\n")
+        print("  meminfo       - show physical page allocator stats\n")
+        print("\n")
+        print("Up/down arrows recall previous commands; left/right move\n")
+        print("the cursor within the current line.\n")
+    }
+
+    func cmd_about() {
+        log("<CYAN>LLPL Bare-Metal Demo</>\n")
+        print("This shell - line editing, history, command dispatch, all of\n")
+        print("it - is written in LLPL and running on top of a framebuffer\n")
+        print("console (fb.llpl) and a PS/2 keyboard driver (kbd.llpl),\n")
+        print("themselves both plain LLPL modules with no special compiler\n")
+        print("support.\n")
+    }
+
+    func cmd_colors() {
+        log("<BLACK>BLACK </><BLUE>BLUE </><GREEN>GREEN </><CYAN>CYAN </><RED>RED </><MAGENTA>MAGENTA </>\n")
+        log("<BROWN>BROWN </><LIGHT_GREY>LIGHT_GREY </><DARK_GREY>DARK_GREY </><LIGHT_BLUE>LIGHT_BLUE </>\n")
+        log("<LIGHT_GREEN>LIGHT_GREEN </><LIGHT_CYAN>LIGHT_CYAN </><LIGHT_RED>LIGHT_RED </><LIGHT_MAGENTA>LIGHT_MAGENTA </>\n")
+        log("<YELLOW>YELLOW </><WHITE>WHITE</>\n")
+    }
+
+    func cmd_ticks() {
+        log("<WHITE>timer_ticks = \(timer_ticks)\n</>")
+    }
+
+    func cmd_bt() {
+        Backtrace.print()
+    }
+
+    // "alloc" - reserves one 4KB physical page frame and reports its
+    // address, or says so if the allocator is out of pages (addr 0 back
+    // from PageAlloc.alloc() - never a valid page, since page 0 is always
+    // reserved as part of the low-1MB region).
+    func cmd_alloc() {
+        let addr: uint = PageAlloc.alloc()
+        if addr == 0 {
+            log("<LIGHT_RED>out of memory\n</>")
+        } else {
+            log("<WHITE>allocated page at \(addr:016:hex)\n</>")
+        }
+    }
+
+    // "free ADDR" - returns a page previously handed out by `alloc` (or
+    // any page-aligned physical address, no bookkeeping of who owns what
+    // pages is done here - same "trust the caller" spirit as peek/poke).
+    func cmd_free(args: char*) {
+        let addr: uint = parse_hex(args)
+        PageAlloc.free(addr)
+        log("<WHITE>freed page at \(addr:016:hex)\n</>")
+    }
+
+    func cmd_meminfo() {
+        log("<WHITE>total: \(PageAlloc.total_pages) pages (\(PageAlloc.total_pages * 4) KB)\n</>")
+        log("<WHITE>free:  \(PageAlloc.free_pages) pages (\(PageAlloc.free_pages * 4) KB)\n</>")
+        let used: uint = PageAlloc.total_pages - PageAlloc.free_pages
+        log("<WHITE>used:  \(used) pages (\(used * 4) KB)\n</>")
+    }
+
+    func run_line(line: char*) {
+        match line {
+            case "" => {
+                // blank line - nothing to do
+            }
+            case "help" => {
+                cmd_help()
+            }
+            case "about" => {
+                cmd_about()
+            }
+            case "clear" => {
+                screen.clear()
+            }
+            case "colors" => {
+                cmd_colors()
+            }
+            case "ticks" => {
+                cmd_ticks()
+            }
+            case "bt" => {
+                cmd_bt()
+            }
+            case "alloc" => {
+                cmd_alloc()
+            }
+            case "meminfo" => {
+                cmd_meminfo()
+            }
+            default => {
+                if starts_with(line, "echo ") {
+                    print(line + 5)
+                    print("\n")
+                } else if starts_with(line, "peek ") {
+                    cmd_peek(line + 5)
+                } else if starts_with(line, "poke ") {
+                    cmd_poke(line + 5)
+                } else if starts_with(line, "dump ") {
+                    cmd_dump(line + 5)
+                } else if starts_with(line, "free ") {
+                    cmd_free(line + 5)
+                } else {
+                    log("<LIGHT_RED>unknown command: </>")
+                    print(line)
+                    print("\n")
+                }
+            }
+        }
+    }
+
+    func run() {
+        log("<CYAN>Starting the shell. Type 'help' for a list of commands.\n</>")
+        let buf: char[128]
+        while true {
+            print_prompt()
+            read_line(buf as char*, LINE_MAX)
+            run_line(buf as char*)
+        }
+    }
+}

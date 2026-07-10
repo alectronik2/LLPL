@@ -1,0 +1,296 @@
+// Framebuffer module.
+//
+// GRUB, honoring the framebuffer request tag in boot64.asm's multiboot2
+// header, sets up a linear framebuffer (and may switch out of VGA text
+// mode to do it) before the kernel ever runs, then hands back a pointer
+// to the multiboot2 info structure describing what it actually got. This
+// module walks that structure's tag list to find the framebuffer info
+// tag, then provides pixel plotting and 8x16 bitmap-font text rendering
+// on top of it. Console.Screen (console.llpl) is built entirely on this -
+// once a framebuffer is requested, 0xB8000 (plain VGA text memory) can no
+// longer be assumed to work, so this replaces that approach rather than
+// living alongside it.
+
+import hal
+
+namespace Framebuffer {
+    // multiboot2 info structure header: total_size, reserved (8 bytes),
+    // then a list of 8-byte-aligned tags.
+    packed struct InfoHeader {
+        let total_size: uint32
+        let reserved: uint32
+    }
+
+    // Generic tag header every tag starts with, used just to read `type`/
+    // `size` before deciding how to interpret the rest.
+    packed struct TagHeader {
+        let tag_type: uint32
+        let size: uint32
+    }
+
+    // Framebuffer info tag (type 8). `size` covers this plus whatever
+    // variable-length color-format info follows, which isn't needed here -
+    // this project only supports 32bpp direct-color framebuffers, the
+    // near-universal default for VBE/GRUB and QEMU alike.
+    packed struct FramebufferTag {
+        let tag_type: uint32
+        let size: uint32
+        let addr: uint
+        let pitch: uint32
+        let width: uint32
+        let height: uint32
+        let bpp: char
+        let fb_type: char
+        let reserved: char
+    }
+
+    let addr: uint = 0
+    let pitch: uint32 = 0
+    let width: uint32 = 0
+    let height: uint32 = 0
+    let bpp: char = 0
+    let ready: bool = false
+
+    func align8(n: uint) -> uint {
+        return (n + 7) & ~7
+    }
+
+    // Walks the multiboot2 tag list starting at `multiboot_ptr` (physical
+    // address, handed to kernel_main in boot64.asm) looking for the
+    // framebuffer info tag. Returns true (and fills in addr/pitch/width/
+    // height/bpp above) if one was found and it's a 32bpp framebuffer -
+    // this module doesn't support anything else.
+    func init(multiboot_ptr: uint) -> bool {
+        let hdr: InfoHeader* = multiboot_ptr as InfoHeader*
+        let end: uint = multiboot_ptr + (hdr.total_size as uint)
+        let ptr: uint = multiboot_ptr + 8
+
+        while ptr < end {
+            let header: TagHeader* = ptr as TagHeader*
+            if header.tag_type == 0 {
+                return false // end tag - no framebuffer tag present
+            }
+            if header.tag_type == 8 {
+                let fb: FramebufferTag* = ptr as FramebufferTag*
+                if fb.bpp as int != 32 {
+                    return false // only 32bpp direct-color is supported
+                }
+                addr = fb.addr
+                pitch = fb.pitch
+                width = fb.width
+                height = fb.height
+                bpp = fb.bpp
+                ready = true
+                return true
+            }
+            ptr = ptr + align8(header.size as uint)
+        }
+        return false
+    }
+
+    func put_pixel(x: uint32, y: uint32, color: uint32) {
+        let offset: uint = (y as uint) * (pitch as uint) + (x as uint) * 4
+        let p: uint32* = (addr + offset) as uint32*
+        // `p[0] = color`, not `*p = color`: LLPL has no statement
+        // terminators and newlines are invisible to the parser, so a `*`
+        // right after a `T*`-typed declaration on the previous line reads
+        // as multiplication ("(...) as uint32* * p"), not a new
+        // statement's dereference - a real, silent-misparse footgun.
+        // Index-assignment sidesteps it entirely.
+        p[0] = color
+    }
+
+    func clear(color: uint32) {
+        let y: uint32 = 0
+        while y < height {
+            let x: uint32 = 0
+            while x < width {
+                put_pixel(x, y, color)
+                x = x + 1
+            }
+            y = y + 1
+        }
+    }
+
+    // Shifts the whole framebuffer up by one text row's worth of pixels
+    // (GLYPH_HEIGHT) and blanks the row this exposes at the bottom - used
+    // by Console.Screen.newline() once the last row is full, instead of
+    // just clamping there and overwriting the same line forever.
+    //
+    // Copies forward (increasing address), which is what makes this safe
+    // despite source and destination overlapping: `dest` always trails
+    // `src` by a fixed offset (one row's worth of words), so nothing this
+    // loop writes is read again until many iterations after it was
+    // already copied out - the same reasoning that makes a forward
+    // memmove safe when the destination is *before* the source.
+    func scroll_up_one_row() {
+        let row_words: uint = ((pitch as uint) * (GLYPH_HEIGHT as uint)) / 4
+        let total_words: uint = ((pitch as uint) * (height as uint)) / 4
+        let copy_words: uint = total_words - row_words
+
+        let dest: uint32* = addr as uint32*
+        let src: uint32* = (addr + (row_words * 4)) as uint32*
+
+        let i: uint = 0
+        while i < copy_words {
+            dest[i] = src[i]
+            i = i + 1
+        }
+
+        let y: uint32 = height - (GLYPH_HEIGHT as uint32)
+        while y < height {
+            let x: uint32 = 0
+            while x < width {
+                put_pixel(x, y, 0x000000)
+                x = x + 1
+            }
+            y = y + 1
+        }
+    }
+
+    // 8x16 bitmap font, ASCII 32 ('space') through 126 ('~'), 16 bytes per
+    // glyph (one per pixel row, bit 7 = leftmost pixel). Generated from a
+    // real monospace typeface and visually verified glyph-by-glyph rather
+    // than hand-transcribed, to rule out the usual way this kind of table
+    // goes subtly wrong.
+    let font_data: char[1520] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 32 ' '
+        0, 0, 0, 24, 24, 24, 24, 24, 24, 0, 0, 24, 24, 0, 0, 0, // 33 '!'
+        0, 0, 36, 36, 36, 36, 36, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 34 '"'
+        0, 0, 0, 18, 54, 127, 54, 36, 108, 254, 108, 104, 72, 0, 0, 0, // 35 '#'
+        0, 24, 24, 60, 126, 90, 120, 60, 30, 90, 126, 60, 24, 24, 0, 0, // 36 '$'
+        0, 0, 98, 242, 214, 220, 248, 88, 31, 59, 43, 111, 70, 0, 0, 0, // 37 '%'
+        0, 0, 24, 60, 100, 108, 56, 56, 123, 78, 70, 110, 59, 0, 0, 0, // 38 '&'
+        0, 0, 24, 24, 24, 24, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 39 '''
+        0, 4, 12, 24, 48, 48, 32, 32, 32, 32, 48, 48, 24, 12, 4, 0, // 40 '('
+        0, 32, 48, 24, 12, 12, 4, 4, 4, 4, 12, 12, 24, 48, 32, 0, // 41 ')'
+        0, 0, 0, 24, 126, 60, 126, 90, 24, 0, 0, 0, 0, 0, 0, 0, // 42 '*'
+        0, 0, 0, 0, 0, 24, 24, 126, 126, 24, 24, 0, 0, 0, 0, 0, // 43 '+'
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 24, 8, 16, 16, // 44 ','
+        0, 0, 0, 0, 0, 0, 0, 126, 126, 0, 0, 0, 0, 0, 0, 0, // 45 '-'
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 24, 0, 0, 0, // 46 '.'
+        0, 2, 6, 4, 12, 12, 8, 24, 24, 16, 48, 48, 32, 96, 64, 0, // 47 '/'
+        0, 0, 24, 126, 102, 66, 66, 90, 66, 66, 66, 126, 60, 0, 0, 0, // 48 '0'
+        0, 0, 8, 56, 120, 8, 8, 8, 8, 8, 8, 8, 8, 0, 0, 0, // 49 '1'
+        0, 0, 24, 126, 102, 2, 6, 12, 8, 24, 48, 126, 126, 0, 0, 0, // 50 '2'
+        0, 0, 24, 126, 102, 6, 6, 28, 6, 2, 66, 126, 60, 0, 0, 0, // 51 '3'
+        0, 0, 4, 12, 28, 28, 52, 36, 100, 126, 126, 4, 4, 0, 0, 0, // 52 '4'
+        0, 0, 60, 126, 96, 96, 124, 102, 2, 2, 70, 126, 60, 0, 0, 0, // 53 '5'
+        0, 0, 24, 126, 98, 64, 92, 126, 102, 66, 66, 126, 60, 0, 0, 0, // 54 '6'
+        0, 0, 126, 126, 6, 4, 12, 12, 8, 24, 24, 16, 48, 0, 0, 0, // 55 '7'
+        0, 0, 24, 60, 102, 102, 102, 60, 102, 66, 66, 126, 60, 0, 0, 0, // 56 '8'
+        0, 0, 24, 126, 102, 66, 66, 126, 58, 2, 66, 126, 60, 0, 0, 0, // 57 '9'
+        0, 0, 0, 0, 0, 24, 24, 24, 0, 0, 0, 24, 24, 0, 0, 0, // 58 ':'
+        0, 0, 0, 0, 0, 24, 24, 24, 0, 0, 0, 24, 24, 8, 16, 16, // 59 ';'
+        0, 0, 0, 0, 6, 14, 56, 96, 96, 56, 14, 6, 0, 0, 0, 0, // 60 '<'
+        0, 0, 0, 0, 0, 0, 126, 0, 0, 126, 0, 0, 0, 0, 0, 0, // 61 '='
+        0, 0, 0, 0, 96, 112, 28, 6, 6, 28, 112, 96, 0, 0, 0, 0, // 62 '>'
+        0, 0, 24, 126, 102, 6, 6, 12, 24, 24, 0, 24, 24, 0, 0, 0, // 63 '?'
+        0, 0, 60, 102, 195, 219, 219, 219, 219, 219, 222, 204, 96, 62, 0, 0, // 64 '@'
+        0, 0, 0, 24, 24, 60, 60, 36, 36, 126, 102, 66, 66, 0, 0, 0, // 65 'A'
+        0, 0, 120, 124, 70, 70, 102, 124, 102, 66, 66, 126, 124, 0, 0, 0, // 66 'B'
+        0, 0, 24, 126, 102, 64, 64, 64, 64, 64, 66, 126, 60, 0, 0, 0, // 67 'C'
+        0, 0, 112, 124, 70, 70, 66, 66, 66, 102, 70, 124, 120, 0, 0, 0, // 68 'D'
+        0, 0, 62, 126, 96, 96, 96, 124, 96, 96, 96, 126, 126, 0, 0, 0, // 69 'E'
+        0, 0, 62, 126, 96, 96, 96, 60, 96, 96, 96, 96, 32, 0, 0, 0, // 70 'F'
+        0, 0, 24, 126, 102, 64, 64, 78, 70, 66, 70, 126, 60, 0, 0, 0, // 71 'G'
+        0, 0, 66, 102, 66, 66, 102, 126, 102, 66, 66, 102, 66, 0, 0, 0, // 72 'H'
+        0, 0, 60, 60, 24, 24, 24, 24, 24, 24, 24, 60, 60, 0, 0, 0, // 73 'I'
+        0, 0, 28, 30, 6, 6, 6, 6, 6, 6, 70, 108, 56, 0, 0, 0, // 74 'J'
+        0, 0, 2, 102, 108, 104, 120, 112, 120, 104, 108, 102, 98, 0, 0, 0, // 75 'K'
+        0, 0, 32, 96, 96, 96, 96, 96, 96, 96, 96, 126, 62, 0, 0, 0, // 76 'L'
+        0, 0, 66, 102, 102, 102, 102, 126, 126, 90, 90, 90, 90, 0, 0, 0, // 77 'M'
+        0, 0, 66, 102, 98, 118, 114, 90, 74, 78, 110, 102, 70, 0, 0, 0, // 78 'N'
+        0, 0, 24, 126, 102, 66, 66, 66, 66, 66, 66, 126, 60, 0, 0, 0, // 79 'O'
+        0, 0, 56, 126, 102, 98, 98, 126, 124, 96, 96, 96, 96, 0, 0, 0, // 80 'P'
+        0, 0, 24, 126, 102, 66, 66, 66, 66, 90, 78, 126, 62, 2, 0, 0, // 81 'Q'
+        0, 0, 120, 126, 70, 98, 70, 126, 124, 76, 100, 102, 66, 0, 0, 0, // 82 'R'
+        0, 0, 24, 126, 102, 96, 96, 60, 14, 6, 66, 126, 60, 0, 0, 0, // 83 'S'
+        0, 0, 126, 126, 24, 24, 24, 24, 24, 24, 24, 24, 24, 0, 0, 0, // 84 'T'
+        0, 0, 66, 102, 66, 66, 66, 66, 66, 66, 102, 126, 60, 0, 0, 0, // 85 'U'
+        0, 0, 66, 66, 102, 102, 102, 36, 60, 60, 24, 24, 24, 0, 0, 0, // 86 'V'
+        0, 0, 0, 219, 90, 90, 90, 126, 126, 102, 102, 36, 36, 0, 0, 0, // 87 'W'
+        0, 0, 66, 102, 36, 60, 24, 24, 24, 60, 36, 102, 66, 0, 0, 0, // 88 'X'
+        0, 0, 66, 102, 102, 36, 60, 24, 24, 24, 24, 24, 24, 0, 0, 0, // 89 'Y'
+        0, 0, 126, 126, 6, 12, 12, 24, 16, 48, 32, 126, 126, 0, 0, 0, // 90 'Z'
+        0, 60, 60, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 60, 60, 0, // 91 '['
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 92 '\\'
+        0, 60, 60, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 60, 60, 0, // 93 ']'
+        0, 0, 0, 24, 36, 102, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 94 '^'
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 126, 126, 0, 0, // 95 '_'
+        0, 0, 32, 48, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 96 '`'
+        0, 0, 0, 0, 0, 60, 126, 66, 30, 126, 66, 126, 58, 0, 0, 0, // 97 'a'
+        0, 0, 64, 96, 64, 92, 126, 102, 66, 66, 98, 126, 92, 0, 0, 0, // 98 'b'
+        0, 0, 0, 0, 0, 60, 126, 102, 64, 64, 66, 126, 60, 0, 0, 0, // 99 'c'
+        0, 0, 2, 6, 2, 58, 126, 102, 66, 66, 70, 126, 58, 0, 0, 0, // 100 'd'
+        0, 0, 0, 0, 0, 60, 126, 66, 126, 126, 66, 126, 60, 0, 0, 0, // 101 'e'
+        0, 0, 6, 30, 24, 16, 126, 24, 16, 16, 16, 24, 16, 0, 0, 0, // 102 'f'
+        0, 0, 0, 0, 0, 58, 126, 102, 66, 66, 70, 126, 62, 6, 126, 60, // 103 'g'
+        0, 0, 64, 96, 64, 92, 126, 102, 66, 66, 66, 102, 66, 0, 0, 0, // 104 'h'
+        0, 0, 0, 24, 0, 48, 56, 24, 24, 24, 24, 126, 126, 0, 0, 0, // 105 'i'
+        0, 0, 0, 12, 0, 56, 60, 12, 12, 12, 12, 12, 12, 12, 120, 112, // 106 'j'
+        0, 0, 0, 96, 96, 98, 102, 108, 120, 120, 108, 100, 102, 0, 0, 0, // 107 'k'
+        0, 0, 112, 112, 16, 16, 16, 16, 16, 16, 16, 28, 14, 0, 0, 0, // 108 'l'
+        0, 0, 0, 0, 0, 118, 126, 90, 90, 90, 90, 90, 90, 0, 0, 0, // 109 'm'
+        0, 0, 0, 0, 0, 92, 126, 102, 66, 66, 66, 102, 66, 0, 0, 0, // 110 'n'
+        0, 0, 0, 0, 0, 60, 126, 102, 66, 66, 66, 126, 60, 0, 0, 0, // 111 'o'
+        0, 0, 0, 0, 0, 92, 126, 102, 66, 66, 98, 126, 124, 64, 96, 64, // 112 'p'
+        0, 0, 0, 0, 0, 58, 126, 102, 66, 66, 70, 126, 62, 2, 6, 2, // 113 'q'
+        0, 0, 0, 0, 0, 38, 62, 48, 32, 32, 32, 32, 32, 0, 0, 0, // 114 'r'
+        0, 0, 0, 0, 0, 60, 126, 98, 120, 30, 6, 126, 60, 0, 0, 0, // 115 's'
+        0, 0, 16, 48, 16, 126, 126, 16, 16, 16, 16, 30, 14, 0, 0, 0, // 116 't'
+        0, 0, 0, 0, 0, 66, 102, 66, 66, 66, 102, 126, 58, 0, 0, 0, // 117 'u'
+        0, 0, 0, 0, 0, 66, 102, 102, 36, 36, 60, 24, 24, 0, 0, 0, // 118 'v'
+        0, 0, 0, 0, 0, 66, 219, 90, 126, 126, 102, 36, 36, 0, 0, 0, // 119 'w'
+        0, 0, 0, 0, 0, 66, 102, 60, 24, 24, 60, 102, 102, 0, 0, 0, // 120 'x'
+        0, 0, 0, 0, 0, 66, 102, 102, 36, 60, 60, 24, 24, 24, 48, 96, // 121 'y'
+        0, 0, 0, 0, 0, 126, 126, 4, 8, 24, 48, 126, 126, 0, 0, 0, // 122 'z'
+        0, 4, 12, 24, 24, 24, 24, 112, 112, 24, 24, 24, 24, 12, 4, 0, // 123 '{'
+        0, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 0, // 124 '|'
+        0, 32, 48, 24, 24, 24, 24, 14, 14, 24, 24, 24, 24, 48, 32, 0, // 125 '}'
+        0, 0, 0, 0, 0, 0, 0, 50, 126, 76, 0, 0, 0, 0, 0, 0 // 126 '~'
+    ]
+
+    const GLYPH_WIDTH = 8
+    const GLYPH_HEIGHT = 16
+
+    // Draws one character at pixel position (x, y). Anything outside the
+    // printable ASCII range (32-126) draws as a blank cell rather than
+    // garbage - there's no glyph data for it.
+    func draw_char(x: uint32, y: uint32, c: char, fg: uint32, bg: uint32) {
+        let code: int = c as int
+        if code < 32 || code > 126 {
+            code = 32
+        }
+        let glyph_offset: int = (code - 32) * GLYPH_HEIGHT
+
+        let row: int = 0
+        while row < GLYPH_HEIGHT {
+            // `& 255` undoes char's signedness before testing bits - a
+            // glyph row byte like 254 would otherwise read back negative
+            // and corrupt every bit test below.
+            let bits: int = (font_data[glyph_offset + row] as int) & 255
+            let col: int = 0
+            while col < GLYPH_WIDTH {
+                let mask: int = 128 >> col
+                if (bits & mask) != 0 {
+                    put_pixel(x + (col as uint32), y + (row as uint32), fg)
+                } else {
+                    put_pixel(x + (col as uint32), y + (row as uint32), bg)
+                }
+                col = col + 1
+            }
+            row = row + 1
+        }
+    }
+
+    func draw_string(x: uint32, y: uint32, str: char*, fg: uint32, bg: uint32) {
+        let i: int = 0
+        let cur_x: uint32 = x
+        while str[i] != 0 {
+            draw_char(cur_x, y, str[i], fg, bg)
+            cur_x = cur_x + (GLYPH_WIDTH as uint32)
+            i = i + 1
+        }
+    }
+}

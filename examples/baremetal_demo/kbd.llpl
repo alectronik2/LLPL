@@ -1,0 +1,142 @@
+// Keyboard module - a minimal PS/2 keyboard driver.
+//
+// The keyboard ISR (idt.llpl, IRQ1 -> vector 0x21) reads a scancode from
+// port 0x60 and calls Keyboard.on_scancode(), which translates it (US
+// QWERTY, scancode set 1 - the PS/2 controller's power-on default, which
+// is what QEMU and real hardware alike start in) and pushes the resulting
+// ASCII character into a small ring buffer. Shell.run() (shell.llpl)
+// polls Keyboard.read_char() in its main loop.
+
+import hal
+
+namespace Keyboard {
+    const BUFFER_SIZE = 64
+
+    // Pushed into the same buffer as real characters for the arrow keys -
+    // Shell.read_line (shell.llpl) checks for these. Safe as sentinels
+    // because every real translated key is a plain ASCII byte (0-127);
+    // these start well above that.
+    const KEY_UP = 200
+    const KEY_DOWN = 201
+    const KEY_LEFT = 202
+    const KEY_RIGHT = 203
+
+    let buffer: char[64]
+    let head: int = 0
+    let tail: int = 0
+
+    let shift_held: bool = false
+
+    // Set for exactly one on_scancode() call after seeing an 0xE0 prefix
+    // byte - scancode set 1's escape for the arrow keys (among others),
+    // which are otherwise unrepresentable in a single byte.
+    let extended: bool = false
+
+    // US QWERTY scancode set 1, unshifted: index = scancode (0x00-0x39),
+    // 0 means "no printable character" (modifiers, function keys, ...).
+    // 8 = backspace, 9 = tab, 10 = enter.
+    let scancodes: char[58] = [
+        0, 0, 49, 50, 51, 52, 53, 54, 55, 56, // 0x00-0x09: ESC 1 2 3 4 5 6 7 8
+        57, 48, 45, 61, 8, 9, // 0x0A-0x0F: 9 0 - = BACKSPACE TAB
+        113, 119, 101, 114, 116, 121, 117, 105, 111, 112, 91, 93, 10, // 0x10-0x1C: q w e r t y u i o p [ ] ENTER
+        0, 97, 115, 100, 102, 103, 104, 106, 107, 108, 59, 39, 96, // 0x1D-0x29: LCTRL a s d f g h j k l ; ' `
+        0, 92, 122, 120, 99, 118, 98, 110, 109, 44, 46, 47, 0, // 0x2A-0x36: LSHIFT \ z x c v b n m , . / RSHIFT
+        0, 0, 32 // 0x37-0x39: PRTSC LALT SPACE
+    ]
+
+    // Same layout, shifted (letters uppercase, symbol keys shifted).
+    let scancodes_shift: char[58] = [
+        0, 0, 33, 64, 35, 36, 37, 94, 38, 42,
+        40, 41, 95, 43, 8, 9,
+        81, 87, 69, 82, 84, 89, 85, 73, 79, 80, 123, 125, 10,
+        0, 65, 83, 68, 70, 71, 72, 74, 75, 76, 58, 34, 126,
+        0, 124, 90, 88, 67, 86, 66, 78, 77, 60, 62, 63, 0,
+        0, 0, 32
+    ]
+
+    func push(c: char) {
+        let next: int = (head + 1) % BUFFER_SIZE
+        if next != tail { // drop the key if the buffer's full
+            buffer[head] = c
+            head = next
+        }
+    }
+
+    // Called from the IRQ1 handler (idt.llpl) with the raw byte read from
+    // port 0x60. Scancode set 1: bit 7 set means "key released" (we only
+    // care about key-down); 0x2A/0x36 are the left/right shift make-codes.
+    //
+    // `code as int` sign-extends (LLPL's `char` is a plain, signed C
+    // `char`), so a byte like 0xAA would come back as -86, not 170 - `&
+    // 255` recovers the true 0-255 value before any comparison against
+    // 0x80 or bit-masking against 0x7F.
+    func on_scancode(code: char) {
+        let raw: int = (code as int) & 255
+
+        if raw == 0xE0 {
+            extended = true
+            return
+        }
+
+        let released: bool = raw >= 0x80
+        let key: char = (raw & 0x7F) as char
+
+        if extended {
+            extended = false
+            if !released {
+                if key == 0x48 {
+                    push(KEY_UP as char)
+                } else if key == 0x50 {
+                    push(KEY_DOWN as char)
+                } else if key == 0x4B {
+                    push(KEY_LEFT as char)
+                } else if key == 0x4D {
+                    push(KEY_RIGHT as char)
+                }
+                // Other extended keys (Ctrl/Alt-right, Home/End, ...) are
+                // silently ignored - there's nothing bound to them yet.
+            }
+            return
+        }
+
+        if key == 0x2A || key == 0x36 {
+            shift_held = !released
+            return
+        }
+
+        if released {
+            return
+        }
+
+        let index: int = key as int
+        if index < 0 || index >= 58 {
+            return
+        }
+
+        let c: char = 0
+        if shift_held {
+            c = scancodes_shift[index]
+        } else {
+            c = scancodes[index]
+        }
+
+        if c != 0 {
+            push(c)
+        }
+    }
+
+    func has_char() -> bool {
+        return head != tail
+    }
+
+    // Blocks (via HAL.halt(), so the CPU idles between interrupts rather
+    // than spinning) until a key is available, then returns it.
+    func read_char() -> char {
+        while !has_char() {
+            HAL.halt()
+        }
+        let c: char = buffer[tail]
+        tail = (tail + 1) % BUFFER_SIZE
+        return c
+    }
+}

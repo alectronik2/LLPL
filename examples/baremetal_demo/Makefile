@@ -8,7 +8,7 @@ LD = ld
 QEMU = qemu-system-x86_64
 
 NASMFLAGS = -f elf64
-CFLAGS = -m64 -ffreestanding -nostdlib -nostdinc -fno-builtin -fno-stack-protector -Wall -Wextra -O2 -I. -mcmodel=kernel -fno-pie -mno-red-zone -mno-sse -mno-sse2 -mno-mmx -mno-80387
+CFLAGS = -m64 -ffreestanding -nostdlib -nostdinc -fno-builtin -fno-stack-protector -fno-omit-frame-pointer -fno-optimize-sibling-calls -Wall -Wextra -O2 -I. -mcmodel=kernel -fno-pie -mno-red-zone -mno-sse -mno-sse2 -mno-mmx -mno-80387
 LDFLAGS = -m elf_x86_64 -T linker64.ld -nostdlib
 BOOT_SRC = boot64.asm
 
@@ -21,9 +21,10 @@ ISO = kernel.iso
 
 all: $(ISO)
 
-# Compile LLPL to C (module resolution picks up hal.llpl/console.llpl
-# automatically via the `import` statements in kernel.llpl)
-$(C_SRC): $(LLPL_SRC) hal.llpl console.llpl
+# Compile LLPL to C (module resolution picks up every imported file
+# automatically via the `import` statements in kernel.llpl; listed here
+# too just so `make` knows to recompile when any of them change)
+$(C_SRC): $(LLPL_SRC) hal.llpl console.llpl gdt.llpl idt.llpl backtrace.llpl fb.llpl kbd.llpl pagealloc.llpl shell.llpl ../../prelude.llpl
 	@echo "Compiling LLPL..."
 	cd ../.. && dub build
 	$(LLPL) $(LLPL_SRC) -o $(C_SRC)
@@ -53,7 +54,9 @@ $(ISO): $(KERNEL_BIN)
 	@echo "Creating ISO..."
 	@mkdir -p isodir/boot/grub
 	@cp $(KERNEL_BIN) isodir/boot/kernel.bin
-	@echo 'menuentry "LLPL Bare-Metal Demo" {' > isodir/boot/grub/grub.cfg
+	@echo 'set timeout=0' > isodir/boot/grub/grub.cfg
+	@echo 'set default=0' >> isodir/boot/grub/grub.cfg
+	@echo 'menuentry "LLPL Bare-Metal Demo" {' >> isodir/boot/grub/grub.cfg
 	@echo '    multiboot2 /boot/kernel.bin' >> isodir/boot/grub/grub.cfg
 	@echo '}' >> isodir/boot/grub/grub.cfg
 	@grub-mkrescue -o $(ISO) isodir 2>/dev/null || echo "Note: grub-mkrescue not found, ISO not created"

@@ -9,7 +9,29 @@ header_start:
     dd header_end - header_start            ; header length
     dd 0x100000000 - (0xe85250d6 + 0 + (header_end - header_start))
 
+    ; Framebuffer request tag: ask GRUB for a 1024x768x32 linear
+    ; framebuffer. GRUB reports back whatever it actually set up (not
+    ; necessarily this exact mode) via the framebuffer info tag in the
+    ; multiboot info structure handed to us in EBX - see fb.llpl, which
+    ; walks that tag list rather than assuming these numbers.
+    align 8
+fb_tag_start:
+    dw 5                                    ; type = framebuffer
+    dw 0                                    ; flags
+    dd fb_tag_end - fb_tag_start            ; size - covers this *whole*
+                                             ; tag (type+flags+size+payload),
+                                             ; not just the payload below -
+                                             ; getting this wrong desyncs
+                                             ; GRUB's tag-list parser, which
+                                             ; then misreads payload bytes
+                                             ; as a bogus next tag.
+    dd 1024                                 ; width
+    dd 768                                  ; height
+    dd 32                                   ; depth (bits per pixel)
+fb_tag_end:
+
     ; End tag
+    align 8
     dw 0
     dw 0
     dd 8
@@ -21,8 +43,11 @@ pml4:
     resb 4096
 pdpt:
     resb 4096
-pd:
-    resb 4096
+; multiboot2's info-structure pointer (handed to us in EBX at entry) - saved
+; immediately, before CPUID (which clobbers EBX as a side effect) can
+; destroy it. Always a 32-bit physical address in this boot protocol.
+multiboot_ptr:
+    resd 1
 stack_bottom:
     resb 16384
 stack_top:
@@ -53,8 +78,10 @@ _start:
     ; Clear direction flag
     cld
 
-    ; VGA test
-    mov dword [0xb8000], 0x2f4b2f4f  ; "OK" in green
+    ; Save the multiboot info pointer (EBX) *before* anything that might
+    ; clobber it - CPUID (used below) writes EBX as a side effect even
+    ; when its result isn't the register we care about.
+    mov [multiboot_ptr], ebx
 
     ; Check multiboot magic
     cmp eax, 0x36d76289
@@ -78,9 +105,6 @@ _start:
 
     ; Load 64-bit GDT
     lgdt [gdt64_pointer]
-
-    ; Debug: Write "JM" before jump
-    mov dword [0xb8004], 0x2f4d2f4a  ; "JM" in green
 
     ; Update CS with far jump
     push 0x08
@@ -136,24 +160,32 @@ check_long_mode:
 setup_paging:
     ; Clear page tables
     mov edi, pml4
-    mov ecx, 3 * 4096 / 4
+    mov ecx, 2 * 4096 / 4
     xor eax, eax
     rep stosd
 
-    ; Set up page tables (identity map first 2MB)
     ; PML4[0] -> PDPT
     mov eax, pdpt
     or eax, 0x03  ; present + writable
     mov [pml4], eax
 
-    ; PDPT[0] -> PD
-    mov eax, pd
-    or eax, 0x03
-    mov [pdpt], eax
-
-    ; PD[0] -> 2MB page
-    mov eax, 0x83  ; present + writable + huge page
-    mov [pd], eax
+    ; Identity-map the first 4GB directly from the PDPT using four 1GB
+    ; pages (present + writable + huge/PS) - no PD or PT needed at all.
+    ; A linear framebuffer from GRUB/VBE can sit well above the 2MB this
+    ; used to map (often just under the 4GB boundary, in PCI MMIO space),
+    ; so a single 2MB huge page isn't enough once fb.llpl needs to reach
+    ; it. 1GB pages need CPUID.80000001H:EDX.Page1GB, which every CPU this
+    ; project targets (real x86-64 since ~2010, and QEMU's default -cpu)
+    ; has - same trust-the-target-hardware trade-off as the rest of this
+    ; boot code (no runtime feature probe).
+    mov eax, 0x83
+    mov edi, pdpt
+    mov ecx, 4
+.fill_pdpt:
+    mov [edi], eax
+    add eax, 0x40000000
+    add edi, 8
+    loop .fill_pdpt
 
     ret
 
@@ -183,11 +215,6 @@ enable_long_mode:
 
 bits 64
 long_mode_entry:
-    ; First thing: write to VGA to confirm we're here
-    mov rax, 0xb8008
-    mov word [rax], 0x0f36  ; '6' in white
-    mov word [rax+2], 0x0f34  ; '4' in white
-
     ; Reload segment registers
     mov ax, 0x10
     mov ds, ax
@@ -199,12 +226,11 @@ long_mode_entry:
     ; Set up stack
     mov rsp, stack_top
 
-    ; Write more to VGA
-    mov rax, 0xb800c
-    mov word [rax], 0x0f4f  ; 'O'
-    mov word [rax+2], 0x0f4b  ; 'K'
-
-    ; Call kernel main
+    ; Call kernel_main(multiboot_ptr) - System V AMD64: first integer
+    ; argument in RDI. `mov edi, ...` zero-extends into RDI, which is
+    ; correct here since multiboot_ptr is always a 32-bit physical address.
+    xor rbp, rbp
+    mov edi, [multiboot_ptr]
     call kernel_main
 
     ; Hang
@@ -238,4 +264,12 @@ enable_interrupts:
 global disable_interrupts
 disable_interrupts:
     cli
+    ret
+
+; Returns _kernel_end (set by linker64.ld, just past .bss) so pagealloc.llpl
+; knows where the kernel image ends and free physical memory can start.
+global get_kernel_end
+extern _kernel_end
+get_kernel_end:
+    mov rax, _kernel_end
     ret

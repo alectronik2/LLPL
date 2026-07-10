@@ -1,0 +1,194 @@
+// Physical page-frame allocator.
+//
+// A bitmap over the first 4GB of physical address space (already
+// identity-mapped by boot64.asm's four 1GB huge pages - see setup_paging),
+// one bit per 4KB page: 1 = free, 0 = used. Every page starts out used;
+// init() walks the multiboot2 memory map (tag type 6) to free exactly the
+// ranges the firmware reports as available (type 1), then re-reserves the
+// handful of ranges that are available in RAM terms but already spoken
+// for - the firmware has no idea the kernel, GRUB's multiboot info
+// structure, or the linear framebuffer exist:
+//
+//   - the low 1MB (BIOS/real-mode/VGA-era memory this project never uses)
+//   - the kernel image itself, 1MB..get_kernel_end() (linker64.ld)
+//   - the multiboot info structure GRUB left behind, still being read
+//   - the linear framebuffer (fb.llpl's Framebuffer.addr, if it landed in
+//     ordinary RAM rather than separate PCI MMIO space)
+//
+// alloc()/free() hand out/reclaim single 4KB pages by physical address -
+// there's no virtual memory here (identity-mapped 1GB pages cover
+// everything), so a physical address *is* a usable pointer once cast.
+
+import hal
+import fb
+
+namespace PageAlloc {
+    const PAGE_SIZE = 4096
+    const MAX_PAGES = 1048576 // 4GB / 4KB - matches boot64.asm's 4GB identity map
+
+    // One bit per page, MAX_PAGES/8 bytes.
+    let bitmap: char[131072]
+
+    // total_pages: pages the firmware reported as available RAM (set once
+    // during init). free_pages: how many of those are currently unused.
+    let total_pages: uint = 0
+    let free_pages: uint = 0
+
+    func set_used(page: uint) {
+        let byte: uint = page / 8
+        let bit: int = (page % 8) as int
+        let cur: int = (bitmap[byte] as int) & 255
+        if (cur & (1 << bit)) != 0 {
+            free_pages = free_pages - 1
+        }
+        bitmap[byte] = (cur & ~(1 << bit)) as char
+    }
+
+    func set_free(page: uint) {
+        let byte: uint = page / 8
+        let bit: int = (page % 8) as int
+        let cur: int = (bitmap[byte] as int) & 255
+        if (cur & (1 << bit)) == 0 {
+            free_pages = free_pages + 1
+        }
+        bitmap[byte] = (cur | (1 << bit)) as char
+    }
+
+    func is_free(page: uint) -> bool {
+        let byte: uint = page / 8
+        let bit: int = (page % 8) as int
+        let cur: int = (bitmap[byte] as int) & 255
+        return (cur & (1 << bit)) != 0
+    }
+
+    func page_floor(addr: uint) -> uint {
+        return addr / PAGE_SIZE
+    }
+
+    func page_ceil(addr: uint) -> uint {
+        return (addr + PAGE_SIZE - 1) / PAGE_SIZE
+    }
+
+    // Frees every page *fully contained* in [start, end) - rounds inward,
+    // so a page straddling the edge of an "available" region (which can
+    // only happen from firmware-reported ranges that aren't page-aligned)
+    // is conservatively left alone rather than freed on the strength of a
+    // partial overlap.
+    func mark_available(start: uint, end: uint) {
+        let lo: uint = page_ceil(start)
+        let hi: uint = page_floor(end)
+        let p: uint = lo
+        while p < hi {
+            if p < MAX_PAGES {
+                set_free(p)
+                total_pages = total_pages + 1
+            }
+            p = p + 1
+        }
+    }
+
+    // Reserves every page *overlapping* [start, end) - rounds outward, so
+    // a reserved range that isn't page-aligned still fully covers the
+    // pages it touches.
+    func mark_reserved(start: uint, end: uint) {
+        let lo: uint = page_floor(start)
+        let hi: uint = page_ceil(end)
+        let p: uint = lo
+        while p < hi {
+            if p < MAX_PAGES {
+                set_used(p)
+            }
+            p = p + 1
+        }
+    }
+
+    // multiboot2 memory map tag (type 6): a header giving entry_size (the
+    // spec allows this to grow in future revisions), followed by that many
+    // entries of `entry_size` bytes each - reusing Framebuffer.InfoHeader/
+    // TagHeader for the outer tag-list walk, the same one fb.llpl's own
+    // init() already does over the same multiboot2 structure.
+    packed struct MemMapTag {
+        let tag_type: uint32
+        let size: uint32
+        let entry_size: uint32
+        let entry_version: uint32
+    }
+
+    packed struct MemMapEntry {
+        let base_addr: uint
+        let length: uint
+        let region_type: uint32
+        let reserved: uint32
+    }
+
+    func init(multiboot_ptr: uint) {
+        let byte_count: uint = MAX_PAGES / 8
+        let b: uint = 0
+        while b < byte_count {
+            bitmap[b] = 0
+            b = b + 1
+        }
+        total_pages = 0
+        free_pages = 0
+
+        let hdr: Framebuffer.InfoHeader* = multiboot_ptr as Framebuffer.InfoHeader*
+        let info_end: uint = multiboot_ptr + (hdr.total_size as uint)
+        let ptr: uint = multiboot_ptr + 8
+        let scanning: bool = true
+
+        while ptr < info_end && scanning {
+            let header: Framebuffer.TagHeader* = ptr as Framebuffer.TagHeader*
+            if header.tag_type == 0 {
+                scanning = false // end tag
+            } else {
+                if header.tag_type == 6 {
+                    let mm: MemMapTag* = ptr as MemMapTag*
+                    let entry_ptr: uint = ptr + 16 // sizeof(MemMapTag)
+                    let entries_end: uint = ptr + (mm.size as uint)
+                    while entry_ptr < entries_end {
+                        let e: MemMapEntry* = entry_ptr as MemMapEntry*
+                        if e.region_type == 1 {
+                            mark_available(e.base_addr, e.base_addr + e.length)
+                        }
+                        entry_ptr = entry_ptr + (mm.entry_size as uint)
+                    }
+                }
+                ptr = ptr + Framebuffer.align8(header.size as uint)
+            }
+        }
+
+        mark_reserved(0, 0x100000) // low 1MB
+        mark_reserved(0x100000, HAL.get_kernel_end()) // the kernel image
+        mark_reserved(multiboot_ptr, info_end) // the multiboot info structure
+
+        if Framebuffer.ready {
+            let fb_start: uint = Framebuffer.addr
+            let fb_end: uint = fb_start + (Framebuffer.pitch as uint) * (Framebuffer.height as uint)
+            mark_reserved(fb_start, fb_end)
+        }
+    }
+
+    // Returns the physical address of a freshly-reserved 4KB page, or 0 if
+    // none are free - 0 is never a valid result otherwise (it's always
+    // inside the low-1MB reservation above).
+    func alloc() -> uint {
+        let p: uint = 0
+        while p < MAX_PAGES {
+            if is_free(p) {
+                set_used(p)
+                return p * PAGE_SIZE
+            }
+            p = p + 1
+        }
+        return 0
+    }
+
+    // Returns `addr` (which must be a page-aligned address previously
+    // handed out by alloc()) to the free pool.
+    func free(addr: uint) {
+        let p: uint = addr / PAGE_SIZE
+        if p < MAX_PAGES {
+            set_free(p)
+        }
+    }
+}

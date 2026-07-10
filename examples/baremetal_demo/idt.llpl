@@ -7,44 +7,60 @@
 // with the correct stack handling instead of a normal `ret`.
 
 import hal
+import kbd
+import backtrace
+
+alias hsw = HAL.Serial.write
 
 let timer_ticks: uint = 0
+
+// The three fault handlers below all do the same thing: report what
+// happened, then halt for good (there's no recovering from a fault this
+// demo doesn't handle). HALT_WITH_FAULT!(msg) is a macro, not a function:
+// `macro NAME(params) { ... }` is expanded inline at each `NAME!(args)`
+// call site (substituting params, no separate C function or call
+// overhead), so `while true { HAL.halt() }` ends up written once here
+// instead of copy-pasted into every handler that needs it.
+macro haltWithFault(msg) {
+    hsw(msg)
+    Backtrace.print()
+    HAL.disable_interrupts()
+    while true {
+        HAL.halt()
+    }
+}
 
 // Handlers are defined before `namespace IDT` references their addresses:
 // LLPL doesn't forward-declare plain functions yet, so this file's order is
 // its C declaration order too.
 
 interrupt func isr_divide_by_zero() {
-    HAL.Serial.write("FAULT: divide by zero (#DE) - halting\n")
-    HAL.disable_interrupts()
-    while true {
-        HAL.halt()
-    }
+    haltWithFault!("FAULT: divide by zero (#DE) - halting\n")
 }
 
 interrupt func isr_breakpoint() {
-    HAL.Serial.write("Breakpoint (int3) handled, resuming...\n")
+    hsw("Breakpoint (int3) handled, resuming...\n")
+
+    Backtrace.print()
 }
 
 interrupt func isr_general_protection(error_code: uint) {
-    HAL.Serial.write("FAULT: general protection (#GP) - halting\n")
-    HAL.disable_interrupts()
-    while true {
-        HAL.halt()
-    }
+    haltWithFault!("FAULT: general protection (#GP) - halting\n")
 }
 
 interrupt func isr_page_fault(error_code: uint) {
-    HAL.Serial.write("FAULT: page fault (#PF) - halting\n")
-    HAL.disable_interrupts()
-    while true {
-        HAL.halt()
-    }
+    haltWithFault!("FAULT: page fault (#PF) - halting\n")
 }
 
 interrupt func isr_timer() {
     timer_ticks = timer_ticks + 1
     HAL.Pic.send_eoi(0)
+}
+
+interrupt func isr_keyboard() {
+    let scancode: char = HAL.inb(0x60)
+    Keyboard.on_scancode(scancode)
+    HAL.Pic.send_eoi(1)
 }
 
 namespace IDT {
@@ -88,6 +104,7 @@ namespace IDT {
         set_gate(13, isr_general_protection as uint, 0x08, 0x8E)
         set_gate(14, isr_page_fault as uint, 0x08, 0x8E)
         set_gate(32, isr_timer as uint, 0x08, 0x8E) // IRQ0 after PIC remap
+        set_gate(33, isr_keyboard as uint, 0x08, 0x8E) // IRQ1 after PIC remap
 
         pointer.limit = (256 * 16) - 1
         pointer.base = entries as uint
