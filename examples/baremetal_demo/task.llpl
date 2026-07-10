@@ -19,12 +19,22 @@
 // switch needs to do. So the actual register save/restore is hand-written
 // NASM; only the scheduling *decision* (which task runs next) is LLPL,
 // called from that asm as schedule_next(current_rsp) -> next_rsp.
+//
+// Tasks live in a *circular* singly-linked list threaded through each
+// task's own stack allocation (its TCB sits at the very bottom of the
+// block KHeap hands back, the same "header lives in the memory it
+// describes" trick kheap.llpl's own arenas use) - there's no fixed-size
+// task-table array, so spawn() has no built-in cap; it only ever fails if
+// the heap itself is out of memory. Circular (the last task's `next`
+// points back to the first) rather than plain singly-linked so
+// schedule_next() can move to "whichever task comes after this one" in
+// O(1) - just follow `.next` - instead of walking the whole list every
+// tick to find the current task and figure out what's after it.
 
 import hal
 import kheap
 
 namespace Task {
-    const MAX_TASKS = 16
     const STACK_SIZE = 16384 // 16KB per task, matching the original boot stack
 
     // Implemented in boot64.asm. timer_isr_entry is IDT gate 32's actual
@@ -75,15 +85,22 @@ namespace Task {
 
     const TRAP_FRAME_SIZE = 160 // sizeof(TrapFrame): 20 fields * 8 bytes
 
-    struct TCB {
+    // Lives at the very start of the task's kmalloc'd stack block (see
+    // spawn()); `next` threads the circular task list, so no separate
+    // registry of any fixed size is needed.
+    packed struct TCB {
         let saved_rsp: uint
-        let stack_base: uint // diagnostics only - stacks are never freed
+        let stack_base: uint // == this TCB's own address; diagnostics only
         let id: int
+        let next: uint       // address of the next task's TCB
     }
 
-    let tasks: TCB[16]
+    const TCB_SIZE = 32 // sizeof(TCB): four 8-byte fields
+
+    let first_task: uint = 0 // 0 = no tasks spawned yet
+    let last_task: uint = 0  // so spawn() can extend the list in O(1)
+    let current_task: uint = 0
     let task_count: int = 0
-    let current_index: int = 0
     let scheduling_enabled: bool = false
 
     // Creates a new task ready to run `entry`, a plain `func() -> void`
@@ -91,22 +108,24 @@ namespace Task {
     // e.g. `Task.spawn(my_task as uint)` - which is how LLPL hands out a
     // function's address (a bare/qualified function reference resolves to
     // its C name, which decays to a pointer; see codegen.d's Identifier and
-    // MemberExpr handling). Returns the new task's id, or -1 on failure (no
-    // room in the task table, or the heap is out of memory).
+    // MemberExpr handling). Returns the new task's id, or -1 if the heap is
+    // out of memory - there's no other way for this to fail, unlike the
+    // fixed-size task table this replaced.
     func spawn(entry: uint) -> int {
-        if task_count >= MAX_TASKS {
-            return -1
-        }
-        let stack: uint = KHeap.kmalloc(STACK_SIZE)
-        if stack == 0 {
+        let block: uint = KHeap.kmalloc(STACK_SIZE)
+        if block == 0 {
             return -1
         }
 
-        // The fake initial frame goes at the *top* of the new stack (the
+        let tcb: TCB* = block as TCB*
+
+        // The fake initial frame goes at the *top* of the block (the
         // highest address - stacks grow down), so the very first pop
         // sequence in timer_isr_entry/start_first_task reads it exactly
-        // like it would read a real preempted task's saved frame.
-        let stack_top: uint = stack + STACK_SIZE
+        // like it would read a real preempted task's saved frame. The TCB
+        // at the bottom (TCB_SIZE bytes) trims the usable stack by a
+        // negligible amount relative to STACK_SIZE.
+        let stack_top: uint = block + STACK_SIZE
         let frame_addr: uint = stack_top - TRAP_FRAME_SIZE
         let frame: TrapFrame* = frame_addr as TrapFrame*
         frame.r15 = 0
@@ -134,12 +153,22 @@ namespace Task {
                                // up the original boot stack
         frame.ss = 0x10       // kernel data selector - see GDT.init()
 
-        let id: int = task_count
-        tasks[id].saved_rsp = frame_addr
-        tasks[id].stack_base = stack
-        tasks[id].id = id
+        tcb.saved_rsp = frame_addr
+        tcb.stack_base = block
+        tcb.id = task_count
+
+        if first_task == 0 {
+            tcb.next = block // single-element cycle: points to itself
+            first_task = block
+        } else {
+            let last: TCB* = last_task as TCB*
+            last.next = block
+            tcb.next = first_task // close the cycle
+        }
+        last_task = block
+
         task_count = task_count + 1
-        return id
+        return tcb.id
     }
 
     // Called from timer_isr_entry (boot64.asm) with the just-preempted
@@ -152,26 +181,38 @@ namespace Task {
         HAL.Pic.send_eoi(0)
         timer_ticks = timer_ticks + 1
 
-        if !scheduling_enabled || task_count == 0 {
+        if !scheduling_enabled || current_task == 0 {
             return rsp
         }
 
-        tasks[current_index].saved_rsp = rsp
-        current_index = (current_index + 1) % task_count
-        return tasks[current_index].saved_rsp
+        let cur: TCB* = current_task as TCB*
+        cur.saved_rsp = rsp
+        current_task = cur.next
+        let next: TCB* = current_task as TCB*
+        return next.saved_rsp
     }
 
-    // Switches from plain boot-time execution to the task table - never
+    // The running task's id, or -1 before start() (nothing's running yet).
+    func current_id() -> int {
+        if current_task == 0 {
+            return -1
+        }
+        let cur: TCB* = current_task as TCB*
+        return cur.id
+    }
+
+    // Switches from plain boot-time execution to the task list - never
     // returns. Everything running up to this call (kernel_main, and
     // whatever it called) simply stops existing: its stack is abandoned,
     // the same way a process image vanishes into an exec(). Must be called
     // with at least one task already spawn()ed.
     func start() {
-        if task_count == 0 {
+        if first_task == 0 {
             return
         }
         scheduling_enabled = true
-        current_index = 0
-        start_first_task(tasks[0].saved_rsp)
+        current_task = first_task
+        let first: TCB* = first_task as TCB*
+        start_first_task(first.saved_rsp)
     }
 }

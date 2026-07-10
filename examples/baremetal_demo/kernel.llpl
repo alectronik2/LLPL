@@ -203,6 +203,18 @@ func bg_task_entry() {
     }
 }
 
+// A do-nothing task spawned on demand by the shell's `spawn` command
+// (shell.llpl) - proof the scheduler's task list has no fixed size limit,
+// since it can be called well past the old 16-task cap and keep
+// succeeding. HAL.halt() rather than a tight loop like bg_task_entry:
+// there's nothing for it to actually do, so it should cost real CPU time
+// only when the timer wakes it up to immediately hand control elsewhere.
+func idle_task_entry() {
+    while true {
+        HAL.halt()
+    }
+}
+
 // `multiboot_ptr` is handed to us by boot64.asm (RDI, System V AMD64's
 // first integer argument): the physical address of the multiboot2 info
 // structure GRUB left behind, which is where fb.llpl's Framebuffer.init
@@ -273,6 +285,11 @@ func kernel_main(multiboot_ptr: uint) {
     HAL.Pic.unmask_irq1()
     HAL.enable_interrupts()
     log("<GREEN>Interrupts enabled.\n</>")
+
+    let s: String = new String("Hello, world!")
+    foreach let x in s {
+        log("<CYAN>char: '\(x)' (0x\(x))\n</>")
+    }
 
     print("\n")
     log("<WHITE>Spawning tasks (shell + a background counter) and starting the scheduler...\n</>")

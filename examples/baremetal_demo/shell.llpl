@@ -397,6 +397,7 @@ namespace Shell {
         print("  kfree ADDR    - free a kernel heap block\n")
         print("  kheap         - show kernel heap stats\n")
         print("  tasks         - show scheduler/task stats\n")
+        print("  spawn         - spawn another idle background task\n")
         print("\n")
         print("Up/down arrows recall previous commands; left/right move\n")
         print("the cursor within the current line.\n")
@@ -493,9 +494,22 @@ namespace Shell {
     // tasks being preempted to let that happen).
     func cmd_tasks() {
         log("<WHITE>tasks:        \(Task.task_count)\n</>")
-        log("<WHITE>current:      \(Task.current_index)\n</>")
+        log("<WHITE>current id:   \(Task.current_id())\n</>")
         log("<WHITE>bg_counter:   \(bg_counter)\n</>")
         log("<WHITE>timer_ticks:  \(timer_ticks)\n</>")
+    }
+
+    // Spawns another idle_task_entry (kernel.llpl) - proof the task list
+    // has no fixed cap: unlike the old TCB[16] table, spawn() only ever
+    // fails when the heap itself runs out, so this can be called far more
+    // than 16 times in a row and keep succeeding.
+    func cmd_spawn() {
+        let id: int = Task.spawn(idle_task_entry as uint)
+        if id < 0 {
+            log("<LIGHT_RED>spawn failed (out of heap memory)\n</>")
+        } else {
+            log("<WHITE>spawned task \(id) (\(Task.task_count) total)\n</>")
+        }
     }
 
     func run_line(line: char*) {
@@ -532,6 +546,9 @@ namespace Shell {
             }
             case "tasks" => {
                 cmd_tasks()
+            }
+            case "spawn" => {
+                cmd_spawn()
             }
             default => {
                 if starts_with(line, "echo ") {
