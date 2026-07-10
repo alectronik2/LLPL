@@ -23,4 +23,18 @@ Backtrace:
 [37marenas: 1 (4096 bytes)
 [0m[37mused:   256 bytes
 [0m[37mfree:   3792 bytes
-[0m[32mllpl[0m [37m$[0m 
+[0m[32mllpl[0m [37m$[0m kfree 0x235020
+[37mkfree(0x0000000000235020)
+[0m[32mllpl[0m [37m$[0m kheap
+[37marenas: 1 (4096 bytes)
+[0m[37mused:   0 bytes
+[0m[37mfree:   4064 bytes
+[0m[32mllpl[0m [37m$[0m free 0x234000
+[37mfreed page at 0x0000000000234000
+[0m[32mllpl[0m [37m$[0m meminfo
+[37mtotal: 65407 pages (261628 KB)
+[0m[37mfree:  64939 pages (259756 KB)
+[0m[37mused:  468 pages (1872 KB)
+[0m[32mllpl[0m [37m$[0m kmalloc 50
+[37mkmalloc(0x50) = 0x0000000000235020
+[0m[32mllpl[0m [37m$[0m kh
