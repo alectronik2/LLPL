@@ -191,4 +191,41 @@ namespace PageAlloc {
             set_free(p)
         }
     }
+
+    // Like alloc(), but for `count` *physically contiguous* pages at once -
+    // needed by kheap.llpl for allocations bigger than one page, since a
+    // multi-page object needs one unbroken run of physical memory, not
+    // `count` pages that each individually happen to be free. First-fit:
+    // scans for the first run of `count` consecutive free pages, marking
+    // all of them used and returning the run's base address, or 0 if no
+    // such run exists (including count == 0, which is never valid).
+    func alloc_contiguous(count: uint) -> uint {
+        if count == 0 {
+            return 0
+        }
+        let p: uint = 0
+        while p + count <= MAX_PAGES {
+            let i: uint = 0
+            let run_ok: bool = true
+            while i < count && run_ok {
+                if !is_free(p + i) {
+                    run_ok = false
+                }
+                i = i + 1
+            }
+            if run_ok {
+                let j: uint = 0
+                while j < count {
+                    set_used(p + j)
+                    j = j + 1
+                }
+                return p * PAGE_SIZE
+            }
+            // `i` is one past the page that broke the run (is_free's false
+            // result bumped it before the loop exited) - restarting there
+            // instead of at p+1 skips re-scanning pages already known bad.
+            p = p + i
+        }
+        return 0
+    }
 }

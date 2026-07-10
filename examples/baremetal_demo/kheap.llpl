@@ -4,25 +4,28 @@
 // (rc_free is a no-op there; see its comment), kfree() here really does
 // return memory for reuse.
 //
-// Design: a set of independent "arenas", each exactly one 4KB page
-// obtained from PageAlloc.alloc(). Within an arena, blocks form an
-// implicit singly-linked list purely through address arithmetic - no
-// `next` field needed, since a live block's footprint (header + size)
-// always says where the following block starts:
+// Design: a set of independent "arenas", each some whole number of pages
+// obtained in one physically-contiguous run from PageAlloc.alloc_contiguous
+// - one page for an ordinary small request, more for anything bigger than
+// a page can hold. Within an arena, blocks form an implicit singly-linked
+// list purely through address arithmetic - no `next` field needed, since a
+// live block's footprint (header + size) always says where the following
+// block starts:
 //
 //   [[BlockHeader][ payload... ]][[BlockHeader][ payload... ]]...
 //   ^ arena_base                 ^ this = prev.size bytes after prev's payload starts
 //
 // This keeps every operation (find-fit, split, coalesce) a straight
-// address walk from arena_base to arena_base + PAGE_SIZE, no pointer
+// address walk from arena_base to arena_base + arena_size, no pointer
 // bookkeeping to keep in sync.
 //
 // Arenas are never returned to PageAlloc, even if they become entirely
 // free again - only individual blocks are tracked as free/used within an
-// arena. A single allocation can't span multiple arenas (PageAlloc only
-// ever hands out one physically-contiguous page at a time, with no
-// guarantee that two separate alloc() calls are adjacent), so kmalloc()
-// caps out at just under one page; see MAX_ALLOC.
+// arena. There's no hard per-allocation size cap: a request just grows the
+// arena it lands in to fit, bounded only by how much physically-contiguous
+// memory PageAlloc.alloc_contiguous can still find (fragmentation can
+// defeat a very large request even with plenty of free memory overall) and
+// by MAX_ARENAS (the fixed-size registry below, not the heap's total size).
 
 import hal
 import pagealloc
@@ -30,8 +33,7 @@ import pagealloc
 namespace KHeap {
     const PAGE_SIZE = 4096
     const HEADER_SIZE = 16 // sizeof(BlockHeader): two 8-byte fields, packed
-    const MAX_ALLOC = PAGE_SIZE - HEADER_SIZE
-    const MAX_ARENAS = 64 // 64 * 4KB = 256KB ceiling on total heap size
+    const MAX_ARENAS = 64 // registry size, not a size cap - see header comment
 
     packed struct BlockHeader {
         let size: uint    // payload size in bytes, excluding this header
@@ -40,16 +42,17 @@ namespace KHeap {
                            // matching HEADER_SIZE exactly
     }
 
-    let arenas: uint[64]
+    let arenas: uint[64]      // base address of each arena
+    let arena_pages: uint[64] // page count of each arena (parallel array)
     let arena_count: int = 0
 
     func init() {
         arena_count = 0
     }
 
-    func init_arena(page: uint) {
-        let hdr: BlockHeader* = page as BlockHeader*
-        hdr.size = PAGE_SIZE - HEADER_SIZE
+    func init_arena(base: uint, pages: uint) {
+        let hdr: BlockHeader* = base as BlockHeader*
+        hdr.size = pages * PAGE_SIZE - HEADER_SIZE
         hdr.is_free = 1
     }
 
@@ -72,8 +75,8 @@ namespace KHeap {
     }
 
     // First-fit search within one arena; returns the payload address, or 0.
-    func find_free_block(arena_base: uint, size: uint) -> uint {
-        let arena_end: uint = arena_base + PAGE_SIZE
+    func find_free_block(arena_base: uint, arena_size: uint, size: uint) -> uint {
+        let arena_end: uint = arena_base + arena_size
         let addr: uint = arena_base
         while addr < arena_end {
             let hdr: BlockHeader* = addr as BlockHeader*
@@ -89,8 +92,8 @@ namespace KHeap {
 
     // Merges every run of adjacent free blocks in one arena into single
     // blocks, undoing split_block's fragmentation after frees.
-    func coalesce_arena(arena_base: uint) {
-        let arena_end: uint = arena_base + PAGE_SIZE
+    func coalesce_arena(arena_base: uint, arena_size: uint) {
+        let arena_end: uint = arena_base + arena_size
         let addr: uint = arena_base
         while addr < arena_end {
             let hdr: BlockHeader* = addr as BlockHeader*
@@ -109,24 +112,20 @@ namespace KHeap {
         }
     }
 
-    // Returns a fresh, zero-filled... no - unlike libc calloc, this does
-    // *not* zero the payload (matching PageAlloc.alloc() and rc_alloc,
-    // neither of which do either): callers that need zeroed memory clear
-    // it themselves. Returns 0 on failure (out of heap space, or `size`
-    // over MAX_ALLOC) - 0 is never a valid payload address, since it
-    // always falls inside PageAlloc's low-1MB reservation.
+    // Returns a fresh, uninitialized block of at least `size` bytes (like
+    // PageAlloc.alloc() and rc_alloc, this does *not* zero the payload -
+    // callers that need zeroed memory clear it themselves), or 0 on
+    // failure - never a valid payload address itself, since it always
+    // falls inside PageAlloc's low-1MB reservation.
     func kmalloc(size: uint) -> uint {
         let aligned: uint = (size + 7) & ~7
         if aligned == 0 {
             aligned = 8
         }
-        if aligned > MAX_ALLOC {
-            return 0
-        }
 
         let i: int = 0
         while i < arena_count {
-            let found: uint = find_free_block(arenas[i], aligned)
+            let found: uint = find_free_block(arenas[i], arena_pages[i] * PAGE_SIZE, aligned)
             if found != 0 {
                 return found
             }
@@ -136,18 +135,16 @@ namespace KHeap {
         if arena_count >= MAX_ARENAS {
             return 0
         }
-        let page: uint = PageAlloc.alloc()
-        if page == 0 {
+        let pages_needed: uint = (aligned + HEADER_SIZE + PAGE_SIZE - 1) / PAGE_SIZE
+        let base: uint = PageAlloc.alloc_contiguous(pages_needed)
+        if base == 0 {
             return 0
         }
-        arenas[arena_count] = page
+        arenas[arena_count] = base
+        arena_pages[arena_count] = pages_needed
         arena_count = arena_count + 1
-        init_arena(page)
-        return find_free_block(page, aligned)
-    }
-
-    func arena_base_of(addr: uint) -> uint {
-        return (addr / PAGE_SIZE) * PAGE_SIZE
+        init_arena(base, pages_needed)
+        return find_free_block(base, pages_needed * PAGE_SIZE, aligned)
     }
 
     func kfree(addr: uint) {
@@ -157,11 +154,31 @@ namespace KHeap {
         let hdr_addr: uint = addr - HEADER_SIZE
         let hdr: BlockHeader* = hdr_addr as BlockHeader*
         hdr.is_free = 1
-        coalesce_arena(arena_base_of(hdr_addr))
+
+        // Arenas are no longer uniformly one page, so the owning arena
+        // can't be recovered by page-aligning `addr` - search the
+        // registry for the arena whose range contains it instead.
+        let i: int = 0
+        let done: bool = false
+        while i < arena_count && !done {
+            let arena_base: uint = arenas[i]
+            let arena_size: uint = arena_pages[i] * PAGE_SIZE
+            if hdr_addr >= arena_base && hdr_addr < arena_base + arena_size {
+                coalesce_arena(arena_base, arena_size)
+                done = true
+            }
+            i = i + 1
+        }
     }
 
     func total_bytes() -> uint {
-        return (arena_count as uint) * (PAGE_SIZE as uint)
+        let total: uint = 0
+        let i: int = 0
+        while i < arena_count {
+            total = total + arena_pages[i] * PAGE_SIZE
+            i = i + 1
+        }
+        return total
     }
 
     // Payload bytes currently handed out (excludes header overhead) -
@@ -172,7 +189,7 @@ namespace KHeap {
         let a: int = 0
         while a < arena_count {
             let arena_base: uint = arenas[a]
-            let arena_end: uint = arena_base + PAGE_SIZE
+            let arena_end: uint = arena_base + arena_pages[a] * PAGE_SIZE
             let addr: uint = arena_base
             while addr < arena_end {
                 let hdr: BlockHeader* = addr as BlockHeader*
@@ -191,7 +208,7 @@ namespace KHeap {
         let a: int = 0
         while a < arena_count {
             let arena_base: uint = arenas[a]
-            let arena_end: uint = arena_base + PAGE_SIZE
+            let arena_end: uint = arena_base + arena_pages[a] * PAGE_SIZE
             let addr: uint = arena_base
             while addr < arena_end {
                 let hdr: BlockHeader* = addr as BlockHeader*

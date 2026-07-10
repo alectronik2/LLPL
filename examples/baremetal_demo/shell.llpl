@@ -455,13 +455,14 @@ namespace Shell {
 
     // "kmalloc SIZE" - unlike `alloc` (whole 4KB physical pages), this
     // reserves an arbitrary byte-sized block from the kernel heap
-    // (kheap.llpl), which grows by requesting pages from PageAlloc as
-    // needed.
+    // (kheap.llpl), which grows by requesting one or more physically
+    // contiguous pages from PageAlloc as needed - so SIZE isn't capped at
+    // one page, only by how much contiguous physical memory is still free.
     func cmd_kmalloc(args: char*) {
         let size: uint = parse_hex(args)
         let addr: uint = KHeap.kmalloc(size)
         if addr == 0 {
-            log("<LIGHT_RED>out of heap memory (or size too large - see kheap.llpl's MAX_ALLOC)\n</>")
+            log("<LIGHT_RED>out of heap memory (no free block or contiguous physical run big enough)\n</>")
         } else {
             log("<WHITE>kmalloc(\(size:hex)) = \(addr:016:hex)\n</>")
         }
