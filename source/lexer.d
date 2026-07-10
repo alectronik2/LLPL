@@ -23,6 +23,7 @@ enum TokenType {
     Destructor,
     Let,
     Const,
+    Volatile,
     If,
     Else,
     While,
@@ -139,6 +140,7 @@ class Lexer {
             "destructor": "Destructor",
             "let": "Let",
             "const": "Const",
+            "volatile": "Volatile",
             "if": "If",
             "else": "Else",
             "while": "While",
@@ -395,6 +397,7 @@ class Lexer {
                 case "Destructor": type = TokenType.Destructor; break;
                 case "Let": type = TokenType.Let; break;
                 case "Const": type = TokenType.Const; break;
+                case "Volatile": type = TokenType.Volatile; break;
                 case "If": type = TokenType.If; break;
                 case "Else": type = TokenType.Else; break;
                 case "While": type = TokenType.While; break;

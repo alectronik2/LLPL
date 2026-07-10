@@ -9,6 +9,7 @@
 import hal
 import kbd
 import backtrace
+import task
 
 alias hsw = HAL.Serial.write
 
@@ -50,11 +51,6 @@ interrupt func isr_general_protection(error_code: uint) {
 
 interrupt func isr_page_fault(error_code: uint) {
     haltWithFault!("FAULT: page fault (#PF) - halting\n")
-}
-
-interrupt func isr_timer() {
-    timer_ticks = timer_ticks + 1
-    HAL.Pic.send_eoi(0)
 }
 
 interrupt func isr_keyboard() {
@@ -103,7 +99,12 @@ namespace IDT {
         set_gate(3, isr_breakpoint as uint, 0x08, 0x8E)
         set_gate(13, isr_general_protection as uint, 0x08, 0x8E)
         set_gate(14, isr_page_fault as uint, 0x08, 0x8E)
-        set_gate(32, isr_timer as uint, 0x08, 0x8E) // IRQ0 after PIC remap
+        // IRQ0 after PIC remap - a hand-written asm entry point (task.llpl/
+        // boot64.asm), not an `interrupt func` like the others: preemptive
+        // task switching needs to iretq from a *different* stack than the
+        // one the interrupt arrived on, which attribute((interrupt))'s
+        // fixed prologue/epilogue can't do. See Task.timer_isr_entry.
+        set_gate(32, Task.timer_isr_entry as uint, 0x08, 0x8E)
         set_gate(33, isr_keyboard as uint, 0x08, 0x8E) // IRQ1 after PIC remap
 
         pointer.limit = (256 * 16) - 1

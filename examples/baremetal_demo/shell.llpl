@@ -19,6 +19,7 @@ import kbd
 import backtrace
 import pagealloc
 import kheap
+import task
 
 namespace Shell {
     const LINE_MAX = 128
@@ -395,6 +396,7 @@ namespace Shell {
         print("  kmalloc SIZE  - allocate SIZE (hex) bytes from the kernel heap\n")
         print("  kfree ADDR    - free a kernel heap block\n")
         print("  kheap         - show kernel heap stats\n")
+        print("  tasks         - show scheduler/task stats\n")
         print("\n")
         print("Up/down arrows recall previous commands; left/right move\n")
         print("the cursor within the current line.\n")
@@ -484,6 +486,18 @@ namespace Shell {
         log("<WHITE>free:   \(KHeap.free_bytes()) bytes\n</>")
     }
 
+    // Shows the scheduler is real: bg_counter (kernel.llpl) only moves
+    // while the background task actually gets CPU time, so running `tasks`
+    // twice a moment apart - with nothing else typed in between - is a
+    // direct, visible proof of preemption (this shell is itself one of the
+    // tasks being preempted to let that happen).
+    func cmd_tasks() {
+        log("<WHITE>tasks:        \(Task.task_count)\n</>")
+        log("<WHITE>current:      \(Task.current_index)\n</>")
+        log("<WHITE>bg_counter:   \(bg_counter)\n</>")
+        log("<WHITE>timer_ticks:  \(timer_ticks)\n</>")
+    }
+
     func run_line(line: char*) {
         match line {
             case "" => {
@@ -515,6 +529,9 @@ namespace Shell {
             }
             case "kheap" => {
                 cmd_kheap()
+            }
+            case "tasks" => {
+                cmd_tasks()
             }
             default => {
                 if starts_with(line, "echo ") {

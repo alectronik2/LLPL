@@ -184,7 +184,7 @@ class Parser {
             return structDecl();
         } else if (check(TokenType.Extern)) {
             return externDecl();
-        } else if (check(TokenType.Let) || check(TokenType.Const)) {
+        } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
             return varDecl();
         } else {
             error("Expected declaration");
@@ -472,7 +472,7 @@ class Parser {
                 destructor = destructorDecl(name);
             } else if (check(TokenType.Function)) {
                 methods ~= functionDecl();
-            } else if (check(TokenType.Let) || check(TokenType.Const)) {
+            } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 fields ~= varDecl();
             } else {
                 error("Expected field or method declaration");
@@ -493,7 +493,7 @@ class Parser {
 
         VarDecl[] fields;
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
-            if (check(TokenType.Let) || check(TokenType.Const)) {
+            if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 fields ~= varDecl();
             } else {
                 error("Expected field declaration");
@@ -542,6 +542,8 @@ class Parser {
         int declLine = current.line;
         int declColumn = current.column;
 
+        bool isVolatile = match(TokenType.Volatile);
+
         bool isConst = false;
         if (match(TokenType.Const)) {
             isConst = true;
@@ -575,7 +577,7 @@ class Parser {
                 format("Cannot infer type of '%s': declare a type or provide an initializer", name));
         }
 
-        return new VarDecl(name, type, initializer, isConst, declLine, declColumn, bitWidth);
+        return new VarDecl(name, type, initializer, isConst, declLine, declColumn, bitWidth, isVolatile);
     }
 
     private Type parseType() {
@@ -651,7 +653,7 @@ class Parser {
             return asmStmt();
         } else if (check(TokenType.Match)) {
             return matchStmt();
-        } else if (check(TokenType.Let) || check(TokenType.Const)) {
+        } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
             return varDecl();
         } else if (check(TokenType.LeftBrace)) {
             return block();
@@ -849,7 +851,7 @@ class Parser {
 
         // init
         if (!check(TokenType.Comma)) {
-            if (check(TokenType.Let) || check(TokenType.Const)) {
+            if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 initializer = varDecl();
             } else {
                 initializer = new ExprStmt(expression());

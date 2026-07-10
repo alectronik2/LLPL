@@ -242,7 +242,7 @@ class CodeGenerator {
     }
 
     private string varSignature(VarDecl v, string displayName) {
-        return format("%s%s: %s", v.isConst ? "const " : "let ", displayName,
+        return format("%s%s%s: %s", v.isVolatile ? "volatile " : "", v.isConst ? "const " : "let ", displayName,
             v.type !is null ? v.type.toString() : "?");
     }
 
@@ -564,11 +564,12 @@ class CodeGenerator {
                 if (auto varDecl = cast(VarDecl)decl) {
                     currentNamespaceSegments = varDecl.namespaceSegments;
                     string cName = mangled(varDecl.namespaceSegments, varDecl.name);
-                    // Must match the real definition's `const`-ness exactly -
-                    // GCC treats an extern declaration and its later
-                    // definition disagreeing on a type qualifier as a
-                    // conflicting redeclaration, not just a style nit.
-                    string constPrefix = varDecl.isConst ? "const " : "";
+                    // Must match the real definition's const/volatile
+                    // qualifiers exactly - GCC treats an extern declaration
+                    // and its later definition disagreeing on a type
+                    // qualifier as a conflicting redeclaration, not just a
+                    // style nit.
+                    string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
                     bool isStructOrClassElement = !varDecl.type.isPointer &&
                         (isStructTypeName(varDecl.type.name) || isClassTypeName(varDecl.type.name));
                     if (varDecl.type.isArray && varDecl.type.arraySize > 0 && isStructOrClassElement) {
@@ -767,7 +768,7 @@ class CodeGenerator {
         }
 
         // Handle array declarations specially
-        string constPrefix = varDecl.isConst ? "const " : "";
+        string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
         string code;
         if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
             string baseType = primitiveToC(varDecl.type.name);
@@ -1088,7 +1089,7 @@ class CodeGenerator {
             }
 
             // Handle array declarations specially
-            string constPrefix = varDecl.isConst ? "const " : "";
+            string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
             if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
                 string baseType = primitiveToC(varDecl.type.name);
                 if (varDecl.type.isPointer) baseType ~= "*";
@@ -1257,7 +1258,7 @@ class CodeGenerator {
                 castExpr.line, castExpr.column);
         } else if (auto varDecl = cast(VarDecl)node) {
             return new VarDecl(varDecl.name, cloneType(varDecl.type), cloneNode(varDecl.initializer, subs),
-                varDecl.isConst, varDecl.line, varDecl.column, varDecl.bitWidth);
+                varDecl.isConst, varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile);
         } else if (auto ifStmt = cast(IfStmt)node) {
             return new IfStmt(cloneNode(ifStmt.condition, subs), cloneBlock(ifStmt.thenBlock, subs),
                 cloneBlock(ifStmt.elseBlock, subs));
@@ -1375,7 +1376,7 @@ class CodeGenerator {
         } else if (auto varDecl = cast(VarDecl)node) {
             return new VarDecl(varDecl.name, cloneType(varDecl.type),
                 expandQuotedNode(varDecl.initializer, subs), varDecl.isConst,
-                varDecl.line, varDecl.column, varDecl.bitWidth);
+                varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile);
         } else if (auto ifStmt = cast(IfStmt)node) {
             return new IfStmt(expandQuotedNode(ifStmt.condition, subs),
                 expandQuotedBlock(ifStmt.thenBlock, subs), expandQuotedBlock(ifStmt.elseBlock, subs));
@@ -2057,6 +2058,29 @@ class CodeGenerator {
             if (qualifiedVar.length > 0) {
                 recordUsage(qualifiedVar, memberExpr.line, memberExpr.column);
                 return qualifiedVar;
+            }
+
+            // A namespace-qualified function referenced as a *value*, not
+            // called - e.g. `Task.timer_isr_entry as uint` to get an ISR's
+            // address for IDT.set_gate (a bare function name decays to its
+            // address in C, same trick already used for unqualified
+            // handlers like `isr_timer as uint`). The CallExpr/MemberExpr-
+            // callee path above already resolves a qualified *call* this
+            // way; this covers the uncalled-reference case function
+            // pointers need.
+            string qualifiedFunc = tryResolveQualifiedPath(memberExpr, (n) => (n in functionRegistry) !is null);
+            if (qualifiedFunc.length == 0) {
+                // extern funcs are always registered under their bare,
+                // unmangled name regardless of where they're declared (see
+                // tryResolveExternFunctionMember's own comment) - e.g.
+                // `Task.timer_isr_entry` binds to a real external asm
+                // symbol just named `timer_isr_entry`, so no namespaced
+                // candidate above would ever match it.
+                qualifiedFunc = tryResolveExternFunctionMember(memberExpr);
+            }
+            if (qualifiedFunc.length > 0) {
+                recordUsage(qualifiedFunc, memberExpr.line, memberExpr.column);
+                return qualifiedFunc;
             }
 
             if (auto objIdent = cast(Identifier)memberExpr.object) {

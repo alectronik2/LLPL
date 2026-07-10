@@ -1,0 +1,177 @@
+// Preemptive multitasking: a minimal round-robin scheduler driven by the
+// timer interrupt (IRQ0).
+//
+// Every task gets its own dedicated stack (from KHeap) and always runs in
+// ring 0 - there's no user mode in this kernel, so unlike a "real" OS
+// there's no need for a second per-task kernel stack or a TSS.RSP0 switch:
+// the CPU never changes privilege level on interrupt entry here, so it
+// just keeps using whatever stack was already active. That's also why a
+// task doesn't need to explicitly yield to be preempted: the timer forces
+// a switch whether the running task cooperates or not (unlike a
+// cooperative scheduler, a task stuck in `while true {}` with no `HAL.halt()`
+// or blocking call is still preempted on schedule).
+//
+// The switch itself happens in boot64.asm (timer_isr_entry/start_first_task)
+// rather than as an LLPL `interrupt func`: GCC's __attribute__((interrupt))
+// generates its own fixed prologue/epilogue around a fixed stack, giving no
+// way to swap RSP out from under it mid-handler and iretq from a *different*
+// stack than the one the interrupt arrived on - exactly what a context
+// switch needs to do. So the actual register save/restore is hand-written
+// NASM; only the scheduling *decision* (which task runs next) is LLPL,
+// called from that asm as schedule_next(current_rsp) -> next_rsp.
+
+import hal
+import kheap
+
+namespace Task {
+    const MAX_TASKS = 16
+    const STACK_SIZE = 16384 // 16KB per task, matching the original boot stack
+
+    // Implemented in boot64.asm. timer_isr_entry is IDT gate 32's actual
+    // handler (see IDT.init() in idt.llpl); start_first_task is called
+    // once, by start() below, to make the very first switch. Both push/pop
+    // the exact same TrapFrame layout, so a task spawn()ed (which fakes one
+    // up on a brand new stack) is indistinguishable from one that's really
+    // been preempted mid-execution - the same code resumes either one.
+    extern func timer_isr_entry() -> void
+    extern func start_first_task(rsp: uint) -> void
+
+    // Mirrors exactly what timer_isr_entry pushes, in the order it pushes
+    // them: rax is pushed first, ending up furthest from the top of stack;
+    // r15 is pushed last, ending up at the very top (lowest address, hence
+    // the first field here) - then the five words the CPU itself pushes for
+    // *every* interrupt in 64-bit mode.
+    //
+    // Unlike legacy 32-bit mode (where a same-privilege interrupt only
+    // pushes RFLAGS/CS/RIP, skipping SS/RSP), long mode *always* pushes a
+    // full RIP/CS/RFLAGS/RSP/SS frame and iretq always pops all five,
+    // privilege change or not - a real x86-64 gotcha, easy to miss since
+    // GCC's __attribute__((interrupt)) (every other ISR in this kernel)
+    // handles it invisibly. Get this wrong and iretq reads garbage for
+    // RSP/SS - a bogus SS value is a textbook #GP fault, which is exactly
+    // what omitting these two fields caused here originally.
+    packed struct TrapFrame {
+        let r15: uint
+        let r14: uint
+        let r13: uint
+        let r12: uint
+        let r11: uint
+        let r10: uint
+        let r9: uint
+        let r8: uint
+        let rbp: uint
+        let rdi: uint
+        let rsi: uint
+        let rdx: uint
+        let rcx: uint
+        let rbx: uint
+        let rax: uint
+        let rip: uint
+        let cs: uint
+        let rflags: uint
+        let rsp: uint
+        let ss: uint
+    }
+
+    const TRAP_FRAME_SIZE = 160 // sizeof(TrapFrame): 20 fields * 8 bytes
+
+    struct TCB {
+        let saved_rsp: uint
+        let stack_base: uint // diagnostics only - stacks are never freed
+        let id: int
+    }
+
+    let tasks: TCB[16]
+    let task_count: int = 0
+    let current_index: int = 0
+    let scheduling_enabled: bool = false
+
+    // Creates a new task ready to run `entry`, a plain `func() -> void`
+    // referenced by bare (or namespace-qualified) name rather than called -
+    // e.g. `Task.spawn(my_task as uint)` - which is how LLPL hands out a
+    // function's address (a bare/qualified function reference resolves to
+    // its C name, which decays to a pointer; see codegen.d's Identifier and
+    // MemberExpr handling). Returns the new task's id, or -1 on failure (no
+    // room in the task table, or the heap is out of memory).
+    func spawn(entry: uint) -> int {
+        if task_count >= MAX_TASKS {
+            return -1
+        }
+        let stack: uint = KHeap.kmalloc(STACK_SIZE)
+        if stack == 0 {
+            return -1
+        }
+
+        // The fake initial frame goes at the *top* of the new stack (the
+        // highest address - stacks grow down), so the very first pop
+        // sequence in timer_isr_entry/start_first_task reads it exactly
+        // like it would read a real preempted task's saved frame.
+        let stack_top: uint = stack + STACK_SIZE
+        let frame_addr: uint = stack_top - TRAP_FRAME_SIZE
+        let frame: TrapFrame* = frame_addr as TrapFrame*
+        frame.r15 = 0
+        frame.r14 = 0
+        frame.r13 = 0
+        frame.r12 = 0
+        frame.r11 = 0
+        frame.r10 = 0
+        frame.r9 = 0
+        frame.r8 = 0
+        frame.rbp = 0
+        frame.rdi = 0
+        frame.rsi = 0
+        frame.rdx = 0
+        frame.rcx = 0
+        frame.rbx = 0
+        frame.rax = 0
+        frame.rip = entry
+        frame.cs = 0x08      // kernel code selector - see GDT.init()
+        frame.rflags = 0x202 // IF (bit 9) set, plus the always-set bit 1
+        frame.rsp = stack_top // the task's real, live RSP once it's running -
+                               // nothing meaningful below it yet, so it
+                               // starts at the very top of its stack, the
+                               // same way long_mode_entry (boot64.asm) sets
+                               // up the original boot stack
+        frame.ss = 0x10       // kernel data selector - see GDT.init()
+
+        let id: int = task_count
+        tasks[id].saved_rsp = frame_addr
+        tasks[id].stack_base = stack
+        tasks[id].id = id
+        task_count = task_count + 1
+        return id
+    }
+
+    // Called from timer_isr_entry (boot64.asm) with the just-preempted
+    // task's stack pointer; returns the stack pointer to resume - the
+    // *same* one, unchanged, if scheduling hasn't started yet (so this is
+    // a safe no-op, identical to the plain tick-counting ISR it replaced,
+    // right up until start() is called), or the next task's in round-robin
+    // order otherwise.
+    func schedule_next(rsp: uint) -> uint {
+        HAL.Pic.send_eoi(0)
+        timer_ticks = timer_ticks + 1
+
+        if !scheduling_enabled || task_count == 0 {
+            return rsp
+        }
+
+        tasks[current_index].saved_rsp = rsp
+        current_index = (current_index + 1) % task_count
+        return tasks[current_index].saved_rsp
+    }
+
+    // Switches from plain boot-time execution to the task table - never
+    // returns. Everything running up to this call (kernel_main, and
+    // whatever it called) simply stops existing: its stack is abandoned,
+    // the same way a process image vanishes into an exec(). Must be called
+    // with at least one task already spawn()ed.
+    func start() {
+        if task_count == 0 {
+            return
+        }
+        scheduling_enabled = true
+        current_index = 0
+        start_first_task(tasks[0].saved_rsp)
+    }
+}

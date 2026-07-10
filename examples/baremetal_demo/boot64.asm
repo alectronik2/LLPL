@@ -273,3 +273,85 @@ extern _kernel_end
 get_kernel_end:
     mov rax, _kernel_end
     ret
+
+; Preemptive multitasking (task.llpl): the timer IRQ (vector 32) is wired
+; to this instead of a plain `interrupt func` - GCC's __attribute__((interrupt))
+; generates its own fixed prologue/epilogue around a fixed stack, with no
+; way to swap RSP out from under it mid-handler and iretq from a *different*
+; stack than the one the interrupt arrived on, which is exactly what a
+; context switch needs to do. So this hand-writes the save/restore, and
+; only the scheduling *decision* is LLPL (Task.schedule_next, called here
+; with the just-saved stack pointer, returning the one to resume).
+;
+; Every push below is 8 bytes (64-bit mode), and their order must exactly
+; match Task.llpl's TrapFrame struct - see its comment for the full layout
+; including the three words the CPU itself pushes before this even runs
+; (RFLAGS, CS, RIP - a plain interrupt-gate entry with no privilege change,
+; since this kernel has no ring 3, never pushes SS/RSP too).
+global timer_isr_entry
+extern Task_schedule_next
+timer_isr_entry:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov rdi, rsp        ; arg0 (System V) = the just-preempted task's frame
+    call Task_schedule_next
+    mov rsp, rax        ; rax (System V return) = the task to resume's frame
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+
+    iretq
+
+; Called once, by Task.start(), to make the very first switch from plain
+; boot-time execution into the task table - never returns. Identical to
+; timer_isr_entry's restore half, just fed a stack pointer directly instead
+; of one a real interrupt produced; Task.spawn() fakes up a TrapFrame ahead
+; of time (RIP = the task's entry point) for exactly this to jump into.
+global start_first_task
+start_first_task:
+    mov rsp, rdi        ; arg0 (System V) = the frame to resume
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+
+    iretq

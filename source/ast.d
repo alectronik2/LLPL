@@ -283,17 +283,26 @@ class VarDecl : ASTNode {
     Type type;
     ASTNode initializer;
     bool isConst;
+    // Forces every read/write of this variable to actually touch memory,
+    // instead of letting the optimizer cache it in a register indefinitely
+    // (e.g. across loop iterations) - needed for anything another
+    // execution context (an interrupt handler, a preempted task) can
+    // observe or modify without this code's knowledge, since from the
+    // optimizer's single-threaded viewpoint such a store looks dead. Maps
+    // straight to C's `volatile`.
+    bool isVolatile;
     int bitWidth = -1; // -1 means "not a bit-field"; only meaningful for class fields
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
 
     this(string name, Type type, ASTNode initializer = null, bool isConst = false, int line = 0, int column = 0,
-         int bitWidth = -1) {
+         int bitWidth = -1, bool isVolatile = false) {
         super(NodeType.VarDecl, line, column);
         this.name = name;
         this.type = type;
         this.initializer = initializer;
         this.isConst = isConst;
         this.bitWidth = bitWidth;
+        this.isVolatile = isVolatile;
     }
 }
 

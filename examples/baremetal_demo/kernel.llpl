@@ -34,6 +34,7 @@ import fb
 import kbd
 import pagealloc
 import kheap
+import task
 import shell
 
 let screen: Console.Screen = null
@@ -166,6 +167,42 @@ func log(msg: char*) {
     }
 }
 
+// Task entry points (see task.llpl) - each becomes its own preemptible task
+// via Task.spawn(name as uint), run on its own dedicated stack.
+
+// The shell itself is just another task, not special-cased by the
+// scheduler - the busy loop in Shell.read_line() (HAL.halt() while waiting
+// for a keypress) means the timer preempts it exactly like any other task
+// whenever it's sitting idle at the prompt.
+func shell_task_entry() {
+    Shell.run()
+}
+
+// Increments bg_counter as fast as it can, forever, with no HAL.halt() or
+// other voluntary yield - proof this is *preemptive*, not cooperative,
+// multitasking: a cooperative scheduler would hang here permanently, but
+// the timer interrupt switches away from this task on schedule regardless
+// of whether it ever gives up the CPU on its own. The `tasks` shell command
+// (shell.llpl) prints this counter, so calling it twice a moment apart
+// shows the value climbing purely from background execution.
+//
+// `volatile` is essential here, not decoration: from the optimizer's
+// single-threaded viewpoint, a `while true { bg_counter = bg_counter + 1 }`
+// loop with no other observable effect looks free to keep the running
+// total in a register forever and never actually store it back to memory
+// (nothing in this function ever reads it back, and the loop never exits
+// to make a final value "matter"). This shell task and the background task
+// are two different execution contexts the compiler has no idea can
+// interleave, so without `volatile` the write could simply never become
+// visible outside this loop.
+volatile let bg_counter: uint = 0
+
+func bg_task_entry() {
+    while true {
+        bg_counter = bg_counter + 1
+    }
+}
+
 // `multiboot_ptr` is handed to us by boot64.asm (RDI, System V AMD64's
 // first integer argument): the physical address of the multiboot2 info
 // structure GRUB left behind, which is where fb.llpl's Framebuffer.init
@@ -209,6 +246,7 @@ func kernel_main(multiboot_ptr: uint) {
     print("namespace Keyboard   -> PS/2 scancode driver (IRQ1)\n")
     print("namespace PageAlloc  -> bitmap physical page-frame allocator\n")
     print("namespace KHeap      -> free-list kernel heap (kmalloc/kfree)\n")
+    print("namespace Task       -> preemptive round-robin task switching\n")
     print("namespace Shell      -> a tiny interactive command line\n")
     print("\n")
 
@@ -237,8 +275,13 @@ func kernel_main(multiboot_ptr: uint) {
     log("<GREEN>Interrupts enabled.\n</>")
 
     print("\n")
-    Shell.run()
+    log("<WHITE>Spawning tasks (shell + a background counter) and starting the scheduler...\n</>")
+    Task.spawn(shell_task_entry as uint)
+    Task.spawn(bg_task_entry as uint)
+    Task.start() // never returns - see task.llpl
 
+    // Only reached if Task.start() found nothing to run (spawn() failed for
+    // both tasks above, e.g. the heap was already exhausted).
     HAL.disable_interrupts()
     while true {
         HAL.halt()
