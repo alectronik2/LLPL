@@ -387,6 +387,79 @@ either, since that would need a real pointer-to-pointer C type this
 language's type system can't express - use a one-field wrapper struct
 around the pointer instead if you need that.
 
+## Pipe Operator
+
+`x |> f` desugars to `f(x)`; `x |> f(a, b)` desugars to `f(x, a, b)` - x is
+always inserted as the function's first argument. Chains left to right,
+so `x |> f |> g` is `g(f(x))`. It binds looser than every other operator
+(parsed just above assignment), so `a + b |> f` means `f(a + b)`, and the
+right-hand side is always a callable reference (a bare name, or already
+applied to its own trailing args) rather than a general expression:
+
+```swift
+func double_it(x: int) -> int {
+    return x * 2
+}
+
+func add(a: int, b: int) -> int {
+    return a + b
+}
+
+func main() -> int {
+    let a: int = 5 |> double_it              // double_it(5) = 10
+    let b: int = 5 |> double_it |> add(1)     // add(double_it(5), 1) = 11
+    return 0
+}
+```
+
+## Nullable Types
+
+`T?` is sugar for the generic `Optional<T>` class (see "Generics" above).
+A `let`/assignment target typed `T?` auto-wraps a plain value (building a
+real `Optional<T>` and calling `.set(...)` on it), or an empty `Optional`
+for `null` or a bare `let x: T?` with no initializer at all - see
+`test/pipe_nullable_demo.llpl` for the full runnable version this is taken
+from:
+
+```swift
+func main() -> int {
+    let maybe: int? = 42     // sugar for a real Optional<int>, set to 42
+    if maybe.is_some() {
+        let value: int = maybe.get()
+    }
+
+    let nothing: int? = null // an empty Optional<int>
+    let default_empty: int?  // also starts out empty, no initializer needed
+
+    return 0
+}
+```
+
+Pipe and nullable types compose naturally - a function returning `T?` can
+sit at the end of a pipeline:
+
+```swift
+func parse_positive(s: char*) -> int? {
+    if s[0] == 0 {
+        return null
+    }
+    // ... digit-by-digit parsing, returning null on any non-digit ...
+    return 123 // placeholder
+}
+
+func main() -> int {
+    let parsed: int? = "123" |> parse_positive
+    if parsed.is_some() {
+        let n: int = parsed.get()
+    }
+    return 0
+}
+```
+
+A `T?` global variable isn't supported (its initializer needs a real
+function call - `Optional_T_new()`/`.set()` - which isn't a valid C static
+initializer); declare it as a local inside a function instead.
+
 ## Macros
 
 ### Quote and Unquote

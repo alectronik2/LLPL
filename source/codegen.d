@@ -44,6 +44,7 @@ class CodeGenerator {
     private string[] deferredStatements;
     private int tempVarCounter;
     private string currentClassName;
+    private Type currentReturnType; // Enclosing function/method/lambda's declared return type, for ReturnStmt's nullable-sugar auto-wrap (see generateNullableWrap)
     private string currentModulePath; // Module whose code is currently being generated, for error citations
     private string[] currentNamespaceSegments; // Enclosing namespace path of the declaration being generated
     private Type[string] variableTypes; // Maps variable names to their types
@@ -628,19 +629,34 @@ class CodeGenerator {
         code ~= "#include <stddef.h>\n";
         code ~= "#include \"runtime.h\"\n\n";
 
+        // Everything below through the alias #defines used to be appended
+        // straight into `code`, but any of these passes can - via
+        // resolveType - trigger a *new* generic instantiation (e.g. an
+        // ordinary function's return type being `int?`/Optional<int>) whose
+        // own forward tag/body only gets flushed into `code` once, right
+        // before declCode (see genericForwardDecls/genericInstanceDecls
+        // below). Writing straight to `code` meant that flush could land
+        // *after* text that already referenced the newly-triggered generic
+        // type's mangled name - a real "unknown type name" bug. Buffering
+        // all of it into earlyDeclCode instead, and only appending it after
+        // that one flush, fixes this the same way declCode already avoids
+        // it (declCode was always buffered, for the analogous reason with
+        // interpBufferDecls/lambdaDecls).
+        string earlyDeclCode = "";
+
         // Forward declarations for classes and structs from all modules
         foreach (prog; programs) {
             foreach (decl; prog.declarations) {
                 if (auto classDecl = cast(ClassDecl)decl) {
                     string cName = mangledClass(classDecl);
-                    code ~= format("typedef struct %s %s;\n", cName, cName);
+                    earlyDeclCode ~= format("typedef struct %s %s;\n", cName, cName);
                 } else if (auto structDecl = cast(StructDecl)decl) {
                     string sName = mangledStruct(structDecl);
-                    code ~= format("typedef struct %s %s;\n", sName, sName);
+                    earlyDeclCode ~= format("typedef struct %s %s;\n", sName, sName);
                 }
             }
         }
-        code ~= "\n";
+        earlyDeclCode ~= "\n";
 
         // Forward declarations for functions and methods from all modules.
         // currentNamespaceSegments is set per-declaration so resolveType
@@ -658,7 +674,7 @@ class CodeGenerator {
                             params ~= format("%s %s", typeToC(param.type), param.name);
                         }
                         if (funcDecl.isVariadic) params ~= ", ...";
-                        code ~= format("extern %s %s(%s);\n",
+                        earlyDeclCode ~= format("extern %s %s(%s);\n",
                             typeToC(funcDecl.returnType), mangledFunc(funcDecl), params);
                     } else if (funcDecl.isInterrupt) {
                         string params = "void* __frame";
@@ -667,7 +683,7 @@ class CodeGenerator {
                             params ~= format(", %s %s",
                                 typeToC(funcDecl.params[0].type), funcDecl.params[0].name);
                         }
-                        code ~= format("__attribute__((interrupt)) void %s(%s);\n",
+                        earlyDeclCode ~= format("__attribute__((interrupt)) void %s(%s);\n",
                             mangledFunc(funcDecl), params);
                     } else {
                         resolveType(funcDecl.returnType);
@@ -678,7 +694,7 @@ class CodeGenerator {
                             params ~= format("%s %s", typeToC(param.type), param.name);
                         }
                         if (funcDecl.isVariadic) params ~= ", ...";
-                        code ~= format("%s %s(%s);\n",
+                        earlyDeclCode ~= format("%s %s(%s);\n",
                             typeToC(funcDecl.returnType), mangledFunc(funcDecl), params);
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
@@ -692,12 +708,12 @@ class CodeGenerator {
                             if (i > 0) params ~= ", ";
                             params ~= format("%s %s", typeToC(param.type), param.name);
                         }
-                        code ~= format("%s* %s_new(%s);\n", cName, cName, params);
+                        earlyDeclCode ~= format("%s* %s_new(%s);\n", cName, cName, params);
                     }
 
                     // Destructor forward declaration
                     if (classDecl.destructor) {
-                        code ~= format("void %s_destroy(void* ptr);\n", cName);
+                        earlyDeclCode ~= format("void %s_destroy(void* ptr);\n", cName);
                     }
 
                     // Method forward declarations
@@ -708,13 +724,13 @@ class CodeGenerator {
                             resolveType(param.type);
                             params ~= format(", %s %s", typeToC(param.type), param.name);
                         }
-                        code ~= format("%s %s_%s(%s);\n",
+                        earlyDeclCode ~= format("%s %s_%s(%s);\n",
                             typeToC(method.returnType), cName, method.name, params);
                     }
                 }
             }
         }
-        code ~= "\n";
+        earlyDeclCode ~= "\n";
 
         // Forward declarations for global variables from all modules: even
         // though the registries above already make a global resolvable by
@@ -751,14 +767,14 @@ class CodeGenerator {
                     } else if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
                         string baseType = primitiveToC(varDecl.type.name);
                         if (varDecl.type.isPointer) baseType ~= "*";
-                        code ~= format("extern %s%s %s[%d];\n", constPrefix, baseType, cName, varDecl.type.arraySize);
+                        earlyDeclCode ~= format("extern %s%s %s[%d];\n", constPrefix, baseType, cName, varDecl.type.arraySize);
                     } else {
-                        code ~= format("extern %s%s %s;\n", constPrefix, typeToC(varDecl.type), cName);
+                        earlyDeclCode ~= format("extern %s%s %s;\n", constPrefix, typeToC(varDecl.type), cName);
                     }
                 }
             }
         }
-        code ~= "\n";
+        earlyDeclCode ~= "\n";
 
         // Alias `#define`s are emitted early too, for the same reason as
         // the forward declarations above: the C preprocessor is purely
@@ -770,11 +786,11 @@ class CodeGenerator {
             currentModulePath = prog.modulePath;
             foreach (decl; prog.declarations) {
                 if (auto aliasDecl = cast(AliasDecl)decl) {
-                    code ~= generateAlias(aliasDecl);
+                    earlyDeclCode ~= generateAlias(aliasDecl);
                 }
             }
         }
-        code ~= "\n";
+        earlyDeclCode ~= "\n";
 
         // Generate declarations from all modules (skip import statements).
         // Collected into declCode, not appended to code directly, because
@@ -803,22 +819,14 @@ class CodeGenerator {
             }
         }
 
-        if (interpBufferDecls.length > 0) {
-            code ~= "// String-interpolation scratch buffers (one per `\\(...)` call site)\n";
-            foreach (bufDecl; interpBufferDecls) {
-                code ~= bufDecl;
-            }
-            code ~= "\n";
-        }
-
-        if (lambdaDecls.length > 0) {
-            code ~= "// Lambda literal environment structs + trampoline functions\n";
-            foreach (lambdaDecl; lambdaDecls) {
-                code ~= lambdaDecl;
-            }
-            code ~= "\n";
-        }
-
+        // genericForwardDecls/genericInstanceDecls may have been populated
+        // as a side effect of *any* pass above (the early forward-decl
+        // passes buffered into earlyDeclCode, or declCode generation just
+        // above) - flushed here, before earlyDeclCode/declCode are
+        // actually appended, so a generic type's own mangled name is
+        // always defined before any earlier-computed text that references
+        // it (see the comment on earlyDeclCode's declaration for the bug
+        // this fixes).
         if (genericForwardDecls.length > 0) {
             code ~= "// Monomorphized generic instantiations - forward declarations\n";
             foreach (fwd; genericForwardDecls) {
@@ -831,6 +839,24 @@ class CodeGenerator {
             code ~= "// Monomorphized generic instantiations - full bodies\n";
             foreach (instDecl; genericInstanceDecls) {
                 code ~= instDecl;
+            }
+            code ~= "\n";
+        }
+
+        code ~= earlyDeclCode;
+
+        if (interpBufferDecls.length > 0) {
+            code ~= "// String-interpolation scratch buffers (one per `\\(...)` call site)\n";
+            foreach (bufDecl; interpBufferDecls) {
+                code ~= bufDecl;
+            }
+            code ~= "\n";
+        }
+
+        if (lambdaDecls.length > 0) {
+            code ~= "// Lambda literal environment structs + trampoline functions\n";
+            foreach (lambdaDecl; lambdaDecls) {
+                code ~= lambdaDecl;
             }
             code ~= "\n";
         }
@@ -951,6 +977,18 @@ class CodeGenerator {
         }
         resolveType(varDecl.type);
         checkArrayLiteralInit(varDecl);
+        if (varDecl.type.isNullableSugar) {
+            // A `T?` global's initializer needs a real Optional_T_new()/
+            // _set() call (see generateNullableWrap) - not a compile-time
+            // constant, so it can't be a plain C static initializer the
+            // way every other global here is. Local `T?` variables and
+            // assignments don't have this restriction (see generateStatement's
+            // VarDecl case), only globals.
+            throw new CompileError(
+                "A nullable ('T?') type isn't supported for a global variable - " ~
+                "declare it as a local inside a function instead",
+                currentModulePath, varDecl.line, varDecl.column);
+        }
         string cName = mangled(varDecl.namespaceSegments, varDecl.name);
         variableTypes[cName] = varDecl.type;
         if (varDecl.isConst) {
@@ -1127,6 +1165,8 @@ class CodeGenerator {
         variableTypes["self"] = new Type(cName);
 
         resolveType(method.returnType);
+        Type prevReturnType = currentReturnType;
+        currentReturnType = method.returnType;
         foreach (param; method.params) {
             resolveType(param.type);
             params ~= format(", %s %s", typeToC(param.type), param.name);
@@ -1157,6 +1197,7 @@ class CodeGenerator {
 
         // Restore previous context
         currentClassName = prevClassName;
+        currentReturnType = prevReturnType;
 
         // See generateConstructor's matching comment: params (and self)
         // are only valid names inside this method's own body.
@@ -1189,6 +1230,8 @@ class CodeGenerator {
         string params = "";
         currentNamespaceSegments = funcDecl.namespaceSegments;
         resolveType(funcDecl.returnType);
+        Type prevReturnType = currentReturnType;
+        currentReturnType = funcDecl.returnType;
 
         foreach (i, param; funcDecl.params) {
             resolveType(param.type);
@@ -1223,6 +1266,8 @@ class CodeGenerator {
 
         indentLevel--;
         code ~= "}\n";
+
+        currentReturnType = prevReturnType;
 
         // See generateConstructor's matching comment: params are only
         // valid names inside this function's own body.
@@ -1275,6 +1320,36 @@ class CodeGenerator {
         return code;
     }
 
+    // Auto-wraps a plain value (or `null`) into a real Optional<T> instance
+    // - what makes `T?` "sugar" for Optional<T> (see ast.Type.isNullableSugar)
+    // rather than just a shorter way to spell the same explicit
+    // `new`+`set()` dance. `optionalType.name` is already the resolved,
+    // mangled instantiation name (e.g. "Optional_int") by the time this
+    // runs, the same as any other generic instantiation - isNullableSugar
+    // only marks the coercion itself, not a separate resolution path.
+    private string generateNullableWrap(Type optionalType, ASTNode value) {
+        string mangledName = optionalType.name;
+        if (cast(NullLiteral)value !is null) {
+            return format("%s_new()", mangledName);
+        }
+        try {
+            // Assigning one already-Optional value to another (e.g. one
+            // nullable variable to another, or a function returning
+            // Optional<T> into a `T?`) - just copy the reference, don't
+            // wrap it a second time.
+            if (inferType(value).name == mangledName) {
+                return generateExpression(value);
+            }
+        } catch (Exception e) {
+            // Not a typed value inferType can see through (e.g. a bare
+            // array literal) - fall through and treat it as a plain value
+            // to wrap, same as the common case below.
+        }
+        string valueCode = generateExpression(value);
+        return format("({ %s* __opt = %s_new(); %s_set(__opt, %s); __opt; })",
+            mangledName, mangledName, mangledName, valueCode);
+    }
+
     private string generateStatement(ASTNode node, bool isDeferred) {
         string code = "";
 
@@ -1308,7 +1383,17 @@ class CodeGenerator {
             }
 
             if (varDecl.initializer) {
-                code ~= " = " ~ generateExpression(varDecl.initializer);
+                if (varDecl.type.isNullableSugar) {
+                    code ~= " = " ~ generateNullableWrap(varDecl.type, varDecl.initializer);
+                } else {
+                    code ~= " = " ~ generateExpression(varDecl.initializer);
+                }
+            } else if (varDecl.type.isNullableSugar) {
+                // No initializer at all (`let x: int?`) - default to an
+                // empty Optional rather than an uninitialized pointer,
+                // which would crash the moment any method (is_some(), ...)
+                // ran on it.
+                code ~= " = " ~ format("%s_new()", varDecl.type.name);
             }
             code ~= ";\n";
         } else if (auto ifStmt = cast(IfStmt)node) {
@@ -1370,7 +1455,11 @@ class CodeGenerator {
             }
             code ~= indent() ~ "return";
             if (returnStmt.value) {
-                code ~= " " ~ generateExpression(returnStmt.value);
+                if (currentReturnType !is null && currentReturnType.isNullableSugar) {
+                    code ~= " " ~ generateNullableWrap(currentReturnType, returnStmt.value);
+                } else {
+                    code ~= " " ~ generateExpression(returnStmt.value);
+                }
             }
             code ~= ";\n";
         } else if (auto deferStmt = cast(DeferStmt)node) {
@@ -2764,6 +2853,8 @@ class CodeGenerator {
         string[] savedDeferred = deferredStatements;
         deferredStatements = [];
         string[string] savedCaptureAccess = currentLambdaCaptureAccess.dup;
+        Type prevReturnType = currentReturnType;
+        currentReturnType = lambdaExpr.returnType;
 
         foreach (i, cap; lambdaExpr.captures) {
             currentLambdaCaptureAccess[cap] = format("__env->%s", cap);
@@ -2793,6 +2884,7 @@ class CodeGenerator {
         }
         currentLambdaCaptureAccess = savedCaptureAccess;
         deferredStatements = savedDeferred;
+        currentReturnType = prevReturnType;
 
         trampolineCode ~= "}\n";
 
@@ -2813,6 +2905,17 @@ class CodeGenerator {
         if (auto binExpr = cast(BinaryExpr)node) {
             if (binExpr.op == "=") {
                 checkNotConstAssignment(binExpr.left);
+                Type leftType = null;
+                try {
+                    leftType = inferType(binExpr.left);
+                } catch (Exception e) {
+                    // Not a typed value inferType can see through - fall
+                    // through to a plain assignment below.
+                }
+                if (leftType !is null && leftType.isNullableSugar) {
+                    return generateExpression(binExpr.left) ~ " = " ~
+                        generateNullableWrap(leftType, binExpr.right);
+                }
                 return generateExpression(binExpr.left) ~ " = " ~ generateExpression(binExpr.right);
             }
             string overloadCall = tryBinaryOperatorOverloadCall(binExpr);

@@ -768,6 +768,18 @@ class Parser {
 
         Type t = new Type(name, isPointer, isArray, arraySize);
         t.typeArgs = typeArgs;
+
+        // `T?` - sugar for `Optional<T>` (see ast.Type.isNullableSugar).
+        // Always trailing, after everything else (`char*?` is
+        // `Optional<char*>`, not `Optional<char>*`), and there's no
+        // ternary operator in this language to make `?` ambiguous here.
+        if (match(TokenType.Question)) {
+            Type wrapped = new Type("Optional");
+            wrapped.typeArgs = [t];
+            wrapped.isNullableSugar = true;
+            t = wrapped;
+        }
+
         return t;
     }
 
@@ -1100,7 +1112,7 @@ class Parser {
     }
 
     private ASTNode assignment() {
-        ASTNode expr = logicalOr();
+        ASTNode expr = pipe();
 
         if (match(TokenType.Assign)) {
             ASTNode value = assignment();
@@ -1122,6 +1134,34 @@ class Parser {
             // trade-offs (see e.g. codegen.d's memberAccessor).
             ASTNode combined = new BinaryExpr(op, expr, value, expr.line, expr.column);
             return new BinaryExpr("=", expr, combined, expr.line, expr.column);
+        }
+
+        return expr;
+    }
+
+    // `x |> f` desugars to `f(x)`; `x |> f(a, b)` desugars to `f(x, a, b)` -
+    // x is always inserted as the first argument. Left-associative, so
+    // `x |> f |> g` is `g(f(x))`. Binds looser than every other binary
+    // operator (parsed just above assignment, below everything else) so
+    // `a + b |> f` means `f(a + b)`, not `a + (b |> f)`. The right-hand
+    // side parses at postfix() level, not a full expression - it's always
+    // "a callable reference, optionally already applied to its own
+    // trailing args" (`f`, `f(a, b)`, `ns.f(a)`, ...), never a general
+    // binary expression, so `x |> f + 1` is a parse error rather than the
+    // ambiguous-looking `f(x) + 1` vs `f(x + 1)`.
+    private ASTNode pipe() {
+        ASTNode expr = logicalOr();
+
+        while (match(TokenType.PipeForward)) {
+            int opLine = tokens[pos - 1].line;
+            int opColumn = tokens[pos - 1].column;
+            ASTNode callee = postfix();
+
+            if (auto callExpr = cast(CallExpr)callee) {
+                expr = new CallExpr(callExpr.callee, expr ~ callExpr.args, opLine, opColumn);
+            } else {
+                expr = new CallExpr(callee, [expr], opLine, opColumn);
+            }
         }
 
         return expr;

@@ -215,6 +215,15 @@ class Type {
     Parameter[] closureParams;
     Type closureReturnType;
 
+    // Set only by parser.d's trailing `T?` sugar (never by writing
+    // `Optional<T>` out directly) - `T?` parses to the exact same
+    // Type("Optional", typeArgs: [T]) that spelling it out would, plus
+    // this flag. codegen.d's generateStatement/generateExpression check it
+    // to auto-wrap a plain value (or `null`) into a real Optional<T> at a
+    // `let`/assignment site, which is what makes `T?` "sugar" rather than
+    // just a shorter way to spell the same explicit new+set() dance.
+    bool isNullableSugar;
+
     this(string name, bool isPointer = false, bool isArray = false, int arraySize = 0) {
         this.name = name;
         this.isPointer = isPointer;

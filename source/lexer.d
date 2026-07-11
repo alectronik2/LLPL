@@ -86,6 +86,8 @@ enum TokenType {
     CaretEqual,
     ShlEqual,
     ShrEqual,
+    PipeForward, // `|>`
+    Question, // `?`, for nullable-type sugar (T?)
 
     // Delimiters
     LeftParen,
@@ -525,6 +527,10 @@ class Lexer {
                 advance(); advance();
                 return Token(TokenType.FatArrow, "=>", startLine, startColumn);
             }
+            if (current == '|' && peek() == '>') {
+                advance(); advance();
+                return Token(TokenType.PipeForward, "|>", startLine, startColumn);
+            }
             if (current == '.' && peek(1) == '.' && peek(2) == '.') {
                 advance(); advance(); advance();
                 return Token(TokenType.Ellipsis, "...", startLine, startColumn);
@@ -609,6 +615,9 @@ class Lexer {
                 case '~':
                     advance();
                     return Token(TokenType.BitwiseNot, "~", startLine, startColumn);
+                case '?':
+                    advance();
+                    return Token(TokenType.Question, "?", startLine, startColumn);
                 case '(':
                     advance();
                     return Token(TokenType.LeftParen, "(", startLine, startColumn);
