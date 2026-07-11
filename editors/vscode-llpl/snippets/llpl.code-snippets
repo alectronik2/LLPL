@@ -9,6 +9,16 @@
         ],
         "description": "Function declaration"
     },
+    "Generic Function": {
+        "prefix": "funcgeneric",
+        "body": [
+            "func ${1:name}<${2:T}>(${3:param}: ${2:T}) -> ${2:T} {",
+            "\t$0",
+            "\treturn ${3:param}",
+            "}"
+        ],
+        "description": "Generic function - type parameters are always inferred from arguments"
+    },
     "Class": {
         "prefix": "class",
         "body": [
@@ -25,6 +35,23 @@
             "}"
         ],
         "description": "Class with constructor and destructor"
+    },
+    "Generic Class": {
+        "prefix": "classgeneric",
+        "body": [
+            "class ${1:Name}<${2:T}> {",
+            "\tlet ${3:field}: ${2:T}",
+            "",
+            "\tconstructor(${3:field}: ${2:T}) {",
+            "\t\tself.${3:field} = ${3:field}",
+            "\t}",
+            "",
+            "\tdestructor() {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Generic class with constructor and destructor"
     },
     "Namespace": {
         "prefix": "namespace",
@@ -54,14 +81,40 @@
         ],
         "description": "Struct (plain value type) declaration"
     },
+    "Struct Literal": {
+        "prefix": "structlit",
+        "body": "${1:Name} { ${2:field}: ${3:value} }",
+        "description": "Struct literal - constructs a struct value directly, every field given by name"
+    },
+    "Trait": {
+        "prefix": "trait",
+        "body": [
+            "trait ${1:Name} {",
+            "\tfunc ${2:method}() -> ${3:int}",
+            "\t$0",
+            "}"
+        ],
+        "description": "Trait declaration - method signatures only, no bodies"
+    },
+    "Impl": {
+        "prefix": "impl",
+        "body": [
+            "impl ${1:TraitName} for ${2:TargetType} {",
+            "\tfunc ${3:method}() -> ${4:int} {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "impl block - gives a primitive/struct/class a real method body for a trait"
+    },
     "Match": {
         "prefix": "match",
         "body": [
             "match ${1:value} {",
-            "\tcase ${2:pattern}: {",
+            "\tcase ${2:pattern} => {",
             "\t\t$0",
             "\t}",
-            "\tdefault: {",
+            "\tdefault => {",
             "\t}",
             "}"
         ],
@@ -80,6 +133,15 @@
             "}"
         ],
         "description": "Macro declaration (expanded inline at each NAME!(args) call site)"
+    },
+    "Quote/Unquote": {
+        "prefix": "quote",
+        "body": [
+            "quote {",
+            "\tunquote(${1:param}) = $0",
+            "}"
+        ],
+        "description": "Macro-body quote block, with an unquote splicing in a call-site argument"
     },
     "If": {
         "prefix": "if",
@@ -123,6 +185,45 @@
             "}"
         ],
         "description": "For loop"
+    },
+    "Foreach": {
+        "prefix": "foreach",
+        "body": [
+            "foreach let ${1:item} in ${2:iterable} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Foreach loop over an iterable"
+    },
+    "Defer": {
+        "prefix": "defer",
+        "body": "defer ${1:statement}",
+        "description": "Defer a statement to run at scope exit (LIFO order)"
+    },
+    "Lambda": {
+        "prefix": "lambda",
+        "body": "func[${1:captures}](${2:param}: ${3:int}) -> ${4:int} { $0 }",
+        "description": "Lambda literal with an explicit capture list"
+    },
+    "Nullable Variable": {
+        "prefix": "nullable",
+        "body": "let ${1:name}: ${2:int}? = ${3:null}",
+        "description": "Nullable-sugar variable (T? is Optional<T>)"
+    },
+    "Result Function": {
+        "prefix": "funcresult",
+        "body": [
+            "func ${1:name}(${2:param}: ${3:int}) -> Result<${4:int}, ${5:char*}> {",
+            "\tlet r: Result<${4:int}, ${5:char*}> = new Result<${4:int}, ${5:char*}>()",
+            "\tif ${6:condition} {",
+            "\t\tr.set_err(${7:\"error\"})",
+            "\t\treturn r",
+            "\t}",
+            "\tr.set_ok($0)",
+            "\treturn r",
+            "}"
+        ],
+        "description": "Function returning Result<T, E>, matching prelude.llpl's Result pattern"
     },
     "Extern Function": {
         "prefix": "extern",

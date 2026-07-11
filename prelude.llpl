@@ -401,9 +401,11 @@ class Result<T, E> {
     let ok: bool
     let value: T
     let error: E
+    let trace: char*
 
     constructor() {
         self.ok = false
+        self.trace = null
     }
 
     destructor() {}
@@ -416,6 +418,15 @@ class Result<T, E> {
     func set_err(e: E) {
         self.ok = false
         self.error = e
+        self.trace = null
+    }
+
+    // Same as set_err, but also records a location string (e.g. "file:line")
+    // so error propagation can reconstruct a call-site trace.
+    func set_err_with_trace(e: E, t: string) {
+        self.ok = false
+        self.error = e
+        self.trace = t
     }
 
     // Undefined (reads whatever - possibly uninitialized - value/error
@@ -427,6 +438,10 @@ class Result<T, E> {
 
     func get_err() -> E {
         return self.error
+    }
+
+    func get_trace() -> char* {
+        return self.trace
     }
 
     func is_ok() -> bool {
@@ -555,6 +570,27 @@ impl Hashable for char* {
     }
     func equals(other: char*) -> bool {
         return llpl_strcmp(self, other) == 0
+    }
+}
+
+// Content-aware hashing/equality for the `String` class so HashMap<String, V>
+// compares string contents, not pointer identity.
+impl Hashable for String {
+    func hash() -> uint {
+        let h: uint = 2166136261
+        let i: int = 0
+        while i < self.length {
+            h = h ^ (self.buf[i] as uint)
+            h = h * 16777619
+            i = i + 1
+        }
+        return h
+    }
+    func equals(other: String) -> bool {
+        if self.length != other.length {
+            return false
+        }
+        return llpl_strcmp(self.buf, other.buf) == 0
     }
 }
 

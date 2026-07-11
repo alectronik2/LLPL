@@ -1,27 +1,123 @@
 #include "runtime.h"
 
-// Simple bump allocator for bare metal
-#define HEAP_SIZE (1024 * 1024) // 1MB heap
+#if __STDC_HOSTED__
+#include <stdio.h>
+#include <stdlib.h>
+#endif
+
+// Free-list allocator over a static 1MB heap. Supports allocation, freeing,
+// and coalescing of adjacent free blocks. Works for both hosted binaries and
+// bare-metal targets because it never calls the system malloc.
+#define HEAP_SIZE (1024 * 1024)
 static uint8_t heap[HEAP_SIZE];
-static size_t heap_offset = 0;
+
+#define ALLOC_FLAG 1
+#define ALIGNMENT 8
+
+typedef struct BlockHeader {
+    size_t size;              // total block size including header; LSB = allocated flag
+    struct BlockHeader* next; // valid only when the block is free
+    struct BlockHeader* prev; // valid only when the block is free
+} BlockHeader;
+
+static BlockHeader* free_list = NULL;
+
+static size_t block_size(BlockHeader* b) { return b->size & ~ALLOC_FLAG; }
+static int block_allocated(BlockHeader* b) { return b->size & ALLOC_FLAG; }
+static void mark_allocated(BlockHeader* b) { b->size |= ALLOC_FLAG; }
+static void mark_free(BlockHeader* b) { b->size &= ~ALLOC_FLAG; }
+
+static size_t align_up(size_t n) {
+    return (n + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+}
+
+static void heap_init(void) {
+    if (free_list) return;
+    free_list = (BlockHeader*)heap;
+    free_list->size = HEAP_SIZE;
+    free_list->next = NULL;
+    free_list->prev = NULL;
+}
+
+static void remove_from_free_list(BlockHeader* b) {
+    if (b->prev) b->prev->next = b->next;
+    else free_list = b->next;
+    if (b->next) b->next->prev = b->prev;
+    b->next = NULL;
+    b->prev = NULL;
+}
+
+static void insert_into_free_list(BlockHeader* b) {
+    b->next = free_list;
+    b->prev = NULL;
+    if (free_list) free_list->prev = b;
+    free_list = b;
+}
+
+static BlockHeader* header_from_ptr(void* ptr) {
+    return (BlockHeader*)((uint8_t*)ptr - sizeof(BlockHeader));
+}
 
 void* rc_alloc(size_t size) {
-    // Align to 8 bytes
-    size = (size + 7) & ~7;
+    heap_init();
 
-    if (heap_offset + size > HEAP_SIZE) {
-        return NULL; // Out of memory
+    if (size == 0) size = ALIGNMENT;
+    size = align_up(size);
+
+    size_t total_size = size + sizeof(BlockHeader);
+    size_t min_block = sizeof(BlockHeader) + 2 * sizeof(BlockHeader*);
+    if (total_size < min_block) total_size = min_block;
+    total_size = align_up(total_size);
+
+    BlockHeader* best = NULL;
+    for (BlockHeader* cur = free_list; cur; cur = cur->next) {
+        if (block_size(cur) >= total_size) {
+            best = cur;
+            break; // first fit
+        }
+    }
+    if (!best) return NULL; // Out of memory
+
+    remove_from_free_list(best);
+
+    size_t best_size = block_size(best);
+    if (best_size >= total_size + min_block) {
+        BlockHeader* remainder = (BlockHeader*)((uint8_t*)best + total_size);
+        remainder->size = best_size - total_size;
+        insert_into_free_list(remainder);
+        best->size = total_size;
     }
 
-    void* ptr = &heap[heap_offset];
-    heap_offset += size;
-    return ptr;
+    mark_allocated(best);
+    return (uint8_t*)best + sizeof(BlockHeader);
 }
 
 void rc_free(void* ptr) {
-    // Simple allocator doesn't support free
-    // In a real implementation, you'd use a proper allocator
-    (void)ptr;
+    if (!ptr) return;
+
+    BlockHeader* b = header_from_ptr(ptr);
+    if (!block_allocated(b)) return; // double-free guard
+
+    mark_free(b);
+    insert_into_free_list(b);
+
+    // Coalesce with next block if it is free and adjacent.
+    BlockHeader* next = (BlockHeader*)((uint8_t*)b + block_size(b));
+    if ((uint8_t*)next < heap + HEAP_SIZE && !block_allocated(next)) {
+        remove_from_free_list(next);
+        b->size += block_size(next);
+    }
+
+    // Coalesce with previous free block if adjacent.
+    if ((uint8_t*)b > heap) {
+        for (BlockHeader* cur = free_list; cur; cur = cur->next) {
+            if ((uint8_t*)cur + block_size(cur) == (uint8_t*)b) {
+                remove_from_free_list(b);
+                cur->size += block_size(b);
+                break;
+            }
+        }
+    }
 }
 
 void rc_init(RefCount* rc) {
@@ -99,6 +195,43 @@ void llpl_free(char* ptr) {
 
 void llpl_memcpy(char* dest, char* src, uint64_t count) {
     memcpy(dest, src, (size_t)count);
+}
+
+// Panic support. On hosted targets the default prints to stderr and aborts.
+// On freestanding targets the default weak hooks do nothing / loop forever,
+// allowing a kernel/port to override llpl_panic_putc/llpl_panic_halt with its
+// own serial-output and halt routines.
+__attribute__((weak)) void llpl_panic_putc(char c) {
+    (void)c;
+}
+
+__attribute__((weak)) void llpl_panic_halt(void) {
+    while (1) { }
+}
+
+static void (*llpl_panic_handler)(char*) = NULL;
+
+void llpl_set_panic_handler(void (*handler)(char*)) {
+    llpl_panic_handler = handler;
+}
+
+void llpl_panic(char* msg) {
+    if (llpl_panic_handler) {
+        llpl_panic_handler(msg);
+    }
+
+    char buf[512];
+    ksnprintf(buf, sizeof(buf), "PANIC: %s\n", msg);
+
+#if __STDC_HOSTED__
+    fputs(buf, stderr);
+    abort();
+#else
+    for (char* p = buf; *p; p++) {
+        llpl_panic_putc(*p);
+    }
+    llpl_panic_halt();
+#endif
 }
 
 // Appends one character, tracking how many characters the *unclamped*

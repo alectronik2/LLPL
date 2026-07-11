@@ -12,12 +12,15 @@
         { "include": "#enum-declaration" },
         { "include": "#struct-declaration" },
         { "include": "#class-declaration" },
+        { "include": "#trait-declaration" },
+        { "include": "#impl-declaration" },
         { "include": "#function-declaration" },
         { "include": "#alias-declaration" },
         { "include": "#macro-declaration" },
         { "include": "#control-keywords" },
         { "include": "#other-keywords" },
         { "include": "#modifier-keywords" },
+        { "include": "#sizeof-keyword" },
         { "include": "#asm-statement" },
         { "include": "#asm-keyword" },
         { "include": "#language-constants" },
@@ -191,16 +194,37 @@
             }
         },
         "control-keywords": {
-            "match": "\\b(if|else|while|for|return|defer|match|case|default|unless)\\b",
+            "match": "\\b(if|else|while|for|foreach|in|return|defer|match|case|default|unless)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {
-            "match": "\\b(import|let|const|extern|constructor|destructor)\\b",
+            "match": "\\b(import|let|const|extern|constructor|destructor|quote|unquote)\\b",
             "name": "keyword.other.llpl"
         },
         "modifier-keywords": {
-            "match": "\\b(packed|interrupt)\\b",
+            "match": "\\b(packed|interrupt|volatile)\\b",
             "name": "storage.modifier.llpl"
+        },
+        "sizeof-keyword": {
+            "match": "\\bsizeof\\b",
+            "name": "keyword.other.sizeof.llpl support.function.sizeof.llpl"
+        },
+        "trait-declaration": {
+            "match": "\\b(trait)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.trait.llpl" },
+                "2": { "name": "entity.name.type.llpl" }
+            }
+        },
+        "impl-declaration": {
+            "comment": "impl TraitName for TargetType { ... } - both names are types, not declared identifiers, so entity.name.type (not entity.name.class/struct) fits either one.",
+            "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.impl.llpl" },
+                "2": { "name": "entity.name.type.llpl" },
+                "3": { "name": "keyword.other.for.llpl" },
+                "4": { "name": "entity.name.type.llpl" }
+            }
         },
         "asm-keyword": {
             "match": "\\basm\\b",
@@ -264,6 +288,8 @@
         },
         "type-name": {
             "patterns": [
+                { "include": "#generic-type-args" },
+                { "include": "#closure-type-parens" },
                 {
                     "match": "\\b(int|uint|int16|uint16|int32|uint32|char|bool|void)\\b",
                     "name": "storage.type.primitive.llpl"
@@ -271,6 +297,14 @@
                 {
                     "match": "[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*",
                     "name": "entity.name.type.llpl"
+                },
+                {
+                    "match": "->",
+                    "name": "keyword.operator.arrow.llpl"
+                },
+                {
+                    "match": "\\?",
+                    "name": "keyword.operator.nullable.llpl"
                 },
                 {
                     "match": "\\*",
@@ -286,6 +320,44 @@
                         "1": { "name": "punctuation.separator.bitfield.llpl" },
                         "2": { "name": "constant.numeric.decimal.llpl" }
                     }
+                }
+            ]
+        },
+        "generic-type-args": {
+            "comment": "Pair<A, B> in a type position - a nested region (not a plain match) so its internal commas don't prematurely end the outer type-annotation/return-type region, which stops at the first bare comma/paren/brace/equals/semicolon it sees.",
+            "begin": "<",
+            "beginCaptures": {
+                "0": { "name": "punctuation.definition.typeparameters.begin.llpl" }
+            },
+            "end": ">",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.typeparameters.end.llpl" }
+            },
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#type-name" },
+                {
+                    "match": ",",
+                    "name": "punctuation.separator.comma.llpl"
+                }
+            ]
+        },
+        "closure-type-parens": {
+            "comment": "(T1, T2) -> R closure/function-pointer type - same nested-region reasoning as generic-type-args, for the commas between parameter types.",
+            "begin": "\\(",
+            "beginCaptures": {
+                "0": { "name": "punctuation.definition.parameters.begin.llpl" }
+            },
+            "end": "\\)",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.parameters.end.llpl" }
+            },
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#type-name" },
+                {
+                    "match": ",",
+                    "name": "punctuation.separator.comma.llpl"
                 }
             ]
         },
@@ -338,7 +410,7 @@
             }
         },
         "operators": {
-            "match": "(==|!=|<=|>=|&&|\\|\\||<<|>>|->|[+\\-*/%=<>!&|^~])",
+            "match": "(==|!=|<=|>=|&&|\\|\\||\\|>|<<|>>|->|=>|[+\\-*/%=<>!&|^~?])",
             "name": "keyword.operator.llpl"
         },
         "punctuation": {

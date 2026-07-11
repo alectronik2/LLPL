@@ -7,6 +7,7 @@ import std.conv;
 import std.array;
 import std.algorithm;
 import std.range;
+import std.path;
 import ast;
 import errors;
 
@@ -77,6 +78,13 @@ class CodeGenerator {
     private ClassDecl[string] genericClassTemplates; // by mangled (namespace-prefixed) template name
     private StructDecl[string] genericStructTemplates;
     private FunctionDecl[string] genericFunctionTemplates;
+    // Which module a generic template/trait was declared in - templates are
+    // pulled out of prog.declarations entirely (see the comment on that pass),
+    // so collectSymbolTable can't recover this by walking prog.declarations
+    // like it does for everything else; recorded at pull-out time instead.
+    private string[string] genericTemplateModulePath; // by the same mangled key as the *Templates maps above
+    private string[string] traitModulePath; // by mangled trait name
+    private string[] pendingImplModulePaths; // parallel to pendingImpls
     private bool[string] monomorphizedInstances; // mangled instantiation name -> reserved/emitted, dedupes + guards recursion
     private string[] genericForwardDecls; // opaque struct tags / function prototypes, spliced before genericInstanceDecls
     private string[] genericInstanceDecls; // full monomorphized class/struct/function bodies, emitted up front
@@ -303,6 +311,24 @@ class CodeGenerator {
         return functionSignature(m, ownerName ~ "." ~ m.name);
     }
 
+    // Renders a template's type-parameter list for display, e.g.
+    // genericSuffix(["T", "U"], ["Comparable", ""]) -> "<T: Comparable, U>".
+    private string genericSuffix(string[] typeParams, string[] bounds) {
+        if (typeParams.length == 0) return "";
+        string[] parts;
+        foreach (i, tp; typeParams) {
+            string bound = i < bounds.length ? bounds[i] : "";
+            parts ~= bound.length > 0 ? format("%s: %s", tp, bound) : tp;
+        }
+        return "<" ~ parts.join(", ") ~ ">";
+    }
+
+    private string traitSignature(TraitDecl t, string displayName) {
+        string[] methodSigs;
+        foreach (m; t.methods) methodSigs ~= functionSignature(m, m.name);
+        return format("trait %s { %s }", displayName, methodSigs.join("; "));
+    }
+
     // Builds the flat, declaration-only symbol table (see SymbolInfo) from
     // every module's top-level declarations. Called at the end of
     // generateMultiple, after the main generation pass, so every field/
@@ -345,6 +371,57 @@ class CodeGenerator {
                     collectedSymbols ~= SymbolInfo(dname, "variable", prog.modulePath,
                         varDecl.line, varDecl.column, varSignature(varDecl, dname));
                 }
+            }
+        }
+
+        // Generic templates, traits, and impl blocks were all pulled out of
+        // prog.declarations entirely before this point (see that pass's own
+        // comment), so they need their own pass here, using the module paths
+        // recorded at pull-out time instead of prog.modulePath.
+        foreach (key, fn; genericFunctionTemplates) {
+            string dname = key ~ genericSuffix(fn.typeParams, fn.typeParamBounds);
+            collectedSymbols ~= SymbolInfo(key, "function", genericTemplateModulePath[key],
+                fn.line, fn.column, functionSignature(fn, dname));
+        }
+        foreach (key, cls; genericClassTemplates) {
+            string dname = key ~ genericSuffix(cls.typeParams, cls.typeParamBounds);
+            string modulePath = genericTemplateModulePath[key];
+            collectedSymbols ~= SymbolInfo(key, "class", modulePath,
+                cls.line, cls.column, classSignature(cls, dname));
+            foreach (field; cls.fields) {
+                collectedSymbols ~= SymbolInfo(key ~ "." ~ field.name, "field", modulePath,
+                    field.line, field.column, fieldSignature(field, key));
+            }
+            foreach (method; cls.methods) {
+                collectedSymbols ~= SymbolInfo(key ~ "." ~ method.name, "method", modulePath,
+                    method.line, method.column, methodSignature(method, key));
+            }
+        }
+        foreach (key, st; genericStructTemplates) {
+            string dname = key ~ genericSuffix(st.typeParams, st.typeParamBounds);
+            string modulePath = genericTemplateModulePath[key];
+            collectedSymbols ~= SymbolInfo(key, "struct", modulePath,
+                st.line, st.column, structSignature(st, dname));
+            foreach (field; st.fields) {
+                collectedSymbols ~= SymbolInfo(key ~ "." ~ field.name, "field", modulePath,
+                    field.line, field.column, fieldSignature(field, key));
+            }
+        }
+        foreach (key, trait; traitRegistry) {
+            collectedSymbols ~= SymbolInfo(key, "trait", traitModulePath[key],
+                trait.line, trait.column, traitSignature(trait, key));
+        }
+        // Impl methods are keyed the same way method-call codegen resolves a
+        // dispatch target (mangleTypeArg(targetType) ~ "." ~ methodName - see
+        // the CallExpr method-dispatch branch), so a hover/go-to-definition
+        // on a call site like `p.greet()` or `key.hash()` resolves here.
+        // impl.targetType is already resolved in place by processImplBlock
+        // by this point in generateMultiple.
+        foreach (i, impl; pendingImpls) {
+            string targetKey = mangleTypeArg(impl.targetType);
+            foreach (method; impl.methods) {
+                collectedSymbols ~= SymbolInfo(targetKey ~ "." ~ method.name, "method", pendingImplModulePaths[i],
+                    method.line, method.column, methodSignature(method, targetKey));
             }
         }
     }
@@ -547,24 +624,32 @@ class CodeGenerator {
             foreach (decl; prog.declarations) {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
                     if (funcDecl.typeParams.length > 0) {
-                        genericFunctionTemplates[mangledFunc(funcDecl)] = funcDecl;
+                        string key = mangledFunc(funcDecl);
+                        genericFunctionTemplates[key] = funcDecl;
+                        genericTemplateModulePath[key] = prog.modulePath;
                         continue;
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
                     if (classDecl.typeParams.length > 0) {
-                        genericClassTemplates[mangledClass(classDecl)] = classDecl;
+                        string key = mangledClass(classDecl);
+                        genericClassTemplates[key] = classDecl;
+                        genericTemplateModulePath[key] = prog.modulePath;
                         continue;
                     }
                 } else if (auto structDecl = cast(StructDecl)decl) {
                     if (structDecl.typeParams.length > 0) {
-                        genericStructTemplates[mangledStruct(structDecl)] = structDecl;
+                        string key = mangledStruct(structDecl);
+                        genericStructTemplates[key] = structDecl;
+                        genericTemplateModulePath[key] = prog.modulePath;
                         continue;
                     }
                 } else if (auto traitDecl = cast(TraitDecl)decl) {
                     // A trait is purely a compile-time contract - it never
                     // produces any C code itself (same treatment as
                     // MacroDecl), so registering it is all that's needed.
-                    traitRegistry[mangled(traitDecl.namespaceSegments, traitDecl.name)] = traitDecl;
+                    string key = mangled(traitDecl.namespaceSegments, traitDecl.name);
+                    traitRegistry[key] = traitDecl;
+                    traitModulePath[key] = prog.modulePath;
                     continue;
                 } else if (auto implDecl = cast(ImplDecl)decl) {
                     // Parked, not processed yet - its methods have a
@@ -577,6 +662,7 @@ class CodeGenerator {
                     // type) before it can resolve its own target, so it's
                     // processed further down, after the main registries.
                     pendingImpls ~= implDecl;
+                    pendingImplModulePaths ~= prog.modulePath;
                     continue;
                 }
                 withGenericsPulledOut ~= decl;
@@ -1434,6 +1520,29 @@ class CodeGenerator {
             mangledName, mangledName, mangledName, valueCode);
     }
 
+    // Escape a string so it can be emitted as a C string literal.
+    private string cStringLiteral(string s) {
+        string result = "\"";
+        foreach (char c; s) {
+            switch (c) {
+                case '\\': result ~= "\\\\"; break;
+                case '"': result ~= "\\\""; break;
+                case '\n': result ~= "\\n"; break;
+                case '\r': result ~= "\\r"; break;
+                case '\t': result ~= "\\t"; break;
+                default:
+                    if (c < 0x20 || c > 0x7E) {
+                        result ~= format("\\x%02x", cast(ubyte)c);
+                    } else {
+                        result ~= c;
+                    }
+                    break;
+            }
+        }
+        result ~= "\"";
+        return result;
+    }
+
     // `expr?` - unwraps an Optional<T>/Result<T, E>, or returns early out
     // of the *enclosing* function with an equivalent empty/error value.
     // Needs currentReturnType (see generateFunction/generateMethod/
@@ -1472,10 +1581,20 @@ class CodeGenerator {
                     "'?' on a Result value needs the enclosing function to also return a Result<T, E>",
                     currentModulePath, propExpr.line, propExpr.column);
             }
+            string loc = format("%s:%d", baseName(currentModulePath), propExpr.line);
+            string locVar = format("__llpl_loc%d", propagateCounter);
+            string traceVar = format("__llpl_trace%d", propagateCounter);
             return format(
-                "({ %s* %s = %s; if (!%s->ok) { %s* __e = %s_new(); %s_set_err(__e, %s->error); return __e; } %s->value; })",
+                "({ static char %s[] = %s; static char %s[512]; %s* %s = %s; " ~
+                "if (!%s->ok) { %s* __e = %s_new(); " ~
+                "if (%s->trace) { ksnprintf(%s, 512, \"%%s -> %%s\", %s->trace, %s); %s_set_err_with_trace(__e, %s->error, %s); } " ~
+                "else { %s_set_err_with_trace(__e, %s->error, %s); } return __e; } %s->value; })",
+                locVar, cStringLiteral(loc), traceVar,
                 operandMangled, tmp, operandCode, tmp,
-                currentReturnType.name, currentReturnType.name, currentReturnType.name, tmp, tmp);
+                currentReturnType.name, currentReturnType.name,
+                tmp, traceVar, tmp, locVar, currentReturnType.name, tmp, traceVar,
+                currentReturnType.name, tmp, locVar,
+                tmp);
         }
 
         throw new CompileError(format("'?' can only be used on an Optional<T> or Result<T, E> value, not '%s'",

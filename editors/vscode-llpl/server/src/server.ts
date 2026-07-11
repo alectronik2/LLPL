@@ -92,10 +92,11 @@ const EMPTY_RESULT: AnalysisResult = { diagnostics: [], symbols: [], usages: [] 
 
 const KEYWORDS = [
     'import', 'namespace', 'class', 'struct', 'packed', 'enum', 'macro',
-    'constructor', 'destructor', 'func', 'let', 'const', 'if', 'else',
-    'while', 'for', 'return', 'defer', 'unless', 'asm', 'new', 'true',
-    'false', 'null', 'extern', 'as', 'match', 'case', 'default', 'alias',
-    'operator', 'self', 'int', 'uint', 'int16', 'uint16', 'int32', 'uint32',
+    'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'if',
+    'else', 'while', 'for', 'foreach', 'in', 'return', 'defer', 'unless',
+    'asm', 'new', 'true', 'false', 'null', 'extern', 'as', 'match', 'case',
+    'default', 'alias', 'operator', 'trait', 'impl', 'quote', 'unquote',
+    'sizeof', 'self', 'int', 'uint', 'int16', 'uint16', 'int32', 'uint32',
     'char', 'bool', 'void',
 ];
 
@@ -267,6 +268,7 @@ function kindToCompletionKind(kind: string): CompletionItemKind {
         case 'macro': return CompletionItemKind.Snippet;
         case 'field': return CompletionItemKind.Field;
         case 'variable': return CompletionItemKind.Variable;
+        case 'trait': return CompletionItemKind.Interface;
         default: return CompletionItemKind.Text;
     }
 }

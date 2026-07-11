@@ -56,6 +56,11 @@ char* llpl_alloc(uint64_t size);
 void llpl_free(char* ptr);
 void llpl_memcpy(char* dest, char* src, uint64_t count);
 
+// Panic: print a message (hosted) or hand it to weak hooks (freestanding),
+// then halt. An optional handler is called first so user code can log/cleanup.
+void llpl_set_panic_handler(void (*handler)(char*));
+void llpl_panic(char* msg);
+
 // Minimal printf-style formatter for kernel logging. Deliberately not named
 // snprintf/vsnprintf: it isn't ISO C compatible (notably %d/%u/%x read a
 // 64-bit value, matching LLPL's `int`/`uint`, not C's 32-bit `int`), and
