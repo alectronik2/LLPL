@@ -385,6 +385,59 @@ class Optional<T> {
     }
 }
 
+// A generic "value or error" box - the same "plain class, not a tagged
+// enum" design as Optional<T> and for the same reason: Ok(value)'s type
+// parameter T is inferable from its own argument, but not E (nothing
+// mentions it), and vice versa for Err(error) - so both type parameters
+// have to already be concrete before any method runs, same as Optional<T>.
+//
+// The `?` operator (see codegen.d's generatePropagateExpr) unwraps a
+// Result<T, E> (or Optional<T>) inline: `let v: int = try_something()?`
+// evaluates to the T on Ok/Some, or returns early out of the *enclosing*
+// function with an equivalent Err/None if there wasn't one - the
+// enclosing function must itself return a Result<T, E> (or Optional<T>/
+// T?) of a compatible shape for this to type-check.
+class Result<T, E> {
+    let ok: bool
+    let value: T
+    let error: E
+
+    constructor() {
+        self.ok = false
+    }
+
+    destructor() {}
+
+    func set_ok(v: T) {
+        self.ok = true
+        self.value = v
+    }
+
+    func set_err(e: E) {
+        self.ok = false
+        self.error = e
+    }
+
+    // Undefined (reads whatever - possibly uninitialized - value/error
+    // happens to be stored) if is_ok()/is_err() says otherwise - always
+    // check first, same as Optional<T>.get().
+    func get_ok() -> T {
+        return self.value
+    }
+
+    func get_err() -> E {
+        return self.error
+    }
+
+    func is_ok() -> bool {
+        return self.ok
+    }
+
+    func is_err() -> bool {
+        return !self.ok
+    }
+}
+
 // One node of a LinkedList<T> - a plain struct (not a class): it's a
 // manually `llpl_alloc`/`llpl_free`'d value with no reference-counting
 // overhead, the same tradeoff a hand-written singly-linked list already

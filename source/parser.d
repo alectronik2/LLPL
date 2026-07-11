@@ -14,6 +14,18 @@ class Parser {
     private Token current;
     private string filePath;
 
+    // Suppresses struct-literal parsing (`Name { ... }`) while parsing an
+    // if/while/for/match/foreach construct's own condition/subject/iterable
+    // expression, since a `{` there would otherwise be ambiguous between
+    // "start of a struct literal" and "start of this construct's body
+    // block" (the same classic ambiguity Rust/Go's struct literals have,
+    // solved the same way: forbid it there, but re-allow it as soon as
+    // we're inside an enclosing `(...)`/`[...]`/argument list, where the
+    // matching close token removes the ambiguity regardless of the outer
+    // context - see argumentList() and primary()'s parenthesized/array
+    // cases, which reset this around their own contents).
+    private bool noStructLiteral = false;
+
     this(Token[] tokens, string filePath = "") {
         this.tokens = tokens;
         this.pos = 0;
@@ -865,6 +877,12 @@ class Parser {
     }
 
     private ASTNode[] argumentList() {
+        // A call's own `(...)` already has an unambiguous terminator, so
+        // struct literals are fine again inside it even if we're currently
+        // inside a suppressed if/while/for/match/foreach expression - see
+        // noStructLiteral's comment.
+        bool savedNoStructLiteral = noStructLiteral;
+        noStructLiteral = false;
         ASTNode[] args;
         if (!check(TokenType.RightParen)) {
             do {
@@ -872,6 +890,7 @@ class Parser {
             } while (match(TokenType.Comma));
         }
         expect(TokenType.RightParen);
+        noStructLiteral = savedNoStructLiteral;
         return args;
     }
 
@@ -965,7 +984,7 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Match);
-        ASTNode subject = expression();
+        ASTNode subject = expressionNoStructLiteral();
         expect(TokenType.LeftBrace);
 
         MatchCase[] cases;
@@ -996,7 +1015,7 @@ class Parser {
 
     private IfStmt ifStmt() {
         expect(TokenType.If);
-        ASTNode condition = expression();
+        ASTNode condition = expressionNoStructLiteral();
         Block thenBlock = block();
         Block elseBlock = null;
 
@@ -1015,7 +1034,7 @@ class Parser {
 
     private WhileStmt whileStmt() {
         expect(TokenType.While);
-        ASTNode condition = expression();
+        ASTNode condition = expressionNoStructLiteral();
         Block body_ = block();
         return new WhileStmt(condition, body_);
     }
@@ -1044,7 +1063,7 @@ class Parser {
 
         // update
         if (!check(TokenType.LeftBrace)) {
-            update = expression();
+            update = expressionNoStructLiteral();
         }
 
         Block body_ = block();
@@ -1063,7 +1082,7 @@ class Parser {
         expect(TokenType.Let);
         string varName = expect(TokenType.Identifier).value;
         expect(TokenType.In);
-        ASTNode iterable = expression();
+        ASTNode iterable = expressionNoStructLiteral();
         Block body_ = block();
         return new ForeachStmt(varName, iterable, body_, startLine, startColumn);
     }
@@ -1090,6 +1109,19 @@ class Parser {
 
     private ASTNode expression() {
         return assignment();
+    }
+
+    // Parses a full expression with struct-literal parsing suppressed -
+    // for exactly the handful of spots (if/while/for-update/match-subject/
+    // foreach-iterable) where the expression is immediately followed by
+    // this construct's own `{ body }`, so `Name { ... }` right there would
+    // be ambiguous. See noStructLiteral's own comment.
+    private ASTNode expressionNoStructLiteral() {
+        bool saved = noStructLiteral;
+        noStructLiteral = true;
+        ASTNode result = expression();
+        noStructLiteral = saved;
+        return result;
     }
 
     // Maps a compound-assignment token to the plain binary operator it
@@ -1319,7 +1351,12 @@ class Parser {
 
         while (true) {
             if (match(TokenType.LeftParen)) {
-                // Function call
+                // Function call - own unambiguous terminator, so struct
+                // literals are fine inside even if we're currently in a
+                // suppressed if/while/for/match/foreach expression (see
+                // noStructLiteral's comment).
+                bool savedNoStructLiteral = noStructLiteral;
+                noStructLiteral = false;
                 ASTNode[] args;
                 if (!check(TokenType.RightParen)) {
                     do {
@@ -1327,6 +1364,7 @@ class Parser {
                     } while (match(TokenType.Comma));
                 }
                 expect(TokenType.RightParen);
+                noStructLiteral = savedNoStructLiteral;
                 expr = new CallExpr(expr, args, startLine, startColumn);
             } else if (match(TokenType.Dot)) {
                 // Member access
@@ -1335,10 +1373,17 @@ class Parser {
                 string member = expect(TokenType.Identifier).value;
                 expr = new MemberExpr(expr, member, memberLine, memberColumn);
             } else if (match(TokenType.LeftBracket)) {
-                // Array indexing
+                // Array indexing - same unambiguous-terminator reasoning as `(` above.
+                bool savedNoStructLiteral = noStructLiteral;
+                noStructLiteral = false;
                 ASTNode index = expression();
                 expect(TokenType.RightBracket);
+                noStructLiteral = savedNoStructLiteral;
                 expr = new IndexExpr(expr, index, startLine, startColumn);
+            } else if (match(TokenType.Question)) {
+                // `expr?` - propagate/unwrap an Optional<T>/Result<T, E> -
+                // see ast.PropagateExpr.
+                expr = new PropagateExpr(expr, startLine, startColumn);
             } else {
                 break;
             }
@@ -1450,6 +1495,9 @@ class Parser {
                 expect(TokenType.LeftParen);
                 return new MacroInvocation(name, argumentList(), tokLine, tokColumn);
             }
+            if (!qualifiedMacro && !noStructLiteral && check(TokenType.LeftBrace)) {
+                return structLiteral(name, tokLine, tokColumn);
+            }
             return new Identifier(name, tokLine, tokColumn);
         }
         if (match(TokenType.New)) {
@@ -1465,11 +1513,17 @@ class Parser {
             return unquoteExpr();
         }
         if (match(TokenType.LeftParen)) {
+            // Own unambiguous terminator - see argumentList()'s matching comment.
+            bool savedNoStructLiteral = noStructLiteral;
+            noStructLiteral = false;
             ASTNode expr = expression();
             expect(TokenType.RightParen);
+            noStructLiteral = savedNoStructLiteral;
             return expr;
         }
         if (match(TokenType.LeftBracket)) {
+            bool savedNoStructLiteral = noStructLiteral;
+            noStructLiteral = false;
             ASTNode[] elements;
             if (!check(TokenType.RightBracket)) {
                 do {
@@ -1477,10 +1531,30 @@ class Parser {
                 } while (match(TokenType.Comma));
             }
             expect(TokenType.RightBracket);
+            noStructLiteral = savedNoStructLiteral;
             return new ArrayLiteral(elements, tokLine, tokColumn);
         }
 
         error(format("Unexpected token: %s", current.type));
         return null;
+    }
+
+    // `Name { field: value, ... }` - see ast.StructLiteral's doc comment.
+    // `name` and its start position are already consumed/captured by the
+    // caller (primary()'s Identifier branch); this just parses the
+    // `{ field: value, ... }` tail.
+    private ASTNode structLiteral(string name, int startLine, int startColumn) {
+        expect(TokenType.LeftBrace);
+        string[] fieldNames;
+        ASTNode[] fieldValues;
+        if (!check(TokenType.RightBrace)) {
+            do {
+                fieldNames ~= expect(TokenType.Identifier).value;
+                expect(TokenType.Colon);
+                fieldValues ~= expression();
+            } while (match(TokenType.Comma));
+        }
+        expect(TokenType.RightBrace);
+        return new StructLiteral(name, fieldNames, fieldValues, startLine, startColumn);
     }
 }

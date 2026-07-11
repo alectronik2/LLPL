@@ -42,7 +42,9 @@ enum NodeType {
     InterpolatedStringLiteral,
     ArrayLiteral,
     LambdaExpr,
-    SizeofExpr
+    SizeofExpr,
+    StructLiteral,
+    PropagateExpr
 }
 
 abstract class ASTNode {
@@ -755,6 +757,45 @@ class SizeofExpr : ASTNode {
     this(Type type, int line = 0, int column = 0) {
         super(NodeType.SizeofExpr, line, column);
         this.type = type;
+    }
+}
+
+// `TypeName { field: value, ... }` - constructs a struct value directly
+// (structs only, never a class - see codegen.d's resolveStructLiteralTarget,
+// which rejects a class name with a pointer to `new` instead). `typeName`
+// is always a single, non-namespaced identifier with no `<...>` type
+// arguments of its own (parser.d's structLiteral()) - a generic struct's
+// type arguments, when needed, come entirely from context (the enclosing
+// `let`/return's declared type) rather than being written in the literal
+// itself, the same way `Optional<T>`'s `T` is always fixed by context
+// before any of its methods run. Every field must be given, by name,
+// though not necessarily in declaration order.
+class StructLiteral : ASTNode {
+    string typeName;
+    string[] fieldNames;
+    ASTNode[] fieldValues;
+
+    this(string typeName, string[] fieldNames, ASTNode[] fieldValues, int line = 0, int column = 0) {
+        super(NodeType.StructLiteral, line, column);
+        this.typeName = typeName;
+        this.fieldNames = fieldNames;
+        this.fieldValues = fieldValues;
+    }
+}
+
+// `expr?` - unwraps an Optional<T>/Result<T, E> value, or returns early
+// out of the enclosing function with an equivalent empty/error value if
+// there isn't one to unwrap (see codegen.d's generatePropagateExpr). Only
+// valid inside a function whose own return type is the same kind of
+// Optional/Result (an empty Optional<T> carries no payload, so any T
+// works there; a Result<T, E> needs a matching E to construct the
+// propagated error).
+class PropagateExpr : ASTNode {
+    ASTNode operand;
+
+    this(ASTNode operand, int line = 0, int column = 0) {
+        super(NodeType.PropagateExpr, line, column);
+        this.operand = operand;
     }
 }
 

@@ -45,6 +45,7 @@ class CodeGenerator {
     private int tempVarCounter;
     private string currentClassName;
     private Type currentReturnType; // Enclosing function/method/lambda's declared return type, for ReturnStmt's nullable-sugar auto-wrap (see generateNullableWrap)
+    private Type currentReturnTypeAsWritten; // Same, but a clone captured *before* resolveType mutated it - see resolveStructLiteralTarget
     private string currentModulePath; // Module whose code is currently being generated, for error citations
     private string[] currentNamespaceSegments; // Enclosing namespace path of the declaration being generated
     private Type[string] variableTypes; // Maps variable names to their types
@@ -79,6 +80,15 @@ class CodeGenerator {
     private bool[string] monomorphizedInstances; // mangled instantiation name -> reserved/emitted, dedupes + guards recursion
     private string[] genericForwardDecls; // opaque struct tags / function prototypes, spliced before genericInstanceDecls
     private string[] genericInstanceDecls; // full monomorphized class/struct/function bodies, emitted up front
+
+    // Which monomorphized instantiations came specifically from prelude.llpl's
+    // `Optional<T>`/`Result<T, E>` templates, by mangled name (e.g.
+    // "Optional_int") - used by generatePropagateExpr (`expr?`) to know
+    // which of the two unwrap/early-return shapes applies, and by
+    // generateNullableWrap's callers to recognize a `T?`-sugared Optional.
+    private bool[string] optionalInstantiations;
+    private bool[string] resultInstantiations;
+    private int propagateCounter; // numbers each `expr?`'s scratch temp var uniquely
 
     this() {
         indentLevel = 0;
@@ -975,6 +985,7 @@ class CodeGenerator {
         if (varDecl.type is null) {
             varDecl.type = inferType(varDecl.initializer);
         }
+        Type declaredTypeAsWritten = cloneType(varDecl.type);
         resolveType(varDecl.type);
         checkArrayLiteralInit(varDecl);
         if (varDecl.type.isNullableSugar) {
@@ -1007,7 +1018,11 @@ class CodeGenerator {
         }
 
         if (varDecl.initializer) {
-            code ~= " = " ~ generateExpression(varDecl.initializer);
+            if (auto structLit = cast(StructLiteral)varDecl.initializer) {
+                code ~= " = " ~ generateStructLiteralValue(structLit, declaredTypeAsWritten);
+            } else {
+                code ~= " = " ~ generateExpression(varDecl.initializer);
+            }
         }
         code ~= ";\n";
         return code;
@@ -1164,6 +1179,8 @@ class CodeGenerator {
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
 
+        Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
+        currentReturnTypeAsWritten = cloneType(method.returnType);
         resolveType(method.returnType);
         Type prevReturnType = currentReturnType;
         currentReturnType = method.returnType;
@@ -1198,6 +1215,7 @@ class CodeGenerator {
         // Restore previous context
         currentClassName = prevClassName;
         currentReturnType = prevReturnType;
+        currentReturnTypeAsWritten = prevReturnTypeAsWritten;
 
         // See generateConstructor's matching comment: params (and self)
         // are only valid names inside this method's own body.
@@ -1229,6 +1247,8 @@ class CodeGenerator {
         string code = "";
         string params = "";
         currentNamespaceSegments = funcDecl.namespaceSegments;
+        Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
+        currentReturnTypeAsWritten = cloneType(funcDecl.returnType);
         resolveType(funcDecl.returnType);
         Type prevReturnType = currentReturnType;
         currentReturnType = funcDecl.returnType;
@@ -1268,6 +1288,7 @@ class CodeGenerator {
         code ~= "}\n";
 
         currentReturnType = prevReturnType;
+        currentReturnTypeAsWritten = prevReturnTypeAsWritten;
 
         // See generateConstructor's matching comment: params are only
         // valid names inside this function's own body.
@@ -1350,6 +1371,54 @@ class CodeGenerator {
             mangledName, mangledName, mangledName, valueCode);
     }
 
+    // `expr?` - unwraps an Optional<T>/Result<T, E>, or returns early out
+    // of the *enclosing* function with an equivalent empty/error value.
+    // Needs currentReturnType (see generateFunction/generateMethod/
+    // generateLambdaExpr) to already be an Optional/Result of the same
+    // kind - an empty Optional<T> carries no payload, so any T works for
+    // that one, but propagating a Result's error needs its own E to match
+    // (or at least be assignment-compatible in the generated C - a
+    // mismatch surfaces as an ordinary C type error, same as everywhere
+    // else this compiler leans on the C backend to catch a deeper type
+    // mismatch rather than checking it itself).
+    private string generatePropagateExpr(PropagateExpr propExpr) {
+        Type operandType;
+        try {
+            operandType = inferType(propExpr.operand);
+        } catch (Exception e) {
+            throw new CompileError("Cannot infer the type of '?''s operand",
+                currentModulePath, propExpr.line, propExpr.column);
+        }
+        string operandMangled = operandType.name;
+        string operandCode = generateExpression(propExpr.operand);
+        string tmp = format("__propagate%d", propagateCounter++);
+
+        if (operandMangled in optionalInstantiations) {
+            if (currentReturnType is null || (currentReturnType.name !in optionalInstantiations)) {
+                throw new CompileError(
+                    "'?' on an Optional value needs the enclosing function to also return " ~
+                    "an Optional<T> (or 'T?')", currentModulePath, propExpr.line, propExpr.column);
+            }
+            return format("({ %s* %s = %s; if (!%s->has_value) { return %s_new(); } %s->value; })",
+                operandMangled, tmp, operandCode, tmp, currentReturnType.name, tmp);
+        }
+
+        if (operandMangled in resultInstantiations) {
+            if (currentReturnType is null || (currentReturnType.name !in resultInstantiations)) {
+                throw new CompileError(
+                    "'?' on a Result value needs the enclosing function to also return a Result<T, E>",
+                    currentModulePath, propExpr.line, propExpr.column);
+            }
+            return format(
+                "({ %s* %s = %s; if (!%s->ok) { %s* __e = %s_new(); %s_set_err(__e, %s->error); return __e; } %s->value; })",
+                operandMangled, tmp, operandCode, tmp,
+                currentReturnType.name, currentReturnType.name, currentReturnType.name, tmp, tmp);
+        }
+
+        throw new CompileError(format("'?' can only be used on an Optional<T> or Result<T, E> value, not '%s'",
+            operandMangled), currentModulePath, propExpr.line, propExpr.column);
+    }
+
     private string generateStatement(ASTNode node, bool isDeferred) {
         string code = "";
 
@@ -1363,6 +1432,11 @@ class CodeGenerator {
             if (varDecl.type is null) {
                 varDecl.type = inferType(varDecl.initializer);
             }
+            // Captured *before* resolveType mutates varDecl.type in place -
+            // a generic struct literal initializer (Pair { ... }) needs the
+            // declared type's original, unmangled name/typeArgs to supply
+            // its own type arguments (see resolveStructLiteralTarget).
+            Type declaredTypeAsWritten = cloneType(varDecl.type);
             resolveType(varDecl.type);
             checkArrayLiteralInit(varDecl);
 
@@ -1385,6 +1459,8 @@ class CodeGenerator {
             if (varDecl.initializer) {
                 if (varDecl.type.isNullableSugar) {
                     code ~= " = " ~ generateNullableWrap(varDecl.type, varDecl.initializer);
+                } else if (auto structLit = cast(StructLiteral)varDecl.initializer) {
+                    code ~= " = " ~ generateStructLiteralValue(structLit, declaredTypeAsWritten);
                 } else {
                     code ~= " = " ~ generateExpression(varDecl.initializer);
                 }
@@ -1457,6 +1533,8 @@ class CodeGenerator {
             if (returnStmt.value) {
                 if (currentReturnType !is null && currentReturnType.isNullableSugar) {
                     code ~= " " ~ generateNullableWrap(currentReturnType, returnStmt.value);
+                } else if (auto structLit = cast(StructLiteral)returnStmt.value) {
+                    code ~= " " ~ generateStructLiteralValue(structLit, currentReturnTypeAsWritten);
                 } else {
                     code ~= " " ~ generateExpression(returnStmt.value);
                 }
@@ -1592,6 +1670,11 @@ class CodeGenerator {
                 castExpr.line, castExpr.column);
         } else if (auto sizeofExpr = cast(SizeofExpr)node) {
             return new SizeofExpr(cloneType(sizeofExpr.type, typeSubs), sizeofExpr.line, sizeofExpr.column);
+        } else if (auto structLit = cast(StructLiteral)node) {
+            return new StructLiteral(structLit.typeName, structLit.fieldNames.dup,
+                cloneNodes(structLit.fieldValues, subs, typeSubs), structLit.line, structLit.column);
+        } else if (auto propExpr = cast(PropagateExpr)node) {
+            return new PropagateExpr(cloneNode(propExpr.operand, subs, typeSubs), propExpr.line, propExpr.column);
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
             Parameter[] lps;
             foreach (p; lambdaExpr.params) lps ~= new Parameter(p.name, cloneType(p.type, typeSubs));
@@ -2247,6 +2330,90 @@ class CodeGenerator {
         }
     }
 
+    // Resolves a struct literal's actual StructDecl + mangled name. `expectedType`
+    // is the as-written (NOT YET resolveType-mutated) declared type at the
+    // let/return site this literal is being used to initialize, if any -
+    // see generateStatement's VarDecl case and the ReturnStmt handling for
+    // where it's captured (a plain cloneType() *before* resolveType runs,
+    // since resolveType mutates its argument in place and this needs the
+    // original, unmangled name/typeArgs to compare against). It's the only
+    // way a literal naming a *generic* struct template ever gets concrete
+    // type arguments, since struct literals never write `<...>` themselves
+    // (ast.StructLiteral's doc comment) - the same "context supplies T"
+    // relationship generateNullableWrap's Optional<T> already relies on.
+    private StructDecl resolveStructLiteralTarget(StructLiteral lit, Type expectedType, out string mangledName) {
+        if (lit.typeName in structRegistry) {
+            mangledName = lit.typeName;
+            return structRegistry[mangledName];
+        }
+        if (lit.typeName in classRegistry) {
+            throw new CompileError(format(
+                "'%s' is a class, not a struct - use 'new %s(...)' instead of a struct literal",
+                lit.typeName, lit.typeName), currentModulePath, lit.line, lit.column);
+        }
+
+        string templateKey = findGenericTemplateKey(lit.typeName, (k) => (k in genericStructTemplates) !is null);
+        if (templateKey.length == 0) {
+            if (findGenericTemplateKey(lit.typeName, (k) => (k in genericClassTemplates) !is null).length > 0) {
+                throw new CompileError(format(
+                    "'%s' is a generic class, not a struct - use 'new %s<...>(...)' instead of a struct literal",
+                    lit.typeName, lit.typeName), currentModulePath, lit.line, lit.column);
+            }
+            throw new CompileError(format("Unknown struct type '%s'", lit.typeName),
+                currentModulePath, lit.line, lit.column);
+        }
+
+        if (expectedType is null || expectedType.name != lit.typeName) {
+            throw new CompileError(format(
+                "Cannot construct generic struct '%s' without a known concrete type - " ~
+                "assign it to a 'let'/return with an explicit type annotation " ~
+                "(e.g. 'let x: %s<...> = %s { ... }')", lit.typeName, lit.typeName, lit.typeName),
+                currentModulePath, lit.line, lit.column);
+        }
+
+        Type instantiation = new Type(lit.typeName);
+        instantiation.typeArgs = expectedType.typeArgs;
+        resolveType(instantiation); // monomorphizes on demand, rewrites .name in place
+        mangledName = instantiation.name;
+        return structRegistry[mangledName];
+    }
+
+    private string generateStructLiteralValue(StructLiteral lit, Type expectedType) {
+        string mangledName;
+        StructDecl decl = resolveStructLiteralTarget(lit, expectedType, mangledName);
+
+        if (lit.fieldNames.length != decl.fields.length) {
+            throw new CompileError(format(
+                "Struct literal for '%s' has %d field(s), but '%s' declares %d",
+                lit.typeName, lit.fieldNames.length, mangledName, decl.fields.length),
+                currentModulePath, lit.line, lit.column);
+        }
+
+        string result = format("(%s){ ", mangledName);
+        bool[string] seen;
+        foreach (i, fieldName; lit.fieldNames) {
+            if (fieldName in seen) {
+                throw new CompileError(format("Field '%s' given more than once in this '%s' literal",
+                    fieldName, lit.typeName), currentModulePath, lit.line, lit.column);
+            }
+            seen[fieldName] = true;
+
+            bool found = false;
+            foreach (field; decl.fields) {
+                if (field.name == fieldName) { found = true; break; }
+            }
+            if (!found) {
+                throw new CompileError(format("'%s' has no field named '%s'", mangledName, fieldName),
+                    currentModulePath, lit.line, lit.column);
+            }
+
+            if (i > 0) result ~= ", ";
+            result ~= format(".%s = %s", fieldName, generateExpression(lit.fieldValues[i]));
+        }
+        result ~= " }";
+        return result;
+    }
+
     // Mirrors resolveName's shape but returns "" (not the original name) on
     // failure, since callers here need to distinguish "this is a generic
     // template" from "this name doesn't exist at all".
@@ -2307,6 +2474,8 @@ class CodeGenerator {
         if (mangledName !in monomorphizedInstances) {
             monomorphizedInstances[mangledName] = true; // reserve before generating the body - guards
                                                           // self-referential fields from re-triggering
+            if (templateKey == "Optional") optionalInstantiations[mangledName] = true;
+            else if (templateKey == "Result") resultInstantiations[mangledName] = true;
             Type[string] typeSubs;
             foreach (i, tp; templateTypeParams) typeSubs[tp] = typeArgs[i];
 
@@ -2800,6 +2969,7 @@ class CodeGenerator {
         string envType = format("__LambdaEnv%d", id);
         string trampolineName = format("__lambda%d", id);
 
+        Type lambdaReturnTypeAsWritten = cloneType(lambdaExpr.returnType);
         resolveType(lambdaExpr.returnType);
         foreach (p; lambdaExpr.params) resolveType(p.type);
 
@@ -2855,6 +3025,8 @@ class CodeGenerator {
         string[string] savedCaptureAccess = currentLambdaCaptureAccess.dup;
         Type prevReturnType = currentReturnType;
         currentReturnType = lambdaExpr.returnType;
+        Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
+        currentReturnTypeAsWritten = lambdaReturnTypeAsWritten;
 
         foreach (i, cap; lambdaExpr.captures) {
             currentLambdaCaptureAccess[cap] = format("__env->%s", cap);
@@ -2885,6 +3057,7 @@ class CodeGenerator {
         currentLambdaCaptureAccess = savedCaptureAccess;
         deferredStatements = savedDeferred;
         currentReturnType = prevReturnType;
+        currentReturnTypeAsWritten = prevReturnTypeAsWritten;
 
         trampolineCode ~= "}\n";
 
@@ -2935,6 +3108,16 @@ class CodeGenerator {
         } else if (auto sizeofExpr = cast(SizeofExpr)node) {
             resolveType(sizeofExpr.type);
             return format("sizeof(%s)", typeToC(sizeofExpr.type));
+        } else if (auto structLit = cast(StructLiteral)node) {
+            // No expected-type context available here (this is the
+            // standalone path, reached whenever a struct literal isn't
+            // sitting directly in a let-initializer/return that already
+            // handled it below with its own known type) - fine for a
+            // plain (non-generic) struct, but resolveStructLiteralTarget
+            // throws a clear error for a generic one used this way.
+            return generateStructLiteralValue(structLit, null);
+        } else if (auto propExpr = cast(PropagateExpr)node) {
+            return generatePropagateExpr(propExpr);
         } else if (auto callExpr = cast(CallExpr)node) {
             // Closure call: if the callee's own type resolves to a closure
             // type (a closure-typed variable, parameter, or field - never a
@@ -3188,6 +3371,18 @@ class CodeGenerator {
             return new Type(newExpr.type.name);
         } else if (cast(SizeofExpr)expr) {
             return new Type("uint");
+        } else if (auto structLit = cast(StructLiteral)expr) {
+            string mangledName;
+            resolveStructLiteralTarget(structLit, null, mangledName); // throws for a generic one with no context
+            return new Type(mangledName);
+        } else if (auto propExpr = cast(PropagateExpr)expr) {
+            Type operandType = inferType(propExpr.operand);
+            if (auto classDecl = operandType.name in classRegistry) {
+                foreach (field; classDecl.fields) {
+                    if (field.name == "value") return field.type;
+                }
+            }
+            throw inferError(expr, "Cannot infer type of '?' expression");
         } else if (auto castExpr = cast(CastExpr)expr) {
             resolveType(castExpr.type);
             return castExpr.type;

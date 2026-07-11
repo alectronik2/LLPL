@@ -460,6 +460,84 @@ A `T?` global variable isn't supported (its initializer needs a real
 function call - `Optional_T_new()`/`.set()` - which isn't a valid C static
 initializer); declare it as a local inside a function instead.
 
+## Struct Literals
+
+`Name { field: value, ... }` constructs a struct value directly - every
+field must be given, by name, though not necessarily in declaration
+order. Structs only, never a class (use `new` for those):
+
+```swift
+struct Point {
+    let x: int
+    let y: int
+}
+
+func main() -> int {
+    let p: Point = Point { x: 1, y: 2 }
+    let p2: Point = Point { y: 4, x: 3 } // order doesn't matter
+    return 0
+}
+```
+
+A generic struct's type arguments always come from context - the
+enclosing `let`/return's declared type - rather than being written in the
+literal itself (there's often nothing else to infer them from):
+
+```swift
+struct Pair<A, B> {
+    let first: A
+    let second: B
+}
+
+func main() -> int {
+    let coords: Pair<int, int> = Pair { first: 10, second: 20 }
+    return 0
+}
+```
+
+A struct literal works anywhere a comma/paren/bracket already gives it an
+unambiguous end - a call argument, inside `(...)`, as a field value in
+another struct literal - but a *bare* one directly as an if/while/for/
+match/foreach condition is rejected (it would be ambiguous with that
+construct's own following `{ body }`); wrap it in parens there instead.
+
+## Result<T, E> and the `?` Operator
+
+`Result<T, E>` (in `prelude.llpl`, alongside `Optional<T>`) is a generic
+"value or error" box - built the same way as `Optional<T>`, a plain class
+with `set_ok`/`set_err`/`is_ok`/`is_err`/`get_ok`/`get_err`, since a
+generic tagged enum can't infer both `T` and `E` from either variant's
+constructor alone (see its doc comment in `prelude.llpl`).
+
+`expr?` unwraps an `Optional<T>`/`Result<T, E>` inline: it evaluates to
+the wrapped value on Some/Ok, or returns early out of the *enclosing*
+function with an equivalent None/Err otherwise - the enclosing function
+must itself return a compatible Optional/Result. See
+`test/struct_literals_result_demo.llpl` for the full runnable version this
+is taken from:
+
+```swift
+func safe_div(a: int, b: int) -> Result<int, char*> {
+    let r: Result<int, char*> = new Result<int, char*>()
+    if b == 0 {
+        r.set_err("division by zero")
+        return r
+    }
+    r.set_ok(a / b)
+    return r
+}
+
+// If either division fails, this returns early with that same failure,
+// never reaching the addition.
+func sum_of_divisions(a: int, b: int, c: int, d: int) -> Result<int, char*> {
+    let first: int = safe_div(a, b)?
+    let second: int = safe_div(c, d)?
+    let result: Result<int, char*> = new Result<int, char*>()
+    result.set_ok(first + second)
+    return result
+}
+```
+
 ## Macros
 
 ### Quote and Unquote
