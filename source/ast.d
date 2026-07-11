@@ -48,7 +48,8 @@ enum NodeType {
     PropagateExpr,
     TraitDecl,
     ImplDecl,
-    DestructuringStmt
+    DestructuringStmt,
+    PatternExpr
 }
 
 abstract class ASTNode {
@@ -512,6 +513,12 @@ class BindingPattern : Pattern {
     }
 }
 
+class WildcardPattern : Pattern {
+    this(int line = 0, int column = 0) {
+        super(line, column);
+    }
+}
+
 class TuplePattern : Pattern {
     Pattern[] elements;
 
@@ -924,6 +931,18 @@ class StructLiteral : ASTNode {
         this.typeName = typeName;
         this.fieldNames = fieldNames;
         this.fieldValues = fieldValues;
+    }
+}
+
+// A destructuring pattern used as a `match` arm pattern. Wraps the
+// non-AST `Pattern` hierarchy so it can sit alongside ordinary expression
+// patterns in `MatchCase.patterns`.
+class PatternExpr : ASTNode {
+    Pattern pattern;
+
+    this(Pattern pattern, int line = 0, int column = 0) {
+        super(NodeType.PatternExpr, line, column);
+        this.pattern = pattern;
     }
 }
 

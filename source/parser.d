@@ -804,6 +804,11 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
 
+        if (check(TokenType.Identifier) && current.value == "_") {
+            advance();
+            return new WildcardPattern(startLine, startColumn);
+        }
+
         if (match(TokenType.LeftParen)) {
             Pattern[] elements;
             if (!check(TokenType.RightParen)) {
@@ -1229,6 +1234,26 @@ class Parser {
         return new MatchStmt(subject, cases, startLine, startColumn);
     }
 
+    private ASTNode matchPattern() {
+        int startLine = current.line;
+        int startColumn = current.column;
+
+        // Destructuring forms: '(' tuple pattern, 'Name { ... }' struct pattern,
+        // or '_' wildcard.
+        if (check(TokenType.LeftParen)) {
+            return new PatternExpr(parsePattern(), startLine, startColumn);
+        }
+        if (check(TokenType.Identifier) && current.value == "_") {
+            return new PatternExpr(parsePattern(), startLine, startColumn);
+        }
+        if (check(TokenType.Identifier) && peek(1).type == TokenType.LeftBrace) {
+            return new PatternExpr(parsePattern(), startLine, startColumn);
+        }
+
+        // Ordinary expression pattern (literal, identifier, enum-variant call).
+        return expression();
+    }
+
     private MatchCase matchCase() {
         if (match(TokenType.Default)) {
             expect(TokenType.FatArrow);
@@ -1237,9 +1262,9 @@ class Parser {
         }
 
         expect(TokenType.Case);
-        ASTNode[] patterns = [expression()];
+        ASTNode[] patterns = [matchPattern()];
         while (match(TokenType.Comma)) {
-            patterns ~= expression();
+            patterns ~= matchPattern();
         }
         expect(TokenType.FatArrow);
         Block body_ = block();

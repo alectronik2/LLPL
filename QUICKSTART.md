@@ -182,6 +182,10 @@ func main() -> int {
     let p = Point { x: 3, y: 4 }
     let Point { px, py } = p     // struct destructuring
 
+    match t {
+        case (u, v) => { print_int("u", u) }
+    }
+
     return 0
 }
 ```

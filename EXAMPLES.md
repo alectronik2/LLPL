@@ -250,6 +250,43 @@ A destructuring `case` and an ordinary equality `case` (string/int
 literals, as elsewhere in this doc) can appear in the same `match`, and
 `default` still works as the catch-all for either.
 
+### Match with Tuple and Struct Patterns
+
+`match` also understands tuple patterns, struct patterns, and the `_`
+wildcard:
+
+```swift
+struct Point {
+    let x: int
+    let y: int
+}
+
+func describe(t: (int, int)) -> char* {
+    match t {
+        case (x, y) => {
+            if x == 0 && y == 0 { return "origin" }
+            if x == 0 { return "on y-axis" }
+            if y == 0 { return "on x-axis" }
+            return "somewhere"
+        }
+    }
+    return ""
+}
+
+func classify(p: Point) -> char* {
+    match p {
+        case Point { x, y } => {
+            if x == 0 && y == 0 { return "origin" }
+            return "somewhere"
+        }
+    }
+    return ""
+}
+```
+
+Patterns can be nested (`case ((a, b), c) => ...`) and used alongside
+ordinary `case` alternatives and `default`.
+
 ## Closures and Lambdas
 
 A closure type is written `(ParamType, ...) -> ReturnType`. A lambda

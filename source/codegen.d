@@ -1867,7 +1867,9 @@ class CodeGenerator {
     // monomorphization engine to stamp out a generic declaration's body
     // with its type parameters substituted - see cloneType above.
     private Pattern clonePattern(Pattern pattern, ASTNode[string] subs, Type[string] typeSubs = null) {
-        if (auto bind = cast(BindingPattern)pattern) {
+        if (cast(WildcardPattern)pattern) {
+            return new WildcardPattern(pattern.line, pattern.column);
+        } else if (auto bind = cast(BindingPattern)pattern) {
             return new BindingPattern(bind.name, bind.line, bind.column);
         } else if (auto tuplePat = cast(TuplePattern)pattern) {
             Pattern[] cloned;
@@ -1944,6 +1946,9 @@ class CodeGenerator {
             return new DestructuringStmt(clonePattern(destructStmt.pattern, subs, typeSubs),
                 cloneType(destructStmt.type, typeSubs), cloneNode(destructStmt.initializer, subs, typeSubs),
                 destructStmt.isConst, destructStmt.isVolatile, destructStmt.line, destructStmt.column);
+        } else if (auto patternExpr = cast(PatternExpr)node) {
+            return new PatternExpr(clonePattern(patternExpr.pattern, subs, typeSubs),
+                patternExpr.line, patternExpr.column);
         } else if (auto ifStmt = cast(IfStmt)node) {
             return new IfStmt(cloneNode(ifStmt.condition, subs, typeSubs), cloneBlock(ifStmt.thenBlock, subs, typeSubs),
                 cloneBlock(ifStmt.elseBlock, subs, typeSubs));
@@ -2154,6 +2159,9 @@ class CodeGenerator {
             }
             return new MatchStmt(expandQuotedNode(matchStmt.subject, subs), cases,
                 matchStmt.line, matchStmt.column);
+        } else if (auto patternExpr = cast(PatternExpr)node) {
+            return new PatternExpr(clonePattern(patternExpr.pattern, subs),
+                patternExpr.line, patternExpr.column);
         } else if (auto macroInvocation = cast(MacroInvocation)node) {
             return new MacroInvocation(macroInvocation.name, expandQuotedNodes(macroInvocation.args, subs),
                 macroInvocation.line, macroInvocation.column);
@@ -2323,6 +2331,7 @@ class CodeGenerator {
         indentLevel++;
         code ~= indent() ~ format("%s %s = %s;\n",
             typeToC(subjectType), tmpName, generateExpression(matchStmt.subject));
+        variableTypes[tmpName] = subjectType;
 
         bool first = true;
         Block defaultBody = null;
@@ -2408,6 +2417,45 @@ class CodeGenerator {
                 continue;
             }
 
+            PatternExpr destructurePattern = null;
+            if (matchCase.patterns.length == 1) {
+                destructurePattern = cast(PatternExpr)matchCase.patterns[0];
+            }
+
+            if (destructurePattern !is null) {
+                if (matchCase.patterns.length > 1) {
+                    throw new CompileError(
+                        "Destructuring patterns cannot share an arm with other patterns",
+                        currentModulePath, matchCase.patterns[0].line, matchCase.patterns[0].column);
+                }
+
+                code ~= indent() ~ format("%s (1) {\n", first ? "if" : "} else if");
+                first = false;
+                indentLevel++;
+
+                Pattern pattern = destructurePattern.pattern;
+                if (auto structPat = cast(StructPattern)pattern) {
+                    inferPatternTypeFromSubject(structPat.type, subjectType);
+                }
+
+                string[] boundNames = patternBindingNames(pattern);
+                Type[string] savedTypes;
+                bool[string] savedConst;
+                saveBindings(boundNames, savedTypes, savedConst);
+
+                auto tmpIdent = new Identifier(tmpName, matchCase.patterns[0].line, matchCase.patterns[0].column);
+                code ~= generatePatternBindings(pattern, tmpIdent, false, false);
+
+                foreach (stmt; matchCase.body_.statements) {
+                    code ~= generateStatement(stmt, isDeferred);
+                }
+
+                restoreBindings(boundNames, savedTypes, savedConst);
+
+                indentLevel--;
+                continue;
+            }
+
             string cond = "";
             foreach (i, pattern; matchCase.patterns) {
                 if (i > 0) cond ~= " || ";
@@ -2448,6 +2496,7 @@ class CodeGenerator {
 
         indentLevel--;
         code ~= indent() ~ "}\n";
+        variableTypes.remove(tmpName);
         return code;
     }
 
@@ -2763,7 +2812,9 @@ class CodeGenerator {
     private string generatePatternBindings(Pattern pattern, ASTNode sourceExpr,
                                            bool isConst, bool isVolatile) {
         string code = "";
-        if (auto bind = cast(BindingPattern)pattern) {
+        if (cast(WildcardPattern)pattern) {
+            // Nothing to bind.
+        } else if (auto bind = cast(BindingPattern)pattern) {
             auto vd = new VarDecl(bind.name, null, sourceExpr, isConst, bind.line, bind.column);
             vd.isVolatile = isVolatile;
             code ~= generateStatement(vd, false);
@@ -2788,15 +2839,36 @@ class CodeGenerator {
                 code ~= generatePatternBindings(elemPat, member, isConst, isVolatile);
             }
         } else if (auto structPat = cast(StructPattern)pattern) {
-            Type resolved = cloneType(structPat.type);
-            resolveType(resolved);
-            bool isClass = (resolved.name in classRegistry) !is null;
-            bool isStruct = (resolved.name in structRegistry) !is null;
-            if (!isClass && !isStruct) {
-                throw new CompileError(format("Cannot destructure unknown type '%s'",
-                    structPat.type.toString()), currentModulePath, structPat.line, structPat.column);
+            Type sourceType = inferType(sourceExpr);
+            Type resolvedSource = cloneType(sourceType);
+            resolveType(resolvedSource);
+
+            Type resolvedPattern = cloneType(structPat.type);
+            if (structPat.type.typeArgs.length > 0) {
+                resolveType(resolvedPattern);
             }
-            ASTNode[] fields;
+
+            // A plain struct pattern must name the same type as the source;
+            // a generic pattern like `Result { ... }` matches any instantiation
+            // of that generic class/struct.
+            bool nameMatches = (resolvedSource.name == structPat.type.name) ||
+                (resolvedSource.name.length > structPat.type.name.length + 1 &&
+                 resolvedSource.name[0 .. structPat.type.name.length + 1] ==
+                    structPat.type.name ~ "_");
+            if (!nameMatches) {
+                throw new CompileError(format(
+                    "Struct pattern '%s' does not match value of type '%s'",
+                    structPat.type.toString(), sourceType.toString()),
+                    currentModulePath, structPat.line, structPat.column);
+            }
+
+            bool isClass = (resolvedSource.name in classRegistry) !is null;
+            bool isStruct = (resolvedSource.name in structRegistry) !is null;
+            if (!isClass && !isStruct) {
+                throw new CompileError(format("Cannot destructure value of type '%s'",
+                    sourceType.toString()), currentModulePath, structPat.line, structPat.column);
+            }
+
             foreach (fieldName; structPat.fieldNames) {
                 auto member = new MemberExpr(sourceExpr, fieldName,
                     structPat.line, structPat.column);
@@ -2815,6 +2887,48 @@ class CodeGenerator {
             }
         }
         return code;
+    }
+
+    private string[] patternBindingNames(Pattern pattern) {
+        string[] names;
+        if (cast(WildcardPattern)pattern) {
+            // no names
+        } else if (auto bind = cast(BindingPattern)pattern) {
+            names ~= bind.name;
+        } else if (auto tuplePat = cast(TuplePattern)pattern) {
+            foreach (p; tuplePat.elements) {
+                names ~= patternBindingNames(p);
+            }
+        } else if (auto structPat = cast(StructPattern)pattern) {
+            foreach (fieldName; structPat.fieldNames) {
+                names ~= fieldName;
+            }
+        }
+        return names;
+    }
+
+    private void saveBindings(string[] names, out Type[string] savedTypes,
+                              out bool[string] savedConst) {
+        foreach (name; names) {
+            if (auto t = name in variableTypes) savedTypes[name] = *t;
+            if (auto c = name in constVariables) savedConst[name] = *c;
+        }
+    }
+
+    private void restoreBindings(string[] names, Type[string] savedTypes,
+                                 bool[string] savedConst) {
+        foreach (name; names) {
+            if (auto t = name in savedTypes) variableTypes[name] = *t;
+            else variableTypes.remove(name);
+            if (auto c = name in savedConst) constVariables[name] = *c;
+            else constVariables.remove(name);
+        }
+    }
+
+    private void inferPatternTypeFromSubject(Type patternType, Type subjectType) {
+        if (patternType.typeArgs.length > 0) return; // already explicit
+        if (patternType.name != subjectType.name) return;
+        patternType.typeArgs = subjectType.typeArgs.map!(a => cloneType(a)).array;
     }
 
     // Mirrors resolveName's shape but returns "" (not the original name) on

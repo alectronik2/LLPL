@@ -46,6 +46,15 @@
   - nested patterns: `let ((a, b), c) = nested`
 - Tuple fields are positional: `_0`, `_1`, `_2`, etc.
 
+#### `match` + Destructuring
+- `match` supports destructuring patterns:
+  - tuple patterns: `case (x, y) => ...`
+  - struct/class field patterns: `case Point { x, y } => ...`
+  - wildcard: `case _ => ...`
+  - nested patterns: `case ((a, b), c) => ...`
+- Existing literal, multi-alternative, and tagged-enum variant patterns
+  continue to work unchanged.
+
 ### Tooling
 - Added `run_tests.sh` to compile and execute every `test/*.llpl`.
 - Golden `.expected` files and `.expected_fail` markers for abort tests.
