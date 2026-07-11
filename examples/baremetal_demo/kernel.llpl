@@ -34,6 +34,9 @@ import fb
 import kbd
 import pagealloc
 import kheap
+import ata
+import vfs
+import tmpfs
 import task
 import shell
 
@@ -238,11 +241,30 @@ func kernel_main(multiboot_ptr: uint) {
     PageAlloc.init(multiboot_ptr)
     log("PageAlloc: \(PageAlloc.free_pages)/\(PageAlloc.total_pages) pages free\n")
 
+    // Purely a multiboot2 tag scan (no allocation, no disk) - can run this
+    // early, unlike VFS below.
+    TmpFS.init(multiboot_ptr)
+    log("TmpFS: \(TmpFS.count()) boot module(s) found\n")
+    TmpFS.selftest()
+
     KHeap.init()
 
     let color: u8 = 15 // white on black
     screen = new Console.Screen(color)
     screen.clear()
+
+    // After the screen exists (not before) - VFS.selftest() calls plain
+    // print(), which (unlike log()) only ever reaches the framebuffer
+    // console, never serial; calling this any earlier would make its
+    // output vanish entirely; see print()'s own definition just above.
+    // VFS.init() itself calls ATA.init() (checks for a disk, self-formats
+    // a fresh one on first boot) - see vfs.llpl.
+    if VFS.init() {
+        log("<GREEN>ATA: primary master detected; VFS mounted (self-formats on first boot)\n</>")
+        VFS.selftest()
+    } else {
+        log("<LIGHT_RED>VFS: unavailable (no primary master disk found)\n</>")
+    }
 
     log("<CYAN>LLPL Bare-Metal Demo\n</>")
     log("<CYAN>=====================\n</>")
@@ -258,6 +280,9 @@ func kernel_main(multiboot_ptr: uint) {
     print("namespace Keyboard   -> PS/2 scancode driver (IRQ1)\n")
     print("namespace PageAlloc  -> bitmap physical page-frame allocator\n")
     print("namespace KHeap      -> free-list kernel heap (kmalloc/kfree)\n")
+    print("namespace ATA        -> primary-master ATA PIO disk driver\n")
+    print("namespace VFS        -> persistent filesystem on top of ATA\n")
+    print("namespace TmpFS      -> read-only tmpfs over multiboot2 modules\n")
     print("namespace Task       -> preemptive round-robin task switching\n")
     print("namespace Shell      -> a tiny interactive command line\n")
     print("\n")

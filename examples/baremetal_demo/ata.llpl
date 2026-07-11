@@ -1,0 +1,182 @@
+// ATA PIO driver - primary-master only, 28-bit LBA, polling (no IRQs/DMA).
+// The simplest real disk driver there is, and well-trodden territory (see
+// the OSDev wiki's "ATA PIO Mode" article, which this follows closely) -
+// enough to back vfs.llpl's on-disk filesystem with QEMU's IDE controller
+// (`-drive file=...,if=ide`), which is free, deterministic hardware to
+// target, the same "one real, plausible piece of hardware, not a general
+// driver framework" spirit as hal.llpl's PIC/serial code or kbd.llpl's
+// PS/2 keyboard.
+//
+// No probing beyond "is there a primary master, and does it look like a
+// plain ATA disk" - no secondary channel, no slave device, no partition
+// table. A documented v1 limitation, not an oversight.
+
+import hal
+
+namespace ATA {
+    const DATA         = 0x1F0
+    const ERROR_FEAT   = 0x1F1
+    const SECCOUNT     = 0x1F2
+    const LBA_LOW      = 0x1F3
+    const LBA_MID      = 0x1F4
+    const LBA_HIGH     = 0x1F5
+    const DRIVE_HEAD   = 0x1F6
+    const STATUS_CMD   = 0x1F7
+    const CONTROL      = 0x3F6
+
+    const CMD_READ_SECTORS  = 0x20
+    const CMD_WRITE_SECTORS = 0x30
+    const CMD_CACHE_FLUSH   = 0xE7
+    const CMD_IDENTIFY      = 0xEC
+
+    const SECTOR_SIZE = 512
+
+    // Status register bits.
+    const STATUS_ERR = 0x01
+    const STATUS_DRQ = 0x08
+    const STATUS_DF  = 0x20
+    const STATUS_BSY = 0x80
+
+    let present: bool = false
+
+    func poll_bsy_clear() {
+        while (HAL.inb(STATUS_CMD) & STATUS_BSY) != 0 {
+            // spin
+        }
+    }
+
+    // Waits for the device to be ready to transfer a word (DRQ set), or
+    // reports failure (ERR/DF set) - the same two outcomes every PIO
+    // command polls for after issuing it.
+    func wait_drq() -> bool {
+        while true {
+            let status: char = HAL.inb(STATUS_CMD)
+            if (status & STATUS_ERR) != 0 || (status & STATUS_DF) != 0 {
+                return false
+            }
+            if (status & STATUS_DRQ) != 0 {
+                return true
+            }
+        }
+    }
+
+    // Selects the primary master and issues IDENTIFY - if a device
+    // answers and looks like a plain ATA disk (not ATAPI/SATA, which
+    // leave a nonzero signature in LBA_MID/LBA_HIGH after the command),
+    // drains its 256-word IDENTIFY payload (unused by this demo, but the
+    // device leaves it queued until read) and reports success.
+    func init() -> bool {
+        HAL.outb(DRIVE_HEAD, 0xA0)
+        HAL.outb(SECCOUNT, 0)
+        HAL.outb(LBA_LOW, 0)
+        HAL.outb(LBA_MID, 0)
+        HAL.outb(LBA_HIGH, 0)
+        HAL.outb(STATUS_CMD, CMD_IDENTIFY)
+
+        let status: char = HAL.inb(STATUS_CMD)
+        if status == 0 {
+            present = false
+            return false // no device on this channel at all
+        }
+
+        poll_bsy_clear()
+
+        if HAL.inb(LBA_MID) != 0 || HAL.inb(LBA_HIGH) != 0 {
+            present = false
+            return false // not a plain ATA device
+        }
+
+        if !wait_drq() {
+            present = false
+            return false
+        }
+
+        let i: int = 0
+        while i < 256 {
+            HAL.inw(DATA) // drain the IDENTIFY payload; contents unused
+            i = i + 1
+        }
+
+        present = true
+        return true
+    }
+
+    // Selects the primary master for LBA read/write and loads the 28-bit
+    // address - shared setup between read_sector/write_sector.
+    func select_lba(lba: uint) {
+        HAL.outb(DRIVE_HEAD, (0xE0 | ((lba >> 24) & 0x0F)) as char)
+        HAL.outb(SECCOUNT, 1)
+        HAL.outb(LBA_LOW, (lba & 0xFF) as char)
+        HAL.outb(LBA_MID, ((lba >> 8) & 0xFF) as char)
+        HAL.outb(LBA_HIGH, ((lba >> 16) & 0xFF) as char)
+    }
+
+    // Reads one 512-byte sector into `buf`. Returns false on a device
+    // error (buf's contents are then unspecified) - callers trust the
+    // disk exists (see `present`) exactly as every other driver in this
+    // demo trusts its one target device is really there.
+    func read_sector(lba: uint, buf: char*) -> bool {
+        select_lba(lba)
+        HAL.outb(STATUS_CMD, CMD_READ_SECTORS)
+        poll_bsy_clear()
+        if !wait_drq() {
+            return false
+        }
+        let i: int = 0
+        while i < 256 {
+            let word: uint = HAL.inw(DATA)
+            buf[i * 2] = (word & 0xFF) as char
+            buf[i * 2 + 1] = ((word >> 8) & 0xFF) as char
+            i = i + 1
+        }
+        return true
+    }
+
+    // Writes one 512-byte sector from `buf`, then flushes the device's
+    // write cache (CACHE FLUSH, 0xE7) so it's actually durable on the
+    // backing disk image before returning - relevant precisely because
+    // vfs.llpl's whole point is surviving a reboot.
+    func write_sector(lba: uint, buf: char*) -> bool {
+        select_lba(lba)
+        HAL.outb(STATUS_CMD, CMD_WRITE_SECTORS)
+        poll_bsy_clear()
+        if !wait_drq() {
+            return false
+        }
+        let i: int = 0
+        while i < 256 {
+            let word: uint = (buf[i * 2] as uint) | ((buf[i * 2 + 1] as uint) << 8)
+            HAL.outw(DATA, word)
+            i = i + 1
+        }
+        HAL.outb(STATUS_CMD, CMD_CACHE_FLUSH)
+        poll_bsy_clear()
+        return true
+    }
+
+    // `count` contiguous sectors starting at `lba`, into/from a single
+    // `count * SECTOR_SIZE`-byte buffer - so vfs.llpl never has to do its
+    // own sector-at-a-time bookkeeping for a multi-sector region (the
+    // inode table, the free-block bitmap, ...).
+    func read_sectors(lba: uint, count: uint, buf: char*) -> bool {
+        let i: uint = 0
+        while i < count {
+            if !read_sector(lba + i, buf + (i * SECTOR_SIZE) as int) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    func write_sectors(lba: uint, count: uint, buf: char*) -> bool {
+        let i: uint = 0
+        while i < count {
+            if !write_sector(lba + i, buf + (i * SECTOR_SIZE) as int) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+}

@@ -1,0 +1,1 @@
+This file was never written to the VFS disk - TmpFS reads it directly out of the memory GRUB already loaded it into.

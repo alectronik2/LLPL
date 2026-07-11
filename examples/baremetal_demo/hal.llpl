@@ -25,6 +25,22 @@ namespace HAL {
         return result
     }
 
+    // 16-bit forms of the above - needed for ATA PIO (ata.llpl), whose
+    // data port transfers a whole 16-bit word per access. `%w0` on the
+    // value/result operand (not just the port) does the same "print this
+    // as its 16-bit sub-register" trick outb/inb already use for the port
+    // operand - LLPL's `uint` is 64 bits, but only the low 16 of it are
+    // ever read or written here.
+    func outw(port: uint, value: uint) {
+        asm("outw %w0, %w1" : : "a"(value), "Nd"(port))
+    }
+
+    func inw(port: uint) -> uint {
+        let result: uint = 0
+        asm("inw %w1, %w0" : "=a"(result) : "Nd"(port))
+        return result
+    }
+
     func disable_interrupts() {
         asm("cli")
     }

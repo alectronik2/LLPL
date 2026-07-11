@@ -980,6 +980,55 @@ func pic_remap(offset1: char, offset2: char) {
 }
 ```
 
+### Persistent Filesystem (`examples/baremetal_demo`)
+
+`examples/baremetal_demo` builds on the port-I/O basics above with a real
+disk driver and a small filesystem on top of it:
+
+- `ata.llpl` (`namespace ATA`) - a primary-master ATA PIO disk driver
+  (28-bit LBA, polling, no IRQs/DMA), targeting QEMU's IDE controller
+  (`-drive file=disk.img,format=raw,if=ide`).
+- `vfs.llpl` (`namespace VFS`) - a small persistent filesystem on top of
+  it: directories, files, path resolution (absolute/relative/`..`), and a
+  fixed-size inode table + free-block bitmap loaded into RAM at boot via
+  `KHeap.kmalloc` (the kernel's real reclaiming heap) and flushed back to
+  disk on every mutation. Self-formats an unrecognized disk on first boot.
+- New shell commands: `ls`, `cd`, `pwd`, `mkdir`, `touch`, `cat`, `write`,
+  `rm`.
+
+Since there's no way to script keyboard input into headless QEMU,
+`VFS.selftest()` (called once at boot, before the interactive shell
+starts) exercises every operation end to end and logs a single
+`SELFTEST: PASS`/`FAIL` line - and checks for a `/selftest/proof.txt` a
+*previous* boot would have left behind before recreating it, logging
+`PERSISTENCE: PASS`/`SKIP`. `make test-persistence` in that directory
+automates the actual two-boot proof (fresh disk, then the same disk
+image again) via serial-log capture, with no human ever needing to type
+into the shell.
+
+Alongside it, `tmpfs.llpl` (`namespace TmpFS`) exposes whatever files
+GRUB loaded as multiboot2 *modules* (grub.cfg's `module2 /path/to/file
+NAME` directive - the Makefile's `$(ISO)` target adds two demo ones) as a
+small read-only, purely in-memory filesystem: unlike `VFS`, there's no
+disk I/O or allocation at all - a module's bytes are already sitting in
+ordinary (identity-mapped) RAM the moment the kernel starts, so reading
+one is just a memory copy out of the address multiboot2's modules tag
+hands back. Not merged into `VFS`'s own path resolution (that would need
+real mount-point dispatch); instead `ls`/`cat` special-case a literal
+leading `/boot` themselves:
+
+```
+llpl $ ls /boot
+m 25  hello.txt
+m 116 readme.txt
+llpl $ cat /boot/hello.txt
+Hello from a GRUB module!
+```
+
+Gone on the next reboot, same as a real tmpfs - there's nothing to
+persist. `TmpFS.selftest()` (also boot-time, no keyboard needed) checks
+the demo modules are found and readable.
+
 ## Data Structures
 
 ### Stack

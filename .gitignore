@@ -17,6 +17,7 @@ examples/*.c
 examples/kernel.bin
 examples/kernel.iso
 examples/isodir/
+examples/baremetal_demo/disk.img
 
 # Editor files
 *.swp

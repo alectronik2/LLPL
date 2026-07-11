@@ -1,0 +1,178 @@
+// TmpFS - a small, read-only, purely in-memory "filesystem" exposing
+// whatever multiboot2 modules GRUB loaded alongside the kernel (grub.cfg's
+// `module2 /path/to/file NAME` directive - see this demo's Makefile).
+//
+// Unlike vfs.llpl's disk-backed filesystem, this one does zero I/O and
+// zero allocation: GRUB has already loaded each module's bytes somewhere
+// in ordinary RAM (identity-mapped, exactly like the framebuffer and the
+// multiboot info structure itself already are - see boot64.asm's
+// setup_paging) before the kernel ever runs, and the multiboot2 "modules"
+// tag (type 3) just hands back each one's {start, end} physical address
+// range plus a name string. TmpFS.init() only ever *records* those
+// pointers - reading a module's content means reading directly out of
+// that same memory, and there is nothing to flush, mount, or persist:
+// gone the moment the machine reboots, same as a real tmpfs.
+//
+// Deliberately not merged into vfs.llpl's on-disk inode tree/path
+// resolution - a real VFS would dispatch by mount point, but doing that
+// generally (rather than hard-coding this one read-only mount) would be
+// a lot of new machinery for what's fundamentally a flat, read-only list.
+// Instead, shell.llpl special-cases a leading "/boot" path itself (see
+// cmd_ls/cmd_cat there) to route into this module - a known, documented
+// v1 limitation: no subdirectories under /boot, no cd into it, no writes.
+
+namespace TmpFS {
+    const MAX_MODULES = 8
+    const MAX_NAME = 32
+
+    packed struct ModuleEntry {
+        let name: char[32]
+        let start: uint  // physical address - already identity-mapped, usable as char* directly
+        let length: uint
+    }
+
+    let modules: ModuleEntry[8]
+    let module_count: int = 0
+
+    packed struct InfoHeader {
+        let total_size: uint32
+        let reserved: uint32
+    }
+
+    packed struct TagHeader {
+        let tag_type: uint32
+        let size: uint32
+    }
+
+    // Modules tag (type 3): this fixed 16-byte header, then a variable-
+    // length NUL-terminated string (the module2 command's NAME argument),
+    // padded out to align8(size) like every other multiboot2 tag.
+    packed struct ModuleTag {
+        let tag_type: uint32
+        let size: uint32
+        let mod_start: uint32
+        let mod_end: uint32
+    }
+
+    func align8(n: uint) -> uint {
+        return (n + 7) & ~7
+    }
+
+    func name_matches(i: int, name: char*) -> bool {
+        let k: int = 0
+        while name[k] != 0 {
+            if modules[i].name[k] != name[k] {
+                return false
+            }
+            k = k + 1
+        }
+        return modules[i].name[k] == 0
+    }
+
+    // Walks the same multiboot2 tag list fb.llpl/pagealloc.llpl already
+    // walk (see either's own comment for the tag-list format), collecting
+    // every type-3 (module) tag up to MAX_MODULES.
+    func init(multiboot_ptr: uint) {
+        module_count = 0
+        let hdr: InfoHeader* = multiboot_ptr as InfoHeader*
+        let end: uint = multiboot_ptr + (hdr.total_size as uint)
+        let ptr: uint = multiboot_ptr + 8
+
+        while ptr < end {
+            let header: TagHeader* = ptr as TagHeader*
+            if header.tag_type == 0 {
+                return // end tag
+            }
+            if header.tag_type == 3 && module_count < MAX_MODULES {
+                let mt: ModuleTag* = ptr as ModuleTag*
+                let idx: int = module_count
+                modules[idx].start = mt.mod_start as uint
+                modules[idx].length = (mt.mod_end - mt.mod_start) as uint
+
+                let str_ptr: char* = (ptr + 16) as char*
+                let i: int = 0
+                while str_ptr[i] != 0 && i < MAX_NAME - 1 {
+                    modules[idx].name[i] = str_ptr[i]
+                    i = i + 1
+                }
+                modules[idx].name[i] = 0
+
+                module_count = module_count + 1
+            }
+            ptr = ptr + align8(header.size as uint)
+        }
+    }
+
+    func count() -> int {
+        return module_count
+    }
+
+    func find(name: char*) -> int {
+        let i: int = 0
+        while i < module_count {
+            if name_matches(i, name) {
+                return i
+            }
+            i = i + 1
+        }
+        return -1
+    }
+
+    func name_at(i: int, out_buf: char*) {
+        let k: int = 0
+        while modules[i].name[k] != 0 {
+            out_buf[k] = modules[i].name[k]
+            k = k + 1
+        }
+        out_buf[k] = 0
+    }
+
+    func size_at(i: int) -> uint {
+        return modules[i].length
+    }
+
+    // Copies up to `max_len` bytes of module `i`'s content into `out_buf`
+    // (not null-terminated by this call) - a plain memory copy, no disk
+    // I/O, since the bytes are already sitting in RAM at modules[i].start.
+    // Returns -1 for an out-of-range index.
+    func read(i: int, out_buf: char*, max_len: uint) -> int {
+        if i < 0 || i >= module_count {
+            return -1
+        }
+        let src: char* = modules[i].start as char*
+        let len: uint = modules[i].length
+        if len > max_len {
+            len = max_len
+        }
+        let k: uint = 0
+        while k < len {
+            out_buf[k] = src[k]
+            k = k + 1
+        }
+        return len as int
+    }
+
+    // Exercises count/find/read against the demo modules this project's
+    // own Makefile always loads (hello.txt/readme.txt - see its ISO
+    // target) and logs a single TMPFS_SELFTEST: PASS/FAIL line, the same
+    // no-keyboard-required verification approach vfs.llpl's selftest()
+    // already uses.
+    func selftest() {
+        let pass: bool = true
+        pass = pass && (module_count > 0)
+
+        let idx: int = find("hello.txt")
+        pass = pass && (idx != -1)
+        if idx != -1 {
+            let buf: char[256]
+            let n: int = read(idx, buf as char*, 255)
+            pass = pass && (n > 0)
+        }
+
+        if pass {
+            log("<LIGHT_GREEN>TMPFS_SELFTEST: PASS\n</>")
+        } else {
+            log("<LIGHT_RED>TMPFS_SELFTEST: FAIL\n</>")
+        }
+    }
+}

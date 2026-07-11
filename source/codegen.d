@@ -1126,6 +1126,26 @@ class CodeGenerator {
         return format("#define %s %s\n", mangledName, target);
     }
 
+    // A struct/class field's C declaration - `type name;`, `type name[N];`
+    // for a fixed-size array field, or `type name : N;` for a bit-field
+    // (checked first - bit-fields and arrays don't overlap in this
+    // language's grammar). Mirrors generateGlobalVar's identical
+    // array-vs-scalar handling for a global variable's own declaration;
+    // used by both generateStruct and generateClass so an array field
+    // (e.g. `let name: char[32]`) isn't silently collapsed to a bare
+    // scalar C declaration, losing its array entirely.
+    private string fieldDeclaration(Type type, string name, int bitWidth) {
+        if (bitWidth >= 0) {
+            return format("    %s %s : %d;\n", typeToC(type), name, bitWidth);
+        }
+        if (type.isArray && type.arraySize > 0) {
+            string baseType = primitiveToC(type.name);
+            if (type.isPointer) baseType ~= "*";
+            return format("    %s %s[%d];\n", baseType, name, type.arraySize);
+        }
+        return format("    %s %s;\n", typeToC(type), name);
+    }
+
     private string generateStruct(StructDecl structDecl) {
         string sName = mangledStruct(structDecl);
         currentNamespaceSegments = structDecl.namespaceSegments;
@@ -1133,11 +1153,7 @@ class CodeGenerator {
         string attr = structDecl.packed ? " __attribute__((packed))" : "";
         string code = format("struct%s %s {\n", attr, sName);
         foreach (field; structDecl.fields) {
-            if (field.bitWidth >= 0) {
-                code ~= format("    %s %s : %d;\n", typeToC(field.type), field.name, field.bitWidth);
-            } else {
-                code ~= format("    %s %s;\n", typeToC(field.type), field.name);
-            }
+            code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
         }
         code ~= "};\n";
         return code;
@@ -1205,11 +1221,7 @@ class CodeGenerator {
         code ~= format("struct %s {\n", cName);
         code ~= "    RefCount ref_count;\n";
         foreach (field; classDecl.fields) {
-            if (field.bitWidth >= 0) {
-                code ~= format("    %s %s : %d;\n", typeToC(field.type), field.name, field.bitWidth);
-            } else {
-                code ~= format("    %s %s;\n", typeToC(field.type), field.name);
-            }
+            code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
         }
         code ~= "};\n\n";
 

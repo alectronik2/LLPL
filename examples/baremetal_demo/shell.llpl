@@ -19,6 +19,9 @@ import kbd
 import backtrace
 import pagealloc
 import kheap
+import ata
+import vfs
+import tmpfs
 import task
 
 namespace Shell {
@@ -398,6 +401,18 @@ namespace Shell {
         print("  kheap         - show kernel heap stats\n")
         print("  tasks         - show scheduler/task stats\n")
         print("  spawn         - spawn another idle background task\n")
+        print("  ls [PATH]     - list a directory (default: current)\n")
+        print("  cd PATH       - change the current directory\n")
+        print("  pwd           - print the current directory\n")
+        print("  mkdir PATH    - create a directory\n")
+        print("  touch PATH    - create an empty file\n")
+        print("  cat PATH      - print a file's contents\n")
+        print("  write P TEXT  - replace a file's contents with TEXT (creates it)\n")
+        print("  rm PATH       - remove a file or empty directory\n")
+        print("\n")
+        print("\"ls /boot\"/\"cat /boot/NAME\" read the read-only tmpfs of\n")
+        print("multiboot2 modules GRUB loaded alongside the kernel - see\n")
+        print("this demo's Makefile and tmpfs.llpl.\n")
         print("\n")
         print("Up/down arrows recall previous commands; left/right move\n")
         print("the cursor within the current line.\n")
@@ -512,6 +527,171 @@ namespace Shell {
         }
     }
 
+    // "/boot" is TmpFS's one, flat, read-only mount point (multiboot2
+    // modules GRUB loaded alongside the kernel - see tmpfs.llpl) - not a
+    // real entry anywhere in VFS's own on-disk tree, so it's special-cased
+    // here rather than taught to VFS's path resolution at all. "m" (not
+    // "d"/"f") marks these as neither an ordinary file nor a directory.
+    func cmd_ls_boot() {
+        let n: int = TmpFS.count()
+        if n == 0 {
+            print("(empty)\n")
+            return
+        }
+        let i: int = 0
+        while i < n {
+            let namebuf: char[32]
+            TmpFS.name_at(i, namebuf as char*)
+            log("<LIGHT_BLUE>m</> <WHITE>\(TmpFS.size_at(i))</> ")
+            print(namebuf as char*)
+            print("\n")
+            i = i + 1
+        }
+    }
+
+    // "ls [path]" - defaults to the current directory. One line per
+    // entry: kind (d/f), size, name - VFS exposes plain data accessors
+    // (first_child/next_sibling/inode_kind/inode_size/inode_name) rather
+    // than a callback/iterator protocol, so the walk happens here.
+    func cmd_ls(args: char*) {
+        let path: char* = args
+        if path[0] == 0 {
+            path = "."
+        }
+        if starts_with(path, "/boot") {
+            cmd_ls_boot()
+            return
+        }
+        let dir: int = VFS.resolve_dir(path)
+        if dir == -1 {
+            log("<LIGHT_RED>no such directory\n</>")
+            return
+        }
+        let child: int = VFS.first_child(dir)
+        if child == -1 {
+            print("(empty)\n")
+        }
+        while child != -1 {
+            let namebuf: char[32]
+            VFS.inode_name(child, namebuf as char*)
+            let size: uint = VFS.inode_size(child)
+            if VFS.inode_kind(child) == VFS.KIND_DIR {
+                log("<LIGHT_BLUE>d</> <WHITE>-</> ")
+            } else {
+                log("<WHITE>f \(size)</> ")
+            }
+            print(namebuf as char*)
+            print("\n")
+            child = VFS.next_sibling(child)
+        }
+    }
+
+    func cmd_cd(args: char*) {
+        if args[0] == 0 {
+            log("<LIGHT_RED>usage: cd <path>\n</>")
+            return
+        }
+        if !VFS.cd(args) {
+            log("<LIGHT_RED>no such directory\n</>")
+        }
+    }
+
+    func cmd_pwd() {
+        let buf: char[128]
+        VFS.path_of(VFS.cwd, buf as char*, 128)
+        print(buf as char*)
+        print("\n")
+    }
+
+    func cmd_mkdir(args: char*) {
+        if args[0] == 0 {
+            log("<LIGHT_RED>usage: mkdir <path>\n</>")
+            return
+        }
+        if !VFS.mkdir(args) {
+            log("<LIGHT_RED>mkdir failed (bad path, or already exists)\n</>")
+        }
+    }
+
+    func cmd_touch(args: char*) {
+        if args[0] == 0 {
+            log("<LIGHT_RED>usage: touch <path>\n</>")
+            return
+        }
+        if !VFS.touch(args) {
+            log("<LIGHT_RED>touch failed (bad path, or already exists)\n</>")
+        }
+    }
+
+    func cmd_rm(args: char*) {
+        if args[0] == 0 {
+            log("<LIGHT_RED>usage: rm <path>\n</>")
+            return
+        }
+        if !VFS.rm(args) {
+            log("<LIGHT_RED>rm failed (not found, or directory not empty)\n</>")
+        }
+    }
+
+    const CAT_MAX = 4096
+
+    // "cat /boot/NAME" - see cmd_ls_boot's comment on why /boot is
+    // special-cased here rather than taught to VFS itself.
+    func cmd_cat_boot(name: char*) {
+        let idx: int = TmpFS.find(name)
+        if idx == -1 {
+            log("<LIGHT_RED>no such boot module\n</>")
+            return
+        }
+        let buf: char[4096]
+        let n: int = TmpFS.read(idx, buf as char*, CAT_MAX - 1)
+        buf[n] = 0
+        print(buf as char*)
+        print("\n")
+    }
+
+    func cmd_cat(args: char*) {
+        if args[0] == 0 {
+            log("<LIGHT_RED>usage: cat <path>\n</>")
+            return
+        }
+        if starts_with(args, "/boot/") {
+            cmd_cat_boot(args + 6)
+            return
+        }
+        let buf: char[4096]
+        let n: int = VFS.read(args, buf as char*, CAT_MAX - 1)
+        if n < 0 {
+            log("<LIGHT_RED>no such file\n</>")
+            return
+        }
+        buf[n] = 0
+        print(buf as char*)
+        print("\n")
+    }
+
+    // "write PATH TEXT..." - splits at the *first* space only (like
+    // cmd_poke already does for "poke ADDR VALUE"), so TEXT itself may
+    // contain spaces. Always replaces the whole file's content, creating
+    // it first if needed.
+    func cmd_write(args: char*) {
+        let sep: int = find_space(args)
+        if args[sep] == 0 {
+            log("<LIGHT_RED>usage: write <path> <text>\n</>")
+            return
+        }
+        args[sep] = 0
+        let path: char* = args
+        let text: char* = args + sep + 1
+        let len: uint = 0
+        while text[len] != 0 {
+            len = len + 1
+        }
+        if !VFS.write(path, text, len) {
+            log("<LIGHT_RED>write failed (bad path, or file too large - max 6KB)\n</>")
+        }
+    }
+
     func run_line(line: char*) {
         match line {
             case "" => {
@@ -550,6 +730,12 @@ namespace Shell {
             case "spawn" => {
                 cmd_spawn()
             }
+            case "ls" => {
+                cmd_ls("")
+            }
+            case "pwd" => {
+                cmd_pwd()
+            }
             default => {
                 if starts_with(line, "echo ") {
                     print(line + 5)
@@ -566,6 +752,20 @@ namespace Shell {
                     cmd_kfree(line + 6)
                 } else if starts_with(line, "free ") {
                     cmd_free(line + 5)
+                } else if starts_with(line, "ls ") {
+                    cmd_ls(line + 3)
+                } else if starts_with(line, "cd ") {
+                    cmd_cd(line + 3)
+                } else if starts_with(line, "mkdir ") {
+                    cmd_mkdir(line + 6)
+                } else if starts_with(line, "touch ") {
+                    cmd_touch(line + 6)
+                } else if starts_with(line, "rm ") {
+                    cmd_rm(line + 3)
+                } else if starts_with(line, "cat ") {
+                    cmd_cat(line + 4)
+                } else if starts_with(line, "write ") {
+                    cmd_write(line + 6)
                 } else {
                     log("<LIGHT_RED>unknown command: </>")
                     print(line)
