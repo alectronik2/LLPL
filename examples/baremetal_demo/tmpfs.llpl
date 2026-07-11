@@ -21,6 +21,8 @@
 // cmd_ls/cmd_cat there) to route into this module - a known, documented
 // v1 limitation: no subdirectories under /boot, no cd into it, no writes.
 
+import pagealloc
+
 namespace TmpFS {
     const MAX_MODULES = 8
     const MAX_NAME = 32
@@ -129,6 +131,14 @@ namespace TmpFS {
 
     func size_at(i: int) -> uint {
         return modules[i].length
+    }
+
+    func reserve_loaded_pages() {
+        let i: int = 0
+        while i < module_count {
+            PageAlloc.reserve_range(modules[i].start, modules[i].start + modules[i].length)
+            i = i + 1
+        }
     }
 
     // Copies up to `max_len` bytes of module `i`'s content into `out_buf`

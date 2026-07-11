@@ -764,6 +764,10 @@ namespace VFS {
     // module name; ".." returns to the disk root (where /boot "lives"
     // from the on-disk tree's perspective).
     func resolve_in_tmpfs_relative(path: char*) -> Node {
+        while path[0] == 46 && path[1] == 47 { // "./"
+            path = path + 2
+        }
+
         if path[0] == 0 || str_eq(path, ".") {
             return Node.TmpfsRoot()
         }

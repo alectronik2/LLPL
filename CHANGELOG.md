@@ -55,6 +55,21 @@
 - Existing literal, multi-alternative, and tagged-enum variant patterns
   continue to work unchanged.
 
+#### Per-Process User-Space VMM with `mmap`
+- New `examples/baremetal_demo/vmm.llpl` page-table manager with per-task
+  `AddressSpace` objects and x86-64 4-level walk/map/unmap helpers.
+- Kernel keeps its identity mapping in every address space; user mappings
+  live above 4GB so they never collide with kernel pages.
+- `examples/baremetal_demo/syscall.llpl` adds an `int 0x80` syscall ABI
+  (`SYS_EXIT`, `SYS_PRINT`, `SYS_MMAP`) with a hand-written asm entry point
+  that handles ring-3 entry/exit and task death.
+- `examples/baremetal_demo/task.llpl` switches `CR3` and `TSS.RSP0` on every
+  context switch; `Task.spawn_user()` creates real ring-3 tasks.
+- `examples/baremetal_demo/gdt.llpl` installs ring-3 code/data segments and
+  a 64-bit TSS.
+- A tiny `userapp/userapp.asm` program is loaded as a GRUB multiboot2
+  module and runs in ring 3, demonstrating `mmap`, `print`, and `exit`.
+
 ### Tooling
 - Added `run_tests.sh` to compile and execute every `test/*.llpl`.
 - Golden `.expected` files and `.expected_fail` markers for abort tests.

@@ -1,10 +1,9 @@
 // GDT (Global Descriptor Table) module.
 //
 // boot64.asm already installs a minimal GDT to get the CPU into long mode.
-// This module defines and loads a fresh one entirely from LLPL, to
-// demonstrate `packed struct` (the exact hardware byte layout the CPU reads
-// via `lgdt`) together with inline asm for `lgdt` and the far-return CS
-// reload every OS needs after replacing the descriptor table.
+// This module defines and loads a fresh one entirely from LLPL, including
+// ring-3 code/data descriptors and a 64-bit TSS descriptor, then loads the
+// TSS so the timer/syscall interrupt gates can use the IST stack.
 
 namespace GDT {
     // One 8-byte GDT descriptor. `packed` is essential here: without it the
@@ -26,7 +25,32 @@ namespace GDT {
         let base: uint
     }
 
-    let entries: Entry[3]
+    // 64-bit TSS layout. We only set RSP0 (kernel stack for ring-3
+    // interrupts without an IST) and IST1 (the stack the timer and syscall
+    // gates use).
+    packed struct TSS {
+        let reserved0: uint32
+        let rsp0: uint
+        let rsp1: uint
+        let rsp2: uint
+        let reserved1: uint
+        let ist1: uint
+        let ist2: uint
+        let ist3: uint
+        let ist4: uint
+        let ist5: uint
+        let ist6: uint
+        let ist7: uint
+        let reserved2: uint
+        let reserved3: uint16
+        let iomap_base: uint16
+    }
+
+    extern func get_tss() -> uint
+    extern func get_kernel_stack_top() -> uint
+    extern func load_tss(selector: uint16)
+
+    let entries: Entry[7]
     let pointer: Pointer
 
     func set_entry(index: int, limit_low: uint16, base_low: uint16, base_mid: char,
@@ -39,16 +63,62 @@ namespace GDT {
         entries[index].base_high = base_high
     }
 
-    func init() {
-        set_entry(0, 0, 0, 0, 0, 0, 0)           // null descriptor
-        set_entry(1, 0xFFFF, 0, 0, 0x9A, 0xAF, 0) // 64-bit code segment, selector 0x08
-        set_entry(2, 0xFFFF, 0, 0, 0x92, 0xCF, 0) // 64-bit data segment, selector 0x10
+    // A 64-bit TSS descriptor spans two consecutive GDT entries. The low
+    // 8 bytes hold the usual limit/base fields with the "available 64-bit TSS"
+    // access byte (0x89); the high 8 bytes hold base bits 32-63.
+    func set_tss_descriptor(index: int, base: uint, limit: uint) {
+        entries[index].limit_low = (limit & 0xFFFF) as uint16
+        entries[index].base_low = (base & 0xFFFF) as uint16
+        entries[index].base_mid = ((base >> 16) & 0xFF) as char
+        entries[index].access = 0x89 as char
+        entries[index].granularity = 0 as char
+        entries[index].base_high = ((base >> 24) & 0xFF) as char
 
-        pointer.limit = (3 * 8) - 1
+        let upper: uint = base >> 32
+        entries[index + 1].limit_low = (upper & 0xFFFF) as uint16
+        entries[index + 1].base_low = ((upper >> 16) & 0xFFFF) as uint16
+        entries[index + 1].base_mid = 0
+        entries[index + 1].access = 0
+        entries[index + 1].granularity = 0
+        entries[index + 1].base_high = 0
+    }
+
+    func init_tss() {
+        let tss_addr: uint = get_tss()
+        let tss: TSS* = tss_addr as TSS*
+        tss.reserved0 = 0
+        tss.rsp0 = get_kernel_stack_top()
+        tss.rsp1 = 0
+        tss.rsp2 = 0
+        tss.reserved1 = 0
+        tss.ist1 = 0
+        tss.ist2 = 0
+        tss.ist3 = 0
+        tss.ist4 = 0
+        tss.ist5 = 0
+        tss.ist6 = 0
+        tss.ist7 = 0
+        tss.reserved2 = 0
+        tss.reserved3 = 0
+        tss.iomap_base = (104 as uint16)
+    }
+
+    func init() {
+        set_entry(0, 0, 0, 0, 0, 0, 0)            // null descriptor
+        set_entry(1, 0xFFFF, 0, 0, 0x9A, 0xAF, 0) // kernel code, selector 0x08
+        set_entry(2, 0xFFFF, 0, 0, 0x92, 0xCF, 0) // kernel data, selector 0x10
+        set_entry(3, 0xFFFF, 0, 0, 0xFA, 0xAF, 0) // user code,    selector 0x18
+        set_entry(4, 0xFFFF, 0, 0, 0xF2, 0xCF, 0) // user data,    selector 0x20
+
+        init_tss()
+        set_tss_descriptor(5, get_tss(), 104)     // TSS, selector 0x28
+
+        pointer.limit = (7 * 8) - 1
         pointer.base = entries as uint
 
         asm("lgdt (%0)" : : "r"(&pointer))
         reload_segments()
+        load_tss(0x28)
     }
 
     // After `lgdt`, the CPU keeps using its cached CS descriptor until an

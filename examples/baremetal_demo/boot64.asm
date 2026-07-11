@@ -52,6 +52,14 @@ stack_bottom:
     resb 16384
 stack_top:
 
+; 64-bit Task State Segment. We only populate RSP0, the kernel stack the CPU
+; switches to when a ring-3 task is interrupted. The kernel updates RSP0 on
+; every context switch so it always points to the current task's own kernel
+; stack. The rest of the TSS is zero.
+align 16
+tss:
+    resb 104
+
 section .data
 align 16
 gdt64:
@@ -274,6 +282,33 @@ get_kernel_end:
     mov rax, _kernel_end
     ret
 
+; Helpers used by the LLPL GDT/VMM modules to set up the TSS and page tables.
+global get_pml4
+get_pml4:
+    mov rax, pml4
+    ret
+
+global get_tss
+get_tss:
+    mov rax, tss
+    ret
+
+global get_kernel_stack_top
+get_kernel_stack_top:
+    mov rax, stack_top
+    ret
+
+global set_tss_rsp0
+set_tss_rsp0:
+    mov rax, tss
+    mov [rax + 4], rdi
+    ret
+
+global load_tss
+load_tss:
+    ltr di
+    ret
+
 ; Preemptive multitasking (task.llpl): the timer IRQ (vector 32) is wired
 ; to this instead of a plain `interrupt func` - GCC's __attribute__((interrupt))
 ; generates its own fixed prologue/epilogue around a fixed stack, with no
@@ -283,11 +318,13 @@ get_kernel_end:
 ; only the scheduling *decision* is LLPL (Task.schedule_next, called here
 ; with the just-saved stack pointer, returning the one to resume).
 ;
-; Every push below is 8 bytes (64-bit mode), and their order must exactly
-; match Task.llpl's TrapFrame struct - see its comment for the full layout
-; including the three words the CPU itself pushes before this even runs
-; (RFLAGS, CS, RIP - a plain interrupt-gate entry with no privilege change,
-; since this kernel has no ring 3, never pushes SS/RSP too).
+; When entering from ring 3 the CPU switches to the TSS's RSP0 stack before
+; pushing the interrupt frame, so the user task's own stack pointer does not
+; need to be valid. The full SS/RSP/RFLAGS/CS/RIP frame (five words) is pushed
+; for ring-3 entries, while ring-0 entries push only RFLAGS/CS/RIP (three
+; words). In both cases our 15 GPR pushes sit on top of the CPU-pushed frame
+; and iretq pops the right number of words automatically based on the saved
+; CS's privilege level, exactly matching Task.llpl's TrapFrame layout.
 global timer_isr_entry
 extern Task_schedule_next
 timer_isr_entry:
@@ -311,6 +348,72 @@ timer_isr_entry:
     call Task_schedule_next
     mov rsp, rax        ; rax (System V return) = the task to resume's frame
 
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+
+    iretq
+
+; System-call entry point for ring-3 tasks. The IDT gate for vector 0x80 is
+; configured with DPL=3 and IST=1, so a user `int 0x80` arrives here on the
+; IST stack with the full interrupt frame already saved.
+;
+; ABI at entry: RAX = syscall number, RDI = arg1, RSI = arg2, RDX = arg3.
+; Return value is placed back into the saved RAX slot so the user task sees
+; it after iretq.
+global syscall_isr_entry
+extern Syscall_dispatch
+extern Task_is_current_dead
+extern Task_pick_next
+syscall_isr_entry:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    ; Load dispatch arguments from the saved user frame.
+    ; Offsets are relative to RSP after our 15 pushes (R15 is at offset 0).
+    mov rdi, [rsp + 112]        ; user RAX -> syscall number
+    mov rsi, [rsp + 72]         ; user RDI -> arg1
+    mov rdx, [rsp + 80]         ; user RSI -> arg2
+    mov rcx, [rsp + 88]         ; user RDX -> arg3
+    call Syscall_dispatch
+    mov [rsp + 112], rax        ; write return value into saved RAX
+
+    ; If the syscall was SYS_EXIT, switch away from the dead task now instead
+    ; of returning to it.
+    call Task_is_current_dead
+    test eax, eax
+    jz .return
+
+    mov rdi, rsp
+    call Task_pick_next
+    mov rsp, rax
+
+.return:
     pop r15
     pop r14
     pop r13

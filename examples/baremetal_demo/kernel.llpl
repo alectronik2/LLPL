@@ -39,6 +39,8 @@ import vfs
 import tmpfs
 import task
 import shell
+import vmm
+import syscall
 
 let screen: Console.Screen = null
 
@@ -245,6 +247,270 @@ func idle_task_entry() {
     }
 }
 
+packed struct Elf64Header {
+    let ident: char[16]
+    let elf_type: uint16
+    let machine: uint16
+    let version: uint32
+    let entry: uint
+    let phoff: uint
+    let shoff: uint
+    let flags: uint32
+    let ehsize: uint16
+    let phentsize: uint16
+    let phnum: uint16
+    let shentsize: uint16
+    let shnum: uint16
+    let shstrndx: uint16
+}
+
+packed struct Elf64ProgramHeader {
+    let ph_type: uint32
+    let flags: uint32
+    let offset: uint
+    let vaddr: uint
+    let paddr: uint
+    let filesz: uint
+    let memsz: uint
+    let align: uint
+}
+
+const ELF_PT_LOAD = 1
+const ELF_PF_W = 2
+const ELF_ET_EXEC = 2
+const ELF_EM_X86_64 = 62
+
+func align_down_page(addr: uint) -> uint {
+    return addr & ~4095
+}
+
+func align_up_page(addr: uint) -> uint {
+    return (addr + 4095) & ~4095
+}
+
+func validate_elf64(file: char*, size: uint) -> bool {
+    if size < sizeof(Elf64Header) {
+        return false
+    }
+
+    let hdr: Elf64Header* = file as Elf64Header*
+    if hdr.ident[0] != 0x7F as char || hdr.ident[1] != 69 as char ||
+       hdr.ident[2] != 76 as char || hdr.ident[3] != 70 as char {
+        return false
+    }
+    if hdr.ident[4] != 2 as char || hdr.ident[5] != 1 as char {
+        return false // ELFCLASS64, little-endian
+    }
+    if hdr.elf_type != ELF_ET_EXEC as uint16 || hdr.machine != ELF_EM_X86_64 as uint16 {
+        return false
+    }
+    if hdr.phentsize != sizeof(Elf64ProgramHeader) as uint16 || hdr.phnum == 0 as uint16 {
+        return false
+    }
+    let ph_end: uint = hdr.phoff + (hdr.phnum as uint) * sizeof(Elf64ProgramHeader)
+    if hdr.phoff < sizeof(Elf64Header) || ph_end > size {
+        return false
+    }
+    return true
+}
+
+func copy_elf_page(file: char*, file_size: uint, ph: Elf64ProgramHeader*, page_vaddr: uint, phys: uint) -> bool {
+    let dst: char* = phys as char*
+
+    let j: int = 0
+    while j < 4096 {
+        dst[j] = 0
+        j = j + 1
+    }
+
+    let seg_start: uint = ph.vaddr
+    let seg_file_end: uint = ph.vaddr + ph.filesz
+    let page_end: uint = page_vaddr + 4096
+
+    let copy_start: uint = page_vaddr
+    if copy_start < seg_start {
+        copy_start = seg_start
+    }
+    let copy_end: uint = page_end
+    if copy_end > seg_file_end {
+        copy_end = seg_file_end
+    }
+
+    if copy_start < copy_end {
+        let file_start: uint = ph.offset + (copy_start - ph.vaddr)
+        let copy_len: uint = copy_end - copy_start
+        if file_start + copy_len > file_size {
+            return false
+        }
+
+        let dst_off: uint = copy_start - page_vaddr
+        let k: uint = 0
+        while k < copy_len {
+            dst[dst_off + k] = file[file_start + k]
+            k = k + 1
+        }
+    }
+
+    return true
+}
+
+func load_elf64_user(file: char*, size: uint, aspace: VMM.AddressSpace*) -> uint {
+    if !validate_elf64(file, size) {
+        return 0
+    }
+
+    let hdr: Elf64Header* = file as Elf64Header*
+    let i: int = 0
+    while i < hdr.phnum as int {
+        let ph: Elf64ProgramHeader* = (file + hdr.phoff + (i as uint) * sizeof(Elf64ProgramHeader)) as Elf64ProgramHeader*
+        if ph.ph_type == ELF_PT_LOAD as uint32 {
+            if ph.memsz < ph.filesz || ph.offset + ph.filesz > size {
+                return 0
+            }
+            if ph.vaddr < VMM.USER_CODE_BASE || ph.vaddr + ph.memsz >= VMM.USER_STACK_TOP {
+                return 0
+            }
+
+            let first_page: uint = align_down_page(ph.vaddr)
+            let last_page: uint = align_up_page(ph.vaddr + ph.memsz)
+            let page: uint = first_page
+            while page < last_page {
+                let phys: uint = PageAlloc.alloc()
+                if phys == 0 {
+                    return 0
+                }
+                if !copy_elf_page(file, size, ph, page, phys) {
+                    PageAlloc.free(phys)
+                    return 0
+                }
+
+                let map_flags: uint = VMM.PTE_PRESENT | VMM.PTE_USER
+                if (ph.flags & ELF_PF_W as uint32) != 0 {
+                    map_flags = map_flags | VMM.PTE_WRITABLE
+                }
+                if !VMM.map_in_aspace(aspace, page, phys, map_flags) {
+                    PageAlloc.free(phys)
+                    return 0
+                }
+                page = page + 4096
+            }
+        }
+        i = i + 1
+    }
+
+    return hdr.entry
+}
+
+func spawn_user_elf(file: char*, size: uint, label: char*) -> bool {
+    let aspace: VMM.AddressSpace* = VMM.create_address_space()
+    if aspace == null {
+        log("<RED>failed to create user address space\n</>")
+        return false
+    }
+
+    let entry: uint = load_elf64_user(file, size, aspace)
+    if entry == 0 {
+        log("<RED>failed to load ELF executable: </>")
+        emit(label, false, 0, null)
+        emit("\n", false, 0, null)
+        return false
+    }
+
+    // Allocate and map one user stack page.
+    let stack_phys: uint = PageAlloc.alloc()
+    if stack_phys != 0 {
+        let sp: char* = stack_phys as char*
+        let j: int = 0
+        while j < 4096 {
+            sp[j] = 0
+            j = j + 1
+        }
+        VMM.map_in_aspace(aspace, VMM.USER_STACK_TOP - 4096, stack_phys,
+                          VMM.PTE_PRESENT | VMM.PTE_WRITABLE | VMM.PTE_USER)
+    }
+
+    let id: int = Task.spawn_user(entry, VMM.USER_STACK_TOP, aspace)
+    if id < 0 {
+        log("<RED>failed to spawn user task\n</>")
+        return false
+    } else {
+        log("<GREEN>spawned user task \(id) from </>")
+        emit(label, false, 0, null)
+        log("<GREEN> (entry=\(entry:hex))\n</>")
+    }
+    return true
+}
+
+func run_user_executable(path: char*) -> bool {
+    match VFS.resolve(path) {
+        case VFS.Node.TmpfsFile(idx) => {
+            let size: uint = TmpFS.size_at(idx)
+            if size == 0 {
+                return false
+            }
+            let tmp: char* = KHeap.kmalloc(size) as char*
+            if tmp == null {
+                log("<RED>failed to allocate executable buffer\n</>")
+                return false
+            }
+            TmpFS.read(idx, tmp, size)
+            let ok: bool = spawn_user_elf(tmp, size, path)
+            KHeap.kfree(tmp as uint)
+            return ok
+        }
+        case VFS.Node.Disk(idx) => {
+            if VFS.inode_kind(idx) != VFS.KIND_FILE {
+                log("<LIGHT_RED>not a file\n</>")
+                return false
+            }
+            let size: uint = VFS.inode_size(idx)
+            if size == 0 {
+                return false
+            }
+            let tmp: char* = KHeap.kmalloc(size) as char*
+            if tmp == null {
+                log("<RED>failed to allocate executable buffer\n</>")
+                return false
+            }
+            let n: int = VFS.read(path, tmp, size)
+            if n < 0 || n as uint != size {
+                KHeap.kfree(tmp as uint)
+                return false
+            }
+            let ok: bool = spawn_user_elf(tmp, size, path)
+            KHeap.kfree(tmp as uint)
+            return ok
+        }
+        default => {
+            log("<LIGHT_RED>no such executable\n</>")
+        }
+    }
+    return false
+}
+
+// Loads the default `userapp.elf` multiboot2 module at boot, if present.
+func spawn_user_task() {
+    let idx: int = TmpFS.find("userapp.elf")
+    if idx < 0 {
+        log("<YELLOW>userapp.elf not found, skipping user task\n</>")
+        return
+    }
+
+    let size: uint = TmpFS.size_at(idx)
+    if size == 0 {
+        return
+    }
+
+    let tmp: char* = KHeap.kmalloc(size) as char*
+    if tmp == null {
+        log("<RED>failed to allocate userapp buffer\n</>")
+        return
+    }
+    TmpFS.read(idx, tmp, size)
+    spawn_user_elf(tmp, size, "userapp.elf")
+    KHeap.kfree(tmp as uint)
+}
+
 // `multiboot_ptr` is handed to us by boot64.asm (RDI, System V AMD64's
 // first integer argument): the physical address of the multiboot2 info
 // structure GRUB left behind, which is where fb.llpl's Framebuffer.init
@@ -271,10 +537,12 @@ func kernel_main(multiboot_ptr: uint) {
     // Purely a multiboot2 tag scan (no allocation, no disk) - can run this
     // early, unlike VFS below.
     TmpFS.init(multiboot_ptr)
+    TmpFS.reserve_loaded_pages()
     log("TmpFS: \(TmpFS.count()) boot module(s) found\n")
     TmpFS.selftest()
 
     KHeap.init()
+    VMM.init()
 
     let color: u8 = 15 // white on black
     screen = new Console.Screen(color)
@@ -342,6 +610,7 @@ func kernel_main(multiboot_ptr: uint) {
     log("<WHITE>Spawning tasks (shell + a background counter) and starting the scheduler...\n</>")
     Task.spawn(shell_task_entry as uint)
     Task.spawn(bg_task_entry as uint)
+    spawn_user_task()
     Task.start() // never returns - see task.llpl
 
     // Only reached if Task.start() found nothing to run (spawn() failed for

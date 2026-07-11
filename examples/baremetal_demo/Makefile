@@ -19,13 +19,15 @@ RUNTIME_SRC = ../../runtime/runtime.c
 KERNEL_BIN = kernel.bin
 ISO = kernel.iso
 DISK_IMG = disk.img
+USERAPP_OBJ = userapp.o
+USERAPP_ELF = userapp.elf
 
 all: $(ISO)
 
 # Compile LLPL to C (module resolution picks up every imported file
 # automatically via the `import` statements in kernel.llpl; listed here
 # too just so `make` knows to recompile when any of them change)
-$(C_SRC): $(LLPL_SRC) hal.llpl console.llpl gdt.llpl idt.llpl backtrace.llpl fb.llpl kbd.llpl pagealloc.llpl kheap.llpl ata.llpl vfs.llpl tmpfs.llpl task.llpl shell.llpl ../../prelude.llpl
+$(C_SRC): $(LLPL_SRC) hal.llpl console.llpl gdt.llpl idt.llpl backtrace.llpl fb.llpl kbd.llpl pagealloc.llpl kheap.llpl ata.llpl vfs.llpl tmpfs.llpl task.llpl shell.llpl vmm.llpl syscall.llpl ../../prelude.llpl
 	@echo "Compiling LLPL..."
 	cd ../.. && dub build
 	$(LLPL) $(LLPL_SRC) -o $(C_SRC)
@@ -34,6 +36,15 @@ $(C_SRC): $(LLPL_SRC) hal.llpl console.llpl gdt.llpl idt.llpl backtrace.llpl fb.
 boot.o: $(BOOT_SRC)
 	@echo "Assembling boot code..."
 	$(NASM) $(NASMFLAGS) $(BOOT_SRC) -o boot.o
+
+# Assemble and link the tiny ring-3 user test program as an ELF executable.
+$(USERAPP_OBJ): userapp/userapp.asm
+	@echo "Assembling user app..."
+	$(NASM) -f elf64 userapp/userapp.asm -o $(USERAPP_OBJ)
+
+$(USERAPP_ELF): $(USERAPP_OBJ) userapp/linker.ld
+	@echo "Linking user app ELF..."
+	$(LD) -m elf_x86_64 -nostdlib -static -T userapp/linker.ld $(USERAPP_OBJ) -o $(USERAPP_ELF)
 
 # Compile kernel
 kernel.o: $(C_SRC)
@@ -53,10 +64,11 @@ $(KERNEL_BIN): boot.o kernel.o runtime.o
 # Create ISO - including two small files loaded as multiboot2 modules
 # (grub.cfg's `module2` directive) purely to give tmpfs.llpl something
 # real to expose; their exact content is asserted by TmpFS.selftest().
-$(ISO): $(KERNEL_BIN)
+$(ISO): $(KERNEL_BIN) $(USERAPP_ELF)
 	@echo "Creating ISO..."
 	@mkdir -p isodir/boot/grub
 	@cp $(KERNEL_BIN) isodir/boot/kernel.bin
+	@cp $(USERAPP_ELF) isodir/boot/userapp.elf
 	@printf "Hello from a GRUB module!" > isodir/boot/hello.txt
 	@printf "This file was never written to the VFS disk - TmpFS reads it directly out of the memory GRUB already loaded it into." > isodir/boot/readme.txt
 	@echo 'set timeout=0' > isodir/boot/grub/grub.cfg
@@ -65,6 +77,7 @@ $(ISO): $(KERNEL_BIN)
 	@echo '    multiboot2 /boot/kernel.bin' >> isodir/boot/grub/grub.cfg
 	@echo '    module2 /boot/hello.txt hello.txt' >> isodir/boot/grub/grub.cfg
 	@echo '    module2 /boot/readme.txt readme.txt' >> isodir/boot/grub/grub.cfg
+	@echo '    module2 /boot/userapp.elf userapp.elf' >> isodir/boot/grub/grub.cfg
 	@echo '}' >> isodir/boot/grub/grub.cfg
 	@grub-mkrescue -o $(ISO) isodir 2>/dev/null || echo "Note: grub-mkrescue not found, ISO not created"
 
@@ -123,5 +136,5 @@ test-persistence: $(ISO)
 # persisted VFS data too, by design: clean means every generated
 # artifact, not "everything except the disk").
 clean:
-	rm -f *.o $(C_SRC) $(KERNEL_BIN) $(ISO) $(DISK_IMG)
+	rm -f *.o $(C_SRC) $(KERNEL_BIN) $(ISO) $(DISK_IMG) $(USERAPP_ELF)
 	rm -rf isodir

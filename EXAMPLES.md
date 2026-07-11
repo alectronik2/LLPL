@@ -1088,6 +1088,62 @@ through it, and a full `cd boot` / `cd ..` round trip - alongside
 `TmpFS.selftest()` checking the demo modules themselves are found and
 readable.
 
+### Per-Process Virtual Memory and Ring-3 User Tasks (`examples/baremetal_demo`)
+
+The demo kernel now has a real per-process virtual-memory manager:
+
+- `vmm.llpl` (`namespace VMM`) walks and allocates x86-64 page tables.
+  Each user task gets its own `AddressSpace` (a fresh PML4) that keeps
+  the kernel's low identity mapping while isolating user mappings above
+  4GB.
+- `syscall.llpl` (`namespace Syscall`) implements an `int 0x80` ABI:
+  `RAX` = syscall number, `RDI`/`RSI`/`RDX` = arguments, return in `RAX`.
+  Supported syscalls: `SYS_EXIT` (0), `SYS_PRINT` (1), `SYS_MMAP` (2).
+- `task.llpl` gained `Task.spawn_user()` and per-task page-table switching
+  (`CR3` and `TSS.RSP0` are updated on every context switch). Kernel tasks
+  continue to run in ring 0; user tasks run in ring 3.
+- `gdt.llpl` installs ring-3 code/data descriptors and a 64-bit TSS.
+- A tiny user test program in `userapp/userapp.asm` is loaded as a GRUB
+  multiboot2 module and mapped into the user address space. It exercises
+  `SYS_MMAP`, copies a string into the freshly mapped page, prints it via
+  `SYS_PRINT`, and exits with `SYS_EXIT`:
+
+```nasm
+bits 64
+_start:
+    mov rax, 2          ; SYS_MMAP
+    xor rdi, rdi        ; hint = 0
+    mov rsi, 1          ; pages = 1
+    xor rdx, rdx        ; flags = 0
+    int 0x80
+
+    mov r8, rax         ; save buffer
+    mov rdi, rax
+    lea rsi, [rel msg]
+    mov rcx, msg_len
+    rep movsb
+
+    mov rax, 1          ; SYS_PRINT
+    mov rdi, r8
+    mov rsi, msg_len
+    int 0x80
+
+    mov rax, 0          ; SYS_EXIT
+    int 0x80
+
+section .data
+msg: db "Hello from user-space mmap!", 10
+msg_len: equ $ - msg
+```
+
+Boot output now includes the user task's message after the shell prompt:
+
+```
+user task spawned (entry=0x100000000)
+Starting the shell. Type 'help' for a list of commands.
+llpl $ Hello from user-space mmap!
+```
+
 ## Slice<T>
 
 A bounds-checked *view* into memory someone else owns - `{ptr, len}`, a

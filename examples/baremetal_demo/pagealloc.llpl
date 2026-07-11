@@ -12,6 +12,8 @@
 //   - the low 1MB (BIOS/real-mode/VGA-era memory this project never uses)
 //   - the kernel image itself, 1MB..get_kernel_end() (linker64.ld)
 //   - the multiboot info structure GRUB left behind, still being read
+//   - the multiboot modules GRUB loaded alongside the kernel, reserved
+//     after TmpFS.init() records their physical ranges
 //   - the linear framebuffer (fb.llpl's Framebuffer.addr, if it landed in
 //     ordinary RAM rather than separate PCI MMIO space)
 //
@@ -109,6 +111,13 @@ namespace PageAlloc {
             }
             p = p + 1
         }
+    }
+
+    func reserve_range(start: uint, end: uint) {
+        let flags: uint = HAL.spinlock_acquire(&lock)
+        defer HAL.spinlock_release(&lock, flags)
+
+        mark_reserved(start, end)
     }
 
     // multiboot2 memory map tag (type 6): a header giving entry_size (the

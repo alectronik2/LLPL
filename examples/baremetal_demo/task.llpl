@@ -1,41 +1,19 @@
 // Preemptive multitasking: a minimal round-robin scheduler driven by the
 // timer interrupt (IRQ0).
 //
-// Every task gets its own dedicated stack (from KHeap) and always runs in
-// ring 0 - there's no user mode in this kernel, so unlike a "real" OS
-// there's no need for a second per-task kernel stack or a TSS.RSP0 switch:
-// the CPU never changes privilege level on interrupt entry here, so it
-// just keeps using whatever stack was already active. That's also why a
-// task doesn't need to explicitly yield to be preempted: the timer forces
-// a switch whether the running task cooperates or not (unlike a
-// cooperative scheduler, a task stuck in `while true {}` with no `HAL.halt()`
-// or blocking call is still preempted on schedule).
-//
-// The switch itself happens in boot64.asm (timer_isr_entry/start_first_task)
-// rather than as an LLPL `interrupt func`: GCC's __attribute__((interrupt))
-// generates its own fixed prologue/epilogue around a fixed stack, giving no
-// way to swap RSP out from under it mid-handler and iretq from a *different*
-// stack than the one the interrupt arrived on - exactly what a context
-// switch needs to do. So the actual register save/restore is hand-written
-// NASM; only the scheduling *decision* (which task runs next) is LLPL,
-// called from that asm as schedule_next(current_rsp) -> next_rsp.
-//
-// Tasks live in a *circular* singly-linked list threaded through each
-// task's own stack allocation (its TCB sits at the very bottom of the
-// block KHeap hands back, the same "header lives in the memory it
-// describes" trick kheap.llpl's own arenas use) - there's no fixed-size
-// task-table array, so spawn() has no built-in cap; it only ever fails if
-// the heap itself is out of memory. Circular (the last task's `next`
-// points back to the first) rather than plain singly-linked so
-// schedule_next() can move to "whichever task comes after this one" in
-// O(1) - just follow `.next` - instead of walking the whole list every
-// tick to find the current task and figure out what's after it.
+// Kernel tasks continue to share the boot-time page tables and run in ring 0.
+// User tasks run in ring 3 with their own page tables; the timer and syscall
+// gates use the TSS IST stack for safe ring-3 entry.
 
 import hal
 import kheap
+import vmm
 
 namespace Task {
     const STACK_SIZE = 16384 // 16KB per task, matching the original boot stack
+
+    const STATE_ALIVE = 0
+    const STATE_DEAD  = 1
 
     // Implemented in boot64.asm. timer_isr_entry is IDT gate 32's actual
     // handler (see IDT.init() in idt.llpl); start_first_task is called
@@ -45,21 +23,13 @@ namespace Task {
     // been preempted mid-execution - the same code resumes either one.
     extern func timer_isr_entry() -> void
     extern func start_first_task(rsp: uint) -> void
+    extern func set_tss_rsp0(rsp0: uint) -> void
 
-    // Mirrors exactly what timer_isr_entry pushes, in the order it pushes
-    // them: rax is pushed first, ending up furthest from the top of stack;
-    // r15 is pushed last, ending up at the very top (lowest address, hence
-    // the first field here) - then the five words the CPU itself pushes for
-    // *every* interrupt in 64-bit mode.
-    //
-    // Unlike legacy 32-bit mode (where a same-privilege interrupt only
-    // pushes RFLAGS/CS/RIP, skipping SS/RSP), long mode *always* pushes a
-    // full RIP/CS/RFLAGS/RSP/SS frame and iretq always pops all five,
-    // privilege change or not - a real x86-64 gotcha, easy to miss since
-    // GCC's __attribute__((interrupt)) (every other ISR in this kernel)
-    // handles it invisibly. Get this wrong and iretq reads garbage for
-    // RSP/SS - a bogus SS value is a textbook #GP fault, which is exactly
-    // what omitting these two fields caused here originally.
+    // Mirrors exactly what timer_isr_entry/syscall_isr_entry push, in the
+    // order they push them: rax is pushed first, ending up furthest from the
+    // top of stack; r15 is pushed last, ending up at the very top (lowest
+    // address) - then the five words the CPU itself pushes for every
+    // 64-bit interrupt (SS, RSP, RFLAGS, CS, RIP).
     packed struct TrapFrame {
         let r15: uint
         let r14: uint
@@ -90,44 +60,112 @@ namespace Task {
     // registry of any fixed size is needed.
     packed struct TCB {
         let saved_rsp: uint
-        let stack_base: uint // == this TCB's own address; diagnostics only
+        let stack_base: uint       // == this TCB's own address; diagnostics only
         let id: int
-        let next: uint       // address of the next task's TCB
+        let next: uint             // address of the next task's TCB
+        let state: int
+        let pml4: uint             // 0 means use the kernel's boot page table
+        let aspace: VMM.AddressSpace*
+        let kernel_stack_top: uint // stack used for ring-3 interrupts / syscalls
     }
-
-    const TCB_SIZE = 32 // sizeof(TCB): four 8-byte fields
 
     let first_task: uint = 0 // 0 = no tasks spawned yet
     let last_task: uint = 0  // so spawn() can extend the list in O(1)
     let current_task: uint = 0
     let task_count: int = 0
+    let next_task_id: int = 0
     let scheduling_enabled: bool = false
 
-    // Creates a new task ready to run `entry`, a plain `func() -> void`
-    // referenced by bare (or namespace-qualified) name rather than called -
-    // e.g. `Task.spawn(my_task as uint)` - which is how LLPL hands out a
-    // function's address (a bare/qualified function reference resolves to
-    // its C name, which decays to a pointer; see codegen.d's Identifier and
-    // MemberExpr handling). Returns the new task's id, or -1 if the heap is
-    // out of memory - there's no other way for this to fail, unlike the
-    // fixed-size task table this replaced.
-    func spawn(entry: uint) -> int {
-        let block: uint = KHeap.kmalloc(STACK_SIZE)
-        if block == 0 {
-            return -1
+    func get_current_pml4() -> uint {
+        if current_task == 0 {
+            return VMM.kernel_pml4
+        }
+        let cur: TCB* = current_task as TCB*
+        if cur.pml4 == 0 {
+            return VMM.kernel_pml4
+        }
+        return cur.pml4
+    }
+
+    func get_current_aspace() -> VMM.AddressSpace* {
+        if current_task == 0 {
+            return null
+        }
+        let cur: TCB* = current_task as TCB*
+        return cur.aspace
+    }
+
+    func is_current_dead() -> bool {
+        if current_task == 0 {
+            return false
+        }
+        let cur: TCB* = current_task as TCB*
+        return cur.state == STATE_DEAD
+    }
+
+    func exit_current() {
+        if current_task == 0 {
+            return
+        }
+        let cur: TCB* = current_task as TCB*
+        cur.state = STATE_DEAD
+    }
+
+    func switch_cr3_to_task(tcb: TCB*) {
+        let target: uint = tcb.pml4
+        if target == 0 {
+            target = VMM.kernel_pml4
+        }
+        if target != VMM.get_cr3() {
+            VMM.set_cr3(target)
+        }
+    }
+
+    func switch_tss_rsp0(tcb: TCB*) {
+        set_tss_rsp0(tcb.kernel_stack_top)
+    }
+
+    // Called from syscall_isr_entry when the current user task has exited.
+    // Removes the dead task from the circular list, switches to the next
+    // alive task, and returns that task's saved RSP. No EOI is sent here
+    // because this is not a hardware interrupt.
+    func pick_next(rsp: uint) -> uint {
+        if current_task == 0 {
+            return rsp
         }
 
-        let tcb: TCB* = block as TCB*
+        let cur: TCB* = current_task as TCB*
+        cur.saved_rsp = rsp
 
-        // The fake initial frame goes at the *top* of the block (the
-        // highest address - stacks grow down), so the very first pop
-        // sequence in timer_isr_entry/start_first_task reads it exactly
-        // like it would read a real preempted task's saved frame. The TCB
-        // at the bottom (TCB_SIZE bytes) trims the usable stack by a
-        // negligible amount relative to STACK_SIZE.
-        let stack_top: uint = block + STACK_SIZE
-        let frame_addr: uint = stack_top - TRAP_FRAME_SIZE
-        let frame: TrapFrame* = frame_addr as TrapFrame*
+        // Single task in the list: give up and return the same frame.
+        if cur.next == current_task {
+            current_task = 0
+            scheduling_enabled = false
+            return rsp
+        }
+
+        // Find the predecessor of the current task so we can unlink it.
+        let prev: TCB* = cur
+        while (prev.next as TCB*).next != current_task {
+            prev = prev.next as TCB*
+        }
+        prev.next = cur.next
+        if current_task == first_task {
+            first_task = cur.next
+        }
+        if current_task == last_task {
+            last_task = prev as uint
+        }
+        task_count = task_count - 1
+
+        current_task = cur.next
+        let next: TCB* = current_task as TCB*
+        switch_cr3_to_task(next)
+        switch_tss_rsp0(next)
+        return next.saved_rsp
+    }
+
+    func init_frame(frame: TrapFrame*, entry: uint, stack_top: uint, cs: uint, ss: uint) {
         frame.r15 = 0
         frame.r14 = 0
         frame.r13 = 0
@@ -144,26 +182,83 @@ namespace Task {
         frame.rbx = 0
         frame.rax = 0
         frame.rip = entry
-        frame.cs = 0x08      // kernel code selector - see GDT.init()
+        frame.cs = cs
         frame.rflags = 0x202 // IF (bit 9) set, plus the always-set bit 1
-        frame.rsp = stack_top // the task's real, live RSP once it's running -
-                               // nothing meaningful below it yet, so it
-                               // starts at the very top of its stack, the
-                               // same way long_mode_entry (boot64.asm) sets
-                               // up the original boot stack
-        frame.ss = 0x10       // kernel data selector - see GDT.init()
+        frame.rsp = stack_top
+        frame.ss = ss
+    }
+
+    // Creates a new kernel task ready to run `entry`, a plain `func() -> void`
+    // referenced by bare name. Returns the new task's id, or -1 if the heap is
+    // out of memory.
+    func spawn(entry: uint) -> int {
+        let block: uint = KHeap.kmalloc(STACK_SIZE)
+        if block == 0 {
+            return -1
+        }
+
+        let tcb: TCB* = block as TCB*
+        let stack_top: uint = block + STACK_SIZE
+        let frame_addr: uint = stack_top - TRAP_FRAME_SIZE
+        let frame: TrapFrame* = frame_addr as TrapFrame*
+        init_frame(frame, entry, stack_top, 0x08, 0x10)
 
         tcb.saved_rsp = frame_addr
         tcb.stack_base = block
-        tcb.id = task_count
+        tcb.id = next_task_id
+        tcb.state = STATE_ALIVE
+        tcb.pml4 = 0
+        tcb.aspace = null
+        tcb.kernel_stack_top = stack_top
+        next_task_id = next_task_id + 1
 
         if first_task == 0 {
-            tcb.next = block // single-element cycle: points to itself
+            tcb.next = block
             first_task = block
         } else {
             let last: TCB* = last_task as TCB*
             last.next = block
-            tcb.next = first_task // close the cycle
+            tcb.next = first_task
+        }
+        last_task = block
+
+        task_count = task_count + 1
+        return tcb.id
+    }
+
+    // Creates a new ring-3 user task starting at `entry` with its own
+    // address space. `stack_top` is the initial user-mode RSP.
+    func spawn_user(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*) -> int {
+        let block: uint = KHeap.kmalloc(STACK_SIZE)
+        if block == 0 {
+            return -1
+        }
+        if aspace == null {
+            return -1
+        }
+
+        let tcb: TCB* = block as TCB*
+        let kernel_stack_top: uint = block + STACK_SIZE
+        let frame_addr: uint = kernel_stack_top - TRAP_FRAME_SIZE
+        let frame: TrapFrame* = frame_addr as TrapFrame*
+        init_frame(frame, entry, stack_top, (0x18 as uint) | 3, (0x20 as uint) | 3)
+
+        tcb.saved_rsp = frame_addr
+        tcb.stack_base = block
+        tcb.id = next_task_id
+        tcb.state = STATE_ALIVE
+        tcb.pml4 = aspace.pml4
+        tcb.aspace = aspace
+        tcb.kernel_stack_top = kernel_stack_top
+        next_task_id = next_task_id + 1
+
+        if first_task == 0 {
+            tcb.next = block
+            first_task = block
+        } else {
+            let last: TCB* = last_task as TCB*
+            last.next = block
+            tcb.next = first_task
         }
         last_task = block
 
@@ -172,11 +267,7 @@ namespace Task {
     }
 
     // Called from timer_isr_entry (boot64.asm) with the just-preempted
-    // task's stack pointer; returns the stack pointer to resume - the
-    // *same* one, unchanged, if scheduling hasn't started yet (so this is
-    // a safe no-op, identical to the plain tick-counting ISR it replaced,
-    // right up until start() is called), or the next task's in round-robin
-    // order otherwise.
+    // task's stack pointer; returns the stack pointer to resume.
     func schedule_next(rsp: uint) -> uint {
         HAL.Pic.send_eoi(0)
         timer_ticks = timer_ticks + 1
@@ -187,12 +278,21 @@ namespace Task {
 
         let cur: TCB* = current_task as TCB*
         cur.saved_rsp = rsp
-        current_task = cur.next
+
+        // Advance to the next alive task, skipping any dead ones.
+        let nxt: uint = cur.next
+        while (nxt as TCB*).state == STATE_DEAD {
+            nxt = (nxt as TCB*).next
+        }
+        current_task = nxt
+
         let next: TCB* = current_task as TCB*
+        switch_cr3_to_task(next)
+        switch_tss_rsp0(next)
         return next.saved_rsp
     }
 
-    // The running task's id, or -1 before start() (nothing's running yet).
+    // The running task's id, or -1 before start().
     func current_id() -> int {
         if current_task == 0 {
             return -1
@@ -202,10 +302,7 @@ namespace Task {
     }
 
     // Switches from plain boot-time execution to the task list - never
-    // returns. Everything running up to this call (kernel_main, and
-    // whatever it called) simply stops existing: its stack is abandoned,
-    // the same way a process image vanishes into an exec(). Must be called
-    // with at least one task already spawn()ed.
+    // returns. Must be called with at least one task already spawned.
     func start() {
         if first_task == 0 {
             return
@@ -213,6 +310,8 @@ namespace Task {
         scheduling_enabled = true
         current_task = first_task
         let first: TCB* = first_task as TCB*
+        switch_cr3_to_task(first)
+        switch_tss_rsp0(first)
         start_first_task(first.saved_rsp)
     }
 }

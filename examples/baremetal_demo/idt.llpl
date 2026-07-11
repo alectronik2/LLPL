@@ -79,15 +79,21 @@ namespace IDT {
     let entries: Entry[256]
     let pointer: Pointer
 
+    extern func syscall_isr_entry() -> void
+
     // flags: 0x8E = present, ring 0, 64-bit interrupt gate.
-    func set_gate(vector: int, handler_addr: uint, selector: uint, flags: char) {
+    func set_gate_ist(vector: int, handler_addr: uint, selector: uint, flags: char, ist: char) {
         entries[vector].offset_low = (handler_addr & 0xFFFF) as uint16
         entries[vector].selector = selector as uint16
-        entries[vector].ist = 0
+        entries[vector].ist = ist
         entries[vector].type_attr = flags
         entries[vector].offset_mid = ((handler_addr >> 16) & 0xFFFF) as uint16
         entries[vector].offset_high = ((handler_addr >> 32) & 0xFFFFFFFF) as uint32
         entries[vector].zero = 0
+    }
+
+    func set_gate(vector: int, handler_addr: uint, selector: uint, flags: char) {
+        set_gate_ist(vector, handler_addr, selector, flags, 0)
     }
 
     func init() {
@@ -99,13 +105,14 @@ namespace IDT {
         set_gate(3, isr_breakpoint as uint, 0x08, 0x8E)
         set_gate(13, isr_general_protection as uint, 0x08, 0x8E)
         set_gate(14, isr_page_fault as uint, 0x08, 0x8E)
-        // IRQ0 after PIC remap - a hand-written asm entry point (task.llpl/
-        // boot64.asm), not an `interrupt func` like the others: preemptive
-        // task switching needs to iretq from a *different* stack than the
-        // one the interrupt arrived on, which attribute((interrupt))'s
-        // fixed prologue/epilogue can't do. See Task.timer_isr_entry.
+        // IRQ0 after PIC remap - hand-written asm entry point. Ring-3 entries
+        // use the per-task RSP0 kernel stack set by the scheduler.
         set_gate(32, Task.timer_isr_entry as uint, 0x08, 0x8E)
         set_gate(33, isr_keyboard as uint, 0x08, 0x8E) // IRQ1 after PIC remap
+
+        // System call vector: DPL=3 so user `int 0x80` can use it. It runs on
+        // the current task's RSP0 kernel stack.
+        set_gate(0x80, syscall_isr_entry as uint, 0x08, 0xEE)
 
         pointer.limit = (256 * 16) - 1
         pointer.base = entries as uint

@@ -1,0 +1,57 @@
+// System-call dispatcher for ring-3 tasks.
+//
+// ABI: user puts the syscall number in RAX and up to three arguments in
+// RDI, RSI, RDX, then executes `int 0x80`. The return value comes back in
+// RAX. The low-level entry point lives in boot64.asm (syscall_isr_entry)
+// because GCC's attribute((interrupt)) doesn't give us access to the
+// interrupted register frame.
+
+import hal
+import task
+import vmm
+
+namespace Syscall {
+    const SYS_EXIT  = 0
+    const SYS_PRINT = 1
+    const SYS_MMAP  = 2
+
+    func dispatch(number: uint, a: uint, b: uint, c: uint) -> uint {
+        if number == SYS_EXIT {
+            Task.exit_current()
+            return 0
+        }
+        if number == SYS_PRINT {
+            return sys_print(a, b)
+        }
+        if number == SYS_MMAP {
+            return sys_mmap(a, b, c)
+        }
+        return 0
+    }
+
+    func sys_print(buf: uint, len: uint) -> uint {
+        let pml4: uint = Task.get_current_pml4()
+        let i: uint = 0
+        while i < len {
+            let page: uint = VMM.virt_to_phys(pml4, buf + i)
+            if page == 0 {
+                break
+            }
+            let ptr: char* = page as char*
+            let offset: uint = (buf + i) & 0xFFF
+            HAL.Serial.write_char(ptr[offset])
+            i = i + 1
+        }
+        return i
+    }
+
+    func sys_mmap(virt_hint: uint, pages: uint, flags: uint) -> uint {
+        let aspace: VMM.AddressSpace* = Task.get_current_aspace()
+        if aspace == null {
+            return 0
+        }
+        // Hint addresses are ignored in this demo; the allocator hands out
+        // consecutive pages starting at USER_MMAP_BASE.
+        return VMM.mmap(aspace, pages)
+    }
+}
