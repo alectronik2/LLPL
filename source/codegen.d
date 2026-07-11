@@ -53,6 +53,7 @@ class CodeGenerator {
     private StructDecl[string] structRegistry; // Structs, by mangled (namespace-prefixed) name
     private MacroDecl[string] macroRegistry; // Macros, by mangled (namespace-prefixed) name
     private VarDecl[string] globalVarRegistry; // Global lets/consts (incl. enum members), by mangled name
+    private VariantInfo[string] variantRegistry; // Tagged-enum variant constructors, by mangled function name
     private Type[string] typeAliases; // Type aliases (`alias string = char*`), by mangled alias name
     private int macroExpansionDepth; // Guards against (possibly indirect) macro self-recursion
     private SymbolInfo[] collectedSymbols; // Declaration-site symbol table, built by generateMultiple; see symbols()
@@ -321,6 +322,87 @@ class CodeGenerator {
         return mangled(st.namespaceSegments, st.name);
     }
 
+    // Recorded per tagged-enum variant, keyed by its constructor's mangled
+    // function name (e.g. "Shape_Circle") - the same name a `case`
+    // pattern's callee resolves to (see tryResolveQualifiedPath), so
+    // generateMatch can recognize `case Shape.Circle(r)` as a destructuring
+    // pattern rather than a plain equality comparison against a call's
+    // result (which wouldn't even compile - see desugarTaggedEnum).
+    private struct VariantInfo {
+        string enumName; // mangled enum/struct name, e.g. "Shape"
+        string variantName; // e.g. "Circle"
+        int tag;
+        Parameter[] fields;
+    }
+
+    // Turns one tagged `enum Name { Variant(field: type, ...), ... }` into
+    // the plain declarations it actually compiles to: a struct (the union
+    // layout) plus one constructor function per variant. Returns them as a
+    // drop-in replacement for the EnumDecl in `prog.declarations` - see the
+    // call site in generateMultiple, which runs this before anything else
+    // (registries, forward declarations, ...) looks at the declaration
+    // list, so every later pass sees only StructDecl/FunctionDecl, exactly
+    // as if this had been hand-written.
+    //
+    // The struct is "flat", not a real C union: every variant's fields all
+    // live in the same struct, each prefixed with its variant's name
+    // (`Circle_radius`, `Rect_width`, `Rect_height`, ...) to keep two
+    // variants that happen to share a field name (`Circle(x: uint)` vs
+    // `Rect(x: uint)`) from colliding. This wastes some space compared to a
+    // real tagged union (every instance carries every variant's fields,
+    // not just the active one's), traded for not needing C's anonymous-
+    // union syntax at all - simpler to generate correctly, and consistent
+    // with this compiler's general preference for straightforward codegen
+    // over maximally compact output (see e.g. KHeap's arena design).
+    private ASTNode[] desugarTaggedEnum(EnumDecl enumDecl) {
+        VarDecl[] structFields;
+        structFields ~= new VarDecl("tag", new Type("int"), null, false, enumDecl.line, enumDecl.column);
+        foreach (variant; enumDecl.variants) {
+            foreach (field; variant.fields) {
+                structFields ~= new VarDecl(format("%s_%s", variant.name, field.name), field.type,
+                    null, false, variant.line, variant.column);
+            }
+        }
+        auto structDecl = new StructDecl(enumDecl.name, structFields, false, enumDecl.line, enumDecl.column);
+        structDecl.namespaceSegments = enumDecl.namespaceSegments;
+
+        ASTNode[] result = [structDecl];
+        string mangledEnumName = mangled(enumDecl.namespaceSegments, enumDecl.name);
+
+        foreach (i, variant; enumDecl.variants) {
+            auto resultType = new Type(enumDecl.name);
+
+            ASTNode[] bodyStmts;
+            bodyStmts ~= new VarDecl("__enum_result", resultType, null, false, variant.line, variant.column);
+            bodyStmts ~= new ExprStmt(new BinaryExpr("=",
+                new MemberExpr(new Identifier("__enum_result", variant.line, variant.column), "tag",
+                    variant.line, variant.column),
+                new IntLiteral(cast(int)i, variant.line, variant.column), variant.line, variant.column));
+            foreach (field; variant.fields) {
+                bodyStmts ~= new ExprStmt(new BinaryExpr("=",
+                    new MemberExpr(new Identifier("__enum_result", variant.line, variant.column),
+                        format("%s_%s", variant.name, field.name), variant.line, variant.column),
+                    new Identifier(field.name, variant.line, variant.column), variant.line, variant.column));
+            }
+            bodyStmts ~= new ReturnStmt(new Identifier("__enum_result", variant.line, variant.column));
+
+            auto ctor = new FunctionDecl(variant.name, variant.fields, resultType, new Block(bodyStmts),
+                false, false, false, variant.line, variant.column);
+            // Namespaced as if declared inside `namespace EnumName { ... }`,
+            // so it mangles to e.g. "Shape_Circle" and `Shape.Circle(...)`
+            // resolves to it via the same qualified-call machinery any
+            // other `Namespace.function(...)` call already uses.
+            ctor.namespaceSegments = enumDecl.namespaceSegments ~ enumDecl.name;
+            result ~= ctor;
+
+            string mangledCtorName = mangledEnumName ~ "_" ~ variant.name;
+            variantRegistry[mangledCtorName] =
+                VariantInfo(mangledEnumName, variant.name, cast(int)i, variant.fields);
+        }
+
+        return result;
+    }
+
     // Recursively hoists the contents of `namespace` blocks to the top level,
     // stamping each contained function/class/struct/global with the full
     // chain of enclosing namespace names (innermost last).
@@ -338,6 +420,9 @@ class CodeGenerator {
             } else if (auto structDecl = cast(StructDecl)decl) {
                 structDecl.namespaceSegments = segments;
                 result ~= structDecl;
+            } else if (auto enumDecl = cast(EnumDecl)decl) {
+                enumDecl.namespaceSegments = segments;
+                result ~= enumDecl;
             } else if (auto varDecl = cast(VarDecl)decl) {
                 varDecl.namespaceSegments = segments;
                 result ~= varDecl;
@@ -361,6 +446,25 @@ class CodeGenerator {
         // before anything else looks at prog.declarations.
         foreach (prog; programs) {
             prog.declarations = flattenNamespaces(prog.declarations, []);
+        }
+
+        // Desugar tagged enums into the struct + constructor functions they
+        // actually compile to (see desugarTaggedEnum) - also before anything
+        // else looks at prog.declarations, so every later pass (registries,
+        // forward declarations, ...) sees only StructDecl/FunctionDecl and
+        // needs no EnumDecl-specific handling of its own. Plain (non-tagged)
+        // enums never produce an EnumDecl in the first place - the parser
+        // desugars those directly into a namespace of int consts.
+        foreach (prog; programs) {
+            ASTNode[] withEnumsDesugared;
+            foreach (decl; prog.declarations) {
+                if (auto enumDecl = cast(EnumDecl)decl) {
+                    withEnumsDesugared ~= desugarTaggedEnum(enumDecl);
+                } else {
+                    withEnumsDesugared ~= decl;
+                }
+            }
+            prog.declarations = withEnumsDesugared;
         }
 
         // Register functions, classes and structs from all modules up front so
@@ -1596,6 +1700,81 @@ class CodeGenerator {
         foreach (matchCase; matchStmt.cases) {
             if (matchCase.patterns.length == 0) {
                 defaultBody = matchCase.body_;
+                continue;
+            }
+
+            // A single pattern shaped like a call whose callee is a known
+            // tagged-enum variant constructor - e.g. `case Shape.Circle(r)`
+            // - destructures instead of comparing by equality (comparing a
+            // constructed value by `==` wouldn't compile anyway; C has no
+            // whole-struct `==`). Multiple comma-separated patterns never
+            // trigger this - each variant can have different fields, so
+            // there'd be no single set of bindings to give the shared body.
+            VariantInfo* variant = null;
+            CallExpr variantCall = null;
+            if (matchCase.patterns.length == 1) {
+                if (auto callExpr = cast(CallExpr)matchCase.patterns[0]) {
+                    if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
+                        string qualifiedName =
+                            tryResolveQualifiedPath(memberCallee, (n) => (n in functionRegistry) !is null);
+                        if (qualifiedName.length > 0) {
+                            if (auto found = qualifiedName in variantRegistry) {
+                                variant = found;
+                                variantCall = callExpr;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (variant !is null) {
+                if (variant.enumName != subjectType.name) {
+                    throw new CompileError(
+                        format("This pattern is for enum '%s', but the match subject has type '%s'",
+                            variant.enumName, subjectType.name),
+                        currentModulePath, matchCase.patterns[0].line, matchCase.patterns[0].column);
+                }
+                if (variantCall.args.length != variant.fields.length) {
+                    throw new CompileError(
+                        format("'%s' has %d field(s), but this pattern binds %d",
+                            variant.variantName, variant.fields.length, variantCall.args.length),
+                        currentModulePath, matchCase.patterns[0].line, matchCase.patterns[0].column);
+                }
+
+                code ~= indent() ~ format("%s (%s.tag == %d) {\n", first ? "if" : "} else if",
+                    tmpName, variant.tag);
+                first = false;
+                indentLevel++;
+
+                string[] boundNames;
+                foreach (i, arg; variantCall.args) {
+                    auto bindIdent = cast(Identifier)arg;
+                    if (bindIdent is null) {
+                        throw new CompileError(
+                            "Tagged-enum patterns can only bind a plain name per field - " ~
+                            "no literals or nested expressions",
+                            currentModulePath, arg.line, arg.column);
+                    }
+                    string fieldName = format("%s_%s", variant.variantName, variant.fields[i].name);
+                    variableTypes[bindIdent.name] = variant.fields[i].type;
+                    boundNames ~= bindIdent.name;
+                    code ~= indent() ~ format("%s %s = %s.%s;\n",
+                        typeToC(variant.fields[i].type), bindIdent.name, tmpName, fieldName);
+                }
+
+                foreach (stmt; matchCase.body_.statements) {
+                    code ~= generateStatement(stmt, isDeferred);
+                }
+
+                // Bindings are only valid inside this arm's own body - see
+                // generateConstructor's matching comment on why leaking a
+                // bare name into variableTypes indefinitely is a real bug,
+                // not just tidiness.
+                foreach (boundName; boundNames) {
+                    variableTypes.remove(boundName);
+                }
+
+                indentLevel--;
                 continue;
             }
 

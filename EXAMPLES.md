@@ -171,6 +171,85 @@ func clamp(value: int, min: int, max: int) -> int {
 }
 ```
 
+## Enums and Pattern Matching
+
+### Plain Enums
+
+A bare `enum` is sugar for a namespace of auto-incrementing int constants -
+`EnumName.MEMBER` resolves just like any other namespaced value:
+
+```swift
+enum Color {
+    RED,
+    GREEN,
+    BLUE = 10,
+    YELLOW // continues from 11
+}
+
+func main() -> int {
+    let c: int = Color.BLUE
+    return c
+}
+```
+
+### Tagged Enums (Sum Types)
+
+Give any member a `(field: type, ...)` list and the whole `enum` becomes a
+tagged union instead: each variant can carry its own, independently-typed
+data. A variant is always constructed by calling it - `Shape.Circle(3)`,
+or `Shape.Triangle()` for a zero-field variant - never as a bare value.
+
+```swift
+enum Shape {
+    Circle(radius: int),
+    Rectangle(width: int, height: int),
+    Triangle(base: int, height: int)
+}
+```
+
+`match` destructures a tagged enum with `case EnumName.Variant(binding,
+...)`, binding each field to a fresh name for that case's body - see
+`test/tagged_enums_demo.llpl` for the full runnable version this is taken
+from:
+
+```swift
+func area(s: Shape) -> int {
+    match s {
+        case Shape.Circle(radius) => {
+            return 3 * radius * radius
+        }
+        case Shape.Rectangle(width, height) => {
+            return width * height
+        }
+        case Shape.Triangle(base, height) => {
+            return (base * height) / 2
+        }
+    }
+    return -1 // unreachable - every variant is handled above
+}
+```
+
+A tagged enum is a natural fit for error handling too - a `Result`-style
+type where the error case carries its own message:
+
+```swift
+enum Result {
+    Ok(value: int),
+    Err(message: char*)
+}
+
+func safe_divide(a: int, b: int) -> Result {
+    if b == 0 {
+        return Result.Err("division by zero")
+    }
+    return Result.Ok(a / b)
+}
+```
+
+A destructuring `case` and an ordinary equality `case` (string/int
+literals, as elsewhere in this doc) can appear in the same `match`, and
+`default` still works as the catch-all for either.
+
 ## Macros
 
 ### Quote and Unquote

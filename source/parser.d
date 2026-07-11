@@ -208,49 +208,123 @@ class Parser {
         return new NamespaceDecl(name, declarations, startLine, startColumn);
     }
 
-    // `enum Name[: Type] { A[, B = value]*, }` desugars straight into a
-    // NamespaceDecl of const VarDecls with auto-incrementing IntLiteral
-    // values (C enum semantics: an explicit value resumes auto-increment
-    // from there). This reuses every bit of the existing namespace/const
-    // machinery in the code generator, so enums need zero new codegen -
-    // `EnumName.MEMBER` resolves exactly like any other namespaced const.
-    private NamespaceDecl enumDecl() {
+    // Two forms share the `enum` keyword, disambiguated by whether *any*
+    // member uses `Name(field: type, ...)`:
+    //
+    //   - Plain: `enum Name[: Type] { A[, B = value]*, }` desugars straight
+    //     into a NamespaceDecl of const VarDecls with auto-incrementing
+    //     IntLiteral values (C enum semantics: an explicit value resumes
+    //     auto-increment from there). This reuses every bit of the existing
+    //     namespace/const machinery in the code generator, so plain enums
+    //     need zero codegen of their own - `EnumName.MEMBER` resolves
+    //     exactly like any other namespaced const, unchanged since before
+    //     tagged enums existed.
+    //   - Tagged: `enum Name { Variant(field: type, ...), Other, ... }` - a
+    //     real sum type, where each variant can carry its own data. Parses
+    //     into an EnumDecl (variant field lists reuse paramList(), the same
+    //     parser a function's parameter list uses); codegen.d's
+    //     desugarTaggedEnum does the actual work of turning that into a
+    //     struct and per-variant constructor functions, and generateMatch
+    //     recognizes `case Name.Variant(binding, ...)` as a destructuring
+    //     pattern against that encoding.
+    //
+    // Every member is parsed the same way up front regardless of which
+    // form this turns out to be - only once the whole member list is in
+    // hand (specifically, only once *a* member's parens are seen) does it
+    // become clear which desugaring applies, so an early member can't
+    // commit to being a plain int constant before a later one reveals this
+    // is actually a tagged enum.
+    private ASTNode enumDecl() {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Enum);
         string name = expect(TokenType.Identifier).value;
 
         Type backingType = new Type("int");
+        bool hasExplicitBackingType = false;
         if (match(TokenType.Colon)) {
             backingType = parseType();
+            hasExplicitBackingType = true;
         }
 
         expect(TokenType.LeftBrace);
 
-        ASTNode[] members;
-        long nextValue = 0;
+        string[] memberNames;
+        int[] memberLines;
+        int[] memberColumns;
+        Parameter[][] memberFields; // empty (not null) when a member has no `(...)`
+        bool[] memberHasFields;
+        bool[] memberHasValue;
+        long[] memberValues;
+        bool isTagged = false;
+
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
             int memberLine = current.line;
             int memberColumn = current.column;
             string memberName = expect(TokenType.Identifier).value;
 
-            long value = nextValue;
-            if (match(TokenType.Assign)) {
+            Parameter[] fields;
+            bool hasFields = false;
+            bool hasValue = false;
+            long value = 0;
+
+            if (match(TokenType.LeftParen)) {
+                isTagged = true;
+                hasFields = true;
+                bool isVariadic;
+                fields = paramList(isVariadic);
+                if (isVariadic) {
+                    error("Tagged enum variants can't be variadic");
+                }
+                expect(TokenType.RightParen);
+            } else if (match(TokenType.Assign)) {
                 bool negative = match(TokenType.Minus);
+                hasValue = true;
                 value = parseIntegerValue(expect(TokenType.Integer).value);
                 if (negative) value = -value;
             }
-            nextValue = value + 1;
 
-            Type memberType = new Type(backingType.name, backingType.isPointer,
-                backingType.isArray, backingType.arraySize);
-            members ~= new VarDecl(memberName, memberType, new IntLiteral(value, memberLine, memberColumn),
-                true, memberLine, memberColumn);
+            memberNames ~= memberName;
+            memberLines ~= memberLine;
+            memberColumns ~= memberColumn;
+            memberFields ~= fields;
+            memberHasFields ~= hasFields;
+            memberHasValue ~= hasValue;
+            memberValues ~= value;
 
             if (!match(TokenType.Comma)) break;
         }
 
         expect(TokenType.RightBrace);
+
+        if (isTagged) {
+            if (hasExplicitBackingType) {
+                errorAt(startLine, startColumn,
+                    "Tagged enum variants can't have an explicit backing type (':Type') - " ~
+                    "the discriminant is always a plain int");
+            }
+            EnumVariant[] variants;
+            foreach (i, memberName; memberNames) {
+                if (memberHasValue[i]) {
+                    errorAt(memberLines[i], memberColumns[i],
+                        "Tagged enum variants can't have an explicit '= value' - tags are " ~
+                        "assigned automatically in declaration order");
+                }
+                variants ~= new EnumVariant(memberName, memberFields[i], memberLines[i], memberColumns[i]);
+            }
+            return new EnumDecl(name, variants, startLine, startColumn);
+        }
+
+        ASTNode[] members;
+        long nextValue = 0;
+        foreach (i, memberName; memberNames) {
+            long value = memberHasValue[i] ? memberValues[i] : nextValue;
+            nextValue = value + 1;
+            Type memberType = new Type(backingType.name, backingType.isPointer,
+                backingType.isArray, backingType.arraySize);
+            members ~= new VarDecl(memberName, memberType, new IntLiteral(value, memberLines[i], memberColumns[i]),
+                true, memberLines[i], memberColumns[i]);
+        }
         return new NamespaceDecl(name, members, startLine, startColumn);
     }
 

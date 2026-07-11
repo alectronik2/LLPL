@@ -11,6 +11,7 @@ enum NodeType {
     FunctionDecl,
     ClassDecl,
     StructDecl,
+    EnumDecl,
     VarDecl,
     IfStmt,
     WhileStmt,
@@ -276,6 +277,47 @@ class StructDecl : ASTNode {
         this.name = name;
         this.fields = fields;
         this.packed = packed;
+    }
+}
+
+// One `Name(field: type, ...)` (or bare `Name`, zero fields) variant of a
+// tagged enum. Reuses `Parameter` for fields - a variant's field list is
+// parsed exactly like a function's parameter list (see parser.d's
+// enumDecl(), which calls the same paramList() a function declaration
+// does).
+class EnumVariant {
+    string name;
+    Parameter[] fields;
+    int line;
+    int column;
+
+    this(string name, Parameter[] fields, int line = 0, int column = 0) {
+        this.name = name;
+        this.fields = fields;
+        this.line = line;
+        this.column = column;
+    }
+}
+
+// `enum Name { Variant(field: type, ...), Other, ... }` - a tagged union
+// (sum type): each variant can carry its own, independently-typed data,
+// unlike a plain `enum` (still just a namespace of int consts, sugar
+// resolved entirely in the parser - this node never appears for that
+// form). codegen.d desugars this into a struct (a `tag` field plus every
+// variant's fields, flattened and name-prefixed to avoid clashes between
+// variants) and one constructor function per variant, then `match`
+// recognizes `case EnumName.Variant(binding, ...)` as a destructuring
+// pattern against that same encoding - see codegen.d's desugarTaggedEnum
+// and generateMatch.
+class EnumDecl : ASTNode {
+    string name;
+    EnumVariant[] variants;
+    string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+
+    this(string name, EnumVariant[] variants, int line = 0, int column = 0) {
+        super(NodeType.EnumDecl, line, column);
+        this.name = name;
+        this.variants = variants;
     }
 }
 

@@ -1,0 +1,271 @@
+// LLPL prelude.
+//
+// Always implicitly compiled in, ahead of everything else, regardless of
+// whether the entry file (or anything it imports) ever mentions this file
+// - see modules.d's resolveWithPrelude, which every entry point (the
+// `llpl` CLI, `llpl --lsp-symbols`) goes through.
+//
+// Keep this small and universally safe: everything here compiles into
+// *every* program, freestanding kernel or hosted alike, so nothing here
+// should assume a particular target (no VGA/HAL-specific stuff - that
+// belongs in a program's own modules, e.g. examples/baremetal_demo/hal.llpl).
+
+// A byte string. LLPL's type system has no way to write "pointer to const
+// data" (only whole-variable `const`), so this is just `char*` - a
+// readability alias, not a distinct type.
+alias string = char*
+
+alias u8 = char
+
+// Minimal printf-style formatter, always available without an `extern
+// func` declaration of your own. Backed by runtime/runtime.c; see that
+// file's header comment (runtime.h) for the exact contract - supported
+// specifiers, width/zero-pad, and why the parameter types are what they
+// are (they're chosen to exactly match what this declaration generates).
+extern func ksnprintf(buf: char*, size: uint, fmt: char*, ...) -> int
+
+// Heap-allocation and raw-buffer primitives String is built on - see
+// runtime.h's comment on why these are separate wrappers rather than
+// `extern func` redeclarations of libc-shaped strlen/strcmp/rc_alloc
+// themselves (same "conflicting types" trap as ksnprintf above).
+extern func llpl_strlen(s: char*) -> uint
+extern func llpl_strcmp(a: char*, b: char*) -> int
+extern func llpl_alloc(size: uint) -> char*
+extern func llpl_free(ptr: char*)
+extern func llpl_memcpy(dest: char*, src: char*, count: uint)
+
+// An owned, heap-allocated, NUL-terminated byte string - unlike `string`
+// (a bare `char*` alias with no ownership of its own), a String copies its
+// data in on construction and frees it on destruction, so it's safe to
+// build, pass around, and let go out of scope independent of whatever
+// buffer it was constructed from.
+//
+// Demonstrates LLPL's operator overloading (`func operator+(...)`, see
+// ast.operatorMethodName) end to end: `+` concatenates, `==`/`!=`/`<`/`>`
+// compare lexicographically (byte order, via llpl_strcmp), and `[]` reads
+// a byte by index (`func operator[](index: int) -> char` - LLPL has no
+// `operator[]=`, so mutation goes through `set()` instead). It also
+// implements the `foreach` iterator protocol (iter_has_next/iter_next/
+// iter_reset - see codegen.d's ITER_HAS_NEXT et al.), so `foreach let c in
+// s { ... }` walks a String one character at a time.
+//
+// Every method that takes another string takes it as `string` (`char*`),
+// not `String` - LLPL has no function/method overloading, so a single
+// parameter type has to serve both a raw literal (`s + "!"`) and another
+// String (`s + other.c_str()`).
+class String {
+    let buf: char*
+    let length: int
+    let iter_pos: int // foreach cursor - see iter_has_next/iter_next/iter_reset
+
+    constructor(s: string) {
+        self.length = llpl_strlen(s) as int
+        self.buf = llpl_alloc((self.length + 1) as uint)
+        llpl_memcpy(self.buf, s, (self.length + 1) as uint)
+        self.iter_pos = 0
+    }
+
+    destructor() {
+        llpl_free(self.buf)
+    }
+
+    func len() -> int {
+        return self.length
+    }
+
+    // The owned buffer as a plain `char*` - for passing a String to
+    // anything (print(), another String's methods, ...) that expects
+    // `string` rather than a String instance.
+    func c_str() -> string {
+        return self.buf
+    }
+
+    func operator[](index: int) -> char {
+        return self.buf[index]
+    }
+
+    // iter_reset is optional in the protocol, but String defines it so
+    // `foreach` over the same instance twice (or a loop re-entered after
+    // an earlier one ran to completion) starts from the beginning both
+    // times rather than seeing an already-exhausted cursor.
+    func iter_reset() {
+        self.iter_pos = 0
+    }
+
+    func iter_has_next() -> bool {
+        return self.iter_pos < self.length
+    }
+
+    func iter_next() -> char {
+        let c: char = self.buf[self.iter_pos]
+        self.iter_pos = self.iter_pos + 1
+        return c
+    }
+
+    func set(index: int, value: char) {
+        self.buf[index] = value
+    }
+
+    func operator==(other: string) -> bool {
+        return llpl_strcmp(self.buf, other) == 0
+    }
+
+    func operator!=(other: string) -> bool {
+        return !(self == other)
+    }
+
+    func operator<(other: string) -> bool {
+        return llpl_strcmp(self.buf, other) < 0
+    }
+
+    func operator>(other: string) -> bool {
+        return llpl_strcmp(self.buf, other) > 0
+    }
+
+    // Concatenation always allocates a fresh String (values, not shared
+    // mutable buffers) - `other`'s bytes are copied into a temporary
+    // buffer alongside `self`'s before handing it to `new String(...)`,
+    // which copies it again into its own owned storage. Two copies for
+    // one `+` is the price of String's single-argument constructor; simple
+    // and correct beats a second constructor form LLPL doesn't have.
+    func operator+(other: string) -> String {
+        let other_len: int = llpl_strlen(other) as int
+        let total: int = self.length + other_len
+        let joined: char* = llpl_alloc((total + 1) as uint)
+        llpl_memcpy(joined, self.buf, self.length as uint)
+        llpl_memcpy(joined + self.length, other, (other_len + 1) as uint)
+        return new String(joined)
+    }
+
+    // Clamps `start`/`count` into range rather than faulting on an
+    // out-of-bounds request - same "don't crash on bad input" spirit as
+    // the rest of String's bounds handling (operator[]/set() are the only
+    // unchecked, direct-access exceptions, matching plain array indexing).
+    func substring(start: int, count: int) -> String {
+        if start < 0 {
+            start = 0
+        }
+        if start > self.length {
+            start = self.length
+        }
+        let max_count: int = self.length - start
+        if count > max_count {
+            count = max_count
+        }
+        if count < 0 {
+            count = 0
+        }
+
+        let piece: char* = llpl_alloc((count + 1) as uint)
+        llpl_memcpy(piece, self.buf + start, count as uint)
+        piece[count] = 0
+        return new String(piece)
+    }
+
+    // First index of `needle`, or -1 if it doesn't occur. An empty needle
+    // matches at 0, mirroring most languages' find()/indexOf().
+    func find(needle: string) -> int {
+        let needle_len: int = llpl_strlen(needle) as int
+        if needle_len == 0 {
+            return 0
+        }
+        let i: int = 0
+        while i <= self.length - needle_len {
+            let j: int = 0
+            let matched: bool = true
+            while j < needle_len && matched {
+                if self.buf[i + j] != needle[j] {
+                    matched = false
+                }
+                j = j + 1
+            }
+            if matched {
+                return i
+            }
+            i = i + 1
+        }
+        return -1
+    }
+
+    func contains(needle: string) -> bool {
+        return self.find(needle) >= 0
+    }
+
+    func starts_with(prefix: string) -> bool {
+        let prefix_len: int = llpl_strlen(prefix) as int
+        if prefix_len > self.length {
+            return false
+        }
+        let i: int = 0
+        while i < prefix_len {
+            if self.buf[i] != prefix[i] {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    func ends_with(suffix: string) -> bool {
+        let suffix_len: int = llpl_strlen(suffix) as int
+        if suffix_len > self.length {
+            return false
+        }
+        let offset: int = self.length - suffix_len
+        let i: int = 0
+        while i < suffix_len {
+            if self.buf[offset + i] != suffix[i] {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    func to_upper() -> String {
+        let out: char* = llpl_alloc((self.length + 1) as uint)
+        let i: int = 0
+        while i < self.length {
+            let c: char = self.buf[i]
+            if c >= 97 && c <= 122 {
+                out[i] = ((c as int) - 32) as char
+            } else {
+                out[i] = c
+            }
+            i = i + 1
+        }
+        out[self.length] = 0
+        return new String(out)
+    }
+
+    func to_lower() -> String {
+        let out: char* = llpl_alloc((self.length + 1) as uint)
+        let i: int = 0
+        while i < self.length {
+            let c: char = self.buf[i]
+            if c >= 65 && c <= 90 {
+                out[i] = ((c as int) + 32) as char
+            } else {
+                out[i] = c
+            }
+            i = i + 1
+        }
+        out[self.length] = 0
+        return new String(out)
+    }
+
+    // Strips leading/trailing space, tab, '\n', and '\r'.
+    func trim() -> String {
+        let start: int = 0
+        while start < self.length && (self.buf[start] == 32 || self.buf[start] == 9 ||
+                self.buf[start] == 10 || self.buf[start] == 13) {
+            start = start + 1
+        }
+        let end: int = self.length
+        while end > start && (self.buf[end - 1] == 32 || self.buf[end - 1] == 9 ||
+                self.buf[end - 1] == 10 || self.buf[end - 1] == 13) {
+            end = end - 1
+        }
+        return self.substring(start, end - start)
+    }
+}
