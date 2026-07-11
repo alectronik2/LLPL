@@ -308,6 +308,85 @@ let doubler: (int) -> int = func(x: int) -> int {
 }
 ```
 
+## Generics
+
+A generic function, class, or struct takes a `<T, ...>` type-parameter
+list right after its name. A generic declaration is a template - it's
+never compiled directly; each concrete type it's actually used with gets
+its own real, fully-typed copy generated the first time that combination
+is seen (monomorphization, the same strategy C++ templates use):
+
+```swift
+func max_of<T>(a: T, b: T) -> T {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+struct Pair<A, B> {
+    let first: A
+    let second: B
+}
+
+func main() -> int {
+    let m: int = max_of(3, 7)      // T inferred as int - always from
+    let n: int = max_of(100, 42)   // arguments, never written explicitly
+    let p: Pair<int, int>
+    p.first = 1
+    p.second = 2
+    return 0
+}
+```
+
+A generic function's type parameters are always inferred from its
+arguments - there's no `identity<int>(5)` call syntax - so every type
+parameter must appear in at least one parameter's type; a generic
+class/struct, on the other hand, is always instantiated explicitly
+(`Pair<int, int>`, `new Vector<int>(...)`), since there's often nothing to
+infer it from at the point it's constructed.
+
+`sizeof(Type)` is available too (mainly for writing generic containers
+that need an element's byte size for allocation).
+
+### Generic Standard Library Containers
+
+`prelude.llpl` builds four generic containers on top of this - `Vector<T>`
+(a growable array), `Optional<T>`, `LinkedList<T>`, and `HashMap<K, V>` -
+available in every program without an import. See `test/generics_demo.llpl`
+for the full runnable version this is taken from:
+
+```swift
+func main() -> int {
+    let numbers: Vector<int> = new Vector<int>()
+    numbers.push(10)
+    numbers.push(20)
+
+    let maybe: Optional<int> = new Optional<int>()
+    maybe.set(99)
+    if maybe.is_some() {
+        let value: int = maybe.get()
+    }
+
+    let list: LinkedList<int> = new LinkedList<int>()
+    list.push_front(1)
+
+    let ages: HashMap<int, int> = new HashMap<int, int>()
+    ages.insert(1, 30)
+    let found: Optional<int> = ages.get(1) // HashMap.get() returns Optional<V>
+
+    return 0
+}
+```
+
+`HashMap<K, V>` is scoped to POD/fixed-size key types - it hashes and
+compares keys by their raw bytes, so a `char*` key works by pointer
+identity, not string content (see its doc comment in `prelude.llpl`).
+`Vector<T>` can't hold an explicitly-pointer element type (`Vector<char*>`)
+either, since that would need a real pointer-to-pointer C type this
+language's type system can't express - use a one-field wrapper struct
+around the pointer instead if you need that.
+
 ## Macros
 
 ### Quote and Unquote

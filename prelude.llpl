@@ -269,3 +269,305 @@ class String {
         return self.substring(start, end - start)
     }
 }
+
+// A dynamic, growable array - the generic analogue of manually managing an
+// `llpl_alloc`'d buffer + length + capacity by hand. `sizeof(T)` (see
+// codegen.d's SizeofExpr handling) is what makes this possible without any
+// element-type-specific code: since a generic class is monomorphized (a
+// real, fully-typed C copy generated per concrete T - see codegen.d's
+// instantiateGenericTypeArgs), `sizeof(T)` is a real compile-time constant
+// in every instantiation, exactly as if this had been hand-written per type.
+//
+// T may be a primitive (int, char, ...) or a class (Vector<SomeClass> just
+// stores references, like any other class field) - but NOT itself an
+// explicit pointer type (Vector<char*>, Vector<int*>, and so `Vector<string>`
+// since `string` is `char*`): this class's own `data: T*` field would need
+// a genuine pointer-to-pointer C type in that case, which ast.Type's
+// single `isPointer` flag has no way to represent (the same limitation
+// documented on resolveType's alias-merge logic). Wrap a pointer element
+// in a one-field struct if you need this (see HashBucket's use of exactly
+// that trick for HashMap's own bucket array).
+class Vector<T> {
+    let data: T*
+    let length: int
+    let capacity: int
+
+    constructor() {
+        self.length = 0
+        self.capacity = 4
+        self.data = llpl_alloc((self.capacity as uint) * sizeof(T)) as T*
+    }
+
+    destructor() {
+        // Frees the backing buffer only - a Vector<SomeClass> does not
+        // release its elements, the same "raw storage, no cascading
+        // ownership" behavior a plain T* array already has everywhere
+        // else in the language.
+        llpl_free(self.data as char*)
+    }
+
+    func push(item: T) {
+        if self.length >= self.capacity {
+            self.grow()
+        }
+        self.data[self.length] = item
+        self.length = self.length + 1
+    }
+
+    func grow() {
+        let new_capacity: int = self.capacity * 2
+        let new_data: T* = llpl_alloc((new_capacity as uint) * sizeof(T)) as T*
+        llpl_memcpy(new_data as char*, self.data as char*, (self.length as uint) * sizeof(T))
+        llpl_free(self.data as char*)
+        self.data = new_data
+        self.capacity = new_capacity
+    }
+
+    func get(index: int) -> T {
+        return self.data[index]
+    }
+
+    func set(index: int, item: T) {
+        self.data[index] = item
+    }
+
+    func pop() -> T {
+        self.length = self.length - 1
+        return self.data[self.length]
+    }
+
+    func len() -> int {
+        return self.length
+    }
+
+    func is_empty() -> bool {
+        return self.length == 0
+    }
+}
+
+// A generic "maybe a value" box. Deliberately a plain class built via
+// `new Optional<T>()` + set()/get(), not a generic tagged enum: a
+// zero-field variant like "None" can't have its type parameter inferred
+// from any argument (there's nothing to infer it from), and this compiler
+// only infers a generic function's type parameters from its argument
+// types (see resolveGenericFunctionCall) - so `T` has to already be
+// concrete before any method runs, which `new Optional<int>()` gives for
+// free.
+class Optional<T> {
+    let has_value: bool
+    let value: T
+
+    constructor() {
+        self.has_value = false
+    }
+
+    destructor() {}
+
+    func set(v: T) {
+        self.has_value = true
+        self.value = v
+    }
+
+    // Undefined (reads whatever - possibly uninitialized - value happens
+    // to be stored) if is_some() is false, same as unwrapping an empty
+    // Optional in most other languages - always check is_some()/is_none()
+    // first.
+    func get() -> T {
+        return self.value
+    }
+
+    func is_some() -> bool {
+        return self.has_value
+    }
+
+    func is_none() -> bool {
+        return !self.has_value
+    }
+}
+
+// One node of a LinkedList<T> - a plain struct (not a class): it's a
+// manually `llpl_alloc`/`llpl_free`'d value with no reference-counting
+// overhead, the same tradeoff a hand-written singly-linked list already
+// makes (see EXAMPLES.md's ListNode).
+struct LinkedListNode<T> {
+    let value: T
+    let next: LinkedListNode<T>*
+}
+
+class LinkedList<T> {
+    let head: LinkedListNode<T>*
+    let count: int
+
+    constructor() {
+        self.head = null
+        self.count = 0
+    }
+
+    destructor() {
+        let current: LinkedListNode<T>* = self.head
+        while current != null {
+            let next_node: LinkedListNode<T>* = current.next
+            llpl_free(current as char*)
+            current = next_node
+        }
+    }
+
+    func push_front(item: T) {
+        let node: LinkedListNode<T>* = llpl_alloc(sizeof(LinkedListNode<T>)) as LinkedListNode<T>*
+        node.value = item
+        node.next = self.head
+        self.head = node
+        self.count = self.count + 1
+    }
+
+    func len() -> int {
+        return self.count
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+}
+
+// One slot of HashMap<K, V>'s bucket array. LLPL's Type model has only a
+// single pointer flag (no way to write a real "pointer to pointer" type -
+// see resolveType's alias-merge comment for the same limitation
+// elsewhere), so the bucket array can't be a raw HashEntry<K, V>** - this
+// one-field wrapper struct is the workaround: `buckets: HashBucket<K, V>*`
+// is a single pointer to an array of these, each holding one chain's head.
+struct HashBucket<K, V> {
+    let head: HashEntry<K, V>*
+}
+
+// One chained entry of HashMap<K, V> - a plain struct for the same
+// "manually allocated value, no refcount overhead" reason as
+// LinkedListNode.
+struct HashEntry<K, V> {
+    let key: K
+    let value: V
+    let next: HashEntry<K, V>*
+}
+
+// A basic hash table, separate chaining, fixed bucket count (no rehashing -
+// a real limitation, acceptable for a first generic-container implementation).
+//
+// Scoped explicitly to POD/fixed-size key types: hashing is a byte-wise
+// FNV-1a over `sizeof(K)` bytes at the key's address, and equality is a
+// byte-wise compare (see hash_key/keys_equal) - correct for
+// int/uint/char/bool/struct/pointer-identity keys, but for a `char*` key
+// this hashes/compares the *pointer*, not the string's contents (the same
+// caveat as using a raw pointer as an unordered_map key in C++ without a
+// custom hasher). A real content-hashed string-keyed map needs a
+// trait/interface system this language doesn't have yet.
+class HashMap<K, V> {
+    let buckets: HashBucket<K, V>*
+    let bucket_count: int
+    let count: int
+
+    constructor() {
+        self.bucket_count = 16
+        self.count = 0
+        self.buckets = llpl_alloc((self.bucket_count as uint) * sizeof(HashBucket<K, V>)) as HashBucket<K, V>*
+        let i: int = 0
+        while i < self.bucket_count {
+            self.buckets[i].head = null
+            i = i + 1
+        }
+    }
+
+    destructor() {
+        let i: int = 0
+        while i < self.bucket_count {
+            let entry: HashEntry<K, V>* = self.buckets[i].head
+            while entry != null {
+                let next_entry: HashEntry<K, V>* = entry.next
+                llpl_free(entry as char*)
+                entry = next_entry
+            }
+            i = i + 1
+        }
+        llpl_free(self.buckets as char*)
+    }
+
+    func hash_key(key: K) -> uint {
+        let bytes: char* = (&key) as char*
+        let h: uint = 2166136261
+        let i: uint = 0
+        while i < sizeof(K) {
+            h = h ^ (bytes[i] as uint)
+            h = h * 16777619
+            i = i + 1
+        }
+        return h
+    }
+
+    func keys_equal(a: K, b: K) -> bool {
+        let abytes: char* = (&a) as char*
+        let bbytes: char* = (&b) as char*
+        let i: uint = 0
+        while i < sizeof(K) {
+            if abytes[i] != bbytes[i] {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    func insert(key: K, value: V) {
+        let idx: int = (self.hash_key(key) % (self.bucket_count as uint)) as int
+        let entry: HashEntry<K, V>* = self.buckets[idx].head
+        while entry != null {
+            if self.keys_equal(entry.key, key) {
+                entry.value = value
+                return
+            }
+            entry = entry.next
+        }
+        let new_entry: HashEntry<K, V>* = llpl_alloc(sizeof(HashEntry<K, V>)) as HashEntry<K, V>*
+        new_entry.key = key
+        new_entry.value = value
+        new_entry.next = self.buckets[idx].head
+        self.buckets[idx].head = new_entry
+        self.count = self.count + 1
+    }
+
+    func get(key: K) -> Optional<V> {
+        let idx: int = (self.hash_key(key) % (self.bucket_count as uint)) as int
+        let entry: HashEntry<K, V>* = self.buckets[idx].head
+        let result: Optional<V> = new Optional<V>()
+        while entry != null {
+            if self.keys_equal(entry.key, key) {
+                result.set(entry.value)
+                return result
+            }
+            entry = entry.next
+        }
+        return result
+    }
+
+    func remove(key: K) -> bool {
+        let idx: int = (self.hash_key(key) % (self.bucket_count as uint)) as int
+        let entry: HashEntry<K, V>* = self.buckets[idx].head
+        let prev: HashEntry<K, V>* = null
+        while entry != null {
+            if self.keys_equal(entry.key, key) {
+                if prev == null {
+                    self.buckets[idx].head = entry.next
+                } else {
+                    prev.next = entry.next
+                }
+                llpl_free(entry as char*)
+                self.count = self.count - 1
+                return true
+            }
+            prev = entry
+            entry = entry.next
+        }
+        return false
+    }
+
+    func len() -> int {
+        return self.count
+    }
+}

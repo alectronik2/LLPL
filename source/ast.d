@@ -41,7 +41,8 @@ enum NodeType {
     UnquoteExpr,
     InterpolatedStringLiteral,
     ArrayLiteral,
-    LambdaExpr
+    LambdaExpr,
+    SizeofExpr
 }
 
 abstract class ASTNode {
@@ -194,7 +195,15 @@ class Type {
     bool isPointer;
     bool isArray;
     int arraySize;
-    Type[] genericArgs;
+
+    // Parsed `<T1, T2, ...>` type arguments, e.g. `Vector<int>` parses to
+    // Type("Vector", typeArgs: [Type("int")]). Empty for every ordinary,
+    // non-generic type. See codegen.d's resolveType: once the instantiation
+    // this refers to has been monomorphized, `name` is rewritten in place
+    // to the concrete mangled name (e.g. "Vector_int") and typeArgs is
+    // cleared, so every other pass (typeToC, isStructTypeName, ...) never
+    // needs to know generics exist at all.
+    Type[] typeArgs;
 
     // Set only when `name == "__LLPL_Closure"` (see parser.d's closure-type
     // syntax `(T1, T2) -> R` and codegen.d's generateLambdaExpr): the actual
@@ -224,6 +233,14 @@ class Type {
             return result;
         }
         string result = name;
+        if (typeArgs.length > 0) {
+            result ~= "<";
+            foreach (i, arg; typeArgs) {
+                if (i > 0) result ~= ", ";
+                result ~= arg.toString();
+            }
+            result ~= ">";
+        }
         if (isPointer) result ~= "*";
         if (isArray) result ~= "[]";
         return result;
@@ -249,9 +266,15 @@ class FunctionDecl : ASTNode {
     bool isInterrupt; // `interrupt func` - emitted as a GCC interrupt handler
     bool isVariadic; // Trailing `...` in the parameter list
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+    // `<T, U>` after the function name - see codegen.d's monomorphization
+    // engine. Empty for an ordinary, non-generic function; a non-empty
+    // FunctionDecl is never generated directly, only its type-substituted
+    // clones are (see instantiateGenericFunction).
+    string[] typeParams;
 
     this(string name, Parameter[] params, Type returnType, Block body_, bool isExtern = false,
-         bool isInterrupt = false, bool isVariadic = false, int line = 0, int column = 0) {
+         bool isInterrupt = false, bool isVariadic = false, int line = 0, int column = 0,
+         string[] typeParams = []) {
         super(NodeType.FunctionDecl, line, column);
         this.name = name;
         this.params = params;
@@ -260,6 +283,7 @@ class FunctionDecl : ASTNode {
         this.isExtern = isExtern;
         this.isInterrupt = isInterrupt;
         this.isVariadic = isVariadic;
+        this.typeParams = typeParams;
     }
 }
 
@@ -270,15 +294,17 @@ class ClassDecl : ASTNode {
     FunctionDecl destructor;
     FunctionDecl[] methods;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+    string[] typeParams; // `<T, U>` after the class name - see FunctionDecl.typeParams
 
     this(string name, VarDecl[] fields, FunctionDecl constructor, FunctionDecl destructor, FunctionDecl[] methods,
-         int line = 0, int column = 0) {
+         int line = 0, int column = 0, string[] typeParams = []) {
         super(NodeType.ClassDecl, line, column);
         this.name = name;
         this.fields = fields;
         this.constructor = constructor;
         this.destructor = destructor;
         this.methods = methods;
+        this.typeParams = typeParams;
     }
 }
 
@@ -291,12 +317,15 @@ class StructDecl : ASTNode {
     VarDecl[] fields;
     bool packed;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+    string[] typeParams; // `<T, U>` after the struct name - see FunctionDecl.typeParams
 
-    this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0) {
+    this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0,
+         string[] typeParams = []) {
         super(NodeType.StructDecl, line, column);
         this.name = name;
         this.fields = fields;
         this.packed = packed;
+        this.typeParams = typeParams;
     }
 }
 
@@ -704,6 +733,19 @@ class CastExpr : ASTNode {
         super(NodeType.CastExpr, line, column);
         this.type = type;
         this.expression = expression;
+    }
+}
+
+// `sizeof(Type)` - a compile-time constant giving the C byte size of one
+// value of that LLPL type (see codegen.d's generateExpression). Needed by
+// generic containers (Vector<T>, ...) to compute allocation sizes for a
+// type that's only concrete after monomorphization.
+class SizeofExpr : ASTNode {
+    Type type;
+
+    this(Type type, int line = 0, int column = 0) {
+        super(NodeType.SizeofExpr, line, column);
+        this.type = type;
     }
 }
 

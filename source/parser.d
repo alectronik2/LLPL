@@ -470,6 +470,22 @@ class Parser {
         }
     }
 
+    // `<T, U>` after a class/struct/(non-operator) function name - see
+    // ast.d's typeParams fields. Optional; an empty return means the
+    // declaration is ordinary (non-generic). Not offered after `operator`
+    // (operators stay non-generic - keeps codegen's operator-overload
+    // lookup simple, and there's no real use case for a generic operator).
+    private string[] typeParamList() {
+        string[] params;
+        if (match(TokenType.Less)) {
+            do {
+                params ~= expect(TokenType.Identifier).value;
+            } while (match(TokenType.Comma));
+            expect(TokenType.Greater);
+        }
+        return params;
+    }
+
     private FunctionDecl functionDecl() {
         int startLine = current.line;
         int startColumn = current.column;
@@ -477,6 +493,7 @@ class Parser {
         expect(TokenType.Function);
 
         string name;
+        string[] typeParams;
         bool isOperator = false;
         int operatorLine = current.line;
         int operatorColumn = current.column;
@@ -498,6 +515,7 @@ class Parser {
             name = rawOp; // placeholder; resolved to its C-safe name below
         } else {
             name = expect(TokenType.Identifier).value;
+            typeParams = typeParamList();
         }
 
         expect(TokenType.LeftParen);
@@ -524,7 +542,7 @@ class Parser {
         }
 
         return new FunctionDecl(name, params, returnType, body_, false, isInterrupt, isVariadic,
-            startLine, startColumn);
+            startLine, startColumn, typeParams);
     }
 
     private ClassDecl classDecl() {
@@ -532,6 +550,7 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.Class);
         string name = expect(TokenType.Identifier).value;
+        string[] typeParams = typeParamList();
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
@@ -554,7 +573,7 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new ClassDecl(name, fields, constructor, destructor, methods, startLine, startColumn);
+        return new ClassDecl(name, fields, constructor, destructor, methods, startLine, startColumn, typeParams);
     }
 
     private StructDecl structDecl() {
@@ -563,6 +582,7 @@ class Parser {
         bool packed = match(TokenType.Packed);
         expect(TokenType.Struct);
         string name = expect(TokenType.Identifier).value;
+        string[] typeParams = typeParamList();
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
@@ -575,7 +595,7 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new StructDecl(name, fields, packed, startLine, startColumn);
+        return new StructDecl(name, fields, packed, startLine, startColumn, typeParams);
     }
 
     private FunctionDecl constructorDecl(string className) {
@@ -683,6 +703,27 @@ class Parser {
         return t;
     }
 
+    // A closing `>` for a `<...>` type-argument list, tolerant of nested
+    // generics: `Box<Box<int>>` lexes its last two characters as a single
+    // RightShift token (`>>`), not two Greater tokens, since the lexer has
+    // no idea it's looking at nested generics rather than a `>>` shift
+    // operator. Split it in place instead: consume one closing `>` and
+    // rewrite this same token slot to a lone Greater (without advancing),
+    // so the next (outer) nesting level's own call sees an ordinary
+    // Greater token to consume normally. Handles any nesting depth, since
+    // each split only ever peels off one level at a time.
+    private void expectGreaterOrSplit() {
+        if (match(TokenType.Greater)) {
+            return;
+        }
+        if (check(TokenType.RightShift)) {
+            tokens[pos] = Token(TokenType.Greater, ">", current.line, current.column + 1);
+            current = tokens[pos];
+            return;
+        }
+        error(format("Expected Greater, got %s", current.type));
+    }
+
     private Type parseType() {
         if (closureTypeAhead()) {
             return parseClosureType();
@@ -694,6 +735,20 @@ class Parser {
         while (match(TokenType.Dot)) {
             name ~= "_" ~ expect(TokenType.Identifier).value;
         }
+
+        // `<T1, T2, ...>` type arguments, e.g. Vector<int>. Only ever
+        // attempted here, inside a type position - never as a general
+        // postfix on an arbitrary expression - so this never collides with
+        // `<`/`>` as comparison operators (see relational(), which is only
+        // reached from general expression parsing, never from parseType()).
+        Type[] typeArgs;
+        if (match(TokenType.Less)) {
+            do {
+                typeArgs ~= parseType();
+            } while (match(TokenType.Comma));
+            expectGreaterOrSplit();
+        }
+
         bool isPointer = false;
         bool isArray = false;
         int arraySize = 0;
@@ -711,7 +766,9 @@ class Parser {
             expect(TokenType.RightBracket);
         }
 
-        return new Type(name, isPointer, isArray, arraySize);
+        Type t = new Type(name, isPointer, isArray, arraySize);
+        t.typeArgs = typeArgs;
+        return t;
     }
 
     private Block block() {
@@ -1294,6 +1351,12 @@ class Parser {
 
         if (check(TokenType.Function)) {
             return lambdaExpr();
+        }
+        if (match(TokenType.Sizeof)) {
+            expect(TokenType.LeftParen);
+            Type type = parseType();
+            expect(TokenType.RightParen);
+            return new SizeofExpr(type, tokLine, tokColumn);
         }
         if (match(TokenType.True)) {
             return new BoolLiteral(true, tokLine, tokColumn);

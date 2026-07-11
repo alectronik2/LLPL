@@ -65,6 +65,20 @@ class CodeGenerator {
     private string[] lambdaDecls; // Per-lambda `struct __LambdaEnvN {...};` + trampoline function decls, emitted up front
     private string[string] currentLambdaCaptureAccess; // Capture name -> "__env->name", set around a lambda body's generation
 
+    // Monomorphization engine (see resolveType's typeArgs branch and
+    // resolveGenericFunctionCall): a generic class/struct/function is
+    // never generated directly, only registered here as a template; each
+    // concrete type combination it's used with gets a real, fully-typed
+    // clone generated on demand the first time that combination is seen,
+    // the same "discover lazily during ordinary codegen, splice the extra
+    // C code in before declCode" trick generateLambdaExpr already uses.
+    private ClassDecl[string] genericClassTemplates; // by mangled (namespace-prefixed) template name
+    private StructDecl[string] genericStructTemplates;
+    private FunctionDecl[string] genericFunctionTemplates;
+    private bool[string] monomorphizedInstances; // mangled instantiation name -> reserved/emitted, dedupes + guards recursion
+    private string[] genericForwardDecls; // opaque struct tags / function prototypes, spliced before genericInstanceDecls
+    private string[] genericInstanceDecls; // full monomorphized class/struct/function bodies, emitted up front
+
     this() {
         indentLevel = 0;
         tempVarCounter = 0;
@@ -481,6 +495,40 @@ class CodeGenerator {
             prog.declarations = withEnumsDesugared;
         }
 
+        // Pull every generic declaration (typeParams non-empty) out of
+        // prog.declarations entirely, before any other pass - field-type
+        // inference, forward declarations, the registry-population loop
+        // below - looks at it. A generic declaration is a template, not
+        // real code: its param/field/return types can mention a bare type
+        // parameter name ("T") that doesn't resolve to anything, so it
+        // must never reach a pass that assumes every declaration it sees
+        // is concrete. Real code is produced later, on demand, by cloning
+        // the template with its type parameters substituted (see
+        // resolveType's typeArgs branch and resolveGenericFunctionCall).
+        foreach (prog; programs) {
+            ASTNode[] withGenericsPulledOut;
+            foreach (decl; prog.declarations) {
+                if (auto funcDecl = cast(FunctionDecl)decl) {
+                    if (funcDecl.typeParams.length > 0) {
+                        genericFunctionTemplates[mangledFunc(funcDecl)] = funcDecl;
+                        continue;
+                    }
+                } else if (auto classDecl = cast(ClassDecl)decl) {
+                    if (classDecl.typeParams.length > 0) {
+                        genericClassTemplates[mangledClass(classDecl)] = classDecl;
+                        continue;
+                    }
+                } else if (auto structDecl = cast(StructDecl)decl) {
+                    if (structDecl.typeParams.length > 0) {
+                        genericStructTemplates[mangledStruct(structDecl)] = structDecl;
+                        continue;
+                    }
+                }
+                withGenericsPulledOut ~= decl;
+            }
+            prog.declarations = withGenericsPulledOut;
+        }
+
         // Register functions, classes and structs from all modules up front so
         // type inference can resolve calls/fields regardless of declaration order.
         // Type aliases (see generateAlias) are registered here too, and before
@@ -771,6 +819,22 @@ class CodeGenerator {
             code ~= "\n";
         }
 
+        if (genericForwardDecls.length > 0) {
+            code ~= "// Monomorphized generic instantiations - forward declarations\n";
+            foreach (fwd; genericForwardDecls) {
+                code ~= fwd;
+            }
+            code ~= "\n";
+        }
+
+        if (genericInstanceDecls.length > 0) {
+            code ~= "// Monomorphized generic instantiations - full bodies\n";
+            foreach (instDecl; genericInstanceDecls) {
+                code ~= instDecl;
+            }
+            code ~= "\n";
+        }
+
         code ~= declCode;
 
         collectSymbolTable(programs);
@@ -1007,6 +1071,19 @@ class CodeGenerator {
         currentNamespaceSegments = classDecl.namespaceSegments;
         string code = "";
 
+        // Unlike generateConstructor/generateMethod, this was previously
+        // never setting variableTypes["self"] - harmless for a destructor
+        // that only ever accesses fields directly off `self` (memberAccessor
+        // silently falls back to "->" when it can't infer a type, which
+        // happens to be the right answer for a bare `self.field`, since
+        // self is always a pointer), but wrong as soon as a destructor
+        // indexes through a field to reach a *value* (struct-typed, not
+        // pointer) element - e.g. `self.buckets[i].head` - where the
+        // fallback's "->" guess is incorrect (it should be "."). Real bug,
+        // not generics-specific; just never previously exercised by any
+        // hand-written destructor.
+        variableTypes["self"] = new Type(cName);
+
         code ~= format("void %s_destroy(void* ptr) {\n", cName);
         indentLevel++;
         code ~= indent() ~ format("%s* self = (%s*)ptr;\n", cName, cName);
@@ -1032,6 +1109,8 @@ class CodeGenerator {
 
         indentLevel--;
         code ~= "}\n\n";
+
+        variableTypes.remove("self");
 
         return code;
     }
@@ -1322,24 +1401,53 @@ class CodeGenerator {
         return code;
     }
 
-    private Type cloneType(Type t) {
+    // `typeSubs`, when non-null, additionally substitutes a generic type
+    // parameter's name (e.g. "T") with its bound concrete Type wherever
+    // this clones a Type - used by the monomorphization engine (see
+    // instantiateGenericClassOrStruct/instantiateGenericFunction) to stamp
+    // out a concrete copy of a generic declaration's body. `null` (the
+    // default, used by every existing macro-expansion call site) means
+    // "just deep-copy, no substitution" - macros are unaffected.
+    private Type cloneType(Type t, Type[string] typeSubs = null) {
         if (t is null) return null;
+        if (typeSubs !is null) {
+            if (auto sub = t.name in typeSubs) {
+                // Merge best-effort, same as resolveType's alias
+                // substitution: a use site that also wrote its own
+                // `*`/`[...]` on top of an already-pointer/array type
+                // parameter binding just ORs the flags together (no way to
+                // represent "pointer to pointer" in this single-flag Type
+                // model, same limitation as everywhere else).
+                auto merged = new Type(sub.name, t.isPointer || sub.isPointer, t.isArray || sub.isArray,
+                    t.arraySize > 0 ? t.arraySize : sub.arraySize);
+                merged.typeArgs = sub.typeArgs.map!(a => cloneType(a, typeSubs)).array;
+                merged.closureParams = sub.closureParams;
+                merged.closureReturnType = sub.closureReturnType;
+                return merged;
+            }
+        }
         auto copy = new Type(t.name, t.isPointer, t.isArray, t.arraySize);
-        copy.genericArgs = t.genericArgs.dup;
+        copy.typeArgs = t.typeArgs.map!(a => cloneType(a, typeSubs)).array;
+        if (t.closureReturnType !is null) {
+            Parameter[] cps;
+            foreach (p; t.closureParams) cps ~= new Parameter(p.name, cloneType(p.type, typeSubs));
+            copy.closureParams = cps;
+            copy.closureReturnType = cloneType(t.closureReturnType, typeSubs);
+        }
         return copy;
     }
 
-    private ASTNode[] cloneNodes(ASTNode[] nodes, ASTNode[string] subs) {
+    private ASTNode[] cloneNodes(ASTNode[] nodes, ASTNode[string] subs, Type[string] typeSubs = null) {
         ASTNode[] result;
         foreach (n; nodes) {
-            result ~= cloneNode(n, subs);
+            result ~= cloneNode(n, subs, typeSubs);
         }
         return result;
     }
 
-    private Block cloneBlock(Block b, ASTNode[string] subs) {
+    private Block cloneBlock(Block b, ASTNode[string] subs, Type[string] typeSubs = null) {
         if (b is null) return null;
-        return new Block(cloneNodes(b.statements, subs));
+        return new Block(cloneNodes(b.statements, subs, typeSubs));
     }
 
     // Deep-copies an AST subtree, replacing any Identifier whose name is a
@@ -1348,12 +1456,15 @@ class CodeGenerator {
     // references to outer/global names) is copied unchanged and left to
     // resolve normally at the call site - macros are deliberately
     // unhygienic about names they didn't introduce, same as C's #define.
-    private ASTNode cloneNode(ASTNode node, ASTNode[string] subs) {
+    // Also reused (with `subs` empty and `typeSubs` set) by the
+    // monomorphization engine to stamp out a generic declaration's body
+    // with its type parameters substituted - see cloneType above.
+    private ASTNode cloneNode(ASTNode node, ASTNode[string] subs, Type[string] typeSubs = null) {
         if (node is null) return null;
 
         if (auto ident = cast(Identifier)node) {
             if (auto sub = ident.name in subs) {
-                return cloneNode(*sub, null); // substitution itself is never re-substituted
+                return cloneNode(*sub, null, typeSubs); // substitution itself is never re-substituted
             }
             return new Identifier(ident.name, ident.line, ident.column);
         } else if (auto intLit = cast(IntLiteral)node) {
@@ -1361,60 +1472,69 @@ class CodeGenerator {
         } else if (auto strLit = cast(StringLiteral)node) {
             return new StringLiteral(strLit.value, strLit.line, strLit.column);
         } else if (auto interp = cast(InterpolatedStringLiteral)node) {
-            return new InterpolatedStringLiteral(interp.literalParts.dup, cloneNodes(interp.expressions, subs),
+            return new InterpolatedStringLiteral(interp.literalParts.dup, cloneNodes(interp.expressions, subs, typeSubs),
                 interp.specs.dup, interp.line, interp.column);
         } else if (auto arrLit = cast(ArrayLiteral)node) {
-            return new ArrayLiteral(cloneNodes(arrLit.elements, subs), arrLit.line, arrLit.column);
+            return new ArrayLiteral(cloneNodes(arrLit.elements, subs, typeSubs), arrLit.line, arrLit.column);
         } else if (auto boolLit = cast(BoolLiteral)node) {
             return new BoolLiteral(boolLit.value, boolLit.line, boolLit.column);
         } else if (cast(NullLiteral)node) {
             return new NullLiteral(node.line, node.column);
         } else if (auto binExpr = cast(BinaryExpr)node) {
-            return new BinaryExpr(binExpr.op, cloneNode(binExpr.left, subs), cloneNode(binExpr.right, subs),
-                binExpr.line, binExpr.column);
+            return new BinaryExpr(binExpr.op, cloneNode(binExpr.left, subs, typeSubs),
+                cloneNode(binExpr.right, subs, typeSubs), binExpr.line, binExpr.column);
         } else if (auto unaryExpr = cast(UnaryExpr)node) {
-            return new UnaryExpr(unaryExpr.op, cloneNode(unaryExpr.operand, subs), unaryExpr.line, unaryExpr.column);
+            return new UnaryExpr(unaryExpr.op, cloneNode(unaryExpr.operand, subs, typeSubs),
+                unaryExpr.line, unaryExpr.column);
         } else if (auto callExpr = cast(CallExpr)node) {
-            return new CallExpr(cloneNode(callExpr.callee, subs), cloneNodes(callExpr.args, subs),
+            return new CallExpr(cloneNode(callExpr.callee, subs, typeSubs), cloneNodes(callExpr.args, subs, typeSubs),
                 callExpr.line, callExpr.column);
         } else if (auto memberExpr = cast(MemberExpr)node) {
-            return new MemberExpr(cloneNode(memberExpr.object, subs), memberExpr.member,
+            return new MemberExpr(cloneNode(memberExpr.object, subs, typeSubs), memberExpr.member,
                 memberExpr.line, memberExpr.column);
         } else if (auto indexExpr = cast(IndexExpr)node) {
-            return new IndexExpr(cloneNode(indexExpr.array, subs), cloneNode(indexExpr.index, subs),
+            return new IndexExpr(cloneNode(indexExpr.array, subs, typeSubs), cloneNode(indexExpr.index, subs, typeSubs),
                 indexExpr.line, indexExpr.column);
         } else if (auto newExpr = cast(NewExpr)node) {
-            return new NewExpr(cloneType(newExpr.type), cloneNodes(newExpr.args, subs), newExpr.line, newExpr.column);
+            return new NewExpr(cloneType(newExpr.type, typeSubs), cloneNodes(newExpr.args, subs, typeSubs),
+                newExpr.line, newExpr.column);
         } else if (auto castExpr = cast(CastExpr)node) {
-            return new CastExpr(cloneType(castExpr.type), cloneNode(castExpr.expression, subs),
+            return new CastExpr(cloneType(castExpr.type, typeSubs), cloneNode(castExpr.expression, subs, typeSubs),
                 castExpr.line, castExpr.column);
+        } else if (auto sizeofExpr = cast(SizeofExpr)node) {
+            return new SizeofExpr(cloneType(sizeofExpr.type, typeSubs), sizeofExpr.line, sizeofExpr.column);
+        } else if (auto lambdaExpr = cast(LambdaExpr)node) {
+            Parameter[] lps;
+            foreach (p; lambdaExpr.params) lps ~= new Parameter(p.name, cloneType(p.type, typeSubs));
+            return new LambdaExpr(lambdaExpr.captures.dup, lps, cloneType(lambdaExpr.returnType, typeSubs),
+                cloneBlock(lambdaExpr.body_, subs, typeSubs), lambdaExpr.line, lambdaExpr.column);
         } else if (auto varDecl = cast(VarDecl)node) {
-            return new VarDecl(varDecl.name, cloneType(varDecl.type), cloneNode(varDecl.initializer, subs),
+            return new VarDecl(varDecl.name, cloneType(varDecl.type, typeSubs), cloneNode(varDecl.initializer, subs, typeSubs),
                 varDecl.isConst, varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile);
         } else if (auto ifStmt = cast(IfStmt)node) {
-            return new IfStmt(cloneNode(ifStmt.condition, subs), cloneBlock(ifStmt.thenBlock, subs),
-                cloneBlock(ifStmt.elseBlock, subs));
+            return new IfStmt(cloneNode(ifStmt.condition, subs, typeSubs), cloneBlock(ifStmt.thenBlock, subs, typeSubs),
+                cloneBlock(ifStmt.elseBlock, subs, typeSubs));
         } else if (auto whileStmt = cast(WhileStmt)node) {
-            return new WhileStmt(cloneNode(whileStmt.condition, subs), cloneBlock(whileStmt.body_, subs));
+            return new WhileStmt(cloneNode(whileStmt.condition, subs, typeSubs), cloneBlock(whileStmt.body_, subs, typeSubs));
         } else if (auto forStmt = cast(ForStmt)node) {
-            return new ForStmt(cloneNode(forStmt.initializer, subs), cloneNode(forStmt.condition, subs),
-                cloneNode(forStmt.update, subs), cloneBlock(forStmt.body_, subs));
+            return new ForStmt(cloneNode(forStmt.initializer, subs, typeSubs), cloneNode(forStmt.condition, subs, typeSubs),
+                cloneNode(forStmt.update, subs, typeSubs), cloneBlock(forStmt.body_, subs, typeSubs));
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
-            return new ForeachStmt(foreachStmt.varName, cloneNode(foreachStmt.iterable, subs),
-                cloneBlock(foreachStmt.body_, subs), foreachStmt.line, foreachStmt.column);
+            return new ForeachStmt(foreachStmt.varName, cloneNode(foreachStmt.iterable, subs, typeSubs),
+                cloneBlock(foreachStmt.body_, subs, typeSubs), foreachStmt.line, foreachStmt.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
-            return new ReturnStmt(cloneNode(returnStmt.value, subs));
+            return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
-            return new DeferStmt(cloneNode(deferStmt.statement, subs));
+            return new DeferStmt(cloneNode(deferStmt.statement, subs, typeSubs));
         } else if (auto block = cast(Block)node) {
-            return cloneBlock(block, subs);
+            return cloneBlock(block, subs, typeSubs);
         } else if (auto exprStmt = cast(ExprStmt)node) {
-            return new ExprStmt(cloneNode(exprStmt.expression, subs));
+            return new ExprStmt(cloneNode(exprStmt.expression, subs, typeSubs));
         } else if (auto asmStmt = cast(AsmStmt)node) {
             AsmOperand[] cloneOperands(AsmOperand[] ops) {
                 AsmOperand[] result;
                 foreach (op; ops) {
-                    result ~= new AsmOperand(op.constraint, cloneNode(op.expr, subs));
+                    result ~= new AsmOperand(op.constraint, cloneNode(op.expr, subs, typeSubs));
                 }
                 return result;
             }
@@ -1423,22 +1543,73 @@ class CodeGenerator {
         } else if (auto matchStmt = cast(MatchStmt)node) {
             MatchCase[] cases;
             foreach (c; matchStmt.cases) {
-                cases ~= new MatchCase(cloneNodes(c.patterns, subs), cloneBlock(c.body_, subs));
+                cases ~= new MatchCase(cloneNodes(c.patterns, subs, typeSubs), cloneBlock(c.body_, subs, typeSubs));
             }
-            return new MatchStmt(cloneNode(matchStmt.subject, subs), cases, matchStmt.line, matchStmt.column);
+            return new MatchStmt(cloneNode(matchStmt.subject, subs, typeSubs), cases, matchStmt.line, matchStmt.column);
         } else if (auto macroInvocation = cast(MacroInvocation)node) {
-            return new MacroInvocation(macroInvocation.name, cloneNodes(macroInvocation.args, subs),
+            return new MacroInvocation(macroInvocation.name, cloneNodes(macroInvocation.args, subs, typeSubs),
                 macroInvocation.line, macroInvocation.column);
         } else if (auto quoteExpr = cast(QuoteExpr)node) {
-            return new QuoteExpr(cloneNode(quoteExpr.body, subs), quoteExpr.isBlock,
+            return new QuoteExpr(cloneNode(quoteExpr.body, subs, typeSubs), quoteExpr.isBlock,
                 quoteExpr.line, quoteExpr.column);
         } else if (auto unquoteExpr = cast(UnquoteExpr)node) {
-            return new UnquoteExpr(cloneNode(unquoteExpr.expression, subs),
+            return new UnquoteExpr(cloneNode(unquoteExpr.expression, subs, typeSubs),
                 unquoteExpr.line, unquoteExpr.column);
         }
 
         throw new CompileError("Internal error: this construct can't appear inside a macro body",
             currentModulePath, node.line, node.column);
+    }
+
+    // Stamps out one concrete copy of a generic function template with its
+    // type parameters bound (`typeSubs`) - used for both a `func foo<T>`
+    // free function and a generic class's methods/constructor/destructor
+    // (all of which share this same "params + return type + body" shape).
+    // `namespaceSegments` is always cleared on the clone: for a top-level
+    // function `newName` is passed in as the already-fully-mangled
+    // instantiation name (e.g. "max_of_int"), so mangledFunc(clone) must
+    // return it unchanged rather than re-prefixing a namespace; for a
+    // method/constructor/destructor `newName`/namespaceSegments aren't used
+    // for naming at all (generateMethod/generateConstructor/
+    // generateDestructor derive the emitted C symbol from the *class's*
+    // mangled name instead), so clearing it here is harmless either way.
+    private FunctionDecl cloneFunctionDeclWithTypeSubs(FunctionDecl fn, Type[string] typeSubs, string newName) {
+        Parameter[] params;
+        foreach (p; fn.params) params ~= new Parameter(p.name, cloneType(p.type, typeSubs));
+        auto clone = new FunctionDecl(newName, params, cloneType(fn.returnType, typeSubs),
+            cloneBlock(fn.body_, null, typeSubs), fn.isExtern, fn.isInterrupt, fn.isVariadic,
+            fn.line, fn.column);
+        clone.namespaceSegments = [];
+        return clone;
+    }
+
+    private ClassDecl cloneClassDeclWithTypeSubs(ClassDecl cls, Type[string] typeSubs, string newName) {
+        VarDecl[] fields;
+        foreach (f; cls.fields) {
+            auto field = new VarDecl(f.name, cloneType(f.type, typeSubs), null, f.isConst,
+                f.line, f.column, f.bitWidth, f.isVolatile);
+            fields ~= field;
+        }
+        FunctionDecl ctor = cls.constructor is null ? null :
+            cloneFunctionDeclWithTypeSubs(cls.constructor, typeSubs, cls.constructor.name);
+        FunctionDecl dtor = cls.destructor is null ? null :
+            cloneFunctionDeclWithTypeSubs(cls.destructor, typeSubs, cls.destructor.name);
+        FunctionDecl[] methods;
+        foreach (m; cls.methods) methods ~= cloneFunctionDeclWithTypeSubs(m, typeSubs, m.name);
+        auto clone = new ClassDecl(newName, fields, ctor, dtor, methods, cls.line, cls.column);
+        clone.namespaceSegments = [];
+        return clone;
+    }
+
+    private StructDecl cloneStructDeclWithTypeSubs(StructDecl st, Type[string] typeSubs, string newName) {
+        VarDecl[] fields;
+        foreach (f; st.fields) {
+            fields ~= new VarDecl(f.name, cloneType(f.type, typeSubs), null, f.isConst,
+                f.line, f.column, f.bitWidth, f.isVolatile);
+        }
+        auto clone = new StructDecl(newName, fields, st.packed, st.line, st.column);
+        clone.namespaceSegments = [];
+        return clone;
     }
 
     private ASTNode unquoteValue(UnquoteExpr unquoteExpr, ASTNode[string] subs) {
@@ -1987,6 +2158,205 @@ class CodeGenerator {
         }
     }
 
+    // Mirrors resolveName's shape but returns "" (not the original name) on
+    // failure, since callers here need to distinguish "this is a generic
+    // template" from "this name doesn't exist at all".
+    private string findGenericTemplateKey(string name, bool delegate(string) exists) {
+        if (exists(name)) return name;
+        foreach (candidate; enclosingQualifications(name)) {
+            if (exists(candidate)) return candidate;
+        }
+        return "";
+    }
+
+    // The instantiation-suffix fragment for one concrete type argument,
+    // e.g. Type("int") -> "int", Type("char", isPointer: true) -> "char_ptr".
+    // By the time this runs, a nested generic argument (Vector<Vector<int>>)
+    // has already had its own name rewritten to its mangled instantiation
+    // name by the recursive resolveType call in instantiateGenericTypeArgs,
+    // so this never needs to recurse into typeArgs itself.
+    private string mangleTypeArg(Type t) {
+        string s = t.name;
+        if (t.isPointer) s ~= "_ptr";
+        if (t.isArray) s ~= format("_arr%d", t.arraySize);
+        return s;
+    }
+
+    private string instantiatedLeafName(string templateLeafName, Type[] typeArgs) {
+        string result = templateLeafName;
+        foreach (arg; typeArgs) result ~= "_" ~ mangleTypeArg(arg);
+        return result;
+    }
+
+    // Monomorphizes (on first use) or looks up the already-monomorphized
+    // mangled name for one `TemplateName<typeArgs...>` instantiation. See
+    // the module-level comment on genericClassTemplates for the overall
+    // design. `typeArgs` must already be resolved (resolveType called on
+    // each) by the caller.
+    private string instantiateGenericTypeArgs(string name, Type[] typeArgs) {
+        string classKey = findGenericTemplateKey(name, (k) => (k in genericClassTemplates) !is null);
+        string structKey = findGenericTemplateKey(name, (k) => (k in genericStructTemplates) !is null);
+        if (classKey.length == 0 && structKey.length == 0) {
+            throw new CompileError(format("'%s' is not a generic type", name), currentModulePath, 0, 0);
+        }
+        bool isClass = classKey.length > 0;
+        string templateKey = isClass ? classKey : structKey;
+        string[] templateTypeParams = isClass ?
+            genericClassTemplates[templateKey].typeParams : genericStructTemplates[templateKey].typeParams;
+        string templateLeafName = isClass ?
+            genericClassTemplates[templateKey].name : genericStructTemplates[templateKey].name;
+        string[] templateNamespaceSegments = isClass ?
+            genericClassTemplates[templateKey].namespaceSegments : genericStructTemplates[templateKey].namespaceSegments;
+
+        if (typeArgs.length != templateTypeParams.length) {
+            throw new CompileError(format("Generic type '%s' expects %d type argument(s), got %d",
+                templateKey, templateTypeParams.length, typeArgs.length), currentModulePath, 0, 0);
+        }
+
+        string mangledName = mangled(templateNamespaceSegments, instantiatedLeafName(templateLeafName, typeArgs));
+
+        if (mangledName !in monomorphizedInstances) {
+            monomorphizedInstances[mangledName] = true; // reserve before generating the body - guards
+                                                          // self-referential fields from re-triggering
+            Type[string] typeSubs;
+            foreach (i, tp; templateTypeParams) typeSubs[tp] = typeArgs[i];
+
+            // An opaque forward tag, emitted immediately (before the real
+            // body is generated below) - lets a self-referential field
+            // (e.g. LinkedListNode<T>'s `next: LinkedListNode<T>*`) resolve
+            // even though the full struct/class body isn't known yet, the
+            // same way every ordinary class/struct is already forward-
+            // declared up front (see generateMultiple's own forward-decl
+            // pass) - this is that same mechanism, just triggered lazily.
+            genericForwardDecls ~= format("typedef struct %s %s;\n", mangledName, mangledName);
+
+            if (isClass) {
+                auto clone = cloneClassDeclWithTypeSubs(genericClassTemplates[templateKey], typeSubs, mangledName);
+                classRegistry[mangledName] = clone;
+                currentNamespaceSegments = [];
+
+                // Ordinary (non-generic) class/struct fields get resolveType
+                // called on them by a dedicated upfront pass in
+                // generateMultiple, before generateClass/generateStruct ever
+                // runs - generateClass/generateStruct don't do it
+                // themselves. A generic clone never goes through that pass
+                // (it doesn't exist until this exact moment), so it has to
+                // happen here instead, or a field's type-argument suffix
+                // (e.g. "Node<T>*") never gets collapsed into its mangled
+                // name and leaks the raw, unmangled template name into the
+                // emitted C.
+                foreach (field; clone.fields) {
+                    if (field.type is null) field.type = inferType(field.initializer);
+                    resolveType(field.type);
+                }
+
+                // Forward-declare the constructor/destructor/methods too,
+                // mirroring generateMultiple's own function/method forward-
+                // decl pass - needed since one method can call another
+                // declared later in the same class body (e.g. Vector<T>'s
+                // push() calling its own grow()), and this class's methods
+                // otherwise get no forward declaration at all before their
+                // bodies are generated below.
+                if (clone.constructor) {
+                    string ctorParams = "";
+                    foreach (i, param; clone.constructor.params) {
+                        resolveType(param.type);
+                        if (i > 0) ctorParams ~= ", ";
+                        ctorParams ~= format("%s %s", typeToC(param.type), param.name);
+                    }
+                    genericForwardDecls ~= format("%s* %s_new(%s);\n", mangledName, mangledName, ctorParams);
+                }
+                if (clone.destructor) {
+                    genericForwardDecls ~= format("void %s_destroy(void* ptr);\n", mangledName);
+                }
+                foreach (method; clone.methods) {
+                    resolveType(method.returnType);
+                    string methodParams = format("%s* self", mangledName);
+                    foreach (param; method.params) {
+                        resolveType(param.type);
+                        methodParams ~= format(", %s %s", typeToC(param.type), param.name);
+                    }
+                    genericForwardDecls ~= format("%s %s_%s(%s);\n",
+                        typeToC(method.returnType), mangledName, method.name, methodParams);
+                }
+
+                genericInstanceDecls ~= generateClass(clone);
+            } else {
+                auto clone = cloneStructDeclWithTypeSubs(genericStructTemplates[templateKey], typeSubs, mangledName);
+                structRegistry[mangledName] = clone;
+                currentNamespaceSegments = [];
+                foreach (field; clone.fields) {
+                    if (field.type is null) field.type = inferType(field.initializer);
+                    resolveType(field.type);
+                }
+                genericInstanceDecls ~= generateStruct(clone);
+            }
+        }
+
+        return mangledName;
+    }
+
+    // Monomorphizes (on first use) or looks up the already-monomorphized
+    // mangled name for a call to a generic function template. Generic
+    // function calls never write explicit `<...>` type arguments (that
+    // syntax only exists in type positions - see typeParamList's comment
+    // on why generic operators/calls stay unambiguous), so every type
+    // parameter is instead inferred from whichever parameter position(s)
+    // mention it, using the argument expressions actually passed here.
+    private string resolveGenericFunctionCall(string templateKey, ASTNode[] args) {
+        FunctionDecl tmpl = genericFunctionTemplates[templateKey];
+
+        Type[string] bindings;
+        foreach (i, param; tmpl.params) {
+            if (tmpl.typeParams.canFind(param.type.name) && (param.type.name in bindings) is null
+                    && i < args.length) {
+                bindings[param.type.name] = inferType(args[i]);
+            }
+        }
+        foreach (tp; tmpl.typeParams) {
+            if ((tp in bindings) is null) {
+                throw new CompileError(format(
+                    "Cannot infer type parameter '%s' for generic function '%s' - " ~
+                    "it must appear in at least one parameter's type", tp, templateKey),
+                    currentModulePath, 0, 0);
+            }
+        }
+        Type[] typeArgs;
+        foreach (tp; tmpl.typeParams) {
+            resolveType(bindings[tp]);
+            typeArgs ~= bindings[tp];
+        }
+
+        string mangledName = mangled(tmpl.namespaceSegments, instantiatedLeafName(tmpl.name, typeArgs));
+
+        if (mangledName !in monomorphizedInstances) {
+            monomorphizedInstances[mangledName] = true;
+
+            Type[string] typeSubs;
+            foreach (i, tp; tmpl.typeParams) typeSubs[tp] = typeArgs[i];
+            auto clone = cloneFunctionDeclWithTypeSubs(tmpl, typeSubs, mangledName);
+
+            // Forward-declare the concrete signature immediately (before
+            // the body is generated) - resolves the common case of mutual
+            // recursion between two different generic function
+            // instantiations (see the module-level comment on
+            // genericForwardDecls).
+            string protoParams = "";
+            foreach (i, p; clone.params) {
+                resolveType(p.type);
+                if (i > 0) protoParams ~= ", ";
+                protoParams ~= format("%s %s", typeToC(p.type), p.name);
+            }
+            resolveType(clone.returnType);
+            genericForwardDecls ~= format("%s %s(%s);\n", typeToC(clone.returnType), mangledName, protoParams);
+
+            functionRegistry[mangledName] = clone;
+            genericInstanceDecls ~= generateFunction(clone);
+        }
+
+        return mangledName;
+    }
+
     // Resolves a possibly-unqualified class type name to its mangled form
     // in place, the same way resolveName does for functions/variables, so a
     // namespaced class can be referenced unqualified (or partially qualified)
@@ -2006,6 +2376,20 @@ class CodeGenerator {
             t.isArray = t.isArray || aliased.isArray;
             if (aliased.arraySize > 0) t.arraySize = aliased.arraySize;
         }
+
+        // Generic instantiation, e.g. Vector<int> - resolve nested type
+        // arguments first (handles Vector<Vector<int>>), then monomorphize
+        // (or reuse an existing instantiation) and rewrite this Type
+        // in-place to the concrete mangled name, exactly as if it had been
+        // hand-written - every other pass (typeToC, isStructTypeName, ...)
+        // never needs to know generics exist at all.
+        if (t.typeArgs.length > 0) {
+            foreach (arg; t.typeArgs) resolveType(arg);
+            t.name = instantiateGenericTypeArgs(t.name, t.typeArgs);
+            t.typeArgs = [];
+            return;
+        }
+
         if (isPrimitiveTypeName(t.name)) return;
         if (t.name in classRegistry || t.name in structRegistry) return;
         foreach (candidate; enclosingQualifications(t.name)) {
@@ -2013,6 +2397,15 @@ class CodeGenerator {
                 t.name = candidate;
                 return;
             }
+        }
+
+        // A bare generic name used with no type arguments at all, e.g.
+        // `let v: Vector` instead of `Vector<int>`.
+        if (findGenericTemplateKey(t.name, (k) => (k in genericClassTemplates) !is null).length > 0 ||
+            findGenericTemplateKey(t.name, (k) => (k in genericStructTemplates) !is null).length > 0) {
+            throw new CompileError(
+                format("Generic type '%s' requires type arguments (e.g. %s<...>)", t.name, t.name),
+                currentModulePath, 0, 0);
         }
     }
 
@@ -2436,6 +2829,9 @@ class CodeGenerator {
             return unaryExpr.op ~ generateExpression(unaryExpr.operand);
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
             return generateLambdaExpr(lambdaExpr);
+        } else if (auto sizeofExpr = cast(SizeofExpr)node) {
+            resolveType(sizeofExpr.type);
+            return format("sizeof(%s)", typeToC(sizeofExpr.type));
         } else if (auto callExpr = cast(CallExpr)node) {
             // Closure call: if the callee's own type resolves to a closure
             // type (a closure-typed variable, parameter, or field - never a
@@ -2472,6 +2868,31 @@ class CodeGenerator {
                     cargs ~= ", " ~ generateExpression(arg);
                 }
                 return format("((%s (*)(%s))(%s).fn)(%s)", retC, paramTypesC, calleeCode, cargs);
+            }
+            // Generic function call: if the callee names a generic
+            // function template (rather than an ordinary function),
+            // monomorphize on demand (inferring its type parameters from
+            // the argument expressions here) and generate the call as an
+            // ordinary call to the concrete mangled function. Checked
+            // before the method-call/qualified-call paths below for the
+            // same reason as the closure check above.
+            string genericTemplateKey = "";
+            if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
+                genericTemplateKey = tryResolveQualifiedPath(memberCallee,
+                    (n) => (n in genericFunctionTemplates) !is null);
+            } else if (auto identCallee = cast(Identifier)callExpr.callee) {
+                genericTemplateKey = findGenericTemplateKey(identCallee.name,
+                    (n) => (n in genericFunctionTemplates) !is null);
+            }
+            if (genericTemplateKey.length > 0) {
+                string mangledName = resolveGenericFunctionCall(genericTemplateKey, callExpr.args);
+                recordUsage(mangledName, callExpr.line, callExpr.column);
+                string gargs = "";
+                foreach (i, arg; callExpr.args) {
+                    if (i > 0) gargs ~= ", ";
+                    gargs ~= generateExpression(arg);
+                }
+                return format("%s(%s)", mangledName, gargs);
             }
             // Check if this is a method call
             if (auto memberExpr = cast(MemberExpr)callExpr.callee) {
@@ -2662,6 +3083,8 @@ class CodeGenerator {
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
             return new Type(newExpr.type.name);
+        } else if (cast(SizeofExpr)expr) {
+            return new Type("uint");
         } else if (auto castExpr = cast(CastExpr)expr) {
             resolveType(castExpr.type);
             return castExpr.type;
@@ -2716,6 +3139,13 @@ class CodeGenerator {
                     return functionRegistry[qualifiedFunc].returnType;
                 }
 
+                string genericKey = tryResolveQualifiedPath(memberCallee,
+                    (n) => (n in genericFunctionTemplates) !is null);
+                if (genericKey.length > 0) {
+                    string mangledName = resolveGenericFunctionCall(genericKey, callExpr.args);
+                    return functionRegistry[mangledName].returnType;
+                }
+
                 Type objType = inferType(memberCallee.object);
                 if (auto classDecl = objType.name in classRegistry) {
                     foreach (method; classDecl.methods) {
@@ -2733,6 +3163,12 @@ class CodeGenerator {
                 string resolved = resolveName(calleeIdent.name, (n) => (n in functionRegistry) !is null);
                 if (auto funcDecl = resolved in functionRegistry) {
                     return funcDecl.returnType;
+                }
+                string genericKey = findGenericTemplateKey(calleeIdent.name,
+                    (n) => (n in genericFunctionTemplates) !is null);
+                if (genericKey.length > 0) {
+                    string mangledName = resolveGenericFunctionCall(genericKey, callExpr.args);
+                    return functionRegistry[mangledName].returnType;
                 }
                 throw inferError(expr, format("Cannot infer type: unknown function '%s'", calleeIdent.name));
             }
