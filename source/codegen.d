@@ -86,6 +86,15 @@ class CodeGenerator {
     private string[string] traitModulePath; // by mangled trait name
     private string[] pendingImplModulePaths; // parallel to pendingImpls
     private bool[string] monomorphizedInstances; // mangled instantiation name -> reserved/emitted, dedupes + guards recursion
+    // Reverse of the substitution instantiateGenericTypeArgs just made -
+    // mangled instantiation name (e.g. "Slice_int") -> the concrete type
+    // args it was built from (e.g. [int]). Needed so a generic *function*
+    // parameter shaped like `s: Slice<T>` (T nested inside another generic
+    // type, not itself the parameter's bare type) can still have T
+    // inferred at a call site - see resolveGenericFunctionCall, which by
+    // call time only ever sees the argument's already-mangled flat type
+    // name and needs this to recover what T actually was.
+    private Type[][string] monomorphizedTypeArgs;
     private string[] genericForwardDecls; // opaque struct tags / function prototypes, spliced before genericInstanceDecls
     private string[] genericInstanceDecls; // full monomorphized class/struct/function bodies, emitted up front
 
@@ -855,7 +864,15 @@ class CodeGenerator {
                         earlyDeclCode ~= format("__attribute__((interrupt)) void %s(%s);\n",
                             mangledFunc(funcDecl), params);
                     } else {
-                        resolveType(funcDecl.returnType);
+                        // Resolve a *clone*, not funcDecl.returnType itself -
+                        // generateFunction later needs the pristine
+                        // as-written return type (e.g. `Pair<int, int>`,
+                        // typeArgs intact) to resolve a bare `return Pair {
+                        // ... }` struct literal's target; resolving the
+                        // real node here first would already have mangled
+                        // it (typeArgs cleared) by the time that runs.
+                        Type returnTypeForFwd = cloneType(funcDecl.returnType);
+                        resolveType(returnTypeForFwd);
                         string params = "";
                         foreach (i, param; funcDecl.params) {
                             resolveType(param.type);
@@ -864,7 +881,7 @@ class CodeGenerator {
                         }
                         if (funcDecl.isVariadic) params ~= ", ...";
                         earlyDeclCode ~= format("%s %s(%s);\n",
-                            typeToC(funcDecl.returnType), mangledFunc(funcDecl), params);
+                            typeToC(returnTypeForFwd), mangledFunc(funcDecl), params);
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
                     currentNamespaceSegments = classDecl.namespaceSegments;
@@ -887,14 +904,19 @@ class CodeGenerator {
 
                     // Method forward declarations
                     foreach (method; classDecl.methods) {
-                        resolveType(method.returnType);
+                        // Same "resolve a clone, not the real node" reasoning
+                        // as the plain-function forward-decl loop above -
+                        // generateMethod needs method.returnType still
+                        // as-written when it later runs.
+                        Type returnTypeForFwd = cloneType(method.returnType);
+                        resolveType(returnTypeForFwd);
                         string params = format("%s* self", cName);
                         foreach (param; method.params) {
                             resolveType(param.type);
                             params ~= format(", %s %s", typeToC(param.type), param.name);
                         }
                         earlyDeclCode ~= format("%s %s_%s(%s);\n",
-                            typeToC(method.returnType), cName, method.name, params);
+                            typeToC(returnTypeForFwd), cName, method.name, params);
                     }
                 }
             }
@@ -2602,7 +2624,39 @@ class CodeGenerator {
                 currentModulePath, lit.line, lit.column);
         }
 
-        if (expectedType is null || expectedType.name != lit.typeName) {
+        Type[] typeArgsToUse;
+        bool haveTypeArgs = false;
+        if (expectedType !is null && expectedType.name == lit.typeName && expectedType.typeArgs.length > 0) {
+            // The common case: expectedType is still the pristine,
+            // as-written form (e.g. `Slice<int>`), not yet mutated by
+            // resolveType.
+            typeArgsToUse = expectedType.typeArgs;
+            haveTypeArgs = true;
+        } else if (expectedType !is null) {
+            // expectedType may already be a *resolved* instantiation of
+            // this same template - e.g. a field's declared type
+            // (`self.data: Slice<int>`), already mangled to "Slice_int" by
+            // an ordinary field-type-resolution pass long before this
+            // particular assignment/return/let ever runs (unlike a fresh
+            // `let`, whose Type object is a brand new clone that hasn't
+            // been resolved yet). Recover the original type args via the
+            // reverse mapping instantiateGenericTypeArgs records, instead
+            // of rejecting this as "no known concrete type" just because
+            // .typeArgs is now empty - confirmed by re-deriving the same
+            // mangled name from those recovered args and checking it
+            // actually matches (not just some other generic type that
+            // coincidentally shares this exact mangled name).
+            StructDecl templ = genericStructTemplates[templateKey];
+            if (auto recorded = expectedType.name in monomorphizedTypeArgs) {
+                string reMangled = mangled(templ.namespaceSegments, instantiatedLeafName(templ.name, *recorded));
+                if (reMangled == expectedType.name) {
+                    typeArgsToUse = *recorded;
+                    haveTypeArgs = true;
+                }
+            }
+        }
+
+        if (!haveTypeArgs) {
             throw new CompileError(format(
                 "Cannot construct generic struct '%s' without a known concrete type - " ~
                 "assign it to a 'let'/return with an explicit type annotation " ~
@@ -2611,7 +2665,7 @@ class CodeGenerator {
         }
 
         Type instantiation = new Type(lit.typeName);
-        instantiation.typeArgs = expectedType.typeArgs;
+        instantiation.typeArgs = typeArgsToUse;
         resolveType(instantiation); // monomorphizes on demand, rewrites .name in place
         mangledName = instantiation.name;
         return structRegistry[mangledName];
@@ -2857,7 +2911,15 @@ class CodeGenerator {
             // target type's complete definition isn't visible yet here -
             // C allows an incomplete-type parameter in a declaration, just
             // not in a definition (see the body, below).
-            resolveType(asFunction.returnType);
+            //
+            // Resolves a *clone* of the return type, not asFunction.returnType
+            // itself - generateFunction (called below, via
+            // deferredFunctionBodies) needs it still as-written to resolve a
+            // bare `return SomeGenericStruct { ... }` in the method body;
+            // resolving the real node here first would already have mangled
+            // it by the time that runs.
+            Type returnTypeForFwd = cloneType(asFunction.returnType);
+            resolveType(returnTypeForFwd);
             string fwdParams = "";
             foreach (i, p; asFunction.params) {
                 resolveType(p.type);
@@ -2867,7 +2929,7 @@ class CodeGenerator {
             if (targetNeedsTypedef) {
                 genericForwardDecls ~= format("typedef struct %s %s;\n", impl.targetType.name, impl.targetType.name);
             }
-            genericForwardDecls ~= format("%s %s(%s);\n", typeToC(asFunction.returnType), asFunction.name, fwdParams);
+            genericForwardDecls ~= format("%s %s(%s);\n", typeToC(returnTypeForFwd), asFunction.name, fwdParams);
 
             functionRegistry[asFunction.name] = asFunction;
 
@@ -2943,6 +3005,7 @@ class CodeGenerator {
         if (mangledName !in monomorphizedInstances) {
             monomorphizedInstances[mangledName] = true; // reserve before generating the body - guards
                                                           // self-referential fields from re-triggering
+            monomorphizedTypeArgs[mangledName] = typeArgs;
             if (templateKey == "Optional") optionalInstantiations[mangledName] = true;
             else if (templateKey == "Result") resultInstantiations[mangledName] = true;
             Type[string] typeSubs;
@@ -2997,14 +3060,19 @@ class CodeGenerator {
                     genericForwardDecls ~= format("void %s_destroy(void* ptr);\n", mangledName);
                 }
                 foreach (method; clone.methods) {
-                    resolveType(method.returnType);
+                    // Resolve a *clone*, not method.returnType itself -
+                    // generateClass (below) -> generateMethod needs it
+                    // still as-written to resolve a bare `return
+                    // SomeGenericStruct { ... }` in the method body.
+                    Type returnTypeForFwd = cloneType(method.returnType);
+                    resolveType(returnTypeForFwd);
                     string methodParams = format("%s* self", mangledName);
                     foreach (param; method.params) {
                         resolveType(param.type);
                         methodParams ~= format(", %s %s", typeToC(param.type), param.name);
                     }
                     genericForwardDecls ~= format("%s %s_%s(%s);\n",
-                        typeToC(method.returnType), mangledName, method.name, methodParams);
+                        typeToC(returnTypeForFwd), mangledName, method.name, methodParams);
                 }
 
                 genericInstanceDecls ~= generateClass(clone);
@@ -3035,9 +3103,29 @@ class CodeGenerator {
 
         Type[string] bindings;
         foreach (i, param; tmpl.params) {
-            if (tmpl.typeParams.canFind(param.type.name) && (param.type.name in bindings) is null
-                    && i < args.length) {
+            if (i >= args.length) continue;
+            if (tmpl.typeParams.canFind(param.type.name) && (param.type.name in bindings) is null) {
                 bindings[param.type.name] = inferType(args[i]);
+                continue;
+            }
+            // A param shaped like `Slice<T>` (T nested inside another
+            // generic type, not the param's own bare type) - recover T
+            // from the argument's own type via the reverse mapping
+            // instantiateGenericTypeArgs records (see
+            // monomorphizedTypeArgs's own comment for why this indirection
+            // is needed at all: by the time we get here, the argument's
+            // type has already been resolved down to a flat mangled name).
+            if (param.type.typeArgs.length > 0) {
+                Type argType = inferType(args[i]);
+                resolveType(argType);
+                if (auto recorded = argType.name in monomorphizedTypeArgs) {
+                    foreach (j, ta; param.type.typeArgs) {
+                        if (j < recorded.length && tmpl.typeParams.canFind(ta.name)
+                                && (ta.name in bindings) is null) {
+                            bindings[ta.name] = (*recorded)[j];
+                        }
+                    }
+                }
             }
         }
         foreach (tp; tmpl.typeParams) {
@@ -3086,8 +3174,15 @@ class CodeGenerator {
                 if (i > 0) protoParams ~= ", ";
                 protoParams ~= format("%s %s", typeToC(p.type), p.name);
             }
-            resolveType(clone.returnType);
-            genericForwardDecls ~= format("%s %s(%s);\n", typeToC(clone.returnType), mangledName, protoParams);
+            // Resolve a *clone*, not clone.returnType itself (yes, "clone"
+            // here already means the monomorphized FunctionDecl - this is
+            // a second, throwaway clone of just its return type) -
+            // generateFunction (below, via deferredFunctionBodies) needs
+            // it still as-written to resolve a bare `return
+            // SomeGenericStruct { ... }` in the body.
+            Type returnTypeForFwd = cloneType(clone.returnType);
+            resolveType(returnTypeForFwd);
+            genericForwardDecls ~= format("%s %s(%s);\n", typeToC(returnTypeForFwd), mangledName, protoParams);
 
             functionRegistry[mangledName] = clone;
             // Deferred, not genericInstanceDecls - a generic function's body
@@ -3600,6 +3695,22 @@ class CodeGenerator {
                 if (leftType !is null && leftType.isNullableSugar) {
                     return generateExpression(binExpr.left) ~ " = " ~
                         generateNullableWrap(leftType, binExpr.right);
+                }
+                // Same reasoning as ReturnStmt/VarDecl's own struct-literal/
+                // tuple-literal handling - a plain assignment's RHS is just
+                // as valid a place to write `self.field = Slice { ... }` as
+                // a `let`/`return`, and needs the same expected-type context
+                // (here, the already-inferred left-hand side's type) so a
+                // *generic* struct/tuple literal can resolve its type args.
+                if (leftType !is null) {
+                    if (auto structLit = cast(StructLiteral)binExpr.right) {
+                        return generateExpression(binExpr.left) ~ " = " ~
+                            generateStructLiteralValue(structLit, leftType);
+                    }
+                    if (auto tupleLit = cast(TupleLiteral)binExpr.right) {
+                        return generateExpression(binExpr.left) ~ " = " ~
+                            generateTupleLiteral(tupleLit, leftType);
+                    }
                 }
                 return generateExpression(binExpr.left) ~ " = " ~ generateExpression(binExpr.right);
             }

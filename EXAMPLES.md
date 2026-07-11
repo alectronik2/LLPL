@@ -1043,33 +1043,77 @@ dispatch directly - resolving `/boot`, resolving a module through it,
 and a full `cd /boot` / `cd ..` round trip - alongside `TmpFS.selftest()`
 checking the demo modules themselves are found and readable.
 
+## Slice<T>
+
+A bounds-checked *view* into memory someone else owns - `{ptr, len}`, a
+plain value type (like `Pair<A, B>`, not an owning container: no
+constructor/destructor, nothing to allocate or free). Replaces a raw `T*`
+passed around together with a separately-tracked count - nothing stops
+those two from drifting out of sync, or an index from running off the
+end - with one value `slice_get`/`slice_set` actually validate before
+touching memory:
+
+```swift
+func sum(s: Slice<int>) -> int {
+    let total: int = 0
+    let i: uint = 0
+    while i < s.len {
+        total = total + slice_get(s, i)
+        i = i + 1
+    }
+    return total
+}
+
+func main() -> int {
+    let arr: int[5]
+    arr[0] = 10
+    arr[1] = 20
+    let view: Slice<int> = Slice { ptr: arr as int*, len: 2 }
+    return sum(view) // 30
+}
+```
+
+Out-of-bounds `slice_get`/`slice_set` calls `llpl_panic` (prelude.llpl)
+rather than reading/writing past `len` - see [Panics](#panics) below for
+what that does on each target. `Vector<T>.get()`/`.set()` are bounds-checked
+the same way now, and `Vector<T>.as_slice()` returns a `Slice<T>` view of
+exactly its live elements (valid only until the next reallocating `push`),
+so a function like `sum` above works on a fixed array, a `Vector<T>`, or
+any other buffer without needing to know which. See `test/slice_demo.llpl`
+for the full runnable version this is taken from.
+
 ## Data Structures
 
 ### Stack
 
+A real, complete `Stack` - unlike a raw `int*`, `self.data`'s bounds are
+checked on every push/pop:
+
 ```swift
 class Stack {
-    let data: int*
+    let data: Slice<int>
+    let backing: int*
     let capacity: int
     let top: int
 
     constructor(cap: int) {
         self.capacity = cap
         self.top = 0
-        // In real code, allocate data array
+        self.backing = llpl_alloc((cap as uint) * sizeof(int)) as int*
+        self.data = Slice { ptr: self.backing, len: cap as uint }
     }
 
     destructor() {
-        // Free data array
+        llpl_free(self.backing as char*)
     }
 
     func push(value: int) -> bool {
         if self.top >= self.capacity {
-            return false as bool
+            return false
         }
-        self.data[self.top] = value
+        slice_set(self.data, self.top as uint, value)
         self.top = self.top + 1
-        return true as bool
+        return true
     }
 
     func pop() -> int {
@@ -1077,11 +1121,11 @@ class Stack {
             return -1
         }
         self.top = self.top - 1
-        return self.data[self.top]
+        return slice_get(self.data, self.top as uint)
     }
 
     func is_empty() -> bool {
-        return self.top == 0 as bool
+        return self.top == 0
     }
 }
 ```
@@ -1090,7 +1134,8 @@ class Stack {
 
 ```swift
 class RingBuffer {
-    let buffer: char*
+    let data: Slice<char>
+    let backing: char*
     let size: int
     let read_pos: int
     let write_pos: int
@@ -1099,33 +1144,34 @@ class RingBuffer {
         self.size = size
         self.read_pos = 0
         self.write_pos = 0
-        // Allocate buffer
+        self.backing = llpl_alloc(size as uint) as char*
+        self.data = Slice { ptr: self.backing, len: size as uint }
     }
 
     destructor() {
-        // Free buffer
+        llpl_free(self.backing as char*)
     }
 
-    func write(data: char) -> bool {
+    func write(value: char) -> bool {
         let next: int = (self.write_pos + 1) % self.size
 
         if next == self.read_pos {
-            return false as bool  // Buffer full
+            return false // Buffer full
         }
 
-        self.buffer[self.write_pos] = data
+        slice_set(self.data, self.write_pos as uint, value)
         self.write_pos = next
-        return true as bool
+        return true
     }
 
     func read() -> int {
         if self.read_pos == self.write_pos {
-            return -1  // Buffer empty
+            return -1 // Buffer empty
         }
 
-        let data: char = self.buffer[self.read_pos]
+        let value: char = slice_get(self.data, self.read_pos as uint)
         self.read_pos = (self.read_pos + 1) % self.size
-        return data as int
+        return value as int
     }
 
     func available() -> int {

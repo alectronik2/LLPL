@@ -170,6 +170,33 @@ func log(msg: char*) {
     }
 }
 
+// Overrides runtime.c's weak llpl_panic_putc/llpl_panic_halt hooks (see
+// prelude.llpl's extern declaration and runtime.c's own comment on both) -
+// bare, non-namespaced top-level functions so their C names come out
+// exactly "llpl_panic_putc"/"llpl_panic_halt", which is what makes this a
+// real link-time override of the weak default (silent no-op + infinite
+// loop) rather than a plain declaration; kernel.c and runtime.c are
+// compiled and linked separately (see the Makefile), so this is ordinary
+// "the strong symbol wins" C linking, nothing LLPL-specific.
+//
+// Without this, any panic in this kernel - which Slice<T>/Vector<T>'s
+// bounds checks (prelude.llpl) can now genuinely trigger - would vanish
+// silently and hang forever: not acceptable for something meant to be
+// debuggable. Mirrors both outputs log()/emit() already write to.
+func llpl_panic_putc(c: char) {
+    HAL.Serial.write_char(c)
+    if screen != null {
+        screen.putchar(c)
+    }
+}
+
+func llpl_panic_halt() {
+    HAL.disable_interrupts()
+    while true {
+        HAL.halt()
+    }
+}
+
 // Task entry points (see task.llpl) - each becomes its own preemptible task
 // via Task.spawn(name as uint), run on its own dedicated stack.
 

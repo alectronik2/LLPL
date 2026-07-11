@@ -34,6 +34,14 @@ extern func llpl_alloc(size: uint) -> char*
 extern func llpl_free(ptr: char*)
 extern func llpl_memcpy(dest: char*, src: char*, count: uint)
 
+// Prints "PANIC: <msg>\n" and halts - stderr+abort() on a hosted target,
+// or (freestanding) whatever a kernel/port wired up via
+// llpl_set_panic_handler/the weak llpl_panic_putc+llpl_panic_halt hooks
+// (see runtime.c's own comment on all three - examples/baremetal_demo's
+// kernel.llpl overrides the weak hooks so a panic is never silent there).
+// Used below by Slice<T>/Vector<T>'s bounds checks.
+extern func llpl_panic(msg: char*)
+
 // An owned, heap-allocated, NUL-terminated byte string - unlike `string`
 // (a bare `char*` alias with no ownership of its own), a String copies its
 // data in on construction and frees it on destruction, so it's safe to
@@ -270,6 +278,36 @@ class String {
     }
 }
 
+// A bounds-checked *view* into memory someone else owns - a plain
+// {ptr, len} value type (like Pair<A, B>, not an owning container: no
+// constructor/destructor, nothing to allocate or free) that turns a raw
+// `T*` + a separately-tracked count - passed around together purely by
+// convention, with nothing stopping them from drifting out of sync or an
+// index from running off the end - into one value slice_get/slice_set
+// can actually validate before ever touching memory. Build one directly
+// with a struct literal (`Slice<int> { ptr: buf, len: 10 }`) over a fixed
+// array, a raw `llpl_alloc`'d buffer, or see Vector<T>.as_slice() below.
+struct Slice<T> {
+    let ptr: T*
+    let len: uint
+}
+
+// Panics (see llpl_panic above) rather than reading/writing past `len` -
+// the entire reason this exists instead of plain `ptr[index]`.
+func slice_get<T>(s: Slice<T>, index: uint) -> T {
+    if index >= s.len {
+        llpl_panic("Slice.get: index out of bounds")
+    }
+    return s.ptr[index]
+}
+
+func slice_set<T>(s: Slice<T>, index: uint, value: T) {
+    if index >= s.len {
+        llpl_panic("Slice.set: index out of bounds")
+    }
+    s.ptr[index] = value
+}
+
 // A dynamic, growable array - the generic analogue of manually managing an
 // `llpl_alloc`'d buffer + length + capacity by hand. `sizeof(T)` (see
 // codegen.d's SizeofExpr handling) is what makes this possible without any
@@ -324,10 +362,16 @@ class Vector<T> {
     }
 
     func get(index: int) -> T {
+        if index < 0 || index >= self.length {
+            llpl_panic("Vector.get: index out of bounds")
+        }
         return self.data[index]
     }
 
     func set(index: int, item: T) {
+        if index < 0 || index >= self.length {
+            llpl_panic("Vector.set: index out of bounds")
+        }
         self.data[index] = item
     }
 
@@ -342,6 +386,16 @@ class Vector<T> {
 
     func is_empty() -> bool {
         return self.length == 0
+    }
+
+    // A bounds-checked view of exactly this Vector's *live* elements
+    // (length, not capacity) - valid only until the next push() past
+    // capacity, which may grow() and reallocate self.data out from under
+    // any slice taken before that (the same "invalidated by a resize"
+    // caveat a C++ vector iterator or a Rust &[T] borrow would document,
+    // just not compiler-enforced here).
+    func as_slice() -> Slice<T> {
+        return Slice { ptr: self.data, len: self.length as uint }
     }
 }
 

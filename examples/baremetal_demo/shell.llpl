@@ -389,6 +389,7 @@ namespace Shell {
         print("  colors        - show the 16-color palette\n")
         print("  ticks         - show the timer tick count\n")
         print("  bt            - print a raw frame-pointer backtrace\n")
+        print("  panic         - deliberately trigger a bounds-check panic (never returns)\n")
         print("  echo T        - print T back\n")
         print("  peek ADDR     - read one byte at a hex address\n")
         print("  poke ADDR VAL - write one byte at a hex address\n")
@@ -440,6 +441,17 @@ namespace Shell {
 
     func cmd_bt() {
         Backtrace.print()
+    }
+
+    // Deliberately triggers Vector<T>'s bounds-check panic (prelude.llpl) -
+    // proof that llpl_panic actually reaches the screen/serial and halts
+    // cleanly here (see kernel.llpl's llpl_panic_putc/llpl_panic_halt
+    // overrides), instead of the runtime's default silent-hang weak hooks.
+    // This never returns.
+    func cmd_panic() {
+        let v: Vector<int> = new Vector<int>()
+        v.push(1)
+        v.get(5) // out of bounds - panics
     }
 
     // "alloc" - reserves one 4KB physical page frame and reports its
@@ -724,6 +736,9 @@ namespace Shell {
             }
             case "bt" => {
                 cmd_bt()
+            }
+            case "panic" => {
+                cmd_panic()
             }
             case "alloc" => {
                 cmd_alloc()
