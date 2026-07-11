@@ -201,7 +201,7 @@ class Parser {
         } else if (check(TokenType.Impl)) {
             return implDecl();
         } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
-            return varDecl();
+            return letDecl();
         } else {
             error("Expected declaration");
             return null;
@@ -761,33 +761,145 @@ class Parser {
         return new VarDecl(name, type, initializer, isConst, declLine, declColumn, bitWidth, isVolatile);
     }
 
-    // Closure types look like `(T1, T2) -> R` - a parenthesized,
-    // comma-separated list of *types only* (no parameter names, unlike a
-    // real parameter list) followed by a mandatory `->` and return type.
-    // They compile down to the single generic `__LLPL_Closure` struct (see
-    // codegen.d), so the parsed Type just records the signature on the
-    // side via closureParams/closureReturnType for call-site type checking.
-    private bool closureTypeAhead() {
-        return check(TokenType.LeftParen);
+    // Parses a destructuring pattern: a plain name, a tuple of patterns, or
+    // `TypeName { field, field, ... }`. Does not consume the optional `: Type`
+    // annotation or `= initializer` that follow the pattern.
+    private Pattern parsePattern() {
+        int startLine = current.line;
+        int startColumn = current.column;
+
+        if (match(TokenType.LeftParen)) {
+            Pattern[] elements;
+            if (!check(TokenType.RightParen)) {
+                do {
+                    elements ~= parsePattern();
+                } while (match(TokenType.Comma));
+            }
+            expect(TokenType.RightParen);
+            if (elements.length < 2) {
+                errorAt(startLine, startColumn,
+                    "Tuple pattern must contain at least two elements");
+            }
+            return new TuplePattern(elements, startLine, startColumn);
+        }
+
+        Token nameToken = expect(TokenType.Identifier);
+        string name = nameToken.value;
+
+        if (check(TokenType.LeftBrace)) {
+            // Struct pattern: TypeName { field, field, ... }
+            expect(TokenType.LeftBrace);
+            string[] fieldNames;
+            if (!check(TokenType.RightBrace)) {
+                do {
+                    fieldNames ~= expect(TokenType.Identifier).value;
+                } while (match(TokenType.Comma));
+            }
+            expect(TokenType.RightBrace);
+            if (fieldNames.length == 0) {
+                errorAt(startLine, startColumn, "Struct pattern must name at least one field");
+            }
+            Type type = new Type(name);
+            return new StructPattern(type, fieldNames, startLine, startColumn);
+        }
+
+        return new BindingPattern(name, nameToken.line, nameToken.column);
     }
 
-    private Type parseClosureType() {
-        expect(TokenType.LeftParen);
-        Parameter[] closureParams;
-        if (!check(TokenType.RightParen)) {
-            do {
-                Type paramType = parseType();
-                closureParams ~= new Parameter("", paramType);
-            } while (match(TokenType.Comma));
-        }
-        expect(TokenType.RightParen);
-        expect(TokenType.Arrow);
-        Type returnType = parseType();
+    // `let`/`const`/`volatile` statement or for-init. Returns either a plain
+    // VarDecl (for a single-name binding) or a DestructuringStmt.
+    private ASTNode letDecl() {
+        int declLine = current.line;
+        int declColumn = current.column;
 
-        Type t = new Type("__LLPL_Closure");
-        t.closureParams = closureParams;
-        t.closureReturnType = returnType;
-        return t;
+        bool isVolatile = match(TokenType.Volatile);
+
+        bool isConst = false;
+        if (match(TokenType.Const)) {
+            isConst = true;
+        } else {
+            expect(TokenType.Let);
+        }
+
+        Pattern pattern = parsePattern();
+
+        // A simple binding can follow the existing VarDecl path, which handles
+        // bit-fields and keeps all existing codegen unchanged.
+        if (auto bind = cast(BindingPattern)pattern) {
+            Type type = null;
+            if (match(TokenType.Colon)) {
+                type = parseType();
+            }
+            int bitWidth = -1;
+            if (match(TokenType.Colon)) {
+                Token widthToken = expect(TokenType.Integer, "Expected bit-field width");
+                bitWidth = to!int(widthToken.value);
+            }
+            ASTNode initializer = null;
+            if (match(TokenType.Assign)) {
+                initializer = expression();
+            }
+            if (type is null && initializer is null) {
+                errorAt(bind.line, bind.column,
+                    format("Cannot infer type of '%s': declare a type or provide an initializer", bind.name));
+            }
+            return new VarDecl(bind.name, type, initializer, isConst, declLine, declColumn,
+                bitWidth, isVolatile);
+        }
+
+        Type type = null;
+        if (match(TokenType.Colon)) {
+            type = parseType();
+        }
+        ASTNode initializer = null;
+        if (match(TokenType.Assign)) {
+            initializer = expression();
+        }
+        if (initializer is null) {
+            errorAt(declLine, declColumn, "Destructuring declaration requires an initializer");
+        }
+        return new DestructuringStmt(pattern, type, initializer, isConst, isVolatile,
+            declLine, declColumn);
+    }
+
+    // Parenthesized type syntax covers three things:
+    //   - `(T1, T2) -> R` / `() -> R` / `(T) -> R`  closure types
+    //   - `(T, U)` and nested variants               tuple types
+    //   - `(T)`                                      parenthesized type
+    private Type parseParenType() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.LeftParen);
+
+        if (check(TokenType.RightParen)) {
+            expect(TokenType.RightParen);
+            expect(TokenType.Arrow);
+            Type ret = parseType();
+            Type t = new Type("__LLPL_Closure");
+            t.closureReturnType = ret;
+            return t;
+        }
+
+        Type first = parseType();
+        if (match(TokenType.Comma)) {
+            Type[] elems = [first];
+            do {
+                elems ~= parseType();
+            } while (match(TokenType.Comma));
+            expect(TokenType.RightParen);
+            return makeTupleType(elems, startLine, startColumn);
+        }
+
+        expect(TokenType.RightParen);
+        if (match(TokenType.Arrow)) {
+            Type ret = parseType();
+            Type t = new Type("__LLPL_Closure");
+            t.closureParams = [new Parameter("", first)];
+            t.closureReturnType = ret;
+            return t;
+        }
+
+        return first;
     }
 
     // A closing `>` for a `<...>` type-argument list, tolerant of nested
@@ -811,9 +923,19 @@ class Parser {
         error(format("Expected Greater, got %s", current.type));
     }
 
+    private Type makeTupleType(Type[] elems, int line, int column) {
+        if (elems.length < 2 || elems.length > 8) {
+            errorAt(line, column, format("Tuple arity %d is not supported (use 2..8)", elems.length));
+        }
+        string name = format("__LLPL_Tuple%d", elems.length);
+        Type t = new Type(name);
+        t.typeArgs = elems;
+        return t;
+    }
+
     private Type parseType() {
-        if (closureTypeAhead()) {
-            return parseClosureType();
+        if (check(TokenType.LeftParen)) {
+            return parseParenType();
         }
         string name = expect(TokenType.Identifier).value;
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
@@ -918,7 +1040,7 @@ class Parser {
         } else if (check(TokenType.Match)) {
             return matchStmt();
         } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
-            return varDecl();
+            return letDecl();
         } else if (check(TokenType.LeftBrace)) {
             return block();
         } else if (check(TokenType.Quote)) {
@@ -1123,7 +1245,7 @@ class Parser {
         // init
         if (!check(TokenType.Comma)) {
             if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
-                initializer = varDecl();
+                initializer = letDecl();
             } else {
                 initializer = new ExprStmt(expression());
             }
@@ -1592,6 +1714,16 @@ class Parser {
             bool savedNoStructLiteral = noStructLiteral;
             noStructLiteral = false;
             ASTNode expr = expression();
+            if (match(TokenType.Comma)) {
+                // Tuple literal: (e1, e2, ...)
+                ASTNode[] elements = [expr];
+                do {
+                    elements ~= expression();
+                } while (match(TokenType.Comma));
+                expect(TokenType.RightParen);
+                noStructLiteral = savedNoStructLiteral;
+                return new TupleLiteral(elements, tokLine, tokColumn);
+            }
             expect(TokenType.RightParen);
             noStructLiteral = savedNoStructLiteral;
             return expr;

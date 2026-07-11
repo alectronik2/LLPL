@@ -156,6 +156,53 @@ let ptr: void* = malloc(100)
 defer free(ptr)
 ```
 
+### Inline Assembly
+```swift
+func read_cr0() -> uint {
+    let value: uint = 0
+    asm("mov %%cr0, %0" : "=r"(value))
+    return value
+}
+```
+
+### Tuples and Destructuring
+```swift
+func pair() -> (int, int) {
+    return (1, 2)
+}
+
+func main() -> int {
+    let t: (int, int) = (10, 20)
+    let a: int = t._0
+    let b: int = t._1
+
+    let (x, y) = pair()          // tuple destructuring
+
+    struct Point { let x: int; let y: int }
+    let p = Point { x: 3, y: 4 }
+    let Point { px, py } = p     // struct destructuring
+
+    return 0
+}
+```
+
+### Traits and Bounded Generics
+```swift
+trait Hashable {
+    func hash() -> uint
+    func equals(other: Self) -> bool
+}
+
+impl Hashable for int {
+    func hash() -> uint { return self as uint }
+    func equals(other: int) -> bool { return self == other }
+}
+
+func hash_of<T: Hashable>(v: T) -> uint {
+    return v.hash()
+}
+```
+
 ## Building a Kernel
 
 ### Prerequisites
@@ -236,6 +283,38 @@ func use_buffer() {
 
     // Use buffer...
     // Automatically cleaned up
+}
+```
+
+### Error Handling with Result<T, E>
+```swift
+func safe_div(a: int, b: int) -> Result<int, char*> {
+    let r: Result<int, char*> = new Result<int, char*>()
+    if b == 0 {
+        r.set_err("division by zero")
+        return r
+    }
+    r.set_ok(a / b)
+    return r
+}
+
+func sum(a: int, b: int, c: int, d: int) -> Result<int, char*> {
+    let x: int = safe_div(a, b)?
+    let y: int = safe_div(c, d)?
+    let r: Result<int, char*> = new Result<int, char*>()
+    r.set_ok(x + y)
+    return r
+}
+```
+
+### Panics
+```swift
+extern func llpl_panic(msg: char*)
+
+func must_be_positive(n: int) {
+    if n <= 0 {
+        llpl_panic("expected positive value")
+    }
 }
 ```
 

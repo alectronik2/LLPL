@@ -716,3 +716,62 @@ class HashMap<K: Hashable, V> {
         return self.count
     }
 }
+
+// Compiler-internal tuple representations. `(T, U)` syntax desugars to
+// `__LLPL_Tuple2<T, U>`; fields are `_0`, `_1`, etc. These are ordinary
+// generic structs so they reuse the normal monomorphization path.
+struct __LLPL_Tuple2<A, B> {
+    let _0: A
+    let _1: B
+}
+
+struct __LLPL_Tuple3<A, B, C> {
+    let _0: A
+    let _1: B
+    let _2: C
+}
+
+struct __LLPL_Tuple4<A, B, C, D> {
+    let _0: A
+    let _1: B
+    let _2: C
+    let _3: D
+}
+
+struct __LLPL_Tuple5<A, B, C, D, E> {
+    let _0: A
+    let _1: B
+    let _2: C
+    let _3: D
+    let _4: E
+}
+
+struct __LLPL_Tuple6<A, B, C, D, E, F> {
+    let _0: A
+    let _1: B
+    let _2: C
+    let _3: D
+    let _4: E
+    let _5: F
+}
+
+struct __LLPL_Tuple7<A, B, C, D, E, F, G> {
+    let _0: A
+    let _1: B
+    let _2: C
+    let _3: D
+    let _4: E
+    let _5: F
+    let _6: G
+}
+
+struct __LLPL_Tuple8<A, B, C, D, E, F, G, H> {
+    let _0: A
+    let _1: B
+    let _2: C
+    let _3: D
+    let _4: E
+    let _5: F
+    let _6: G
+    let _7: H
+}

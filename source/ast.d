@@ -44,9 +44,11 @@ enum NodeType {
     LambdaExpr,
     SizeofExpr,
     StructLiteral,
+    TupleLiteral,
     PropagateExpr,
     TraitDecl,
-    ImplDecl
+    ImplDecl,
+    DestructuringStmt
 }
 
 abstract class ASTNode {
@@ -243,6 +245,18 @@ class Type {
                 result ~= p.type.toString();
             }
             result ~= ") -> " ~ closureReturnType.toString();
+            return result;
+        }
+        // Pretty-print compiler-internal tuple types as (T, U, ...).
+        if (name.length > 13 && name[0 .. 13] == "__LLPL_Tuple" && typeArgs.length > 0) {
+            string result = "(";
+            foreach (i, arg; typeArgs) {
+                if (i > 0) result ~= ", ";
+                result ~= arg.toString();
+            }
+            result ~= ")";
+            if (isPointer) result ~= "*";
+            if (isArray) result ~= "[]";
             return result;
         }
         string result = name;
@@ -473,6 +487,68 @@ class VarDecl : ASTNode {
         this.initializer = initializer;
         this.isConst = isConst;
         this.bitWidth = bitWidth;
+        this.isVolatile = isVolatile;
+    }
+}
+
+// Patterns are used only by DestructuringStmt; they are not ASTNodes
+// themselves but refer to source locations and names.
+abstract class Pattern {
+    int line;
+    int column;
+
+    this(int line = 0, int column = 0) {
+        this.line = line;
+        this.column = column;
+    }
+}
+
+class BindingPattern : Pattern {
+    string name;
+
+    this(string name, int line = 0, int column = 0) {
+        super(line, column);
+        this.name = name;
+    }
+}
+
+class TuplePattern : Pattern {
+    Pattern[] elements;
+
+    this(Pattern[] elements, int line = 0, int column = 0) {
+        super(line, column);
+        this.elements = elements;
+    }
+}
+
+class StructPattern : Pattern {
+    Type type;
+    string[] fieldNames;
+
+    this(Type type, string[] fieldNames, int line = 0, int column = 0) {
+        super(line, column);
+        this.type = type;
+        this.fieldNames = fieldNames;
+    }
+}
+
+// `let (a, b) = expr` or `let Point { x, y } = expr`.
+// Simple single-name bindings are still represented as VarDecl; this node
+// is only produced for non-trivial patterns.
+class DestructuringStmt : ASTNode {
+    Pattern pattern;
+    Type type;            // optional explicit annotation for the RHS
+    ASTNode initializer;
+    bool isConst;
+    bool isVolatile;
+
+    this(Pattern pattern, Type type, ASTNode initializer, bool isConst, bool isVolatile,
+         int line = 0, int column = 0) {
+        super(NodeType.DestructuringStmt, line, column);
+        this.pattern = pattern;
+        this.type = type;
+        this.initializer = initializer;
+        this.isConst = isConst;
         this.isVolatile = isVolatile;
     }
 }
@@ -864,6 +940,18 @@ class PropagateExpr : ASTNode {
     this(ASTNode operand, int line = 0, int column = 0) {
         super(NodeType.PropagateExpr, line, column);
         this.operand = operand;
+    }
+}
+
+// `(e1, e2, ...)` - a tuple value literal. The arity is fixed at parse
+// time and must be within the range of __LLPL_TupleN structs defined in
+// prelude.llpl (currently 2..8).
+class TupleLiteral : ASTNode {
+    ASTNode[] elements;
+
+    this(ASTNode[] elements, int line = 0, int column = 0) {
+        super(NodeType.TupleLiteral, line, column);
+        this.elements = elements;
     }
 }
 

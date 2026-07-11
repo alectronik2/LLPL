@@ -9,8 +9,13 @@ A low-level programming language with Swift/JavaScript-like syntax that compiles
 - **No Expression Parentheses**: Clean if/while statements without parentheses
 - **Classes**: Object-oriented programming with constructors and destructors
 - **Automatic Reference Counting**: Memory management without manual malloc/free
+- **RAII for Class Locals**: Automatic `rc_release` at scope exit, on reassignment, and at function returns
+- **Traits / Bounded Generics**: Static interfaces for shared behavior (`Hashable`, `Comparable`, ...)
+- **Inline Assembly**: GCC-style extended `asm(...)` statements for kernel/low-level code
 - **Defer Statement**: Resource cleanup similar to Swift
 - **Macros**: Compile-time expansion with `quote`/`unquote`
+- **Result<T, E> with Traces**: `?` propagation captures a chained `file:line` trace
+- **Panics with Hooks**: `llpl_panic("...")` prints a message and aborts; optional handler for cleanup
 - **C FFI**: Easy interoperability with C code
 - **Bare Metal**: Compiles to efficient C code for kernel development
 
@@ -61,6 +66,55 @@ class Point {
 let p: Point = new Point(10, 20)
 let dist: int = p.distance()
 ```
+
+### Traits / Bounded Generics
+
+A `trait` declares a contract of method signatures. An `impl Trait for Type`
+block provides the bodies, allowing primitives, structs, and classes to gain
+methods. Dispatch is static (monomorphization) - there are no vtables or trait
+objects.
+
+```swift
+trait Hashable {
+    func hash() -> uint
+    func equals(other: Self) -> bool
+}
+
+impl Hashable for int {
+    func hash() -> uint { return self as uint }
+    func equals(other: int) -> bool { return self == other }
+}
+
+// T must have a matching impl, checked when the generic is instantiated.
+func use_hash<T: Hashable>(key: T) -> uint {
+    return key.hash()
+}
+```
+
+`prelude.llpl` ships `Hashable` and `Comparable`. `HashMap<K: Hashable, V>`
+uses `key.hash()` / `key.equals(other)` so `HashMap<String, V>` compares string
+content, not pointer identity.
+
+### Inline Assembly
+
+GCC-style extended inline assembly is available through `asm(...)`:
+
+```swift
+func read_cr0() -> uint {
+    let value: uint = 0
+    asm("mov %%cr0, %0" : "=r"(value))
+    return value
+}
+
+func add_asm(a: int, b: int) -> int {
+    asm("addq %1, %0" : "=r"(a) : "r"(b) : "cc")
+    return a
+}
+```
+
+Syntax: `asm("template" : outputs : inputs : clobbers)`. Operands use
+constraint-string-then-expression pairs (`"=r"(dest)`), exactly like GCC's
+extended asm. Multiple template strings are concatenated.
 
 ### Control Flow
 
@@ -117,6 +171,61 @@ func compute() -> int {
     let x: int = 0
     assignTwice!(x, 41)
     return square!(x)
+}
+```
+
+### Result<T, E> and Error Traces
+
+`Result<T, E>` is a generic "value or error" box from `prelude.llpl`. The `?`
+operator unwraps a `Result` or returns early with the error; each propagation
+step records the call-site location, building a chained trace.
+
+```swift
+func safe_div(a: int, b: int) -> Result<int, char*> {
+    let r: Result<int, char*> = new Result<int, char*>()
+    if b == 0 {
+        r.set_err("division by zero")
+        return r
+    }
+    r.set_ok(a / b)
+    return r
+}
+
+func sum_of_divisions(a: int, b: int, c: int, d: int) -> Result<int, char*> {
+    let first: int = safe_div(a, b)?   // trace starts here on error
+    let second: int = safe_div(c, d)?  // chained here if this fails
+    let r: Result<int, char*> = new Result<int, char*>()
+    r.set_ok(first + second)
+    return r
+}
+
+func main() -> int {
+    let r: Result<int, char*> = sum_of_divisions(10, 0, 20, 4)
+    if r.is_err() {
+        // r.get_trace() might return "file:14 -> file:21"
+    }
+    return 0
+}
+```
+
+### Panics
+
+`llpl_panic("message")` prints the message and aborts on hosted targets. A
+panic handler can be installed for logging or cleanup; it runs before the
+default halt/abort.
+
+```swift
+extern func llpl_panic(msg: char*)
+extern func llpl_set_panic_handler(handler: (char*) -> void)
+
+func my_handler(msg: char*) {
+    // log msg, clean up resources, etc.
+}
+
+func main() -> int {
+    llpl_set_panic_handler(my_handler)
+    llpl_panic("unrecoverable error")
+    return 0
 }
 ```
 

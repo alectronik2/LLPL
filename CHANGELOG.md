@@ -1,5 +1,55 @@
 # LLPL Changelog
 
+## Unreleased
+
+### Major Features
+
+#### Traits / Bounded Generics
+- `trait` declarations define method-signature contracts.
+- `impl Trait for Type { ... }` provides method bodies for primitives, structs,
+  and classes.
+- Generic type parameters can declare bounds: `func f<T: Hashable>(...)`.
+- Static dispatch via monomorphization - no vtables or trait objects.
+
+#### Inline Assembly
+- GCC-style extended `asm(...)` statements: `asm("template" : outputs : inputs : clobbers)`.
+- Supports input/output operands with constraints and clobber lists.
+
+#### RAII for Class-Typed Locals
+- Automatic `rc_release` at scope exit, on reassignment, and at function returns.
+- Retain/release lowering for assignments to owning class locals.
+
+#### Result<T, E> Error Traces
+- `Result<T, E>` carries a `trace: char*` field.
+- The `?` operator records call-site locations and chains them through
+  propagation (`file:10 -> file:20`).
+
+#### Panics with Hooks
+- `llpl_panic("message")` prints a message and aborts on hosted targets.
+- `llpl_set_panic_handler(...)` allows custom cleanup/logging before halt.
+
+#### Improved Allocator
+- Replaced the bump allocator with a free-list allocator supporting `rc_free`
+  and coalescing of adjacent free blocks.
+
+#### String Hashable
+- `impl Hashable for String` so `HashMap<String, V>` compares string content,
+  not pointer identity.
+
+#### Tuples and Destructuring
+- Tuple types: `(int, char*)`, `((int, int), bool)`.
+- Tuple literals: `(1, 2)`, `("hello", true, 3)`.
+- Multi-value returns: `func split() -> (int, int) { return (1, 2) }`.
+- Destructuring `let`/`const`:
+  - `let (a, b) = pair`
+  - `let Point { x, y } = p`
+  - nested patterns: `let ((a, b), c) = nested`
+- Tuple fields are positional: `_0`, `_1`, `_2`, etc.
+
+### Tooling
+- Added `run_tests.sh` to compile and execute every `test/*.llpl`.
+- Golden `.expected` files and `.expected_fail` markers for abort tests.
+
 ## Version 0.2.0 - Module System & 64-bit Support
 
 ### Major Features

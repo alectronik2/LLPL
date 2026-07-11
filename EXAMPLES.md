@@ -433,10 +433,12 @@ method bodies, and an `impl` target must be concrete - `impl X for
 Vector<int>` (a generic type) is rejected.
 
 `prelude.llpl` ships two traits: `Hashable` (`hash() -> uint`,
-`equals(other: Self) -> bool`, with impls for `int`/`uint`/`char`/`char*` -
-see `HashMap<K: Hashable, V>` above) and `Comparable` (`compare(other:
+`equals(other: Self) -> bool`, with impls for `int`/`uint`/`char`/`char*`
+and `String` - the `char*` and `String` impls hash/compare by actual string
+content, not pointer identity) and `Comparable` (`compare(other:
 Self) -> int`, with impls for `int`/`uint`/`char`). See
-`test/traits_demo.llpl` for the full runnable version this is taken from.
+`test/traits_demo.llpl` and `test/test_hashmap_string.llpl` for full runnable
+versions.
 
 ## Pipe Operator
 
@@ -552,6 +554,50 @@ another struct literal - but a *bare* one directly as an if/while/for/
 match/foreach condition is rejected (it would be ambiguous with that
 construct's own following `{ body }`); wrap it in parens there instead.
 
+## Tuples and Destructuring
+
+Tuple types are written `(T, U, ...)`, tuple literals are written `(a, b, ...)`,
+and tuples are value types (they are implemented as generic structs in the
+prelude, with positional fields `_0`, `_1`, etc.).
+
+```swift
+struct Point {
+    let x: int
+    let y: int
+}
+
+func split() -> (int, int) {
+    return (10, 20)
+}
+
+func main() -> int {
+    // Explicit tuple type and positional access
+    let t: (int, int) = (1, 2)
+    let a: int = t._0
+    let b: int = t._1
+
+    // Type inference works too
+    let inferred = (3, 4)
+
+    // Multi-value return + destructuring
+    let (x, y) = split()
+
+    // Struct destructuring
+    let p = Point { x: 7, y: 8 }
+    let Point { px, py } = p
+
+    // Nested patterns
+    let nested = ((100, 200), 300)
+    let ((u, v), w) = nested
+
+    return 0
+}
+```
+
+Tuples are a normal value type, so they can be nested, returned from functions,
+and destructured with `let`/`const`. The positional accessors are `_0`, `_1`,
+`_2`, etc. Tuple arity is currently limited to 2..8.
+
 ## Result<T, E> and the `?` Operator
 
 `Result<T, E>` (in `prelude.llpl`, alongside `Optional<T>`) is a generic
@@ -588,6 +634,72 @@ func sum_of_divisions(a: int, b: int, c: int, d: int) -> Result<int, char*> {
     return result
 }
 ```
+
+Each `?` propagation step records the call-site `file:line` in the returned
+`Result`'s `trace` field. If the error travels through several functions the
+trace is chained (`a.llpl:5 -> b.llpl:12`). Use `get_trace()` to read it:
+
+```swift
+func main() -> int {
+    let r: Result<int, char*> = sum_of_divisions(10, 0, 20, 4)
+    if r.is_err() {
+        let trace: char* = r.get_trace()
+        if trace != null {
+            // trace might be "examples.llpl:14 -> examples.llpl:21"
+        }
+    }
+    return 0
+}
+```
+
+## Panics
+
+`llpl_panic("message")` halts the program with a message. On hosted targets it
+prints to stderr and calls `abort()`. A custom handler can be installed for
+logging or last-ditch cleanup:
+
+```swift
+extern func llpl_panic(msg: char*)
+extern func llpl_set_panic_handler(handler: (char*) -> void)
+
+func log_panic(msg: char*) {
+    // write msg to a serial log, free global resources, etc.
+}
+
+func main() -> int {
+    llpl_set_panic_handler(log_panic)
+    llpl_panic("unrecoverable error")
+    return 0
+}
+```
+
+## Inline Assembly
+
+GCC-style extended inline assembly is available through `asm(...)`:
+
+```swift
+func read_cr0() -> uint {
+    let value: uint = 0
+    asm("mov %%cr0, %0" : "=r"(value))
+    return value
+}
+
+func atomic_inc(p: int*) -> int {
+    let one: int = 1
+    let old: int = 0
+    asm("lock; xaddq %0, %1"
+        : "=r"(old), "+m"(*p)
+        : "0"(one)
+        : "cc", "memory")
+    return old
+}
+```
+
+Syntax: `asm("template" : outputs : inputs : clobbers)`. Outputs and inputs
+are comma-separated `"constraint"(expression)` pairs. Multiple consecutive
+string literals are concatenated into one template, so multi-line assembly is
+straightforward. See `generateAsm` in `source/codegen.d` for the exact mapping
+to GCC extended asm.
 
 ## Macros
 

@@ -131,6 +131,24 @@ class CodeGenerator {
         return result;
     }
 
+    // Builds the compiler-internal tuple type `__LLPL_TupleN<T1, ..., Tn>`.
+    // Arities outside 2..8 are rejected here; the parser already enforces the
+    // same limit for user-written tuple syntax.
+    private Type makeTupleType(Type[] elems, int line, int column) {
+        if (elems.length < 2 || elems.length > 8) {
+            throw new CompileError(format("Tuple arity %d is not supported (use 2..8)", elems.length),
+                currentModulePath, line, column);
+        }
+        string name = format("__LLPL_Tuple%d", elems.length);
+        Type t = new Type(name);
+        t.typeArgs = elems;
+        return t;
+    }
+
+    private string tupleFieldName(size_t i) {
+        return format("_%d", i);
+    }
+
     // Escapes a decoded LLPL string (already past lexer escape processing,
     // e.g. \x1b is a real ESC byte by this point) back into a C string
     // literal body: named escapes for the common control characters, and
@@ -1641,6 +1659,8 @@ class CodeGenerator {
             if (varDecl.initializer) {
                 if (varDecl.type.isNullableSugar) {
                     code ~= " = " ~ generateNullableWrap(varDecl.type, varDecl.initializer);
+                } else if (auto tupleLit = cast(TupleLiteral)varDecl.initializer) {
+                    code ~= " = " ~ generateTupleLiteral(tupleLit, declaredTypeAsWritten);
                 } else if (auto structLit = cast(StructLiteral)varDecl.initializer) {
                     code ~= " = " ~ generateStructLiteralValue(structLit, declaredTypeAsWritten);
                 } else {
@@ -1654,6 +1674,8 @@ class CodeGenerator {
                 code ~= " = " ~ format("%s_new()", varDecl.type.name);
             }
             code ~= ";\n";
+        } else if (auto destructStmt = cast(DestructuringStmt)node) {
+            code ~= generateDestructuringStmt(destructStmt);
         } else if (auto ifStmt = cast(IfStmt)node) {
             code ~= indent() ~ "if (" ~ generateExpression(ifStmt.condition) ~ ") {\n";
             indentLevel++;
@@ -1715,6 +1737,8 @@ class CodeGenerator {
             if (returnStmt.value) {
                 if (currentReturnType !is null && currentReturnType.isNullableSugar) {
                     code ~= " " ~ generateNullableWrap(currentReturnType, returnStmt.value);
+                } else if (auto tupleLit = cast(TupleLiteral)returnStmt.value) {
+                    code ~= " " ~ generateTupleLiteral(tupleLit, currentReturnTypeAsWritten);
                 } else if (auto structLit = cast(StructLiteral)returnStmt.value) {
                     code ~= " " ~ generateStructLiteralValue(structLit, currentReturnTypeAsWritten);
                 } else {
@@ -1808,6 +1832,20 @@ class CodeGenerator {
     // Also reused (with `subs` empty and `typeSubs` set) by the
     // monomorphization engine to stamp out a generic declaration's body
     // with its type parameters substituted - see cloneType above.
+    private Pattern clonePattern(Pattern pattern, ASTNode[string] subs, Type[string] typeSubs = null) {
+        if (auto bind = cast(BindingPattern)pattern) {
+            return new BindingPattern(bind.name, bind.line, bind.column);
+        } else if (auto tuplePat = cast(TuplePattern)pattern) {
+            Pattern[] cloned;
+            foreach (p; tuplePat.elements) cloned ~= clonePattern(p, subs, typeSubs);
+            return new TuplePattern(cloned, tuplePat.line, tuplePat.column);
+        } else if (auto structPat = cast(StructPattern)pattern) {
+            return new StructPattern(cloneType(structPat.type, typeSubs),
+                structPat.fieldNames.dup, structPat.line, structPat.column);
+        }
+        return null;
+    }
+
     private ASTNode cloneNode(ASTNode node, ASTNode[string] subs, Type[string] typeSubs = null) {
         if (node is null) return null;
 
@@ -1855,6 +1893,9 @@ class CodeGenerator {
         } else if (auto structLit = cast(StructLiteral)node) {
             return new StructLiteral(structLit.typeName, structLit.fieldNames.dup,
                 cloneNodes(structLit.fieldValues, subs, typeSubs), structLit.line, structLit.column);
+        } else if (auto tupleLit = cast(TupleLiteral)node) {
+            return new TupleLiteral(cloneNodes(tupleLit.elements, subs, typeSubs),
+                tupleLit.line, tupleLit.column);
         } else if (auto propExpr = cast(PropagateExpr)node) {
             return new PropagateExpr(cloneNode(propExpr.operand, subs, typeSubs), propExpr.line, propExpr.column);
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
@@ -1865,6 +1906,10 @@ class CodeGenerator {
         } else if (auto varDecl = cast(VarDecl)node) {
             return new VarDecl(varDecl.name, cloneType(varDecl.type, typeSubs), cloneNode(varDecl.initializer, subs, typeSubs),
                 varDecl.isConst, varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile);
+        } else if (auto destructStmt = cast(DestructuringStmt)node) {
+            return new DestructuringStmt(clonePattern(destructStmt.pattern, subs, typeSubs),
+                cloneType(destructStmt.type, typeSubs), cloneNode(destructStmt.initializer, subs, typeSubs),
+                destructStmt.isConst, destructStmt.isVolatile, destructStmt.line, destructStmt.column);
         } else if (auto ifStmt = cast(IfStmt)node) {
             return new IfStmt(cloneNode(ifStmt.condition, subs, typeSubs), cloneBlock(ifStmt.thenBlock, subs, typeSubs),
                 cloneBlock(ifStmt.elseBlock, subs, typeSubs));
@@ -2594,6 +2639,116 @@ class CodeGenerator {
         }
         result ~= " }";
         return result;
+    }
+
+    private string generateTupleLiteral(TupleLiteral lit, Type expectedType) {
+        Type tupleType;
+        if (expectedType !is null) {
+            tupleType = cloneType(expectedType);
+        } else {
+            Type[] elemTypes;
+            foreach (e; lit.elements) {
+                elemTypes ~= inferType(e);
+            }
+            tupleType = makeTupleType(elemTypes, lit.line, lit.column);
+        }
+
+        Type asWritten = cloneType(tupleType);
+        resolveType(tupleType);
+
+        if (tupleType.name !in structRegistry) {
+            throw new CompileError(format("Unknown tuple type '%s'", asWritten.toString()),
+                currentModulePath, lit.line, lit.column);
+        }
+        StructDecl decl = structRegistry[tupleType.name];
+        if (lit.elements.length != decl.fields.length) {
+            throw new CompileError(format(
+                "Tuple literal has %d element(s), but %s has %d field(s)",
+                lit.elements.length, asWritten.toString(), decl.fields.length),
+                currentModulePath, lit.line, lit.column);
+        }
+
+        string result = format("(%s){ ", tupleType.name);
+        foreach (i, e; lit.elements) {
+            if (i > 0) result ~= ", ";
+            result ~= format(".%s = %s", tupleFieldName(i), generateExpression(e));
+        }
+        result ~= " }";
+        return result;
+    }
+
+    private string generateDestructuringStmt(DestructuringStmt stmt) {
+        Type rhsType;
+        if (stmt.type !is null) {
+            rhsType = cloneType(stmt.type);
+        } else {
+            rhsType = inferType(stmt.initializer);
+        }
+
+        string tmp = format("__llpl_destruct_%d", tempVarCounter++);
+        auto tmpDecl = new VarDecl(tmp, rhsType, stmt.initializer, false, stmt.line, stmt.column);
+        string code = generateStatement(tmpDecl, false);
+
+        auto tmpIdent = new Identifier(tmp, stmt.line, stmt.column);
+        code ~= generatePatternBindings(stmt.pattern, tmpIdent, stmt.isConst, stmt.isVolatile);
+        return code;
+    }
+
+    private string generatePatternBindings(Pattern pattern, ASTNode sourceExpr,
+                                           bool isConst, bool isVolatile) {
+        string code = "";
+        if (auto bind = cast(BindingPattern)pattern) {
+            auto vd = new VarDecl(bind.name, null, sourceExpr, isConst, bind.line, bind.column);
+            vd.isVolatile = isVolatile;
+            code ~= generateStatement(vd, false);
+        } else if (auto tuplePat = cast(TuplePattern)pattern) {
+            Type sourceType = inferType(sourceExpr);
+            Type resolved = cloneType(sourceType);
+            resolveType(resolved);
+            if (resolved.name !in structRegistry) {
+                throw new CompileError(format("Cannot destructure a non-tuple value of type '%s'",
+                    sourceType.toString()), currentModulePath, tuplePat.line, tuplePat.column);
+            }
+            StructDecl decl = structRegistry[resolved.name];
+            if (tuplePat.elements.length != decl.fields.length) {
+                throw new CompileError(format(
+                    "Tuple pattern has %d element(s), but value of type '%s' has %d",
+                    tuplePat.elements.length, sourceType.toString(), decl.fields.length),
+                    currentModulePath, tuplePat.line, tuplePat.column);
+            }
+            foreach (i, elemPat; tuplePat.elements) {
+                auto member = new MemberExpr(sourceExpr, tupleFieldName(i),
+                    elemPat.line, elemPat.column);
+                code ~= generatePatternBindings(elemPat, member, isConst, isVolatile);
+            }
+        } else if (auto structPat = cast(StructPattern)pattern) {
+            Type resolved = cloneType(structPat.type);
+            resolveType(resolved);
+            bool isClass = (resolved.name in classRegistry) !is null;
+            bool isStruct = (resolved.name in structRegistry) !is null;
+            if (!isClass && !isStruct) {
+                throw new CompileError(format("Cannot destructure unknown type '%s'",
+                    structPat.type.toString()), currentModulePath, structPat.line, structPat.column);
+            }
+            ASTNode[] fields;
+            foreach (fieldName; structPat.fieldNames) {
+                auto member = new MemberExpr(sourceExpr, fieldName,
+                    structPat.line, structPat.column);
+                // Validate the field exists by inferring its type.
+                try {
+                    inferType(member);
+                } catch (Exception e) {
+                    throw new CompileError(format("'%s' has no field named '%s'",
+                        structPat.type.toString(), fieldName),
+                        currentModulePath, structPat.line, structPat.column);
+                }
+                auto vd = new VarDecl(fieldName, null, member, isConst,
+                    structPat.line, structPat.column);
+                vd.isVolatile = isVolatile;
+                code ~= generateStatement(vd, false);
+            }
+        }
+        return code;
     }
 
     // Mirrors resolveName's shape but returns "" (not the original name) on
@@ -3437,6 +3592,8 @@ class CodeGenerator {
             // plain (non-generic) struct, but resolveStructLiteralTarget
             // throws a clear error for a generic one used this way.
             return generateStructLiteralValue(structLit, null);
+        } else if (auto tupleLit = cast(TupleLiteral)node) {
+            return generateTupleLiteral(tupleLit, null);
         } else if (auto propExpr = cast(PropagateExpr)node) {
             return generatePropagateExpr(propExpr);
         } else if (auto callExpr = cast(CallExpr)node) {
@@ -3706,6 +3863,12 @@ class CodeGenerator {
             string mangledName;
             resolveStructLiteralTarget(structLit, null, mangledName); // throws for a generic one with no context
             return new Type(mangledName);
+        } else if (auto tupleLit = cast(TupleLiteral)expr) {
+            Type[] elemTypes;
+            foreach (e; tupleLit.elements) {
+                elemTypes ~= inferType(e);
+            }
+            return makeTupleType(elemTypes, tupleLit.line, tupleLit.column);
         } else if (auto propExpr = cast(PropagateExpr)expr) {
             Type operandType = inferType(propExpr.operand);
             if (auto classDecl = operandType.name in classRegistry) {
