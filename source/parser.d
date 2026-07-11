@@ -647,7 +647,33 @@ class Parser {
             int sigLine = current.line;
             int sigColumn = current.column;
             expect(TokenType.Function);
-            string methodName = expect(TokenType.Identifier).value;
+
+            // `func operator+(other: Self) -> Self` - same operator-token
+            // recognition functionDecl() uses for an impl's real method
+            // bodies, so a trait can require an overloadable operator by its
+            // source-level spelling. Resolved to its C-safe name (e.g.
+            // "op_add") once the parameter list (and so arity) is known,
+            // exactly like functionDecl() does - this is what
+            // processImplBlock's nominal name-matching compares an impl's
+            // own (identically-resolved) operator method names against.
+            bool isOperator = false;
+            string rawOp;
+            string methodName;
+            if (match(TokenType.Operator)) {
+                isOperator = true;
+                if (match(TokenType.LeftBracket)) {
+                    expect(TokenType.RightBracket);
+                    rawOp = "[]";
+                } else if (isOverloadableOperatorToken()) {
+                    rawOp = current.value;
+                    advance();
+                } else {
+                    error("Expected an overloadable operator after 'operator'");
+                }
+            } else {
+                methodName = expect(TokenType.Identifier).value;
+            }
+
             expect(TokenType.LeftParen);
             bool isVariadic;
             Parameter[] params = paramList(isVariadic);
@@ -656,6 +682,16 @@ class Parser {
             if (match(TokenType.Arrow)) {
                 returnType = parseType();
             }
+
+            if (isOperator) {
+                methodName = operatorMethodName(rawOp, params.length == 0);
+                if (methodName.length == 0) {
+                    errorAt(sigLine, sigColumn,
+                        format("'%s' isn't an overloadable %s operator", rawOp,
+                            params.length == 0 ? "unary" : "binary"));
+                }
+            }
+
             methods ~= new FunctionDecl(methodName, params, returnType, null, false, false, isVariadic,
                 sigLine, sigColumn);
         }

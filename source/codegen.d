@@ -3332,11 +3332,19 @@ class CodeGenerator {
         }
     }
 
-    // Finds the operator-overload method (see ast.operatorMethodName) a
-    // class defines for `op`, given the left/self operand's inferred type.
-    // Returns null if there isn't one - the caller falls back to the plain
-    // C operator.
-    private FunctionDecl findOperatorMethod(ASTNode selfOperand, string op, bool isUnary) {
+    // Finds the operator-overload method (see ast.operatorMethodName) `op`'s
+    // self/left operand's type defines, or null if there isn't one - the
+    // caller falls back to the plain C operator. Two independent sources,
+    // since a class can define one inline (`func operator+(...)` as an
+    // ordinary method, looked up via classRegistry like any other method)
+    // while a struct or primitive has no inline method syntax at all and can
+    // only ever gain one via `impl Add for TargetType { func operator+(...) }`
+    // (desugared by processImplBlock into an ordinary function named
+    // `<mangleTypeArg(target)>_op_add`, registered in functionRegistry) - a
+    // class can use either form, so both are checked. Used both to generate
+    // the overload call (see findOperatorMethodCallName) and, by inferType,
+    // to get the overload's return type for `a + b`-shaped expressions.
+    private FunctionDecl findOperatorMethodDecl(ASTNode selfOperand, string op, bool isUnary) {
         string methodName = operatorMethodName(op, isUnary);
         if (methodName.length == 0) return null;
         try {
@@ -3347,40 +3355,56 @@ class CodeGenerator {
                     if (method.name == methodName) return method;
                 }
             }
+            if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
+                return *fn;
+            }
         } catch (Exception e) {
             // fall through - not an overload
         }
         return null;
     }
 
+    // The mangled C call name for findOperatorMethodDecl's match - always
+    // `<mangleTypeArg(selfType)>_<methodName>`. Built from the bare
+    // operatorMethodName result, not the matched FunctionDecl's own .name -
+    // a class's inline method's .name is bare ("op_add"), but an impl
+    // block's desugared method is registered in functionRegistry under the
+    // already-fully-mangled name ("Vec2_op_add" - see processImplBlock), so
+    // using .name here would double the prefix for that second case.
+    private string findOperatorMethodCallName(ASTNode selfOperand, string op, bool isUnary) {
+        if (findOperatorMethodDecl(selfOperand, op, isUnary) is null) return "";
+        string methodName = operatorMethodName(op, isUnary);
+        try {
+            Type selfType = inferType(selfOperand);
+            resolveType(selfType);
+            return format("%s_%s", mangleTypeArg(selfType), methodName);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     private string tryBinaryOperatorOverloadCall(BinaryExpr binExpr) {
-        FunctionDecl method = findOperatorMethod(binExpr.left, binExpr.op, false);
-        if (method is null) return "";
-        Type selfType = inferType(binExpr.left);
-        resolveType(selfType);
-        return format("%s_%s(%s, %s)", selfType.name, method.name,
+        string callName = findOperatorMethodCallName(binExpr.left, binExpr.op, false);
+        if (callName.length == 0) return "";
+        return format("%s(%s, %s)", callName,
             generateExpression(binExpr.left), generateExpression(binExpr.right));
     }
 
     private string tryUnaryOperatorOverloadCall(UnaryExpr unaryExpr) {
-        FunctionDecl method = findOperatorMethod(unaryExpr.operand, unaryExpr.op, true);
-        if (method is null) return "";
-        Type selfType = inferType(unaryExpr.operand);
-        resolveType(selfType);
-        return format("%s_%s(%s)", selfType.name, method.name, generateExpression(unaryExpr.operand));
+        string callName = findOperatorMethodCallName(unaryExpr.operand, unaryExpr.op, true);
+        if (callName.length == 0) return "";
+        return format("%s(%s)", callName, generateExpression(unaryExpr.operand));
     }
 
     // Same idea as tryBinaryOperatorOverloadCall, for `arr[index]` where
-    // `arr` is a class instance defining `operator[]` (op_index). Read-only:
-    // there's no op_index= counterpart, so this never fires for the left
-    // side of an assignment in a way that would need an lvalue - see
+    // `arr` defines `operator[]` (op_index). Read-only: there's no
+    // op_index= counterpart, so this never fires for the left side of an
+    // assignment in a way that would need an lvalue - see
     // ast.operatorMethodName's doc comment.
     private string tryIndexOperatorOverloadCall(IndexExpr indexExpr) {
-        FunctionDecl method = findOperatorMethod(indexExpr.array, "[]", false);
-        if (method is null) return "";
-        Type selfType = inferType(indexExpr.array);
-        resolveType(selfType);
-        return format("%s_%s(%s, %s)", selfType.name, method.name,
+        string callName = findOperatorMethodCallName(indexExpr.array, "[]", false);
+        if (callName.length == 0) return "";
+        return format("%s(%s, %s)", callName,
             generateExpression(indexExpr.array), generateExpression(indexExpr.index));
     }
 
@@ -3966,7 +3990,7 @@ class CodeGenerator {
             }
             throw inferError(expr, "Cannot infer type of call expression");
         } else if (auto binExpr = cast(BinaryExpr)expr) {
-            FunctionDecl binOpMethod = findOperatorMethod(binExpr.left, binExpr.op, false);
+            FunctionDecl binOpMethod = findOperatorMethodDecl(binExpr.left, binExpr.op, false);
             if (binOpMethod !is null) {
                 return binOpMethod.returnType;
             }
@@ -3978,7 +4002,7 @@ class CodeGenerator {
                     return inferType(binExpr.left);
             }
         } else if (auto unaryExpr = cast(UnaryExpr)expr) {
-            FunctionDecl unaryOpMethod = findOperatorMethod(unaryExpr.operand, unaryExpr.op, true);
+            FunctionDecl unaryOpMethod = findOperatorMethodDecl(unaryExpr.operand, unaryExpr.op, true);
             if (unaryOpMethod !is null) {
                 return unaryOpMethod.returnType;
             }

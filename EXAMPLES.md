@@ -432,13 +432,73 @@ have at most one bound per type parameter in v1 (no `T: A + B`), no default
 method bodies, and an `impl` target must be concrete - `impl X for
 Vector<int>` (a generic type) is rejected.
 
-`prelude.llpl` ships two traits: `Hashable` (`hash() -> uint`,
-`equals(other: Self) -> bool`, with impls for `int`/`uint`/`char`/`char*`
-and `String` - the `char*` and `String` impls hash/compare by actual string
-content, not pointer identity) and `Comparable` (`compare(other:
-Self) -> int`, with impls for `int`/`uint`/`char`). See
+`prelude.llpl` ships `Hashable` (`hash() -> uint`, `equals(other: Self) ->
+bool`, with impls for `int`/`uint`/`char`/`char*` and `String` - the `char*`
+and `String` impls hash/compare by actual string content, not pointer
+identity), `Comparable` (`compare(other: Self) -> int`, with impls for
+`int`/`uint`/`char`), and the operator-overloading traits below. See
 `test/traits_demo.llpl` and `test/test_hashmap_string.llpl` for full runnable
 versions.
+
+### Operator Overloading
+
+`func operator+(other: T) -> T` (and `-`/`*`/`/`/`%`/`==`/`!=`/`<`/`>`/`<=`/
+`>=`/`&`/`|`/`^`/`<<`/`>>`/unary `-`/`!`/`~`/`[]`) is a special method name
+form usable two ways: as an ordinary inline method on a `class`, or - the
+only option for a `struct` or primitive, neither of which have inline
+method syntax for anything - through `impl SomeTrait for TargetType { ... }`.
+Both forms resolve to the exact same internal method name (`op_add` for
+`+`, etc. - see `ast.operatorMethodName`), so `a + b` dispatches identically
+either way once a matching method exists:
+
+```swift
+struct Vec2 {
+    let x: int
+    let y: int
+}
+
+trait Add {
+    func operator+(other: Self) -> Self
+}
+
+impl Add for Vec2 {
+    func operator+(other: Vec2) -> Vec2 {
+        let r: Vec2
+        r.x = self.x + other.x
+        r.y = self.y + other.y
+        return r
+    }
+}
+
+// Works through a bounded generic function too, same as any other trait.
+func sum_pair<T: Add>(a: T, b: T) -> T {
+    return a + b
+}
+
+func main() -> int {
+    let a: Vec2
+    a.x = 1
+    a.y = 2
+    let b: Vec2
+    b.x = 10
+    b.y = 20
+    let c: Vec2 = a + b        // Vec2 { x: 11, y: 22 }
+    let d: Vec2 = sum_pair(a, b) // same result, via the bound
+    return 0
+}
+```
+
+`prelude.llpl` ships `Add`, `Sub`, `Neg` (unary `-`), and `Mul` as traits,
+deliberately *without* impls for the primitive types - plain `+`/`-`/`*`
+already works unconditionally on `int`/`uint`/`char` with no bound needed,
+and `impl Add for int` would recurse (its own `self + other` body would
+dispatch straight back into that same impl, since there's no way to spell
+"the native operator, not this overload" once one exists for a type). These
+traits exist for user-defined arithmetic types like `Vec2` that have no
+native operator to begin with. Validation is nominal/name-only (see above),
+so an impl's parameter doesn't have to be `Self` either - `impl Mul for
+Vec2 { func operator*(scalar: int) -> Vec2 { ... } }` (scaling by a plain
+`int`) is perfectly valid.
 
 ## Pipe Operator
 

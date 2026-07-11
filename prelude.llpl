@@ -594,7 +594,8 @@ impl Hashable for String {
     }
 }
 
-// A trait a type implements to provide ordering, e.g. for max_of<T: Comparable> below.
+// A trait a type implements to provide ordering, for use in a bounded
+// generic function (`func f<T: Comparable>(...)`) - see test/traits_demo.llpl.
 trait Comparable {
     func compare(other: Self) -> int
 }
@@ -621,6 +622,39 @@ impl Comparable for char {
         if self > other { return 1 }
         return 0
     }
+}
+
+// Operator-overloading traits - `impl Add for TargetType { func operator+
+// (other: Self) -> Self { ... } }` is how a struct or class gains a real
+// `+` overload (see ast.operatorMethodName for the full operator -> "op_*"
+// name table this trait system reuses unchanged - `func operator+` inside
+// a trait or impl resolves to the same "op_add" method name a class's own
+// inline `func operator+` method already does, so both forms dispatch
+// identically at a use site like `a + b`).
+//
+// Deliberately *not* implemented here for the primitive types (int/uint/
+// char) - the plain `+`/`-`/`*` C operator already works unconditionally
+// for those with no trait bound needed at all, and a hypothetical
+// `impl Add for int` would recurse (its own `self + other` body would
+// dispatch straight back into that same impl, since operator lookup can't
+// tell "the native primitive operator" apart from "this exact impl" once
+// one exists). These traits are for user-defined arithmetic types (vectors,
+// complex numbers, ...) that have no native operator of their own to begin
+// with - see test/traits_demo.llpl for a Vec2 example.
+trait Add {
+    func operator+(other: Self) -> Self
+}
+
+trait Sub {
+    func operator-(other: Self) -> Self
+}
+
+trait Neg {
+    func operator-() -> Self
+}
+
+trait Mul {
+    func operator*(other: Self) -> Self
 }
 
 // A basic hash table, separate chaining, fixed bucket count (no rehashing -
