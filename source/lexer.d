@@ -51,6 +51,8 @@ enum TokenType {
     Unquote,
     InterpolatedString,
     Sizeof,
+    Trait,
+    Impl,
 
     // Operators
     Plus,
@@ -171,7 +173,9 @@ class Lexer {
             "unless": "Unless",
             "quote": "Quote",
             "unquote": "Unquote",
-            "sizeof": "Sizeof"
+            "sizeof": "Sizeof",
+            "trait": "Trait",
+            "impl": "Impl"
         ];
     }
 
@@ -432,6 +436,8 @@ class Lexer {
                 case "Quote": type = TokenType.Quote; break;
                 case "Unquote": type = TokenType.Unquote; break;
                 case "Sizeof": type = TokenType.Sizeof; break;
+                case "Trait": type = TokenType.Trait; break;
+                case "Impl": type = TokenType.Impl; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);

@@ -90,6 +90,26 @@ class CodeGenerator {
     private bool[string] resultInstantiations;
     private int propagateCounter; // numbers each `expr?`'s scratch temp var uniquely
 
+    // Traits/interfaces (see processImplBlock): static, monomorphization-time
+    // only - a trait bound never participates in any runtime dispatch, so
+    // there's no vtable/fat-pointer representation anywhere in this list.
+    private TraitDecl[string] traitRegistry; // by (namespace-qualified) name
+    private bool[string] traitImplemented; // "TraitName:MangledTargetTypeName" -> true (key uses mangleTypeArg, so char vs char* don't collide)
+    private ImplDecl[] pendingImpls; // parked during the early pull-out pass, processed once classRegistry/structRegistry exist
+    // Function *bodies* (impl methods, and generic-function instantiations)
+    // that take a *plain* class/struct type by value - unlike a generic
+    // class/struct's own instantiated body (genericInstanceDecls), which is
+    // fully self-contained, a function body accessing `self.x`/`v.field` on
+    // a plain type needs that type's complete C definition already visible,
+    // which for a plain (non-generic) class/struct only exists once declCode
+    // has emitted it - i.e. after declCode, not before it like
+    // genericForwardDecls/genericInstanceDecls. Forward declarations
+    // (prototypes) don't have this problem (C allows an incomplete-type
+    // parameter in a declaration, just not in a definition), so those still
+    // go in genericForwardDecls as usual - see processImplBlock and
+    // resolveGenericFunctionCall.
+    private string[] deferredFunctionBodies;
+
     this() {
         indentLevel = 0;
         tempVarCounter = 0;
@@ -460,6 +480,12 @@ class CodeGenerator {
             } else if (auto macroDecl = cast(MacroDecl)decl) {
                 macroDecl.namespaceSegments = segments;
                 result ~= macroDecl;
+            } else if (auto traitDecl = cast(TraitDecl)decl) {
+                traitDecl.namespaceSegments = segments;
+                result ~= traitDecl;
+            } else if (auto implDecl = cast(ImplDecl)decl) {
+                implDecl.namespaceSegments = segments;
+                result ~= implDecl;
             } else {
                 result ~= decl;
             }
@@ -534,6 +560,24 @@ class CodeGenerator {
                         genericStructTemplates[mangledStruct(structDecl)] = structDecl;
                         continue;
                     }
+                } else if (auto traitDecl = cast(TraitDecl)decl) {
+                    // A trait is purely a compile-time contract - it never
+                    // produces any C code itself (same treatment as
+                    // MacroDecl), so registering it is all that's needed.
+                    traitRegistry[mangled(traitDecl.namespaceSegments, traitDecl.name)] = traitDecl;
+                    continue;
+                } else if (auto implDecl = cast(ImplDecl)decl) {
+                    // Parked, not processed yet - its methods have a
+                    // `Self`-typed (or otherwise unresolved) target type
+                    // that isn't safe for any pass to see as if it were
+                    // concrete until processImplBlock below resolves it,
+                    // the same reasoning that already applies to generic
+                    // templates. Also needs classRegistry/structRegistry
+                    // to already be populated (for a user-defined target
+                    // type) before it can resolve its own target, so it's
+                    // processed further down, after the main registries.
+                    pendingImpls ~= implDecl;
+                    continue;
                 }
                 withGenericsPulledOut ~= decl;
             }
@@ -575,6 +619,17 @@ class CodeGenerator {
                     globalVarRegistry[mangled(varDecl.namespaceSegments, varDecl.name)] = varDecl;
                 }
             }
+        }
+
+        // Process every parked `impl Trait for Type { ... }` block now
+        // that classRegistry/structRegistry are populated (so a
+        // user-defined target type resolves correctly) but before the
+        // field-resolution pass just below - the earliest point a generic
+        // instantiation's trait-bound check could otherwise fire, which
+        // needs traitImplemented already populated (see processImplBlock).
+        foreach (impl; pendingImpls) {
+            currentNamespaceSegments = impl.namespaceSegments;
+            processImplBlock(impl);
         }
 
         // Resolve any inferred class/struct field types before they can be
@@ -872,6 +927,14 @@ class CodeGenerator {
         }
 
         code ~= declCode;
+
+        if (deferredFunctionBodies.length > 0) {
+            code ~= "// Function bodies deferred until after plain class/struct definitions exist\n";
+            foreach (b; deferredFunctionBodies) {
+                code ~= b;
+            }
+            code ~= "\n";
+        }
 
         collectSymbolTable(programs);
 
@@ -2425,6 +2488,111 @@ class CodeGenerator {
         return "";
     }
 
+    // Validates one `impl TraitName for TargetType { ... }` block and, if
+    // valid, desugars each of its methods into an ordinary top-level
+    // function (`TargetType_methodName`, with an explicit `self` parameter
+    // prepended) - see ast.ImplDecl's doc comment. Called once per
+    // `pendingImpls` entry, after classRegistry/structRegistry are already
+    // populated (so a user-defined target type resolves correctly) but
+    // before anything that could trigger generic monomorphization (so a
+    // trait bound check never runs before traitImplemented is populated).
+    private void processImplBlock(ImplDecl impl) {
+        // Captured *before* resolveType - resolveType monomorphizes a generic
+        // instantiation in place and clears its typeArgs (see resolveType's
+        // own comment), so checking .typeArgs after that call would always
+        // see an empty array regardless of what the user actually wrote.
+        bool targetWasGeneric = impl.targetType.typeArgs.length > 0;
+        string targetDisplayName = impl.targetType.toString();
+        resolveType(impl.targetType);
+        if (targetWasGeneric) {
+            throw new CompileError(
+                format("'impl %s for %s' isn't supported - impl targets must be a concrete " ~
+                    "primitive, class, or struct, not a generic type", impl.traitName, targetDisplayName),
+                currentModulePath, impl.line, impl.column);
+        }
+
+        string traitKey = findGenericTemplateKey(impl.traitName, (k) => (k in traitRegistry) !is null);
+        if (traitKey.length == 0) {
+            throw new CompileError(format("Unknown trait '%s'", impl.traitName),
+                currentModulePath, impl.line, impl.column);
+        }
+        TraitDecl trait = traitRegistry[traitKey];
+
+        foreach (required; trait.methods) {
+            bool found = false;
+            foreach (m; impl.methods) {
+                if (m.name == required.name) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                throw new CompileError(
+                    format("'impl %s for %s' is missing required method '%s'",
+                        impl.traitName, impl.targetType.name, required.name),
+                    currentModulePath, impl.line, impl.column);
+            }
+        }
+
+        // Keyed by mangleTypeArg, not the bare .name - a pointer type (e.g.
+        // char*) and its pointee (char) must not collide on the same key,
+        // and mangleTypeArg already exists precisely to make that distinction
+        // (see its own doc comment).
+        string targetKey = mangleTypeArg(impl.targetType);
+        traitImplemented[traitKey ~ ":" ~ targetKey] = true;
+
+        // A plain (non-generic) class/struct target's own typedef is only
+        // emitted later, in earlyDeclCode - which always lands *after*
+        // genericForwardDecls in the final output (see generateMultiple's
+        // splice-order comment). Since this method's forward declaration
+        // goes into genericForwardDecls too, re-emit an idempotent duplicate
+        // typedef right before it so `TargetType` already names a type by
+        // then (identical repeated typedefs are legal in C11). Not needed
+        // for primitives (already a built-in C type name) or generic
+        // instantiations (their own typedef is already emitted the same way
+        // by instantiateGenericTypeArgs).
+        bool targetNeedsTypedef = (impl.targetType.name in classRegistry) !is null ||
+            (impl.targetType.name in structRegistry) !is null;
+
+        foreach (method; impl.methods) {
+            Type[string] typeSubs;
+            typeSubs["Self"] = impl.targetType;
+            string mangledName = format("%s_%s", targetKey, method.name);
+            auto substituted = cloneFunctionDeclWithTypeSubs(method, typeSubs, mangledName);
+
+            Parameter[] paramsWithSelf = new Parameter("self", impl.targetType) ~ substituted.params;
+            auto asFunction = new FunctionDecl(substituted.name, paramsWithSelf, substituted.returnType,
+                substituted.body_, false, false, false, method.line, method.column);
+            asFunction.namespaceSegments = [];
+
+            // Forward-declare immediately (mirrors the ordinary function
+            // forward-decl pass) so a call from code processed earlier
+            // than this impl block still compiles. Safe even though the
+            // target type's complete definition isn't visible yet here -
+            // C allows an incomplete-type parameter in a declaration, just
+            // not in a definition (see the body, below).
+            resolveType(asFunction.returnType);
+            string fwdParams = "";
+            foreach (i, p; asFunction.params) {
+                resolveType(p.type);
+                if (i > 0) fwdParams ~= ", ";
+                fwdParams ~= format("%s %s", typeToC(p.type), p.name);
+            }
+            if (targetNeedsTypedef) {
+                genericForwardDecls ~= format("typedef struct %s %s;\n", impl.targetType.name, impl.targetType.name);
+            }
+            genericForwardDecls ~= format("%s %s(%s);\n", typeToC(asFunction.returnType), asFunction.name, fwdParams);
+
+            functionRegistry[asFunction.name] = asFunction;
+
+            // The body (unlike the prototype above) needs the target type's
+            // *complete* definition when it's a plain class/struct (e.g. a
+            // `self.x` field access) - so it can't go in genericInstanceDecls
+            // (spliced before declCode); see deferredFunctionBodies's doc comment.
+            deferredFunctionBodies ~= generateFunction(asFunction);
+        }
+    }
+
     // The instantiation-suffix fragment for one concrete type argument,
     // e.g. Type("int") -> "int", Type("char", isPointer: true) -> "char_ptr".
     // By the time this runs, a nested generic argument (Vector<Vector<int>>)
@@ -2459,6 +2627,8 @@ class CodeGenerator {
         string templateKey = isClass ? classKey : structKey;
         string[] templateTypeParams = isClass ?
             genericClassTemplates[templateKey].typeParams : genericStructTemplates[templateKey].typeParams;
+        string[] templateTypeParamBounds = isClass ?
+            genericClassTemplates[templateKey].typeParamBounds : genericStructTemplates[templateKey].typeParamBounds;
         string templateLeafName = isClass ?
             genericClassTemplates[templateKey].name : genericStructTemplates[templateKey].name;
         string[] templateNamespaceSegments = isClass ?
@@ -2467,6 +2637,19 @@ class CodeGenerator {
         if (typeArgs.length != templateTypeParams.length) {
             throw new CompileError(format("Generic type '%s' expects %d type argument(s), got %d",
                 templateKey, templateTypeParams.length, typeArgs.length), currentModulePath, 0, 0);
+        }
+
+        // Trait-bound check - runs on *every* call (cache hit or miss),
+        // since a second use with the same bad type arg must still be
+        // caught even once monomorphizedInstances already has an entry.
+        foreach (i, bound; templateTypeParamBounds) {
+            if (bound.length == 0) continue;
+            if ((bound ~ ":" ~ mangleTypeArg(typeArgs[i])) !in traitImplemented) {
+                throw new CompileError(
+                    format("Type '%s' used for type parameter '%s' of '%s' must implement trait '%s'",
+                        typeArgs[i].name, templateTypeParams[i], templateKey, bound),
+                    currentModulePath, 0, 0);
+            }
         }
 
         string mangledName = mangled(templateNamespaceSegments, instantiatedLeafName(templateLeafName, typeArgs));
@@ -2585,6 +2768,18 @@ class CodeGenerator {
             typeArgs ~= bindings[tp];
         }
 
+        // Trait-bound check - runs on every call (cache hit or miss), same
+        // reasoning as instantiateGenericTypeArgs's identical check.
+        foreach (i, bound; tmpl.typeParamBounds) {
+            if (bound.length == 0) continue;
+            if ((bound ~ ":" ~ mangleTypeArg(typeArgs[i])) !in traitImplemented) {
+                throw new CompileError(
+                    format("Type '%s' used for type parameter '%s' of '%s' must implement trait '%s'",
+                        typeArgs[i].name, tmpl.typeParams[i], templateKey, bound),
+                    currentModulePath, 0, 0);
+            }
+        }
+
         string mangledName = mangled(tmpl.namespaceSegments, instantiatedLeafName(tmpl.name, typeArgs));
 
         if (mangledName !in monomorphizedInstances) {
@@ -2609,7 +2804,14 @@ class CodeGenerator {
             genericForwardDecls ~= format("%s %s(%s);\n", typeToC(clone.returnType), mangledName, protoParams);
 
             functionRegistry[mangledName] = clone;
-            genericInstanceDecls ~= generateFunction(clone);
+            // Deferred, not genericInstanceDecls - a generic function's body
+            // (unlike a generic class/struct's own definition) is never
+            // needed by anything ahead of it, only its prototype above is
+            // (already forward-declared) - and deferring avoids the same
+            // incomplete-type problem processImplBlock hits when a plain
+            // class/struct type argument is used by value (see
+            // deferredFunctionBodies's doc comment).
+            deferredFunctionBodies ~= generateFunction(clone);
         }
 
         return mangledName;
@@ -3214,7 +3416,17 @@ class CodeGenerator {
                 // any expression it can type, not just `x.method()`.
                 string className = "";
                 try {
-                    className = inferType(memberExpr.object).name;
+                    // mangleTypeArg, not the bare .name - a raw pointer
+                    // receiver (e.g. a `char*` calling an `impl Hashable for
+                    // char*` method) must dispatch to its own
+                    // pointer-suffixed mangled name, distinct from its
+                    // pointee's (see processImplBlock, which mangles impl
+                    // methods the same way). A no-op for every already-
+                    // working case: ordinary generic instantiations' .name
+                    // is already their final mangled name with isPointer
+                    // false, and plain classes/structs/primitives have
+                    // isPointer false too.
+                    className = mangleTypeArg(inferType(memberExpr.object));
                 } catch (Exception e) {
                     // fall through - className stays "", falls back to the
                     // CLASS_ placeholder below

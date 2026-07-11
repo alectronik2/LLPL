@@ -44,7 +44,9 @@ enum NodeType {
     LambdaExpr,
     SizeofExpr,
     StructLiteral,
-    PropagateExpr
+    PropagateExpr,
+    TraitDecl,
+    ImplDecl
 }
 
 abstract class ASTNode {
@@ -282,10 +284,18 @@ class FunctionDecl : ASTNode {
     // FunctionDecl is never generated directly, only its type-substituted
     // clones are (see instantiateGenericFunction).
     string[] typeParams;
+    // Parallel to typeParams (same length): `<T: TraitName, U>`'s optional
+    // per-parameter trait bound, "" when a parameter is unbounded. Checked
+    // at monomorphization time against codegen.d's traitImplemented
+    // registry - see processImplBlock. A separate parallel array, not a
+    // richer TypeParam[] replacing typeParams itself, so every existing
+    // reader of .typeParams (LSP signatures, cloning, mangling) needed no
+    // changes when trait bounds were added.
+    string[] typeParamBounds;
 
     this(string name, Parameter[] params, Type returnType, Block body_, bool isExtern = false,
          bool isInterrupt = false, bool isVariadic = false, int line = 0, int column = 0,
-         string[] typeParams = []) {
+         string[] typeParams = [], string[] typeParamBounds = []) {
         super(NodeType.FunctionDecl, line, column);
         this.name = name;
         this.params = params;
@@ -295,6 +305,7 @@ class FunctionDecl : ASTNode {
         this.isInterrupt = isInterrupt;
         this.isVariadic = isVariadic;
         this.typeParams = typeParams;
+        this.typeParamBounds = typeParamBounds;
     }
 }
 
@@ -306,9 +317,10 @@ class ClassDecl : ASTNode {
     FunctionDecl[] methods;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     string[] typeParams; // `<T, U>` after the class name - see FunctionDecl.typeParams
+    string[] typeParamBounds; // parallel to typeParams - see FunctionDecl.typeParamBounds
 
     this(string name, VarDecl[] fields, FunctionDecl constructor, FunctionDecl destructor, FunctionDecl[] methods,
-         int line = 0, int column = 0, string[] typeParams = []) {
+         int line = 0, int column = 0, string[] typeParams = [], string[] typeParamBounds = []) {
         super(NodeType.ClassDecl, line, column);
         this.name = name;
         this.fields = fields;
@@ -316,27 +328,83 @@ class ClassDecl : ASTNode {
         this.destructor = destructor;
         this.methods = methods;
         this.typeParams = typeParams;
+        this.typeParamBounds = typeParamBounds;
     }
 }
 
 // A plain value-type aggregate: no ref-counting header, no heap allocation,
-// no constructor/destructor/methods. Compiles to a bare C struct, usable as
-// a stack/global value, array element, or (with `packed`) a hardware-layout
-// descriptor like a GDT/IDT entry.
+// no constructor/destructor. Compiles to a bare C struct, usable as a
+// stack/global value, array element, or (with `packed`) a hardware-layout
+// descriptor like a GDT/IDT entry. Can't declare methods *inline* the way
+// a class can, but can still gain real methods from an external
+// `impl Trait for StructName { ... }` block (see codegen.d's
+// processImplBlock) - those are generated as ordinary top-level functions
+// taking this struct by value as an explicit first parameter, not stored
+// anywhere on StructDecl itself.
 class StructDecl : ASTNode {
     string name;
     VarDecl[] fields;
     bool packed;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     string[] typeParams; // `<T, U>` after the struct name - see FunctionDecl.typeParams
+    string[] typeParamBounds; // parallel to typeParams - see FunctionDecl.typeParamBounds
 
     this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0,
-         string[] typeParams = []) {
+         string[] typeParams = [], string[] typeParamBounds = []) {
         super(NodeType.StructDecl, line, column);
         this.name = name;
         this.fields = fields;
         this.packed = packed;
         this.typeParams = typeParams;
+        this.typeParamBounds = typeParamBounds;
+    }
+}
+
+// `trait Name { func sig(...) -> T  ... }` - a compile-time-only contract:
+// a list of required method signatures, never generated as code itself
+// (each method's `body_` is always null, the same way ClassDecl's
+// constructor/destructor are nullable). Only ever used to validate that an
+// `impl TraitName for SomeType { ... }` block (see ImplDecl) actually
+// provides every required method, and to gate a bounded generic type
+// parameter (`<T: Name>`) at monomorphization time - see codegen.d's
+// traitRegistry/traitImplemented and processImplBlock. `Self`, when used
+// in a trait method's own parameter/return types, refers to whatever
+// concrete type ends up implementing this trait - it isn't a reserved
+// keyword, just a name resolved by string comparison wherever a type is
+// being substituted (the same mechanism generic type parameters already
+// use), so it needs no lexer support of its own.
+class TraitDecl : ASTNode {
+    string name;
+    FunctionDecl[] methods;
+    string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+
+    this(string name, FunctionDecl[] methods, int line = 0, int column = 0) {
+        super(NodeType.TraitDecl, line, column);
+        this.name = name;
+        this.methods = methods;
+    }
+}
+
+// `impl TraitName for TargetType { func method(...) -> T { body } ... }` -
+// gives `targetType` (a primitive, class, or plain struct - never a
+// generic type; see codegen.d's processImplBlock for that restriction)
+// real methods with real bodies, satisfying `traitName`'s contract.
+// codegen.d desugars each method into an ordinary top-level function
+// (`TargetType_methodName`, with an explicit `self: TargetType` parameter
+// prepended) rather than storing these anywhere on a ClassDecl/StructDecl -
+// this is the only way a *struct* or *primitive* type can ever gain a
+// method at all, since neither has an inline method-declaration syntax.
+class ImplDecl : ASTNode {
+    string traitName;
+    Type targetType;
+    FunctionDecl[] methods;
+    string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+
+    this(string traitName, Type targetType, FunctionDecl[] methods, int line = 0, int column = 0) {
+        super(NodeType.ImplDecl, line, column);
+        this.traitName = traitName;
+        this.targetType = targetType;
+        this.methods = methods;
     }
 }
 

@@ -501,18 +501,99 @@ struct HashEntry<K, V> {
     let next: HashEntry<K, V>*
 }
 
+// A trait a type implements to provide its own hash/equality for use as a
+// HashMap key - see HashMap<K: Hashable, V> below. `Self` inside a trait's
+// signatures and inside a matching `impl` block's bodies refers to whatever
+// concrete type the `impl` targets; it's resolved by name, not a keyword.
+trait Hashable {
+    func hash() -> uint
+    func equals(other: Self) -> bool
+}
+
+impl Hashable for int {
+    func hash() -> uint {
+        return self as uint
+    }
+    func equals(other: int) -> bool {
+        return self == other
+    }
+}
+
+impl Hashable for uint {
+    func hash() -> uint {
+        return self
+    }
+    func equals(other: uint) -> bool {
+        return self == other
+    }
+}
+
+impl Hashable for char {
+    func hash() -> uint {
+        return self as uint
+    }
+    func equals(other: char) -> bool {
+        return self == other
+    }
+}
+
+// Real content hash/equality for string keys (FNV-1a over the string's
+// bytes, via llpl_strlen) - unlike the raw byte-wise hashing HashMap used
+// before traits existed, two different `char*` pointers holding the same
+// text now hash/compare equal, exactly like a normal string-keyed map.
+impl Hashable for char* {
+    func hash() -> uint {
+        let len: uint = llpl_strlen(self)
+        let h: uint = 2166136261
+        let i: uint = 0
+        while i < len {
+            h = h ^ (self[i] as uint)
+            h = h * 16777619
+            i = i + 1
+        }
+        return h
+    }
+    func equals(other: char*) -> bool {
+        return llpl_strcmp(self, other) == 0
+    }
+}
+
+// A trait a type implements to provide ordering, e.g. for max_of<T: Comparable> below.
+trait Comparable {
+    func compare(other: Self) -> int
+}
+
+impl Comparable for int {
+    func compare(other: int) -> int {
+        if self < other { return -1 }
+        if self > other { return 1 }
+        return 0
+    }
+}
+
+impl Comparable for uint {
+    func compare(other: uint) -> int {
+        if self < other { return -1 }
+        if self > other { return 1 }
+        return 0
+    }
+}
+
+impl Comparable for char {
+    func compare(other: char) -> int {
+        if self < other { return -1 }
+        if self > other { return 1 }
+        return 0
+    }
+}
+
 // A basic hash table, separate chaining, fixed bucket count (no rehashing -
 // a real limitation, acceptable for a first generic-container implementation).
 //
-// Scoped explicitly to POD/fixed-size key types: hashing is a byte-wise
-// FNV-1a over `sizeof(K)` bytes at the key's address, and equality is a
-// byte-wise compare (see hash_key/keys_equal) - correct for
-// int/uint/char/bool/struct/pointer-identity keys, but for a `char*` key
-// this hashes/compares the *pointer*, not the string's contents (the same
-// caveat as using a raw pointer as an unordered_map key in C++ without a
-// custom hasher). A real content-hashed string-keyed map needs a
-// trait/interface system this language doesn't have yet.
-class HashMap<K, V> {
+// Keys hash/compare via K's own Hashable impl (key.hash()/key.equals(other))
+// rather than raw bytes, so a `char*` key now hashes/compares by string
+// *content*, not pointer identity - see `impl Hashable for char*` above.
+class HashMap<K: Hashable, V> {
     let buckets: HashBucket<K, V>*
     let bucket_count: int
     let count: int
@@ -542,36 +623,11 @@ class HashMap<K, V> {
         llpl_free(self.buckets as char*)
     }
 
-    func hash_key(key: K) -> uint {
-        let bytes: char* = (&key) as char*
-        let h: uint = 2166136261
-        let i: uint = 0
-        while i < sizeof(K) {
-            h = h ^ (bytes[i] as uint)
-            h = h * 16777619
-            i = i + 1
-        }
-        return h
-    }
-
-    func keys_equal(a: K, b: K) -> bool {
-        let abytes: char* = (&a) as char*
-        let bbytes: char* = (&b) as char*
-        let i: uint = 0
-        while i < sizeof(K) {
-            if abytes[i] != bbytes[i] {
-                return false
-            }
-            i = i + 1
-        }
-        return true
-    }
-
     func insert(key: K, value: V) {
-        let idx: int = (self.hash_key(key) % (self.bucket_count as uint)) as int
+        let idx: int = (key.hash() % (self.bucket_count as uint)) as int
         let entry: HashEntry<K, V>* = self.buckets[idx].head
         while entry != null {
-            if self.keys_equal(entry.key, key) {
+            if entry.key.equals(key) {
                 entry.value = value
                 return
             }
@@ -586,11 +642,11 @@ class HashMap<K, V> {
     }
 
     func get(key: K) -> Optional<V> {
-        let idx: int = (self.hash_key(key) % (self.bucket_count as uint)) as int
+        let idx: int = (key.hash() % (self.bucket_count as uint)) as int
         let entry: HashEntry<K, V>* = self.buckets[idx].head
         let result: Optional<V> = new Optional<V>()
         while entry != null {
-            if self.keys_equal(entry.key, key) {
+            if entry.key.equals(key) {
                 result.set(entry.value)
                 return result
             }
@@ -600,11 +656,11 @@ class HashMap<K, V> {
     }
 
     func remove(key: K) -> bool {
-        let idx: int = (self.hash_key(key) % (self.bucket_count as uint)) as int
+        let idx: int = (key.hash() % (self.bucket_count as uint)) as int
         let entry: HashEntry<K, V>* = self.buckets[idx].head
         let prev: HashEntry<K, V>* = null
         while entry != null {
-            if self.keys_equal(entry.key, key) {
+            if entry.key.equals(key) {
                 if prev == null {
                     self.buckets[idx].head = entry.next
                 } else {

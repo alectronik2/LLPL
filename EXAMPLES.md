@@ -379,13 +379,64 @@ func main() -> int {
 }
 ```
 
-`HashMap<K, V>` is scoped to POD/fixed-size key types - it hashes and
-compares keys by their raw bytes, so a `char*` key works by pointer
-identity, not string content (see its doc comment in `prelude.llpl`).
-`Vector<T>` can't hold an explicitly-pointer element type (`Vector<char*>`)
-either, since that would need a real pointer-to-pointer C type this
-language's type system can't express - use a one-field wrapper struct
-around the pointer instead if you need that.
+`HashMap<K: Hashable, V>` hashes/compares keys via `key.hash()`/
+`key.equals(other)` (see [Traits/Interfaces](#traitsinterfaces) below) -
+`prelude.llpl` provides `Hashable` impls for `int`/`uint`/`char`/`char*`,
+the `char*` one hashing/comparing by actual string content, not pointer
+identity. `Vector<T>` can't hold an explicitly-pointer element type
+(`Vector<char*>`) either, since that would need a real pointer-to-pointer C
+type this language's type system can't express - use a one-field wrapper
+struct around the pointer instead if you need that.
+
+## Traits/Interfaces
+
+A `trait` is a compile-time-only contract - method signatures, no bodies.
+`impl TraitName for TargetType { ... }` is how a primitive, struct, or
+class actually gains a method body for it - the only way, since none of
+those have inline method-declaration syntax of their own for an arbitrary
+trait. Dispatch is entirely static (monomorphization, like every other
+generic in this language) - there's no vtable, no trait-object/dynamic
+dispatch, no heterogeneous "any Comparable" collection through a shared
+pointer type.
+
+```swift
+trait Comparable {
+    func compare(other: Self) -> int
+}
+
+impl Comparable for int {
+    func compare(other: int) -> int {
+        if self < other { return -1 }
+        if self > other { return 1 }
+        return 0
+    }
+}
+
+// A bounded generic type parameter - T must have a matching `impl`,
+// checked at monomorphization time.
+func max_of<T: Comparable>(a: T, b: T) -> T {
+    if a.compare(b) >= 0 {
+        return a
+    }
+    return b
+}
+```
+
+`Self` inside a trait's signatures or a matching `impl` block's bodies
+refers to whatever concrete type that `impl` targets - it isn't a reserved
+keyword, just a name resolved by substitution the same way a generic `T`
+already is. An `impl` is valid if it defines a same-named method for every
+one its trait declares; deeper signature mismatches are left for the C
+backend to catch, same as everywhere else in this compiler. A trait can
+have at most one bound per type parameter in v1 (no `T: A + B`), no default
+method bodies, and an `impl` target must be concrete - `impl X for
+Vector<int>` (a generic type) is rejected.
+
+`prelude.llpl` ships two traits: `Hashable` (`hash() -> uint`,
+`equals(other: Self) -> bool`, with impls for `int`/`uint`/`char`/`char*` -
+see `HashMap<K: Hashable, V>` above) and `Comparable` (`compare(other:
+Self) -> int`, with impls for `int`/`uint`/`char`). See
+`test/traits_demo.llpl` for the full runnable version this is taken from.
 
 ## Pipe Operator
 

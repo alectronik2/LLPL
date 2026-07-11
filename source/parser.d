@@ -196,6 +196,10 @@ class Parser {
             return structDecl();
         } else if (check(TokenType.Extern)) {
             return externDecl();
+        } else if (check(TokenType.Trait)) {
+            return traitDecl();
+        } else if (check(TokenType.Impl)) {
+            return implDecl();
         } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
             return varDecl();
         } else {
@@ -487,11 +491,24 @@ class Parser {
     // declaration is ordinary (non-generic). Not offered after `operator`
     // (operators stay non-generic - keeps codegen's operator-overload
     // lookup simple, and there's no real use case for a generic operator).
-    private string[] typeParamList() {
+    //
+    // Each parameter may carry a single trait bound (`T: TraitName`) -
+    // `bounds` is parallel to the returned array (same length; "" for an
+    // unbounded parameter), checked at monomorphization time against
+    // codegen.d's traitImplemented registry. No `T: A + B` (multiple
+    // bounds) in v1 - not needed for anything this language's standard
+    // library actually requires yet, and a straightforward extension of
+    // this same loop later if it is.
+    private string[] typeParamList(out string[] bounds) {
         string[] params;
         if (match(TokenType.Less)) {
             do {
                 params ~= expect(TokenType.Identifier).value;
+                string bound = "";
+                if (match(TokenType.Colon)) {
+                    bound = expect(TokenType.Identifier).value;
+                }
+                bounds ~= bound;
             } while (match(TokenType.Comma));
             expect(TokenType.Greater);
         }
@@ -506,6 +523,7 @@ class Parser {
 
         string name;
         string[] typeParams;
+        string[] typeParamBounds;
         bool isOperator = false;
         int operatorLine = current.line;
         int operatorColumn = current.column;
@@ -527,7 +545,7 @@ class Parser {
             name = rawOp; // placeholder; resolved to its C-safe name below
         } else {
             name = expect(TokenType.Identifier).value;
-            typeParams = typeParamList();
+            typeParams = typeParamList(typeParamBounds);
         }
 
         expect(TokenType.LeftParen);
@@ -554,7 +572,7 @@ class Parser {
         }
 
         return new FunctionDecl(name, params, returnType, body_, false, isInterrupt, isVariadic,
-            startLine, startColumn, typeParams);
+            startLine, startColumn, typeParams, typeParamBounds);
     }
 
     private ClassDecl classDecl() {
@@ -562,7 +580,8 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.Class);
         string name = expect(TokenType.Identifier).value;
-        string[] typeParams = typeParamList();
+        string[] typeParamBounds;
+        string[] typeParams = typeParamList(typeParamBounds);
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
@@ -585,7 +604,8 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new ClassDecl(name, fields, constructor, destructor, methods, startLine, startColumn, typeParams);
+        return new ClassDecl(name, fields, constructor, destructor, methods, startLine, startColumn,
+            typeParams, typeParamBounds);
     }
 
     private StructDecl structDecl() {
@@ -594,7 +614,8 @@ class Parser {
         bool packed = match(TokenType.Packed);
         expect(TokenType.Struct);
         string name = expect(TokenType.Identifier).value;
-        string[] typeParams = typeParamList();
+        string[] typeParamBounds;
+        string[] typeParams = typeParamList(typeParamBounds);
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
@@ -607,7 +628,61 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new StructDecl(name, fields, packed, startLine, startColumn, typeParams);
+        return new StructDecl(name, fields, packed, startLine, startColumn, typeParams, typeParamBounds);
+    }
+
+    // `trait Name { func sig(...) -> T  func sig2(...) -> T  ... }` -
+    // method *signatures* only, no bodies, no braces per signature (see
+    // ast.TraitDecl's doc comment on why - these never get generated as
+    // code, only used to validate an `impl` block).
+    private TraitDecl traitDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Trait);
+        string name = expect(TokenType.Identifier).value;
+        expect(TokenType.LeftBrace);
+
+        FunctionDecl[] methods;
+        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            int sigLine = current.line;
+            int sigColumn = current.column;
+            expect(TokenType.Function);
+            string methodName = expect(TokenType.Identifier).value;
+            expect(TokenType.LeftParen);
+            bool isVariadic;
+            Parameter[] params = paramList(isVariadic);
+            expect(TokenType.RightParen);
+            Type returnType = new Type("void");
+            if (match(TokenType.Arrow)) {
+                returnType = parseType();
+            }
+            methods ~= new FunctionDecl(methodName, params, returnType, null, false, false, isVariadic,
+                sigLine, sigColumn);
+        }
+
+        expect(TokenType.RightBrace);
+        return new TraitDecl(name, methods, startLine, startColumn);
+    }
+
+    // `impl TraitName for TargetType { func method(...) -> T { body } ... }` -
+    // unlike trait method signatures, these are ordinary functionDecl()s
+    // with real bodies (see ast.ImplDecl's doc comment).
+    private ImplDecl implDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Impl);
+        string traitName = expect(TokenType.Identifier).value;
+        expect(TokenType.For);
+        Type targetType = parseType();
+        expect(TokenType.LeftBrace);
+
+        FunctionDecl[] methods;
+        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            methods ~= functionDecl();
+        }
+
+        expect(TokenType.RightBrace);
+        return new ImplDecl(traitName, targetType, methods, startLine, startColumn);
     }
 
     private FunctionDecl constructorDecl(string className) {
