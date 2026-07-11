@@ -250,6 +250,64 @@ A destructuring `case` and an ordinary equality `case` (string/int
 literals, as elsewhere in this doc) can appear in the same `match`, and
 `default` still works as the catch-all for either.
 
+## Closures and Lambdas
+
+A closure type is written `(ParamType, ...) -> ReturnType`. A lambda
+literal is `func[captures](params) -> ReturnType { ... }` - the capture
+list is explicit, so a missing capture is a compile error rather than a
+silently wrong closure. Each capture's *current value* is snapshotted (by
+value, not by reference) into the closure's own environment at the moment
+the lambda expression runs - changing the original variable afterwards
+never affects an already-created closure:
+
+```swift
+func make_adder(n: int) -> (int) -> int {
+    return func[n](x: int) -> int {
+        return x + n
+    }
+}
+
+func main() -> int {
+    let add5: (int) -> int = make_adder(5)
+    let result: int = add5(10) // 15
+    return 0
+}
+```
+
+A closure can be passed around like any other value - as a function
+argument, or stored in and called through a class field - see
+`test/closures_demo.llpl` for the full runnable version this is taken from:
+
+```swift
+func apply_twice(f: (int) -> int, x: int) -> int {
+    return f(f(x))
+}
+
+class Counter {
+    let count: int
+    let step: (int) -> int
+
+    constructor(start: int, step_fn: (int) -> int) {
+        self.count = start
+        self.step = step_fn
+    }
+
+    destructor() {}
+
+    func advance() {
+        self.count = self.step(self.count)
+    }
+}
+```
+
+A lambda with no captures at all just omits the `[...]`:
+
+```swift
+let doubler: (int) -> int = func(x: int) -> int {
+    return x * 2
+}
+```
+
 ## Macros
 
 ### Quote and Unquote

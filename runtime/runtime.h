@@ -10,6 +10,23 @@ typedef struct {
     uint32_t count;
 } RefCount;
 
+// A closure value (see codegen.d's LambdaExpr handling): `fn` and `env`
+// are untyped here because C has no way to write "a pointer to a function
+// taking whatever parameters this particular closure's signature has"
+// generically - every closure shares this same two-word representation
+// regardless of its actual signature, which is recovered by an explicit
+// cast at each call site instead (the call site always knows the
+// expected signature statically, from the closure-typed variable/
+// parameter/field being called). `env` points at a heap-allocated (via
+// rc_alloc), per-lambda-shaped struct holding that lambda's captured
+// variables by value - never freed once allocated, the same trade-off
+// rc_alloc's bump allocator already makes for everything else it hands
+// out.
+typedef struct {
+    void* fn;
+    void* env;
+} __LLPL_Closure;
+
 // Memory allocation for bare metal
 void* rc_alloc(size_t size);
 void rc_free(void* ptr);

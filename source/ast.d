@@ -40,7 +40,8 @@ enum NodeType {
     QuoteExpr,
     UnquoteExpr,
     InterpolatedStringLiteral,
-    ArrayLiteral
+    ArrayLiteral,
+    LambdaExpr
 }
 
 abstract class ASTNode {
@@ -195,6 +196,16 @@ class Type {
     int arraySize;
     Type[] genericArgs;
 
+    // Set only when `name == "__LLPL_Closure"` (see parser.d's closure-type
+    // syntax `(T1, T2) -> R` and codegen.d's generateLambdaExpr): the actual
+    // parameter/return types of the closure, since every closure otherwise
+    // shares the same two-word `__LLPL_Closure { fn, env }` runtime shape.
+    // `closureParams` only ever uses each Parameter's `type` field - there
+    // are no real parameter names to carry, since a closure *type* (as
+    // opposed to a lambda literal) never names its parameters.
+    Parameter[] closureParams;
+    Type closureReturnType;
+
     this(string name, bool isPointer = false, bool isArray = false, int arraySize = 0) {
         this.name = name;
         this.isPointer = isPointer;
@@ -203,6 +214,15 @@ class Type {
     }
 
     override string toString() const {
+        if (closureReturnType !is null) {
+            string result = "(";
+            foreach (i, p; closureParams) {
+                if (i > 0) result ~= ", ";
+                result ~= p.type.toString();
+            }
+            result ~= ") -> " ~ closureReturnType.toString();
+            return result;
+        }
         string result = name;
         if (isPointer) result ~= "*";
         if (isArray) result ~= "[]";
@@ -574,6 +594,29 @@ class Identifier : ASTNode {
     this(string name, int line = 0, int column = 0) {
         super(NodeType.Identifier, line, column);
         this.name = name;
+    }
+}
+
+// `func[cap1, cap2](params) -> T { ... }` - a lambda literal. `captures`
+// names existing variables (from the enclosing scope) whose *current
+// value* is snapshotted by value into a heap-allocated environment struct
+// at the point the lambda expression is evaluated; the lambda body reads
+// captures from that environment, never from the enclosing scope directly
+// (see codegen.d's generateLambdaExpr). Capture lists are explicit, not
+// inferred, so a capture that's missing is a compile error ("Unknown
+// capture") rather than a silently-wrong closure.
+class LambdaExpr : ASTNode {
+    string[] captures;
+    Parameter[] params;
+    Type returnType;
+    Block body_;
+
+    this(string[] captures, Parameter[] params, Type returnType, Block body_, int line = 0, int column = 0) {
+        super(NodeType.LambdaExpr, line, column);
+        this.captures = captures;
+        this.params = params;
+        this.returnType = returnType;
+        this.body_ = body_;
     }
 }
 

@@ -61,6 +61,9 @@ class CodeGenerator {
     private int interpStringCounter; // Numbers each `\(...)` call site's scratch buffer uniquely
     private string[] interpBufferDecls; // `static char __llpl_interpN[SIZE];` decls, emitted up front
     private enum interpBufferSize = 256; // Scratch buffer size for one interpolated string's result
+    private int lambdaCounter; // Numbers each lambda literal's env struct/trampoline function uniquely
+    private string[] lambdaDecls; // Per-lambda `struct __LambdaEnvN {...};` + trampoline function decls, emitted up front
+    private string[string] currentLambdaCaptureAccess; // Capture name -> "__env->name", set around a lambda body's generation
 
     this() {
         indentLevel = 0;
@@ -442,6 +445,17 @@ class CodeGenerator {
     string generateMultiple(Program[] programs) {
         string code = "";
 
+        // Register the closure runtime representation as a known struct
+        // type name (see runtime.h's __LLPL_Closure and parser.d's closure
+        // type syntax), so resolveType/isStructTypeName/typeToC treat
+        // `__LLPL_Closure` as an ordinary value-type struct name - without
+        // this it would fail resolveType's "known type" check. Registered
+        // directly into the dict rather than via prog.declarations, since
+        // the real definition already exists (hand-written) in runtime.h -
+        // emitting another `typedef struct {...} __LLPL_Closure;` here
+        // would be a duplicate-definition error.
+        structRegistry["__LLPL_Closure"] = new StructDecl("__LLPL_Closure", [], false);
+
         // Resolve namespace blocks into flat, mangled top-level declarations
         // before anything else looks at prog.declarations.
         foreach (prog; programs) {
@@ -749,6 +763,14 @@ class CodeGenerator {
             code ~= "\n";
         }
 
+        if (lambdaDecls.length > 0) {
+            code ~= "// Lambda literal environment structs + trampoline functions\n";
+            foreach (lambdaDecl; lambdaDecls) {
+                code ~= lambdaDecl;
+            }
+            code ~= "\n";
+        }
+
         code ~= declCode;
 
         collectSymbolTable(programs);
@@ -996,9 +1018,13 @@ class CodeGenerator {
             }
         }
 
-        // Release reference-counted fields
+        // Release reference-counted fields. Struct-typed fields (including
+        // __LLPL_Closure - see runtime.h/generateLambdaExpr) are plain
+        // value types, not heap-allocated class instances, so they're
+        // never reference-counted and must be excluded here the same way
+        // typeToC/isStructTypeName already exclude them from auto-pointering.
         foreach (field; classDecl.fields) {
-            if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer) {
+            if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer && !isStructTypeName(field.type.name)) {
                 code ~= indent() ~ format("if (self->%s) rc_release(self->%s, %s_destroy);\n",
                     field.name, field.name, field.type.name);
             }
@@ -2277,6 +2303,119 @@ class CodeGenerator {
         return name;
     }
 
+    // `func[cap1, cap2](params) -> T { ... }` - see ast.d's LambdaExpr and
+    // runtime.h's __LLPL_Closure for the overall design: every closure
+    // shares the same two-word {fn, env} runtime representation regardless
+    // of its signature, so this only needs to synthesize a per-lambda
+    // environment struct (one field per capture) and a trampoline function
+    // taking that environment (cast back from void*) as an extra leading
+    // parameter, then return a single C expression building the closure
+    // value - its env allocated fresh, by value, from the *current* value
+    // of each captured variable (a snapshot, never a live reference back
+    // into the enclosing scope).
+    private string generateLambdaExpr(LambdaExpr lambdaExpr) {
+        int id = lambdaCounter++;
+        string envType = format("__LambdaEnv%d", id);
+        string trampolineName = format("__lambda%d", id);
+
+        resolveType(lambdaExpr.returnType);
+        foreach (p; lambdaExpr.params) resolveType(p.type);
+
+        // Resolve each capture's current type and the C expression that
+        // reads its current value. A capture named in currentLambdaCaptureAccess
+        // is itself an outer lambda's own capture (a lambda nested in
+        // another lambda's body, re-capturing one of the enclosing
+        // lambda's captures) - otherwise it's an ordinary in-scope
+        // variable, resolved the same way any other identifier is.
+        Type[] captureTypes;
+        string[] captureAccess;
+        foreach (cap; lambdaExpr.captures) {
+            string accessExpr;
+            Type capType;
+            if (auto outerAccess = cap in currentLambdaCaptureAccess) {
+                accessExpr = *outerAccess;
+                capType = variableTypes[cap];
+            } else {
+                string resolved = resolveName(cap, (n) => (n in variableTypes) !is null);
+                if ((resolved in variableTypes) is null) {
+                    throw new CompileError(format("Unknown capture '%s'", cap),
+                        currentModulePath, lambdaExpr.line, lambdaExpr.column);
+                }
+                accessExpr = resolved;
+                capType = variableTypes[resolved];
+            }
+            captureAccess ~= accessExpr;
+            captureTypes ~= capType;
+        }
+
+        string envDecl = "typedef struct {\n";
+        foreach (i, cap; lambdaExpr.captures) {
+            envDecl ~= format("    %s %s;\n", typeToC(captureTypes[i]), cap);
+        }
+        envDecl ~= format("} %s;\n\n", envType);
+
+        string trampolineParams = "void* __env_raw";
+        foreach (p; lambdaExpr.params) {
+            trampolineParams ~= format(", %s %s", typeToC(p.type), p.name);
+        }
+
+        string trampolineCode = format("%s %s(%s) {\n", typeToC(lambdaExpr.returnType), trampolineName, trampolineParams);
+        trampolineCode ~= format("    %s* __env = (%s*)__env_raw;\n", envType, envType);
+
+        // Save/restore all per-function generation state around the body,
+        // mirroring generateFunction/generateMethod: this trampoline is a
+        // real top-level C function with its own fresh defer-stack, and
+        // its own params/captures must not leak into the surrounding
+        // function's variableTypes once it's done generating (the same
+        // param-leak discipline every other generator function follows).
+        string[] savedDeferred = deferredStatements;
+        deferredStatements = [];
+        string[string] savedCaptureAccess = currentLambdaCaptureAccess.dup;
+
+        foreach (i, cap; lambdaExpr.captures) {
+            currentLambdaCaptureAccess[cap] = format("__env->%s", cap);
+            variableTypes[cap] = captureTypes[i];
+        }
+        foreach (p; lambdaExpr.params) {
+            variableTypes[p.name] = p.type;
+        }
+
+        int savedIndent = indentLevel;
+        indentLevel = 1;
+        foreach (stmt; lambdaExpr.body_.statements) {
+            trampolineCode ~= generateStatement(stmt, false);
+        }
+        if (deferredStatements.length > 0) {
+            foreach_reverse (deferStmt; deferredStatements) {
+                trampolineCode ~= deferStmt;
+            }
+        }
+        indentLevel = savedIndent;
+
+        foreach (cap; lambdaExpr.captures) {
+            variableTypes.remove(cap);
+        }
+        foreach (p; lambdaExpr.params) {
+            variableTypes.remove(p.name);
+        }
+        currentLambdaCaptureAccess = savedCaptureAccess;
+        deferredStatements = savedDeferred;
+
+        trampolineCode ~= "}\n";
+
+        lambdaDecls ~= envDecl;
+        lambdaDecls ~= trampolineCode;
+        lambdaDecls ~= "\n";
+
+        string envInit = format("({ %s* __e = (%s*)rc_alloc(sizeof(%s)); ", envType, envType, envType);
+        foreach (i, cap; lambdaExpr.captures) {
+            envInit ~= format("__e->%s = %s; ", cap, captureAccess[i]);
+        }
+        envInit ~= "(void*)__e; })";
+
+        return format("((__LLPL_Closure){ .fn = (void*)%s, .env = %s })", trampolineName, envInit);
+    }
+
     private string generateExpression(ASTNode node) {
         if (auto binExpr = cast(BinaryExpr)node) {
             if (binExpr.op == "=") {
@@ -2295,7 +2434,45 @@ class CodeGenerator {
                 return overloadCall;
             }
             return unaryExpr.op ~ generateExpression(unaryExpr.operand);
+        } else if (auto lambdaExpr = cast(LambdaExpr)node) {
+            return generateLambdaExpr(lambdaExpr);
         } else if (auto callExpr = cast(CallExpr)node) {
+            // Closure call: if the callee's own type resolves to a closure
+            // type (a closure-typed variable, parameter, or field - never a
+            // plain function/method name, which has no Type of its own),
+            // generate an explicit function-pointer-cast call through the
+            // closure's {fn, env} pair instead of any of the ordinary call
+            // paths below. Checked first since a closure can be stored in a
+            // field (self.callback(x)) and would otherwise match the
+            // qualified-function-call/method-call branches' MemberExpr
+            // callee below.
+            Type closureType = null;
+            try {
+                closureType = inferType(callExpr.callee);
+            } catch (Exception e) {
+                // Not a typed value (a plain function/method name has no
+                // Type) - fall through to the ordinary call paths below.
+            }
+            if (closureType !is null && closureType.closureReturnType !is null) {
+                string calleeCode = generateExpression(callExpr.callee);
+                string retC = typeToC(closureType.closureReturnType);
+                string paramTypesC = "void*";
+                foreach (p; closureType.closureParams) {
+                    paramTypesC ~= ", " ~ typeToC(p.type);
+                }
+                // calleeCode is embedded twice (once to reach .fn, once for
+                // .env) - a documented, accepted limitation: a closure
+                // *expression* with side effects (rather than a plain
+                // variable/field) would run those side effects twice. Every
+                // realistic use calls through a closure-typed variable,
+                // parameter or field, none of which have side effects to
+                // duplicate.
+                string cargs = format("(%s).env", calleeCode);
+                foreach (arg; callExpr.args) {
+                    cargs ~= ", " ~ generateExpression(arg);
+                }
+                return format("((%s (*)(%s))(%s).fn)(%s)", retC, paramTypesC, calleeCode, cargs);
+            }
             // Check if this is a method call
             if (auto memberExpr = cast(MemberExpr)callExpr.callee) {
                 // A namespace-qualified function call (e.g. Graphics.helper())
@@ -2413,6 +2590,9 @@ class CodeGenerator {
             return format("%s[%s]", generateExpression(indexExpr.array),
                          generateExpression(indexExpr.index));
         } else if (auto ident = cast(Identifier)node) {
+            if (auto access = ident.name in currentLambdaCaptureAccess) {
+                return *access;
+            }
             string resolved = resolveName(ident.name,
                 (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null);
             recordUsage(resolved, ident.line, ident.column);
@@ -2485,6 +2665,13 @@ class CodeGenerator {
         } else if (auto castExpr = cast(CastExpr)expr) {
             resolveType(castExpr.type);
             return castExpr.type;
+        } else if (auto lambdaExpr = cast(LambdaExpr)expr) {
+            resolveType(lambdaExpr.returnType);
+            foreach (p; lambdaExpr.params) resolveType(p.type);
+            Type t = new Type("__LLPL_Closure");
+            t.closureParams = lambdaExpr.params;
+            t.closureReturnType = lambdaExpr.returnType;
+            return t;
         } else if (auto ident = cast(Identifier)expr) {
             string resolved = resolveName(ident.name, (n) => (n in variableTypes) !is null);
             if (resolved in variableTypes) {
@@ -2539,6 +2726,10 @@ class CodeGenerator {
                 }
                 throw inferError(expr, format("Cannot infer type: unknown method '%s'", memberCallee.member));
             } else if (auto calleeIdent = cast(Identifier)callExpr.callee) {
+                string resolvedVar = resolveName(calleeIdent.name, (n) => (n in variableTypes) !is null);
+                if (resolvedVar in variableTypes && variableTypes[resolvedVar].closureReturnType !is null) {
+                    return variableTypes[resolvedVar].closureReturnType;
+                }
                 string resolved = resolveName(calleeIdent.name, (n) => (n in functionRegistry) !is null);
                 if (auto funcDecl = resolved in functionRegistry) {
                     return funcDecl.returnType;

@@ -654,7 +654,39 @@ class Parser {
         return new VarDecl(name, type, initializer, isConst, declLine, declColumn, bitWidth, isVolatile);
     }
 
+    // Closure types look like `(T1, T2) -> R` - a parenthesized,
+    // comma-separated list of *types only* (no parameter names, unlike a
+    // real parameter list) followed by a mandatory `->` and return type.
+    // They compile down to the single generic `__LLPL_Closure` struct (see
+    // codegen.d), so the parsed Type just records the signature on the
+    // side via closureParams/closureReturnType for call-site type checking.
+    private bool closureTypeAhead() {
+        return check(TokenType.LeftParen);
+    }
+
+    private Type parseClosureType() {
+        expect(TokenType.LeftParen);
+        Parameter[] closureParams;
+        if (!check(TokenType.RightParen)) {
+            do {
+                Type paramType = parseType();
+                closureParams ~= new Parameter("", paramType);
+            } while (match(TokenType.Comma));
+        }
+        expect(TokenType.RightParen);
+        expect(TokenType.Arrow);
+        Type returnType = parseType();
+
+        Type t = new Type("__LLPL_Closure");
+        t.closureParams = closureParams;
+        t.closureReturnType = returnType;
+        return t;
+    }
+
     private Type parseType() {
+        if (closureTypeAhead()) {
+            return parseClosureType();
+        }
         string name = expect(TokenType.Identifier).value;
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
         // Graphics_Point, matching how the code generator mangles namespaced
@@ -1218,10 +1250,51 @@ class Parser {
         return expr;
     }
 
+    // `func[cap1, cap2](params) -> T { ... }` - a lambda literal. The
+    // capture list is optional (`func(params) -> T {...}` is a lambda that
+    // captures nothing) but the parens and `{ }` body are always required,
+    // even for an empty parameter list, so this can never be confused with
+    // an ordinary parenthesized expression or array literal at this point
+    // in primary() (both of those start with `(` / `[`, not `func`).
+    private ASTNode lambdaExpr() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Function);
+
+        string[] captures;
+        if (match(TokenType.LeftBracket)) {
+            if (!check(TokenType.RightBracket)) {
+                do {
+                    captures ~= expect(TokenType.Identifier).value;
+                } while (match(TokenType.Comma));
+            }
+            expect(TokenType.RightBracket);
+        }
+
+        expect(TokenType.LeftParen);
+        bool isVariadic;
+        Parameter[] params = paramList(isVariadic);
+        expect(TokenType.RightParen);
+        if (isVariadic) {
+            error("A lambda cannot be variadic");
+        }
+
+        Type returnType = new Type("void");
+        if (match(TokenType.Arrow)) {
+            returnType = parseType();
+        }
+
+        Block body_ = block();
+        return new LambdaExpr(captures, params, returnType, body_, startLine, startColumn);
+    }
+
     private ASTNode primary() {
         int tokLine = current.line;
         int tokColumn = current.column;
 
+        if (check(TokenType.Function)) {
+            return lambdaExpr();
+        }
         if (match(TokenType.True)) {
             return new BoolLiteral(true, tokLine, tokColumn);
         }
