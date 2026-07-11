@@ -527,10 +527,8 @@ namespace Shell {
         }
     }
 
-    // "/boot" is TmpFS's one, flat, read-only mount point (multiboot2
-    // modules GRUB loaded alongside the kernel - see tmpfs.llpl) - not a
-    // real entry anywhere in VFS's own on-disk tree, so it's special-cased
-    // here rather than taught to VFS's path resolution at all. "m" (not
+    // TmpFS's modules, listed flat - called from cmd_ls's match arm below
+    // when VFS.resolve() says the path landed on the /boot mount. "m" (not
     // "d"/"f") marks these as neither an ordinary file nor a directory.
     func cmd_ls_boot() {
         let n: int = TmpFS.count()
@@ -549,43 +547,57 @@ namespace Shell {
         }
     }
 
-    // "ls [path]" - defaults to the current directory. One line per
-    // entry: kind (d/f), size, name - VFS exposes plain data accessors
-    // (first_child/next_sibling/inode_kind/inode_size/inode_name) rather
-    // than a callback/iterator protocol, so the walk happens here.
+    // "ls [path]" - defaults to the current directory. `VFS.resolve()` is
+    // real mount-point dispatch (see vfs.llpl) - this never has to know
+    // *where* a path landed beyond matching on the tag it comes back
+    // with. One line per on-disk entry: kind (d/f), size, name - VFS
+    // exposes plain data accessors (first_child/next_sibling/inode_kind/
+    // inode_size/inode_name) rather than a callback/iterator protocol, so
+    // the walk happens here.
     func cmd_ls(args: char*) {
         let path: char* = args
         if path[0] == 0 {
             path = "."
         }
-        if starts_with(path, "/boot") {
-            cmd_ls_boot()
-            return
-        }
-        let dir: int = VFS.resolve_dir(path)
-        if dir == -1 {
-            log("<LIGHT_RED>no such directory\n</>")
-            return
-        }
-        let child: int = VFS.first_child(dir)
-        if child == -1 {
-            print("(empty)\n")
-        }
-        while child != -1 {
-            let namebuf: char[32]
-            VFS.inode_name(child, namebuf as char*)
-            let size: uint = VFS.inode_size(child)
-            if VFS.inode_kind(child) == VFS.KIND_DIR {
-                log("<LIGHT_BLUE>d</> <WHITE>-</> ")
-            } else {
-                log("<WHITE>f \(size)</> ")
+        match VFS.resolve(path) {
+            case VFS.Node.TmpfsRoot() => {
+                cmd_ls_boot()
             }
-            print(namebuf as char*)
-            print("\n")
-            child = VFS.next_sibling(child)
+            case VFS.Node.Disk(idx) => {
+                if VFS.inode_kind(idx) != VFS.KIND_DIR {
+                    log("<LIGHT_RED>not a directory\n</>")
+                    return
+                }
+                let child: int = VFS.first_child(idx)
+                if child == -1 {
+                    print("(empty)\n")
+                }
+                while child != -1 {
+                    let namebuf: char[32]
+                    VFS.inode_name(child, namebuf as char*)
+                    let size: uint = VFS.inode_size(child)
+                    if VFS.inode_kind(child) == VFS.KIND_DIR {
+                        log("<LIGHT_BLUE>d</> <WHITE>-</> ")
+                    } else {
+                        log("<WHITE>f \(size)</> ")
+                    }
+                    print(namebuf as char*)
+                    print("\n")
+                    child = VFS.next_sibling(child)
+                }
+            }
+            case VFS.Node.TmpfsFile(idx) => {
+                log("<LIGHT_RED>not a directory\n</>")
+            }
+            default => {
+                log("<LIGHT_RED>no such directory\n</>")
+            }
         }
     }
 
+    // VFS.cd() already does its own mount-aware resolve() internally
+    // (see vfs.llpl) - "cd /boot" really moves cwd into tmpfs, and
+    // "cd .." from there returns to the disk root, both for free.
     func cmd_cd(args: char*) {
         if args[0] == 0 {
             log("<LIGHT_RED>usage: cd <path>\n</>")
@@ -598,7 +610,7 @@ namespace Shell {
 
     func cmd_pwd() {
         let buf: char[128]
-        VFS.path_of(VFS.cwd, buf as char*, 128)
+        VFS.current_path(buf as char*, 128)
         print(buf as char*)
         print("\n")
     }
@@ -635,39 +647,37 @@ namespace Shell {
 
     const CAT_MAX = 4096
 
-    // "cat /boot/NAME" - see cmd_ls_boot's comment on why /boot is
-    // special-cased here rather than taught to VFS itself.
-    func cmd_cat_boot(name: char*) {
-        let idx: int = TmpFS.find(name)
-        if idx == -1 {
-            log("<LIGHT_RED>no such boot module\n</>")
-            return
-        }
-        let buf: char[4096]
-        let n: int = TmpFS.read(idx, buf as char*, CAT_MAX - 1)
-        buf[n] = 0
-        print(buf as char*)
-        print("\n")
-    }
-
     func cmd_cat(args: char*) {
         if args[0] == 0 {
             log("<LIGHT_RED>usage: cat <path>\n</>")
             return
         }
-        if starts_with(args, "/boot/") {
-            cmd_cat_boot(args + 6)
-            return
+        match VFS.resolve(args) {
+            case VFS.Node.TmpfsFile(idx) => {
+                let buf: char[4096]
+                let n: int = TmpFS.read(idx, buf as char*, CAT_MAX - 1)
+                buf[n] = 0
+                print(buf as char*)
+                print("\n")
+            }
+            case VFS.Node.Disk(idx) => {
+                if VFS.inode_kind(idx) != VFS.KIND_FILE {
+                    log("<LIGHT_RED>not a file\n</>")
+                    return
+                }
+                let buf: char[4096]
+                let n: int = VFS.read(args, buf as char*, CAT_MAX - 1)
+                buf[n] = 0
+                print(buf as char*)
+                print("\n")
+            }
+            case VFS.Node.TmpfsRoot() => {
+                log("<LIGHT_RED>not a file\n</>")
+            }
+            default => {
+                log("<LIGHT_RED>no such file\n</>")
+            }
         }
-        let buf: char[4096]
-        let n: int = VFS.read(args, buf as char*, CAT_MAX - 1)
-        if n < 0 {
-            log("<LIGHT_RED>no such file\n</>")
-            return
-        }
-        buf[n] = 0
-        print(buf as char*)
-        print("\n")
     }
 
     // "write PATH TEXT..." - splits at the *first* space only (like

@@ -1013,21 +1013,35 @@ small read-only, purely in-memory filesystem: unlike `VFS`, there's no
 disk I/O or allocation at all - a module's bytes are already sitting in
 ordinary (identity-mapped) RAM the moment the kernel starts, so reading
 one is just a memory copy out of the address multiboot2's modules tag
-hands back. Not merged into `VFS`'s own path resolution (that would need
-real mount-point dispatch); instead `ls`/`cat` special-case a literal
-leading `/boot` themselves:
+hands back. Gone on the next reboot, same as a real tmpfs - there's
+nothing to persist.
+
+`VFS` mounts it at `/boot` through **real mount-point dispatch**, not a
+shell-level string check: `VFS.resolve(path) -> Node` (a tagged enum -
+`Disk(idx)`, `TmpfsRoot`, `TmpfsFile(idx)`, or `NotFound`) is the one
+path-resolution entry point every command (`ls`/`cd`/`cat`/`pwd`) matches
+on, and `cwd` itself is a `Node` - so `cd /boot` genuinely moves into the
+mount, and *relative* references from there (no `/boot/` prefix needed)
+resolve correctly until `cd ..` returns to the disk root:
 
 ```
-llpl $ ls /boot
+llpl $ cd /boot
+llpl $ pwd
+/boot
+llpl $ ls
 m 25  hello.txt
 m 116 readme.txt
-llpl $ cat /boot/hello.txt
+llpl $ cat hello.txt
 Hello from a GRUB module!
+llpl $ cd ..
+llpl $ pwd
+/
 ```
 
-Gone on the next reboot, same as a real tmpfs - there's nothing to
-persist. `TmpFS.selftest()` (also boot-time, no keyboard needed) checks
-the demo modules are found and readable.
+`VFS.selftest()` (boot-time, no keyboard needed) exercises this
+dispatch directly - resolving `/boot`, resolving a module through it,
+and a full `cd /boot` / `cd ..` round trip - alongside `TmpFS.selftest()`
+checking the demo modules themselves are found and readable.
 
 ## Data Structures
 
