@@ -1,0 +1,130 @@
+// Minimal Limine bare-metal demo in LLPL.
+//
+// Limine enters this kernel already in 64-bit mode with paging enabled.
+// We request a framebuffer using Limine's request/response protocol, then
+// write to COM1 serial and draw a simple color pattern directly into the
+// framebuffer returned by the bootloader.
+
+namespace HAL {
+    func outb(port: uint, value: char) {
+        asm("outb %0, %w1" : : "a"(value), "Nd"(port))
+    }
+
+    func inb(port: uint) -> char {
+        let value: char = 0
+        asm("inb %w1, %0" : "=a"(value) : "Nd"(port))
+        return value
+    }
+
+    func halt() {
+        asm("hlt")
+    }
+
+    func disable_interrupts() {
+        asm("cli")
+    }
+
+    namespace Serial {
+        const PORT = 0x3F8
+
+        func init() {
+            outb(PORT + 1, 0)
+            outb(PORT + 3, 128)
+            outb(PORT, 3)
+            outb(PORT + 1, 0)
+            outb(PORT + 3, 3)
+            outb(PORT + 2, 199)
+            outb(PORT + 4, 11)
+        }
+
+        func ready() -> bool {
+            return (inb(PORT + 5) & 32) != 0
+        }
+
+        func write_char(c: char) {
+            while !ready() {}
+            outb(PORT, c)
+        }
+
+        func write(s: char*) {
+            let i: int = 0
+            while s[i] != 0 {
+                write_char(s[i])
+                i = i + 1
+            }
+        }
+    }
+}
+
+packed struct LimineFramebuffer {
+    let address: uint
+    let width: uint
+    let height: uint
+    let pitch: uint
+    let bpp: uint16
+    let memory_model: char
+    let red_mask_size: char
+    let red_mask_shift: char
+    let green_mask_size: char
+    let green_mask_shift: char
+    let blue_mask_size: char
+    let blue_mask_shift: char
+    let unused: char[7]
+    let edid_size: uint
+    let edid: uint
+    let mode_count: uint
+    let modes: uint
+}
+
+extern func limine_get_framebuffer() -> LimineFramebuffer*
+
+func put_pixel(fb: LimineFramebuffer*, x: uint, y: uint, rgb: uint32) {
+    if fb.bpp != 32 as uint16 {
+        return
+    }
+    let row: char* = (fb.address + y * fb.pitch) as char*
+    let p: uint32* = (row + x * 4) as uint32*
+    p[0] = rgb
+}
+
+func draw_demo(fb: LimineFramebuffer*) {
+    let max_y: uint = fb.height
+    if max_y > 240 {
+        max_y = 240
+    }
+    let max_x: uint = fb.width
+    if max_x > 320 {
+        max_x = 320
+    }
+
+    let y: uint = 0
+    while y < max_y {
+        let x: uint = 0
+        while x < max_x {
+            let r: uint32 = ((x * 255 / max_x) & 255) as uint32
+            let g: uint32 = ((y * 255 / max_y) & 255) as uint32
+            let b: uint32 = 0x80
+            put_pixel(fb, x, y, (r << 16) | (g << 8) | b)
+            x = x + 1
+        }
+        y = y + 1
+    }
+}
+
+func kernel_main() {
+    HAL.disable_interrupts()
+    HAL.Serial.init()
+    HAL.Serial.write("LLPL Limine bare-metal demo booted\n")
+
+    let fb: LimineFramebuffer* = limine_get_framebuffer()
+    if fb == null {
+        HAL.Serial.write("No Limine framebuffer response\n")
+    } else {
+        HAL.Serial.write("Drawing into Limine framebuffer\n")
+        draw_demo(fb)
+    }
+
+    while true {
+        HAL.halt()
+    }
+}

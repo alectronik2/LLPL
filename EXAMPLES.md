@@ -1,5 +1,15 @@
 # LLPL Code Examples
 
+## Bare-Metal Examples
+
+The `examples/baremetal_demo` directory contains the larger GRUB/Multiboot2
+demo with paging, tasks, a shell, VFS, and user ELF loading.
+
+The `examples/limine_baremetal_demo` directory contains a smaller Limine boot
+protocol companion demo. It builds a higher-half kernel ELF, publishes a
+Limine framebuffer request, writes to COM1 serial, and draws directly into the
+framebuffer returned by Limine.
+
 ## Basic Examples
 
 ### Hello World (with C FFI)
