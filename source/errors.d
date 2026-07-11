@@ -20,6 +20,24 @@ class CompileError : Exception {
     }
 }
 
+// Carries every CompileError collected across an entire compile, instead
+// of stopping at the first one - see codegen.d's collectedErrors
+// (populated per top-level declaration in generateMultiple's main
+// declCode loop, the point past which one declaration's own error can't
+// cascade into a false one anywhere else - every registry/field/generic-
+// template resolution earlier declarations might depend on has already
+// happened by then). Thrown once, at the very end of generateMultiple, so
+// a file with bugs in several independent functions reports all of them
+// in one compile instead of needing one fix-and-rerun cycle per bug.
+class MultiCompileError : Exception {
+    CompileError[] errors;
+
+    this(CompileError[] errors) {
+        super(format("%d error(s)", errors.length));
+        this.errors = errors;
+    }
+}
+
 private string spaces(size_t n) {
     string result;
     foreach (i; 0 .. n) result ~= " ";

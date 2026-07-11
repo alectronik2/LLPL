@@ -25,40 +25,33 @@ import errors;
 // symbol by finding the usage (or declaration) at that exact location,
 // then looks that resolved name up in `symbols`.
 //
-// On a compile error, `diagnostics` gets one entry and `symbols`/`usages`
-// are empty - there's no error-recovering parse here, so a currently-broken
-// file temporarily has no completion/hover data, just the diagnostic
-// explaining why (matching every other LLPL tool in this project, which
-// also stop at the first CompileError rather than trying to recover).
+// `diagnostics` can carry more than one entry now - codegen.d collects a
+// CompileError per top-level declaration that failed (see its
+// collectedErrors/MultiCompileError) instead of stopping at the first one,
+// so an editor can show every independent error in the file at once, not
+// just the first. `symbols`/`usages` are still populated from whatever
+// *did* generate cleanly even when there are errors elsewhere (`gen` is
+// constructed outside the try block specifically so it's still reachable
+// after a caught exception) - there's still no statement-level error
+// recovery within a single declaration, so a badly-broken one still
+// contributes nothing beyond its own diagnostic.
 void runLspSymbols(string entryFile) {
     JSONValue[] diagnostics;
     JSONValue[] symbolsJson;
     JSONValue[] usagesJson;
 
+    auto gen = new CodeGenerator();
     try {
         auto programs = resolveWithPrelude(entryFile);
-
-        auto gen = new CodeGenerator();
         gen.generateMultiple(programs);
-
-        foreach (sym; gen.symbols()) {
+    } catch (MultiCompileError e) {
+        foreach (err; e.errors) {
             JSONValue j;
-            j["name"] = sym.name;
-            j["kind"] = sym.kind;
-            j["file"] = sym.file;
-            j["line"] = sym.line;
-            j["column"] = sym.column;
-            j["signature"] = sym.signature;
-            symbolsJson ~= j;
-        }
-
-        foreach (u; gen.usages()) {
-            JSONValue j;
-            j["name"] = u.name;
-            j["file"] = u.file;
-            j["line"] = u.line;
-            j["column"] = u.column;
-            usagesJson ~= j;
+            j["message"] = err.msg;
+            j["file"] = err.filePath;
+            j["line"] = err.line;
+            j["column"] = err.column;
+            diagnostics ~= j;
         }
     } catch (CompileError e) {
         JSONValue j;
@@ -74,6 +67,26 @@ void runLspSymbols(string entryFile) {
         j["line"] = 1;
         j["column"] = 1;
         diagnostics ~= j;
+    }
+
+    foreach (sym; gen.symbols()) {
+        JSONValue j;
+        j["name"] = sym.name;
+        j["kind"] = sym.kind;
+        j["file"] = sym.file;
+        j["line"] = sym.line;
+        j["column"] = sym.column;
+        j["signature"] = sym.signature;
+        symbolsJson ~= j;
+    }
+
+    foreach (u; gen.usages()) {
+        JSONValue j;
+        j["name"] = u.name;
+        j["file"] = u.file;
+        j["line"] = u.line;
+        j["column"] = u.column;
+        usagesJson ~= j;
     }
 
     JSONValue result;

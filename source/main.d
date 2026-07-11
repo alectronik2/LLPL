@@ -95,6 +95,12 @@ void main(string[] args) {
             writefln("Successfully compiled to %s", outputFile);
         }
 
+    } catch (MultiCompileError e) {
+        foreach (i, err; e.errors) {
+            if (i > 0) stderr.writeln();
+            stderr.write(formatCompileError(err));
+        }
+        exit(1);
     } catch (CompileError e) {
         stderr.write(formatCompileError(e));
         exit(1);

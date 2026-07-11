@@ -61,6 +61,16 @@ class CodeGenerator {
     private int macroExpansionDepth; // Guards against (possibly indirect) macro self-recursion
     private SymbolInfo[] collectedSymbols; // Declaration-site symbol table, built by generateMultiple; see symbols()
     private UsageInfo[] usageRecords; // Resolved reference sites, recorded via recordUsage; see usages()
+    // Every CompileError caught instead of letting it abort the whole
+    // compile - see errors.MultiCompileError, thrown with this list once
+    // generateMultiple finishes (or returned normally if it's still
+    // empty). Populated at two levels: generateMultiple's main declCode
+    // loop catches per top-level declaration, and generateBodyStatement
+    // catches per top-level statement within one function/method/
+    // constructor/destructor/lambda body - so both "two independent
+    // functions each have a bug" and "one function has several unrelated
+    // bad statements" get every error reported in the same run.
+    private CompileError[] collectedErrors;
     private int interpStringCounter; // Numbers each `\(...)` call site's scratch buffer uniquely
     private string[] interpBufferDecls; // `static char __llpl_interpN[SIZE];` decls, emitted up front
     private enum interpBufferSize = 256; // Scratch buffer size for one interpolated string's result
@@ -1005,8 +1015,22 @@ class CodeGenerator {
                 if (cast(AliasDecl)decl) {
                     continue;  // Already emitted above, ahead of everything that might use it.
                 }
-                declCode ~= generateDeclaration(decl);
-                declCode ~= "\n";
+                // Caught and collected, not left to abort the whole
+                // compile - see collectedErrors's own comment. Safe to
+                // just skip this one declaration's contribution to
+                // declCode and move on: every registry/field/generic-
+                // template resolution any *other* declaration could
+                // depend on already happened in the passes above, so
+                // this declaration's own failure can't cascade into a
+                // false error anywhere else. None of declCode ends up
+                // used anyway once collectedErrors is non-empty (see the
+                // very end of this function).
+                try {
+                    declCode ~= generateDeclaration(decl);
+                    declCode ~= "\n";
+                } catch (CompileError e) {
+                    collectedErrors ~= e;
+                }
             }
         }
 
@@ -1063,6 +1087,15 @@ class CodeGenerator {
         }
 
         collectSymbolTable(programs);
+
+        // Collected symbols/usages above are still valid (if partial) even
+        // when this throws - an editor tool (lspquery.d) can still offer
+        // hover/go-to-def for whatever *did* generate cleanly, alongside
+        // every collected diagnostic, rather than losing all of it just
+        // because something else in the file has a bug.
+        if (collectedErrors.length > 0) {
+            throw new MultiCompileError(collectedErrors);
+        }
 
         return code;
     }
@@ -1266,6 +1299,32 @@ class CodeGenerator {
         return code;
     }
 
+    // Generates one *top-level* statement of a function/method/constructor/
+    // destructor/lambda body, catching (not letting propagate) a
+    // CompileError so a sibling statement's own, independent bug still
+    // gets found in the same compile, instead of the first bad statement
+    // aborting the rest of the body - see collectedErrors's own comment
+    // (this is the same mechanism, just one level deeper: per-declaration
+    // there, per-top-level-statement here). Deliberately scoped to this
+    // level only, not recursively into every nested if/while/match/foreach
+    // body too - a bug inside one of those still aborts its *whole*
+    // enclosing top-level statement, an acceptable, predictable boundary
+    // matching generateMultiple's own "declaration-level, not universal"
+    // reasoning. Safe to just skip a failed statement's contribution to
+    // `code`: local variable *types* are already registered in
+    // variableTypes before their initializer expression is ever generated
+    // (see generateStatement's VarDecl case), so a broken initializer
+    // doesn't cascade into spurious "unknown variable" errors for whatever
+    // sibling statement references that name next.
+    private string generateBodyStatement(ASTNode stmt, bool isDeferred) {
+        try {
+            return generateStatement(stmt, isDeferred);
+        } catch (CompileError e) {
+            collectedErrors ~= e;
+            return "";
+        }
+    }
+
     private string generateConstructor(ClassDecl classDecl, FunctionDecl constructor) {
         string cName = mangledClass(classDecl);
         string code = "";
@@ -1294,7 +1353,7 @@ class CodeGenerator {
         // Generate constructor body
         if (constructor.body_) {
             foreach (stmt; constructor.body_.statements) {
-                code ~= generateStatement(stmt, false);
+                code ~= generateBodyStatement(stmt, false);
             }
         }
 
@@ -1345,7 +1404,7 @@ class CodeGenerator {
         // Generate destructor body
         if (destructor.body_) {
             foreach (stmt; destructor.body_.statements) {
-                code ~= generateStatement(stmt, false);
+                code ~= generateBodyStatement(stmt, false);
             }
         }
 
@@ -1399,7 +1458,7 @@ class CodeGenerator {
 
         if (method.body_) {
             foreach (stmt; method.body_.statements) {
-                code ~= generateStatement(stmt, false);
+                code ~= generateBodyStatement(stmt, false);
             }
         }
 
@@ -1470,7 +1529,7 @@ class CodeGenerator {
 
         if (funcDecl.body_) {
             foreach (stmt; funcDecl.body_.statements) {
-                code ~= generateStatement(stmt, false);
+                code ~= generateBodyStatement(stmt, false);
             }
         }
 
@@ -1532,7 +1591,7 @@ class CodeGenerator {
 
         if (funcDecl.body_) {
             foreach (stmt; funcDecl.body_.statements) {
-                code ~= generateStatement(stmt, false);
+                code ~= generateBodyStatement(stmt, false);
             }
         }
 
@@ -3760,7 +3819,7 @@ class CodeGenerator {
         int savedIndent = indentLevel;
         indentLevel = 1;
         foreach (stmt; lambdaExpr.body_.statements) {
-            trampolineCode ~= generateStatement(stmt, false);
+            trampolineCode ~= generateBodyStatement(stmt, false);
         }
         if (deferredStatements.length > 0) {
             foreach_reverse (deferStmt; deferredStatements) {
