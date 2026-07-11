@@ -718,6 +718,33 @@ namespace VFS {
         return path[plen] == 0 || path[plen] == 47
     }
 
+    // The relative-path counterpart to is_boot_path - "boot" exactly, or
+    // "boot/..." (no leading '/'), which only ever means the mount when
+    // resolved from the disk *root* (see resolve()'s Disk(cur) branch
+    // below - a "boot" found deeper in the on-disk tree is just an
+    // ordinary name, not the mount).
+    func is_boot_path_relative(path: char*) -> bool {
+        let name: char* = MOUNT_PREFIX + 1 // "boot", without the leading '/'
+        if !str_prefix(path, name) {
+            return false
+        }
+        let plen: int = cstrlen(name) as int
+        return path[plen] == 0 || path[plen] == 47
+    }
+
+    // The mount's bare display name ("boot", no leading slash) - what a
+    // directory listing of the disk root shows for the one virtual mount,
+    // alongside its real on-disk entries (see shell.llpl's cmd_ls).
+    func mount_name(out_buf: char*) {
+        let name: char* = MOUNT_PREFIX + 1
+        let i: int = 0
+        while name[i] != 0 {
+            out_buf[i] = name[i]
+            i = i + 1
+        }
+        out_buf[i] = 0
+    }
+
     // `rest` is everything after "/boot" itself - "" for exactly "/boot",
     // or "/NAME" (leading '/' guaranteed by is_boot_path's own check) for
     // "/boot/NAME".
@@ -772,6 +799,15 @@ namespace VFS {
 
         match cwd {
             case Node.Disk(cur) => {
+                // "boot" (no leading slash) only ever means the mount
+                // point when resolved *from the disk root* - matches what
+                // a listing of the root shows (see cmd_ls's synthetic
+                // entry), so `cd boot`/`cat boot/hello.txt` typed exactly
+                // as seen there resolve the same way `/boot/...` does.
+                if cur == ROOT_INODE && is_boot_path_relative(path) {
+                    let name_len: int = cstrlen(MOUNT_PREFIX) as int - 1
+                    return resolve_in_tmpfs(path + name_len)
+                }
                 let idx: int = resolve_from(cur, path)
                 if idx == -1 {
                     return Node.NotFound()
@@ -983,6 +1019,21 @@ namespace VFS {
         let mp: char[64]
         current_path(mp as char*, 64)
         pass = pass && str_eq(mp as char*, "/boot")
+        pass = pass && cd("..")
+        pass = pass && (cwd_disk_index() == ROOT_INODE)
+
+        // Relative "boot" (no leading slash) from the disk root - what
+        // typing exactly what a plain `ls` shows (see shell.llpl's
+        // cmd_ls) actually resolves to.
+        match resolve("boot") {
+            case Node.TmpfsRoot() => {
+                // expected
+            }
+            default => {
+                pass = false
+            }
+        }
+        pass = pass && cd("boot")
         pass = pass && cd("..")
         pass = pass && (cwd_disk_index() == ROOT_INODE)
 

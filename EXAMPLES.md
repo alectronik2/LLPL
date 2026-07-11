@@ -1022,10 +1022,17 @@ shell-level string check: `VFS.resolve(path) -> Node` (a tagged enum -
 path-resolution entry point every command (`ls`/`cd`/`cat`/`pwd`) matches
 on, and `cwd` itself is a `Node` - so `cd /boot` genuinely moves into the
 mount, and *relative* references from there (no `/boot/` prefix needed)
-resolve correctly until `cd ..` returns to the disk root:
+resolve correctly until `cd ..` returns to the disk root. `ls` at the disk
+root also lists `boot` itself (synthesized - it isn't a real on-disk
+entry, see `cmd_ls`), and typing exactly that name resolves the same way
+`/boot` does, so it's actually discoverable rather than something you'd
+only find by already knowing to look for it:
 
 ```
-llpl $ cd /boot
+llpl $ ls
+d -   selftest
+d -   boot
+llpl $ cd boot
 llpl $ pwd
 /boot
 llpl $ ls
@@ -1039,9 +1046,10 @@ llpl $ pwd
 ```
 
 `VFS.selftest()` (boot-time, no keyboard needed) exercises this
-dispatch directly - resolving `/boot`, resolving a module through it,
-and a full `cd /boot` / `cd ..` round trip - alongside `TmpFS.selftest()`
-checking the demo modules themselves are found and readable.
+dispatch directly - resolving `/boot` and `boot`, resolving a module
+through it, and a full `cd boot` / `cd ..` round trip - alongside
+`TmpFS.selftest()` checking the demo modules themselves are found and
+readable.
 
 ## Slice<T>
 

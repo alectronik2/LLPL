@@ -411,9 +411,10 @@ namespace Shell {
         print("  write P TEXT  - replace a file's contents with TEXT (creates it)\n")
         print("  rm PATH       - remove a file or empty directory\n")
         print("\n")
-        print("\"ls /boot\"/\"cat /boot/NAME\" read the read-only tmpfs of\n")
-        print("multiboot2 modules GRUB loaded alongside the kernel - see\n")
-        print("this demo's Makefile and tmpfs.llpl.\n")
+        print("\"boot\" (shown by plain ls at the root) is the read-only tmpfs\n")
+        print("of multiboot2 modules GRUB loaded alongside the kernel - \"cd\n")
+        print("boot\"/\"ls /boot\"/\"cat /boot/NAME\" all work - see this demo's\n")
+        print("Makefile and tmpfs.llpl.\n")
         print("\n")
         print("Up/down arrows recall previous commands; left/right move\n")
         print("the cursor within the current line.\n")
@@ -580,8 +581,15 @@ namespace Shell {
                     log("<LIGHT_RED>not a directory\n</>")
                     return
                 }
+                // The disk root also "contains" the /boot mount (see
+                // vfs.llpl's resolve()) - not a real on-disk entry, so it
+                // never shows up via first_child/next_sibling like the
+                // rest of this listing; synthesized here instead so it's
+                // actually discoverable without already knowing to type
+                // "ls /boot" or "cd /boot" blind.
+                let is_root: bool = idx == VFS.ROOT_INODE
                 let child: int = VFS.first_child(idx)
-                if child == -1 {
+                if child == -1 && !is_root {
                     print("(empty)\n")
                 }
                 while child != -1 {
@@ -596,6 +604,13 @@ namespace Shell {
                     print(namebuf as char*)
                     print("\n")
                     child = VFS.next_sibling(child)
+                }
+                if is_root {
+                    log("<LIGHT_BLUE>d</> <WHITE>-</> ")
+                    let mountbuf: char[32]
+                    VFS.mount_name(mountbuf as char*)
+                    print(mountbuf as char*)
+                    print("\n")
                 }
             }
             case VFS.Node.TmpfsFile(idx) => {

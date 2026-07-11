@@ -338,11 +338,6 @@ func kernel_main(multiboot_ptr: uint) {
     HAL.enable_interrupts()
     log("<GREEN>Interrupts enabled.\n</>")
 
-    let s: String = new String("Hello, world!")
-    foreach let x in s {
-        log("<CYAN>char: '\(x)' (0x\(x))\n</>")
-    }
-
     print("\n")
     log("<WHITE>Spawning tasks (shell + a background counter) and starting the scheduler...\n</>")
     Task.spawn(shell_task_entry as uint)
