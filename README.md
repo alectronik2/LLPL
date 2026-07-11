@@ -163,6 +163,19 @@ This creates the `llpl` compiler executable.
 ./llpl input.llpl -o output.c
 ```
 
+Or compile straight to a native binary with `-b`/`--binary`, which
+generates the C internally and invokes a system C compiler (`cc` by
+default - override with `--cc=<path>` or `$CC`) linked against
+`runtime/runtime.c`:
+
+```bash
+./llpl input.llpl -b -o output
+```
+
+This targets ordinary hosted programs only - a freestanding/kernel target
+like `examples/baremetal_demo` needs its own Makefile-based build instead
+(custom linker script, boot assembly, `-ffreestanding` flags), not `-b`.
+
 ## Example: Bare Metal Kernel
 
 A complete kernel example is provided in `examples/kernel.llpl`.

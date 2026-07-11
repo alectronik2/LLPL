@@ -55,6 +55,19 @@ gcc hello.c -o hello
 ./hello
 ```
 
+Or skip the separate `gcc` step and compile straight to a binary with
+`-b`/`--binary` (invokes a system C compiler - `cc` by default, or `$CC`,
+or `--cc=<path>` - and links against `runtime/runtime.c` automatically):
+
+```bash
+./llpl hello.llpl -b -o hello
+./hello
+```
+
+This only targets ordinary hosted programs; a freestanding/kernel target
+like `examples/baremetal_demo` still needs its own Makefile (custom linker
+script, boot assembly, `-ffreestanding` flags) rather than `-b`.
+
 ## Language Syntax Cheat Sheet
 
 ### Variables
