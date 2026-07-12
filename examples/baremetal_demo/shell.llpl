@@ -104,14 +104,14 @@ namespace Shell {
         return i
     }
 
-    // Draws buf[from..len) at the current screen position (used to redraw
+    // Draws buf[start..len) at the current screen position (used to redraw
     // whatever comes after a mid-line insert/delete), mirroring each
     // character to serial too - unlike echo_char, this writes the
     // framebuffer and serial sides directly rather than going through
     // emit(), since it's drawing *content that already exists in `buf`*,
     // not a single freshly-typed character.
-    func redraw_tail(buf: char*, from: int, len: int) {
-        let i: int = from
+    func redraw_tail(buf: char*, start: int, len: int) {
+        let i: int = start
         while i < len {
             screen.putchar(buf[i])
             HAL.Serial.write_char(buf[i])

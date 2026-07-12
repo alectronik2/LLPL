@@ -1,9 +1,10 @@
 // Minimal Limine bare-metal demo in LLPL.
 //
 // Limine enters this kernel already in 64-bit mode with paging enabled.
-// We request a framebuffer using Limine's request/response protocol, then
-// write to COM1 serial and draw a simple color pattern directly into the
-// framebuffer returned by the bootloader.
+// We request framebuffer, memory-map, and HHDM data using Limine's
+// request/response protocol, then write diagnostics to COM1 serial and draw
+// a simple visualization directly into the framebuffer returned by the
+// bootloader.
 
 namespace HAL {
     func outb(port: uint, value: char) {
@@ -46,7 +47,7 @@ namespace HAL {
             outb(PORT, c)
         }
 
-        func write(s: char*) {
+        func write(s: string) {
             let i: int = 0
             while s[i] != 0 {
                 write_char(s[i])
@@ -79,17 +80,55 @@ packed struct LimineFramebuffer {
 packed struct LimineFramebufferRequest {
     let id: uint[4]
     let revision: uint
-    let response: uint
+    let response: LimineFramebufferResponse*
 }
 
 packed struct LimineFramebufferResponse {
     let revision: uint
     let framebuffer_count: uint
-    let framebuffers: uint
+    let framebuffers: uint*
 }
 
-@section(".limine_requests_start")
-@used
+packed struct LimineMemmapEntry {
+    let base: uint
+    let length: uint
+    let entry_type: uint
+}
+
+packed struct LimineMemmapRequest {
+    let id: uint[4]
+    let revision: uint
+    let response: LimineMemmapResponse*
+}
+
+packed struct LimineMemmapResponse {
+    let revision: uint
+    let entry_count: uint
+    let entries: uint
+}
+
+packed struct LimineHhdmRequest {
+    let id: uint[4]
+    let revision: uint
+    let response: LimineHhdmResponse*
+}
+
+packed struct LimineHhdmResponse {
+    let revision: uint
+    let offset: uint
+}
+
+const MEMMAP_USABLE = 0
+const MEMMAP_RESERVED = 1
+const MEMMAP_ACPI_RECLAIMABLE = 2
+const MEMMAP_ACPI_NVS = 3
+const MEMMAP_BAD_MEMORY = 4
+const MEMMAP_BOOTLOADER_RECLAIMABLE = 5
+const MEMMAP_EXECUTABLE_AND_MODULES = 6
+const MEMMAP_FRAMEBUFFER = 7
+const MEMMAP_RESERVED_MAPPED = 8
+
+@section(".limine_requests_start") @used
 let limine_requests_start_marker: uint[4] = [
     0xf6b8f4b39de7d1ae,
     0xfab91a6940fcb9cf,
@@ -97,8 +136,7 @@ let limine_requests_start_marker: uint[4] = [
     0x181e920a7852b9d9
 ]
 
-@section(".limine_requests")
-@used
+@section(".limine_requests") @used
 let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
     id: [
         0xc7b1dd30df4c8b88,
@@ -110,8 +148,31 @@ let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
     response: 0
 }
 
-@section(".limine_requests_end")
-@used
+@section(".limine_requests") @used
+let memmap_request: LimineMemmapRequest = LimineMemmapRequest {
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x67cf3d9d378a806f,
+        0xe304acdfc50c3c62
+    ],
+    revision: 0,
+    response: 0
+}
+
+@section(".limine_requests") @used
+let hhdm_request: LimineHhdmRequest = LimineHhdmRequest {
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x48dcf1cb8ad2b852,
+        0x63984e959a98244b
+    ],
+    revision: 0,
+    response: 0
+}
+
+@section(".limine_requests_end") @used
 let limine_requests_end_marker: uint[2] = [
     0xadc0e0531bb10d03,
     0x9572709f31764c62
@@ -121,21 +182,101 @@ func limine_get_framebuffer() -> LimineFramebuffer* {
     if framebuffer_request.response == 0 {
         return null
     }
-    let response: LimineFramebufferResponse* = framebuffer_request.response as LimineFramebufferResponse*
-    if response.framebuffer_count == 0 {
-        return null
-    }
-    let framebuffers: uint* = response.framebuffers as uint*
+    let response: LimineFramebufferResponse* = framebuffer_request.response
+    let framebuffers = response.framebuffers 
     return framebuffers[0] as LimineFramebuffer*
+}
+
+func limine_get_memmap() -> LimineMemmapResponse* {
+    return memmap_request.response
+}
+
+func limine_get_hhdm() -> LimineHhdmResponse* {
+    return hhdm_request.response
+}
+
+func serial_write_hex(value: uint) {
+    let hex_chars: string = "0123456789abcdef"
+    let buffer: char[17]
+    buffer[16] = 0
+    let i: int = 15
+    while i >= 0 {
+        buffer[i] = hex_chars[value & 15]
+        value = value >> 4
+        i = i - 1
+    }
+    HAL.Serial.write("0x")
+    HAL.Serial.write(buffer as string)
+}
+
+func serial_write_dec(value: uint) {
+    let buffer: char[21]
+    buffer[20] = 0
+    if value == 0 {
+        HAL.Serial.write("0")
+        return
+    }
+    let i: int = 19 
+    while value > 0 && i >= 0 {
+        let digit: uint = value % 10
+        buffer[i] = (48 + digit) as char
+        value = value / 10
+        i = i - 1
+    }
+    HAL.Serial.write((buffer as string) + i + 1)
+}
+
+func memmap_type_name(t: uint) -> string {
+    match t {
+        case MEMMAP_USABLE => { return "usable" }
+        case MEMMAP_RESERVED => { return "reserved" }
+        case MEMMAP_ACPI_RECLAIMABLE => { return "acpi-reclaimable" }
+        case MEMMAP_ACPI_NVS => { return "acpi-nvs" }
+        case MEMMAP_BAD_MEMORY => { return "bad-memory" }
+        case MEMMAP_BOOTLOADER_RECLAIMABLE => { return "bootloader-reclaimable" }
+        case MEMMAP_EXECUTABLE_AND_MODULES => { return "kernel/modules" }
+        case MEMMAP_FRAMEBUFFER => { return "framebuffer" }
+        case MEMMAP_RESERVED_MAPPED => { return "reserved-mapped" }
+        case _ => { return "unknown" }
+    }
+}
+
+func memmap_type_color(t: uint) -> uint32 {
+    match t {
+        case MEMMAP_USABLE => { return 0x1fbf75 as uint32 }
+        case MEMMAP_RESERVED => { return 0x777777 as uint32 }
+        case MEMMAP_ACPI_RECLAIMABLE => { return 0x44b5ff as uint32 }
+        case MEMMAP_ACPI_NVS => { return 0xffc857 as uint32 }
+        case MEMMAP_BAD_MEMORY => { return 0xff2020 as uint32 }
+        case MEMMAP_BOOTLOADER_RECLAIMABLE => { return 0x44b5ff as uint32 }
+        case MEMMAP_EXECUTABLE_AND_MODULES => { return 0xffc857 as uint32 }
+        case MEMMAP_FRAMEBUFFER => { return 0xff4f8b as uint32 }
+        case MEMMAP_RESERVED_MAPPED => { return 0x777777 as uint32 }\
+        case _ => { return 0x777777 as uint32 }
+    }
 }
 
 func put_pixel(fb: LimineFramebuffer*, x: uint, y: uint, rgb: uint32) {
     if fb.bpp != 32 as uint16 {
         return
     }
-    let row: char* = (fb.address + y * fb.pitch) as char*
-    let p: uint32* = (row + x * 4) as uint32*
+    let row = (fb.address + y * fb.pitch) as string
+    let p = (row + x * 4) as uint32*
     p[0] = rgb
+}
+
+func fill_rect(fb: LimineFramebuffer*, x0: uint, y0: uint, w: uint, h: uint, rgb: uint32) {
+    let y: uint = 0
+    while y < h {
+        let x: uint = 0
+        while x < w {
+            if x0 + x < fb.width && y0 + y < fb.height {
+                put_pixel(fb, x0 + x, y0 + y, rgb)
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
 }
 
 func draw_demo(fb: LimineFramebuffer*) {
@@ -162,17 +303,137 @@ func draw_demo(fb: LimineFramebuffer*) {
     }
 }
 
+func print_memmap(memmap: LimineMemmapResponse*) {
+    HAL.Serial.write("Limine memory map entries: ")
+    serial_write_dec(memmap.entry_count)
+    HAL.Serial.write("\n")
+
+    let entries: uint* = memmap.entries as uint*
+    let i: uint = 0
+    while i < memmap.entry_count {
+        let entry = entries[i] as LimineMemmapEntry*
+        HAL.Serial.write("  ")
+        serial_write_hex(entry.base)
+        HAL.Serial.write("..")
+        serial_write_hex(entry.base + entry.length)
+        HAL.Serial.write(" len=")
+        serial_write_hex(entry.length)
+        HAL.Serial.write(" ")
+        HAL.Serial.write(memmap_type_name(entry.entry_type))
+        HAL.Serial.write("\n")
+        i = i + 1
+    }
+}
+
+func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
+    let entries = memmap.entries as uint*
+    let max_end = 0
+    let i = 0
+    while i < memmap.entry_count {
+        let entry = entries[i] as LimineMemmapEntry*
+        let end_addr: uint = entry.base + entry.length
+        if end_addr > max_end {
+            max_end = end_addr
+        }
+        i = i + 1
+    }
+    if max_end == 0 {
+        return
+    }
+
+    let plot_x: uint = 16
+    let plot_y: uint = 260
+    let plot_w: uint = fb.width
+    if plot_w > 640 {
+        plot_w = 640
+    }
+    if plot_w > 32 {
+        plot_w = plot_w - 32
+    }
+
+    fb |> fill_rect(plot_x, plot_y - 2, plot_w, 16, 0x202020 as uint32)
+
+    i = 0
+    while i < memmap.entry_count {
+        let entry = entries[i] as LimineMemmapEntry*
+        let x0: uint = plot_x + (entry.base * plot_w) / max_end
+        let x1: uint = plot_x + ((entry.base + entry.length) * plot_w) / max_end
+        let w: uint = x1 - x0
+        if w == 0 {
+            w = 1
+        }
+        fill_rect(fb, x0, plot_y, w, 12, memmap_type_color(entry.entry_type))
+        i = i + 1
+    }
+
+    let legend_y: uint = plot_y + 24
+    fb |> fill_rect(plot_x, legend_y, 18, 10, memmap_type_color(MEMMAP_USABLE))
+    fb |> fill_rect(plot_x + 26, legend_y, 18, 10, memmap_type_color(MEMMAP_RESERVED))
+    fb |> fill_rect(plot_x + 52, legend_y, 18, 10, memmap_type_color(MEMMAP_BOOTLOADER_RECLAIMABLE))
+    fb |> fill_rect(plot_x + 78, legend_y, 18, 10, memmap_type_color(MEMMAP_EXECUTABLE_AND_MODULES))
+    fb |> fill_rect(plot_x + 104, legend_y, 18, 10, memmap_type_color(MEMMAP_FRAMEBUFFER))
+}
+
+func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
+    HAL.Serial.write("Limine HHDM offset: \(hhdm.offset:hex)\n")
+
+    let entries: uint* = memmap.entries as uint*
+    let probe_phys: uint = 0
+    let found: bool = false
+    let i: uint = 0
+    while i < memmap.entry_count && !found {
+        let entry = entries[i] as LimineMemmapEntry*
+        if entry.entry_type == MEMMAP_USABLE && entry.length > 0 {
+            probe_phys = entry.base
+            if probe_phys < 0x1000 && entry.length > 0x1000 {
+                probe_phys = 0x1000
+            }
+            if probe_phys < entry.base + entry.length {
+                found = true
+            }
+        }
+        i = i + 1
+    }
+
+    if found {
+        let probe_virt = hhdm.offset + probe_phys
+        let p = probe_virt as char*
+        let value = p[0] as uint
+        HAL.Serial.write("HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n")
+    } else {
+        HAL.Serial.write("No usable memory region available for HHDM probe\n")
+    }
+}
+
 func kernel_main() {
     HAL.disable_interrupts()
     HAL.Serial.init()
     HAL.Serial.write("LLPL Limine bare-metal demo booted\n")
 
-    let fb: LimineFramebuffer* = limine_get_framebuffer()
+    let fb = limine_get_framebuffer()
+    let memmap = limine_get_memmap()
+    let hhdm = limine_get_hhdm()
+
+    if memmap == null {
+        HAL.Serial.write("No Limine memory map response\n")
+    } else {
+        print_memmap(memmap)
+    }
+
+    if hhdm == null {
+        HAL.Serial.write("No Limine HHDM response\n")
+    } else if memmap != null {
+        demo_hhdm(memmap, hhdm)
+    }
+
     if fb == null {
         HAL.Serial.write("No Limine framebuffer response\n")
     } else {
         HAL.Serial.write("Drawing into Limine framebuffer\n")
         draw_demo(fb)
+        if memmap != null {
+            draw_memmap(fb, memmap)
+        }
     }
 
     while true {

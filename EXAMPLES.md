@@ -335,6 +335,15 @@ func main() -> int {
 }
 ```
 
+Prefix a capture with `&` to capture it **by reference** instead. The
+closure stores a pointer to the original variable, so reads see live values
+and assignments write back to the enclosing scope. Nested lambdas can
+re-capture an outer reference capture, with all closures aliasing the same
+original variable. See `test/closures_by_ref.llpl` for a runnable example.
+
+> Lifetime is the programmer's responsibility: a reference-capturing
+> closure must not outlive the variable it points to.
+
 A closure can be passed around like any other value - as a function
 argument, or stored in and called through a class field - see
 `test/closures_demo.llpl` for the full runnable version this is taken from:
@@ -368,6 +377,51 @@ let doubler: (int) -> int = func(x: int) -> int {
     return x * 2
 }
 ```
+
+## Modules and Imports
+
+Files are compiled together by following their `import` statements. A plain
+import makes every top-level declaration from the target file available in
+the importing file:
+
+```swift
+import graphics
+```
+
+Dotted paths become directory separators, and quoted paths are accepted for
+names that aren't valid identifiers:
+
+```swift
+import drivers.serial
+import "weird-path.llpl"
+```
+
+An alias lets you qualify names through a shorter prefix:
+
+```swift
+import graphics as G
+
+func main() -> int {
+    G.clear_screen()
+    return 0
+}
+```
+
+Selective imports pull in only the named symbols (optionally renaming them),
+which is useful for keeping large imports tidy or resolving name clashes:
+
+```swift
+import { Point, draw as render } from graphics
+
+func main() -> int {
+    let p: Point = Point { x: 1, y: 2 }
+    render(p)
+    return 0
+}
+```
+
+See `test/import_alias.llpl` and `test/import_selective.llpl` for runnable
+examples.
 
 ## Generics
 
@@ -773,38 +827,36 @@ func main() -> int {
 }
 ```
 
-## try/catch/finally
+## throw/try/catch/finally
 
-`try { ... } catch (e) { ... } finally { ... }` is compile-time sugar over
-`Result<T, E>` and `?` - not real stack-unwinding exceptions (this
-compiler transpiles to plain C with no unwind tables, and freestanding
-targets have no `setjmp`/`longjmp`). A `?` inside a `try` block redirects
-to that try's `catch` (via a plain C `goto`) instead of returning from the
-enclosing function - that's the capability this adds over plain `?`:
-calling Result-returning helpers and handling their errors *locally*, even
-from a function that doesn't itself return a compatible Result (`main`,
-for instance). See `test/try_catch_demo.llpl` for the full runnable
-version this is taken from:
+`throw value`, `try { ... } catch (e: T) { ... } finally { ... }`, and
+`Result<T, E>?` use LLPL's SJLJ exception runtime. The compiler emits an
+explicit handler stack and an x86_64 register save/restore jump buffer, so
+`throw` can cross LLPL function boundaries on hosted and bare-metal targets
+without libc or platform unwind tables.
+
+Cross-function throws need an explicit catch type, such as `catch (e: int)`.
+Local `throw`/`?` paths can still infer the type when no annotation is
+present. See `test/throw_try_demo.llpl` and `test/try_catch_demo.llpl` for
+runnable examples:
 
 ```swift
 func safe_div(a: int, b: int) -> Result<int, int> {
-    let r: Result<int, int> = new Result<int, int>()
     if b == 0 {
-        r.set_err(-1)
-        return r
+        throw -1
     }
+    let r: Result<int, int> = new Result<int, int>()
     r.set_ok(a / b)
     return r
 }
 
-// main returns plain `int`, not a Result - a bare `?` wouldn't compile
-// here, but wrapped in `try` it's fine: an error redirects to catch.
 func main() -> int {
     try {
-        let x: int = safe_div(10, 0)?
-        print_int("x", x)
-    } catch (e) {
-        print_int("caught", e)
+        let x: int = safe_div(10, 2)?
+        print_int("x", x)      // prints 5
+        throw 7
+    } catch (e: int) {
+        print_int("caught", e) // prints 7
     } finally {
         puts("finally always runs")
     }
@@ -814,27 +866,25 @@ func main() -> int {
 
 `catch` and `finally` are each independently optional, but at least one of
 them must be present - a bare `try { }` with neither is a parse error.
-`catch (e)`'s type is inferred from whichever `Result<T, E>` the *first*
-`?` inside that try block targets; every other `?` in the same try block
-must resolve to the same `E` (checked at compile time - a mismatch is a
-compile error, since LLPL has no error-union type and one try block only
-ever catches one error type). A `finally` block always runs - on normal
-completion, after a caught error, and before any `return` from inside the
-try or catch block (which also still runs any enclosing `defer`s, in
-innermost-to-outermost order: this try's `finally`, then any others
-further out, then function-level `defer`s last).
+`catch (e: T)` catches thrown values whose static type string matches `T`.
+If the type annotation is omitted, the compiler infers the type from local
+`throw` or failed `Result<T, E>?` paths in the try body. A `finally` block
+runs on normal completion, after a caught error, before any `return` from
+inside the try or catch block, and before a throw crosses outward through
+that try.
 
-Known v1 limitations:
-- One error type per `try` block - no catching more than one distinct
-  `Result<T, E>` error type in the same try.
+Known limitations:
+- One error type per `try` block - no catching more than one distinct error
+  type in the same try.
+- The SJLJ register save/restore runtime is currently implemented for
+  x86_64.
 - `Optional<T>`'s `None` isn't catchable via `catch` (there's no error
   *value* to bind `e` to) - a plain `?`/`is_none()` still works inside a
   `try`, it just propagates out of the enclosing function as it does
   today, unaffected by an enclosing try aimed at a different (Result)
   error.
-- No re-throw - a `catch` block can't hand the same error back out to an
-  enclosing `try`/function via `?` again; it can still build and
-  return/propagate a *new* `Result` to signal failure upward.
+- This unwinds through LLPL-registered frames; it cannot safely cross
+  arbitrary external C callbacks that never return to LLPL-generated code.
 
 ## Panics
 

@@ -27,6 +27,36 @@ typedef struct {
     void* env;
 } __LLPL_Closure;
 
+typedef struct {
+    uint64_t rbx;
+    uint64_t rbp;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
+    uint64_t rsp;
+    uint64_t rip;
+} __LLPL_EH_JumpBuf;
+
+#define LLPL_EH_FRAME_CATCH 1
+#define LLPL_EH_FRAME_CLEANUP 2
+
+typedef struct __LLPL_EH_Frame {
+    struct __LLPL_EH_Frame* prev;
+    int kind;
+    char* type_id;
+    void* error_slot;
+    uint64_t error_size;
+    __LLPL_EH_JumpBuf env;
+} __LLPL_EH_Frame;
+
+int llpl_eh_setjmp(__LLPL_EH_JumpBuf* env);
+void llpl_eh_longjmp(__LLPL_EH_JumpBuf* env, int value);
+void llpl_eh_push(__LLPL_EH_Frame* frame);
+void llpl_eh_pop(__LLPL_EH_Frame* frame);
+void llpl_eh_throw(char* type_id, void* error, uint64_t error_size);
+void llpl_eh_resume(void);
+
 // Memory allocation for bare metal
 void* rc_alloc(size_t size);
 void rc_free(void* ptr);

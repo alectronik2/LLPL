@@ -439,7 +439,29 @@ class Parser {
     }
 
     private ImportStmt importStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
         expect(TokenType.Import);
+
+        ImportedName[] names;
+        bool isSelective = false;
+
+        // Selective import: import { Foo, Bar as Baz } from "path"
+        if (match(TokenType.LeftBrace)) {
+            isSelective = true;
+            if (!check(TokenType.RightBrace)) {
+                do {
+                    string original = expect(TokenType.Identifier).value;
+                    string localAlias = "";
+                    if (match(TokenType.As)) {
+                        localAlias = expect(TokenType.Identifier).value;
+                    }
+                    names ~= ImportedName(original, localAlias);
+                } while (match(TokenType.Comma));
+            }
+            expect(TokenType.RightBrace);
+            expect(TokenType.From);
+        }
 
         // Canonical form: `import hal` or `import hal.serial` (dotted path
         // segments become directory separators). The quoted form is still
@@ -459,7 +481,7 @@ class Parser {
             alias_ = expect(TokenType.Identifier).value;
         }
 
-        return new ImportStmt(modulePath, alias_);
+        return new ImportStmt(modulePath, alias_, names, isSelective, startLine, startColumn);
     }
 
     // Parses a comma-separated `name: Type` parameter list, with an optional
@@ -1116,6 +1138,8 @@ class Parser {
             return deferStmt();
         } else if (check(TokenType.Try)) {
             return tryStmt();
+        } else if (check(TokenType.Throw)) {
+            return throwStmt();
         } else if (check(TokenType.Asm)) {
             return asmStmt();
         } else if (check(TokenType.Match)) {
@@ -1394,6 +1418,16 @@ class Parser {
         return new ReturnStmt(value);
     }
 
+    private ThrowStmt throwStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Throw);
+        if (check(TokenType.RightBrace) || check(TokenType.EOF)) {
+            errorAt(startLine, startColumn, "'throw' requires a value");
+        }
+        return new ThrowStmt(expression(), startLine, startColumn);
+    }
+
     private DeferStmt deferStmt() {
         expect(TokenType.Defer);
         ASTNode stmt = statement();
@@ -1411,10 +1445,14 @@ class Parser {
         Block tryBlock = block();
 
         string catchVar = "";
+        Type catchType = null;
         Block catchBlock = null;
         if (match(TokenType.Catch)) {
             expect(TokenType.LeftParen);
             catchVar = expect(TokenType.Identifier).value;
+            if (match(TokenType.Colon)) {
+                catchType = parseType();
+            }
             expect(TokenType.RightParen);
             catchBlock = block();
         }
@@ -1428,7 +1466,7 @@ class Parser {
             errorAt(startLine, startColumn, "'try' needs at least a 'catch' or a 'finally'");
         }
 
-        return new TryStmt(tryBlock, catchVar, catchBlock, finallyBlock, startLine, startColumn);
+        return new TryStmt(tryBlock, catchVar, catchType, catchBlock, finallyBlock, startLine, startColumn);
     }
 
     private ExprStmt exprStmt() {
@@ -1721,22 +1759,26 @@ class Parser {
         return expr;
     }
 
-    // `func[cap1, cap2](params) -> T { ... }` - a lambda literal. The
+    // `func[cap1, &cap2](params) -> T { ... }` - a lambda literal. The
     // capture list is optional (`func(params) -> T {...}` is a lambda that
     // captures nothing) but the parens and `{ }` body are always required,
     // even for an empty parameter list, so this can never be confused with
     // an ordinary parenthesized expression or array literal at this point
-    // in primary() (both of those start with `(` / `[`, not `func`).
+    // in primary() (both of those start with `(` / `[`, not `func`). A
+    // capture prefixed with `&` is stored by reference; otherwise it is
+    // copied by value.
     private ASTNode lambdaExpr() {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Function);
 
-        string[] captures;
+        Capture[] captures;
         if (match(TokenType.LeftBracket)) {
             if (!check(TokenType.RightBracket)) {
                 do {
-                    captures ~= expect(TokenType.Identifier).value;
+                    bool byRef = match(TokenType.BitwiseAnd);
+                    string name = expect(TokenType.Identifier).value;
+                    captures ~= new Capture(name, byRef);
                 } while (match(TokenType.Comma));
             }
             expect(TokenType.RightBracket);

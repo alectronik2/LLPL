@@ -5,6 +5,106 @@
 #include <stdlib.h>
 #endif
 
+#define LLPL_EH_MAX_ERROR_SIZE 256
+
+static __LLPL_EH_Frame* llpl_eh_top = NULL;
+static char* llpl_eh_pending_type = NULL;
+static uint64_t llpl_eh_pending_size = 0;
+static uint8_t llpl_eh_pending_error[LLPL_EH_MAX_ERROR_SIZE];
+
+#if defined(__x86_64__)
+__asm__(
+".global llpl_eh_setjmp\n"
+"llpl_eh_setjmp:\n"
+"    movq %rbx, 0(%rdi)\n"
+"    movq %rbp, 8(%rdi)\n"
+"    movq %r12, 16(%rdi)\n"
+"    movq %r13, 24(%rdi)\n"
+"    movq %r14, 32(%rdi)\n"
+"    movq %r15, 40(%rdi)\n"
+"    leaq 8(%rsp), %rax\n"
+"    movq %rax, 48(%rdi)\n"
+"    movq (%rsp), %rax\n"
+"    movq %rax, 56(%rdi)\n"
+"    xorl %eax, %eax\n"
+"    ret\n"
+".global llpl_eh_longjmp\n"
+"llpl_eh_longjmp:\n"
+"    movq 0(%rdi), %rbx\n"
+"    movq 8(%rdi), %rbp\n"
+"    movq 16(%rdi), %r12\n"
+"    movq 24(%rdi), %r13\n"
+"    movq 32(%rdi), %r14\n"
+"    movq 40(%rdi), %r15\n"
+"    movq 48(%rdi), %rsp\n"
+"    movq 56(%rdi), %rdx\n"
+"    movl %esi, %eax\n"
+"    testl %eax, %eax\n"
+"    jne 1f\n"
+"    movl $1, %eax\n"
+"1:\n"
+"    jmp *%rdx\n"
+);
+#else
+int llpl_eh_setjmp(__LLPL_EH_JumpBuf* env) {
+    (void)env;
+    llpl_panic("llpl_eh_setjmp is only implemented for x86_64");
+    return 0;
+}
+
+void llpl_eh_longjmp(__LLPL_EH_JumpBuf* env, int value) {
+    (void)env;
+    (void)value;
+    llpl_panic("llpl_eh_longjmp is only implemented for x86_64");
+}
+#endif
+
+void llpl_eh_push(__LLPL_EH_Frame* frame) {
+    frame->prev = llpl_eh_top;
+    llpl_eh_top = frame;
+}
+
+void llpl_eh_pop(__LLPL_EH_Frame* frame) {
+    if (llpl_eh_top == frame) {
+        llpl_eh_top = frame->prev;
+    }
+}
+
+static void llpl_eh_deliver_pending(void) {
+    __LLPL_EH_Frame* frame = llpl_eh_top;
+    while (frame) {
+        llpl_eh_top = frame->prev;
+        if (frame->kind == LLPL_EH_FRAME_CLEANUP) {
+            llpl_eh_longjmp(&frame->env, 1);
+        }
+        if (frame->kind == LLPL_EH_FRAME_CATCH &&
+                strcmp(frame->type_id, llpl_eh_pending_type) == 0) {
+            uint64_t copy_size = llpl_eh_pending_size;
+            if (copy_size > frame->error_size) {
+                copy_size = frame->error_size;
+            }
+            memcpy(frame->error_slot, llpl_eh_pending_error, (size_t)copy_size);
+            llpl_eh_longjmp(&frame->env, 1);
+        }
+        frame = llpl_eh_top;
+    }
+    llpl_panic("uncaught LLPL exception");
+}
+
+void llpl_eh_throw(char* type_id, void* error, uint64_t error_size) {
+    if (error_size > LLPL_EH_MAX_ERROR_SIZE) {
+        llpl_panic("LLPL exception payload too large");
+    }
+    llpl_eh_pending_type = type_id;
+    llpl_eh_pending_size = error_size;
+    memcpy(llpl_eh_pending_error, error, (size_t)error_size);
+    llpl_eh_deliver_pending();
+}
+
+void llpl_eh_resume(void) {
+    llpl_eh_deliver_pending();
+}
+
 // Free-list allocator over a static 1MB heap. Supports allocation, freeing,
 // and coalescing of adjacent free blocks. Works for both hosted binaries and
 // bare-metal targets because it never calls the system malloc.

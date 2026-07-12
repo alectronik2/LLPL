@@ -50,7 +50,8 @@ enum NodeType {
     ImplDecl,
     DestructuringStmt,
     PatternExpr,
-    TryStmt
+    TryStmt,
+    ThrowStmt
 }
 
 abstract class ASTNode {
@@ -76,14 +77,29 @@ class Program : ASTNode {
     }
 }
 
+struct ImportedName {
+    string original;
+    string alias_;  // empty means no local alias
+
+    this(string original, string alias_ = "") {
+        this.original = original;
+        this.alias_ = alias_;
+    }
+}
+
 class ImportStmt : ASTNode {
     string modulePath;
-    string alias_;  // Optional alias
+    string alias_;       // Optional module alias
+    string resolvedPath; // Absolute path, filled in by ModuleResolver
+    ImportedName[] names;
+    bool isSelective;
 
-    this(string modulePath, string alias_ = "") {
-        super(NodeType.ImportStmt);
+    this(string modulePath, string alias_ = "", ImportedName[] names = [], bool isSelective = false, int line = 0, int column = 0) {
+        super(NodeType.ImportStmt, line, column);
         this.modulePath = modulePath;
         this.alias_ = alias_;
+        this.names = names;
+        this.isSelective = isSelective;
     }
 }
 
@@ -664,30 +680,21 @@ class DeferStmt : ASTNode {
     }
 }
 
-// `try { ... } catch (e) { ... } finally { ... }` - pure compile-time
-// sugar over the existing Result<T, E>/`?`/defer machinery (see
-// codegen.d's generateTryStmt), *not* real stack-unwinding exceptions:
-// this compiler transpiles to plain C with no unwind-table/landing-pad
-// machinery, freestanding targets have no setjmp/longjmp (no libc), and a
-// real unwind jumping through a function via a mechanism the compiler
-// doesn't control would skip defer's own compile-time replay-at-return
-// and silently break its guarantee. Instead, a `?` inside `tryBlock`
-// redirects (via a plain C `goto`) to this try's catch label instead of
-// returning from the enclosing function - the key new capability plain
-// `?` doesn't have: code inside `try` can call Result-returning helpers
-// without the *enclosing function* itself needing to return a compatible
-// Result. `finallyBlock` is generated once and replayed at every exit
-// path (normal completion, via catch, or an early `return` from inside
-// either), the same "generate the code once, replay the string at every
-// exit point" trick codegen.d's deferredStatements already uses for defer.
+// `try { ... } catch (e: T) { ... } finally { ... }` and `throw value`
+// lower to LLPL's small SJLJ runtime, not platform ABI/DWARF unwinding.
+// The runtime keeps an explicit handler stack and uses an x86_64 register
+// save/restore jump buffer, so throws can cross LLPL function boundaries on
+// hosted and freestanding targets without libc. A failed Result<T, E>? inside
+// the same function's try block still uses the cheaper local redirect path.
 //
 // `catchBlock`/`finallyBlock` are each independently optional, but at
 // least one must be present (enforced by the parser) - a bare `try { }`
 // with neither would do nothing. `catchVar`'s type is inferred from
-// whichever `Result<T, E>` the first redirected `?` inside `tryBlock`
-// targets; every other redirected `?` in the *same* try block must
-// resolve to the same `E` (checked in codegen.d) - one try block only
-// ever catches one error type, since LLPL has no error-union type.
+// Cross-function throws need an explicit catch type (`catch (e: int)`) because
+// the parser cannot infer a callee's possible thrown values from a plain call.
+// Local throw/? paths can still infer the catch type when no annotation is
+// present. One try block catches one error type, since LLPL has no error-union
+// type.
 // Deliberately scoped to `Result<T, E>` only, not `Optional<T>` - `None`
 // carries no error *value* to bind `catchVar` to; a plain `?`/`is_none()`
 // on an Optional still works fine inside a `try`, it just isn't caught by
@@ -696,16 +703,27 @@ class DeferStmt : ASTNode {
 class TryStmt : ASTNode {
     Block tryBlock;
     string catchVar;    // "" if there's no catch clause
+    Type catchType;     // Optional explicit `catch (e: T)` type
     Block catchBlock;   // null if there's no catch clause
     Block finallyBlock; // null if there's no finally clause
 
-    this(Block tryBlock, string catchVar, Block catchBlock, Block finallyBlock,
+    this(Block tryBlock, string catchVar, Type catchType, Block catchBlock, Block finallyBlock,
             int line = 0, int column = 0) {
         super(NodeType.TryStmt, line, column);
         this.tryBlock = tryBlock;
         this.catchVar = catchVar;
+        this.catchType = catchType;
         this.catchBlock = catchBlock;
         this.finallyBlock = finallyBlock;
+    }
+}
+
+class ThrowStmt : ASTNode {
+    ASTNode value;
+
+    this(ASTNode value, int line = 0, int column = 0) {
+        super(NodeType.ThrowStmt, line, column);
+        this.value = value;
     }
 }
 
@@ -852,21 +870,37 @@ class Identifier : ASTNode {
     }
 }
 
+// One named capture in a lambda literal's `[...]` list. `byRef` stores the
+// variable by address so the lambda sees later mutations (and can mutate the
+// original); otherwise the variable's current value is copied into the
+// environment at lambda-creation time, exactly like the original behaviour.
+class Capture {
+    string name;
+    bool byRef;
+
+    this(string name, bool byRef = false) {
+        this.name = name;
+        this.byRef = byRef;
+    }
+}
+
 // `func[cap1, cap2](params) -> T { ... }` - a lambda literal. `captures`
-// names existing variables (from the enclosing scope) whose *current
-// value* is snapshotted by value into a heap-allocated environment struct
-// at the point the lambda expression is evaluated; the lambda body reads
-// captures from that environment, never from the enclosing scope directly
-// (see codegen.d's generateLambdaExpr). Capture lists are explicit, not
-// inferred, so a capture that's missing is a compile error ("Unknown
+// names existing variables (from the enclosing scope); by default each
+// capture's *current value* is snapshotted by value into a heap-allocated
+// environment struct at the point the lambda expression is evaluated. A
+// capture prefixed with `&` is stored by reference instead, so the lambda
+// sees later mutations and can mutate the original variable. The lambda body
+// reads captures from that environment, never from the enclosing scope
+// directly (see codegen.d's generateLambdaExpr). Capture lists are explicit,
+// not inferred, so a capture that's missing is a compile error ("Unknown
 // capture") rather than a silently-wrong closure.
 class LambdaExpr : ASTNode {
-    string[] captures;
+    Capture[] captures;
     Parameter[] params;
     Type returnType;
     Block body_;
 
-    this(string[] captures, Parameter[] params, Type returnType, Block body_, int line = 0, int column = 0) {
+    this(Capture[] captures, Parameter[] params, Type returnType, Block body_, int line = 0, int column = 0) {
         super(NodeType.LambdaExpr, line, column);
         this.captures = captures;
         this.params = params;

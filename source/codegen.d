@@ -40,23 +40,30 @@ struct UsageInfo {
     int column;
 }
 
-// One active `try` block's redirect/replay state - see generateTryStmt
-// and generatePropagateExpr's use of tryFrameStack below.
+// One active `try` block's redirect/replay state - see generateTryStmt,
+// generateThrowStmt, and generatePropagateExpr's use of tryFrameStack below.
 private struct TryFrame {
-    string catchLabel;    // "" disables ?-redirection (no catch clause, or
+    string catchLabel;    // "" disables throw/? redirection (no catch clause, or
                            // we're generating *this* try's own catch block)
-    string errorVarName;  // C variable a redirecting `?` assigns the error into
-    Type errorType;       // set by the first redirected `?` seen in this
-                           // try's tryBlock; every later one in the same
-                           // try must match (see generatePropagateExpr)
+    string errorVarName;  // C variable a redirecting throw/? assigns into
+    Type errorType;       // set by the first redirected throw/? seen in this
+                           // try's tryBlock; every later one in the same try
+                           // must match
     string[] finallyCode; // this try's finally block, pre-generated once
                            // (empty if there's no finally clause)
+    string frameVarName;
+}
+
+private struct DeferInfo {
+    string code;
+    string frameVarName;
+    string activeVarName;
 }
 
 class CodeGenerator {
     private int indentLevel;
-    private string[] deferredStatements;
-    // Stack of TryFrames, innermost last - what a `?` inside a try block
+    private DeferInfo[] deferredStatements;
+    // Stack of TryFrames, innermost last - what throw/`?` inside a try block
     // redirects to (see generatePropagateExpr) instead of returning from
     // the enclosing function, and what a `return` anywhere inside a try or
     // its catch block needs to replay (that try's finally) before actually
@@ -80,6 +87,15 @@ class CodeGenerator {
     private VarDecl[string] globalVarRegistry; // Global lets/consts (incl. enum members), by mangled name
     private VariantInfo[string] variantRegistry; // Tagged-enum variant constructors, by mangled function name
     private Type[string] typeAliases; // Type aliases (`alias string = char*`), by mangled alias name
+
+    // Per-symbol origin module path, so alias-qualified and selective imports
+    // can look up which module a given mangled name came from.
+    private string[string] functionModulePath;
+    private string[string] classModulePath;
+    private string[string] structModulePath;
+    private string[string] macroModulePath;
+    private string[string] globalVarModulePath;
+    private string[string] typeAliasModulePath;
     private int macroExpansionDepth; // Guards against (possibly indirect) macro self-recursion
     private SymbolInfo[] collectedSymbols; // Declaration-site symbol table, built by generateMultiple; see symbols()
     private UsageInfo[] usageRecords; // Resolved reference sites, recorded via recordUsage; see usages()
@@ -98,7 +114,34 @@ class CodeGenerator {
     private enum interpBufferSize = 256; // Scratch buffer size for one interpolated string's result
     private int lambdaCounter; // Numbers each lambda literal's env struct/trampoline function uniquely
     private string[] lambdaDecls; // Per-lambda `struct __LambdaEnvN {...};` + trampoline function decls, emitted up front
-    private string[string] currentLambdaCaptureAccess; // Capture name -> "__env->name", set around a lambda body's generation
+
+    // Per-capture context while generating a lambda body: how to read the
+    // capture's value (useExpr), how to refer to its storage location
+    // (lvalueExpr), and whether it is itself a reference capture. Nested
+    // lambdas need all three to build their own environments correctly.
+    private struct LambdaCaptureCtx {
+        string useExpr;
+        string lvalueExpr;
+        bool byRef;
+    }
+    private LambdaCaptureCtx[string] currentLambdaCaptures;
+
+    // Per-module import metadata for aliases and selective imports.
+    private struct ImportedNameInfo {
+        string original;
+        string alias_;
+    }
+    private struct ModuleImportInfo {
+        string targetModulePath;
+        string alias_;                // module alias, if any
+        ImportedNameInfo[] names;     // empty = import all
+        bool isSelective;
+    }
+    private ModuleImportInfo[][string] moduleImports;       // importer -> imports
+    private string[string][string] moduleAliases;           // importer -> alias -> target module path
+    private string[string][string] selectiveLocalAliases;   // importer -> local name -> target mangled name
+    private bool[string][string] exportsByModule;           // module -> set of mangled names it declares
+    private string preludeModulePath;                       // treated as implicitly imported everywhere
 
     // Monomorphization engine (see resolveType's typeArgs branch and
     // resolveGenericFunctionCall): a generic class/struct/function is
@@ -686,6 +729,7 @@ class CodeGenerator {
                         string key = mangledFunc(funcDecl);
                         genericFunctionTemplates[key] = funcDecl;
                         genericTemplateModulePath[key] = prog.modulePath;
+                        exportsByModule[prog.modulePath][key] = true;
                         continue;
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
@@ -693,6 +737,7 @@ class CodeGenerator {
                         string key = mangledClass(classDecl);
                         genericClassTemplates[key] = classDecl;
                         genericTemplateModulePath[key] = prog.modulePath;
+                        exportsByModule[prog.modulePath][key] = true;
                         continue;
                     }
                 } else if (auto structDecl = cast(StructDecl)decl) {
@@ -700,6 +745,7 @@ class CodeGenerator {
                         string key = mangledStruct(structDecl);
                         genericStructTemplates[key] = structDecl;
                         genericTemplateModulePath[key] = prog.modulePath;
+                        exportsByModule[prog.modulePath][key] = true;
                         continue;
                     }
                 } else if (auto traitDecl = cast(TraitDecl)decl) {
@@ -709,6 +755,7 @@ class CodeGenerator {
                     string key = mangled(traitDecl.namespaceSegments, traitDecl.name);
                     traitRegistry[key] = traitDecl;
                     traitModulePath[key] = prog.modulePath;
+                    exportsByModule[prog.modulePath][key] = true;
                     continue;
                 } else if (auto implDecl = cast(ImplDecl)decl) {
                     // Parked, not processed yet - its methods have a
@@ -746,6 +793,8 @@ class CodeGenerator {
                         string baseName = aliasDecl.targetPath.join("_");
                         typeAliases[mangledName] = new Type(baseName, aliasDecl.targetIsPointer,
                             aliasDecl.targetIsArray, aliasDecl.targetArraySize);
+                        typeAliasModulePath[mangledName] = prog.modulePath;
+                        exportsByModule[prog.modulePath][mangledName] = true;
                     }
                 }
             }
@@ -753,18 +802,37 @@ class CodeGenerator {
         foreach (prog; programs) {
             foreach (decl; prog.declarations) {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
-                    functionRegistry[mangledFunc(funcDecl)] = funcDecl;
+                    string key = mangledFunc(funcDecl);
+                    functionRegistry[key] = funcDecl;
+                    functionModulePath[key] = prog.modulePath;
+                    exportsByModule[prog.modulePath][key] = true;
                 } else if (auto classDecl = cast(ClassDecl)decl) {
-                    classRegistry[mangledClass(classDecl)] = classDecl;
+                    string key = mangledClass(classDecl);
+                    classRegistry[key] = classDecl;
+                    classModulePath[key] = prog.modulePath;
+                    exportsByModule[prog.modulePath][key] = true;
                 } else if (auto structDecl = cast(StructDecl)decl) {
-                    structRegistry[mangledStruct(structDecl)] = structDecl;
+                    string key = mangledStruct(structDecl);
+                    structRegistry[key] = structDecl;
+                    structModulePath[key] = prog.modulePath;
+                    exportsByModule[prog.modulePath][key] = true;
                 } else if (auto macroDecl = cast(MacroDecl)decl) {
-                    macroRegistry[mangled(macroDecl.namespaceSegments, macroDecl.name)] = macroDecl;
+                    string key = mangled(macroDecl.namespaceSegments, macroDecl.name);
+                    macroRegistry[key] = macroDecl;
+                    macroModulePath[key] = prog.modulePath;
+                    exportsByModule[prog.modulePath][key] = true;
                 } else if (auto varDecl = cast(VarDecl)decl) {
-                    globalVarRegistry[mangled(varDecl.namespaceSegments, varDecl.name)] = varDecl;
+                    string key = mangled(varDecl.namespaceSegments, varDecl.name);
+                    globalVarRegistry[key] = varDecl;
+                    globalVarModulePath[key] = prog.modulePath;
+                    exportsByModule[prog.modulePath][key] = true;
                 }
             }
         }
+
+        // Build per-module import metadata (aliases, selective imports) now
+        // that every module's exports are known.
+        collectImports(programs);
 
         // Process every parked `impl Trait for Type { ... }` block now
         // that classRegistry/structRegistry are populated (so a
@@ -1416,13 +1484,19 @@ class CodeGenerator {
         code ~= indent() ~ "if (!self) return NULL;\n";
         code ~= indent() ~ "rc_init(&self->ref_count);\n\n";
 
+        deferredStatements = [];
+
         // Generate constructor body
+        string bodyCode = "";
         if (constructor.body_) {
             foreach (stmt; constructor.body_.statements) {
-                code ~= generateBodyStatement(stmt, false);
+                bodyCode ~= generateBodyStatement(stmt, false);
             }
         }
 
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
         code ~= indent() ~ "return self;\n";
         indentLevel--;
         code ~= "}\n\n";
@@ -1467,12 +1541,19 @@ class CodeGenerator {
         indentLevel++;
         code ~= indent() ~ format("%s* self = (%s*)ptr;\n", cName, cName);
 
+        deferredStatements = [];
+
         // Generate destructor body
+        string bodyCode = "";
         if (destructor.body_) {
             foreach (stmt; destructor.body_.statements) {
-                code ~= generateBodyStatement(stmt, false);
+                bodyCode ~= generateBodyStatement(stmt, false);
             }
         }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
 
         // Release reference-counted fields. Struct-typed fields (including
         // __LLPL_Closure - see runtime.h/generateLambdaExpr) are plain
@@ -1522,18 +1603,16 @@ class CodeGenerator {
 
         deferredStatements = [];
 
+        string bodyCode = "";
         if (method.body_) {
             foreach (stmt; method.body_.statements) {
-                code ~= generateBodyStatement(stmt, false);
+                bodyCode ~= generateBodyStatement(stmt, false);
             }
         }
 
-        // Add deferred statements before return
-        if (deferredStatements.length > 0) {
-            foreach_reverse (deferStmt; deferredStatements) {
-                code ~= deferStmt;
-            }
-        }
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
 
         indentLevel--;
         code ~= "}\n\n";
@@ -1593,22 +1672,21 @@ class CodeGenerator {
 
         deferredStatements = [];
 
+        string bodyCode = "";
         if (funcDecl.body_) {
             foreach (stmt; funcDecl.body_.statements) {
-                code ~= generateBodyStatement(stmt, false);
+                bodyCode ~= generateBodyStatement(stmt, false);
             }
         }
 
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
         // Replay deferred statements for a fall-off-the-end return (every
         // *explicit* `return` already replays them inline - see
         // generateStatement's ReturnStmt case - but a void function that
         // never writes one needs this too, the same as generateMethod
         // already does).
-        if (deferredStatements.length > 0) {
-            foreach_reverse (deferStmt; deferredStatements) {
-                code ~= deferStmt;
-            }
-        }
+        code ~= deferredCleanupCode();
 
         indentLevel--;
         code ~= "}\n";
@@ -1655,11 +1733,16 @@ class CodeGenerator {
 
         deferredStatements = [];
 
+        string bodyCode = "";
         if (funcDecl.body_) {
             foreach (stmt; funcDecl.body_.statements) {
-                code ~= generateBodyStatement(stmt, false);
+                bodyCode ~= generateBodyStatement(stmt, false);
             }
         }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
 
         indentLevel--;
         code ~= "}\n";
@@ -1730,13 +1813,133 @@ class CodeGenerator {
     // mismatch surfaces as an ordinary C type error, same as everywhere
     // else this compiler leans on the C backend to catch a deeper type
     // mismatch rather than checking it itself).
+    private bool sameErrorType(Type a, Type b) {
+        if (a is null || b is null) return a is b;
+        return a.name == b.name && a.isPointer == b.isPointer &&
+            a.isArray == b.isArray && a.arraySize == b.arraySize;
+    }
+
+    private int nearestCatchFrameIndex() {
+        int i = cast(int)tryFrameStack.length - 1;
+        while (i >= 0) {
+            if (tryFrameStack[i].catchLabel.length > 0) {
+                return i;
+            }
+            i--;
+        }
+        return -1;
+    }
+
+    private void recordTryFrameErrorType(int frameIndex, Type errorType, int line, int column, string origin) {
+        Type existing = tryFrameStack[frameIndex].errorType;
+        if (existing is null) {
+            tryFrameStack[frameIndex].errorType = errorType;
+        } else if (!sameErrorType(existing, errorType)) {
+            throw new CompileError(format(
+                "All throws/'?' propagations caught by one 'try' block must use the same error type - " ~
+                "this %s has '%s', but an earlier one was '%s'",
+                origin, errorType.toString(), existing.toString()),
+                currentModulePath, line, column);
+        }
+    }
+
+    private string finallyCodeAboveFrame(int frameIndex) {
+        string code = "";
+        int i = cast(int)tryFrameStack.length - 1;
+        while (i > frameIndex) {
+            foreach (finallyStmt; tryFrameStack[i].finallyCode) {
+                code ~= finallyStmt;
+            }
+            i--;
+        }
+        return code;
+    }
+
+    private string allActiveFinallyCode() {
+        string code = "";
+        if (tryFrameStack.length > 0) {
+            foreach_reverse (frame; tryFrameStack) {
+                foreach (finallyStmt; frame.finallyCode) {
+                    code ~= finallyStmt;
+                }
+            }
+        }
+        return code;
+    }
+
+    private string cleanupCodeForFunctionExit() {
+        string code = allActiveFinallyCode();
+        if (tryFrameStack.length > 0) {
+            foreach_reverse (frame; tryFrameStack) {
+                if (frame.frameVarName.length > 0) {
+                    code ~= indent() ~ format("llpl_eh_pop(&%s);\n", frame.frameVarName);
+                }
+            }
+        }
+        code ~= deferredCleanupCode();
+        return code;
+    }
+
+    private string deferredCleanupCode() {
+        string code = "";
+        if (deferredStatements.length > 0) {
+            foreach_reverse (deferInfo; deferredStatements) {
+                code ~= indent() ~ format("if (%s) {\n", deferInfo.activeVarName);
+                indentLevel++;
+                code ~= indent() ~ format("%s = 0;\n", deferInfo.activeVarName);
+                code ~= indent() ~ format("llpl_eh_pop(&%s);\n", deferInfo.frameVarName);
+                code ~= deferInfo.code;
+                indentLevel--;
+                code ~= indent() ~ "}\n";
+            }
+        }
+        return code;
+    }
+
+    private string deferFrameDeclarations() {
+        string code = "";
+        foreach (deferInfo; deferredStatements) {
+            code ~= indent() ~ format("__LLPL_EH_Frame %s;\n", deferInfo.frameVarName);
+            code ~= indent() ~ format("int %s = 0;\n", deferInfo.activeVarName);
+        }
+        return code;
+    }
+
+    private string generateDeferStmt(DeferStmt deferStmt) {
+        string frameVar = format("__llpl_defer_frame%d", tryCounter++);
+        string activeVar = format("__llpl_defer_active%d", tryCounter++);
+        string deferCode = generateStatement(deferStmt.statement, true);
+        deferredStatements ~= DeferInfo(deferCode, frameVar, activeVar);
+
+        string code = "";
+        code ~= indent() ~ format("%s.kind = LLPL_EH_FRAME_CLEANUP;\n", frameVar);
+        code ~= indent() ~ format("%s.type_id = NULL;\n", frameVar);
+        code ~= indent() ~ format("%s.error_slot = NULL;\n", frameVar);
+        code ~= indent() ~ format("%s.error_size = 0;\n", frameVar);
+        code ~= indent() ~ format("llpl_eh_push(&%s);\n", frameVar);
+        code ~= indent() ~ format("%s = 1;\n", activeVar);
+        code ~= indent() ~ format("if (llpl_eh_setjmp(&%s.env) != 0) {\n", frameVar);
+        indentLevel++;
+        code ~= indent() ~ format("%s = 0;\n", activeVar);
+        code ~= deferCode;
+        code ~= indent() ~ "llpl_eh_resume();\n";
+        code ~= indent() ~ "__builtin_unreachable();\n";
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        return code;
+    }
+
+    private string typeId(Type t) {
+        return cStringLiteral(t.toString());
+    }
+
     // Desugars `try { ... } [catch (e) { ... }] [finally { ... }]` into plain
     // C blocks/goto/labels - see ast.TryStmt's doc comment for the overall
     // design and TryFrame's own comment for the per-try state this pushes
     // onto tryFrameStack while generating the try/catch bodies (consulted
-    // by generatePropagateExpr to redirect a `?` here instead of returning,
-    // and by generateStatement's ReturnStmt case to replay finallyCode
-    // before any actual return).
+    // by generateThrowStmt/generatePropagateExpr to redirect here instead of
+    // returning, and by generateStatement's ReturnStmt case to replay
+    // finallyCode before any actual return).
     private string generateTryStmt(TryStmt stmt, bool isDeferred) {
         string[] finallyCode;
         if (stmt.finallyBlock !is null) {
@@ -1749,6 +1952,13 @@ class CodeGenerator {
         int myId = tryCounter;
         string catchLabel = stmt.catchBlock !is null ? format("__catch_%d", myId) : "";
         string errorVarName = format("__llpl_try_err%d", myId);
+        string frameVarName = format("__llpl_eh_frame%d", myId);
+
+        Type explicitCatchType = null;
+        if (stmt.catchType !is null) {
+            explicitCatchType = cloneType(stmt.catchType);
+            resolveType(explicitCatchType);
+        }
 
         // Generate the try block's own statements first (at the indent depth
         // they'll actually be spliced back in at, below) so myFrame.errorType
@@ -1756,7 +1966,7 @@ class CodeGenerator {
         // inside tryBodyCode already refers to errorVarName by name, so the
         // declaration has to exist somewhere that both it and the __catch_N
         // label below can see, i.e. the wrapping `{ }` this function emits.
-        tryFrameStack ~= TryFrame(catchLabel, errorVarName, null, finallyCode);
+        tryFrameStack ~= TryFrame(catchLabel, errorVarName, explicitCatchType, finallyCode, frameVarName);
         indentLevel++;
         string tryBodyCode = "";
         foreach (tstmt; stmt.tryBlock.statements) {
@@ -1768,8 +1978,8 @@ class CodeGenerator {
 
         if (stmt.catchBlock !is null && myFrame.errorType is null) {
             throw new CompileError(
-                "'try' has a 'catch' clause but no '?' inside the try block to determine " ~
-                "the caught error's type",
+                "'try' has a 'catch' clause but no throw/'?' inside the try block to determine " ~
+                "the caught error's type; use 'catch (e: Type)' for cross-function throws",
                 currentModulePath, stmt.line, stmt.column);
         }
 
@@ -1778,25 +1988,59 @@ class CodeGenerator {
         indentLevel++;
         if (stmt.catchBlock !is null) {
             code ~= indent() ~ format("%s %s;\n", typeToC(myFrame.errorType), errorVarName);
-        }
-        code ~= tryBodyCode;
-
-        if (stmt.catchBlock !is null) {
+            code ~= indent() ~ format("__LLPL_EH_Frame %s;\n", frameVarName);
+            code ~= indent() ~ format("%s.kind = LLPL_EH_FRAME_CATCH;\n", frameVarName);
+            code ~= indent() ~ format("%s.type_id = %s;\n", frameVarName, typeId(myFrame.errorType));
+            code ~= indent() ~ format("%s.error_slot = &%s;\n", frameVarName, errorVarName);
+            code ~= indent() ~ format("%s.error_size = sizeof(%s);\n", frameVarName, typeToC(myFrame.errorType));
+            code ~= indent() ~ format("llpl_eh_push(&%s);\n", frameVarName);
+            code ~= indent() ~ format("if (llpl_eh_setjmp(&%s.env) == 0) {\n", frameVarName);
+            indentLevel++;
+            code ~= tryBodyCode;
+            code ~= indent() ~ format("llpl_eh_pop(&%s);\n", frameVarName);
             code ~= indent() ~ format("goto __try_done_%d;\n", myId);
+            indentLevel--;
+            code ~= indent() ~ "} else {\n";
+            indentLevel++;
             code ~= format("%s: ;\n", catchLabel);
             code ~= indent() ~ "{\n";
             indentLevel++;
             code ~= indent() ~ format("%s %s = %s;\n",
                 typeToC(myFrame.errorType), stmt.catchVar, errorVarName);
             variableTypes[stmt.catchVar] = myFrame.errorType;
-            tryFrameStack ~= TryFrame("", errorVarName, myFrame.errorType, finallyCode);
+            tryFrameStack ~= TryFrame("", errorVarName, myFrame.errorType, finallyCode, "");
             foreach (cstmt; stmt.catchBlock.statements) {
                 code ~= generateBodyStatement(cstmt, isDeferred);
             }
             tryFrameStack = tryFrameStack[0 .. $ - 1];
             indentLevel--;
             code ~= indent() ~ "}\n";
+            indentLevel--;
+            code ~= indent() ~ "}\n";
             code ~= format("__try_done_%d: ;\n", myId);
+        } else if (stmt.finallyBlock !is null) {
+            code ~= indent() ~ format("__LLPL_EH_Frame %s;\n", frameVarName);
+            code ~= indent() ~ format("%s.kind = LLPL_EH_FRAME_CLEANUP;\n", frameVarName);
+            code ~= indent() ~ format("%s.type_id = NULL;\n", frameVarName);
+            code ~= indent() ~ format("%s.error_slot = NULL;\n", frameVarName);
+            code ~= indent() ~ format("%s.error_size = 0;\n", frameVarName);
+            code ~= indent() ~ format("llpl_eh_push(&%s);\n", frameVarName);
+            code ~= indent() ~ format("if (llpl_eh_setjmp(&%s.env) == 0) {\n", frameVarName);
+            indentLevel++;
+            code ~= tryBodyCode;
+            code ~= indent() ~ format("llpl_eh_pop(&%s);\n", frameVarName);
+            indentLevel--;
+            code ~= indent() ~ "} else {\n";
+            indentLevel++;
+            foreach (finStmt; finallyCode) {
+                code ~= finStmt;
+            }
+            code ~= indent() ~ "llpl_eh_resume();\n";
+            code ~= indent() ~ "__builtin_unreachable();\n";
+            indentLevel--;
+            code ~= indent() ~ "}\n";
+        } else {
+            code ~= tryBodyCode;
         }
 
         indentLevel--;
@@ -1806,6 +2050,46 @@ class CodeGenerator {
             code ~= finStmt;
         }
 
+        return code;
+    }
+
+    private Type currentResultErrorType(int line, int column, string diagnostic) {
+        if (currentReturnType is null || (currentReturnType.name !in resultInstantiations)) {
+            throw new CompileError(diagnostic, currentModulePath, line, column);
+        }
+        auto recorded = currentReturnType.name in monomorphizedTypeArgs;
+        if (recorded is null || recorded.length != 2) {
+            throw new CompileError("Cannot determine the current function's Result error type",
+                currentModulePath, line, column);
+        }
+        return (*recorded)[1];
+    }
+
+    private string generateThrowStmt(ThrowStmt stmt, bool isDeferred) {
+        if (isDeferred) {
+            throw new CompileError("'throw' is not supported inside a deferred statement",
+                currentModulePath, stmt.line, stmt.column);
+        }
+
+        Type thrownType;
+        try {
+            thrownType = inferType(stmt.value);
+        } catch (Exception e) {
+            throw new CompileError("Cannot infer the type of thrown value",
+                currentModulePath, stmt.line, stmt.column);
+        }
+        string valueCode = generateExpression(stmt.value);
+
+        int catchIndex = nearestCatchFrameIndex();
+        if (catchIndex >= 0) {
+            recordTryFrameErrorType(catchIndex, thrownType, stmt.line, stmt.column, "'throw'");
+        }
+        string code = "";
+        string tmp = format("__llpl_throw_value%d", tryCounter++);
+        code ~= indent() ~ format("%s %s = %s;\n", typeToC(thrownType), tmp, valueCode);
+        code ~= indent() ~ format("llpl_eh_throw(%s, &%s, sizeof(%s));\n",
+            typeId(thrownType), tmp, typeToC(thrownType));
+        code ~= indent() ~ "__builtin_unreachable();\n";
         return code;
     }
 
@@ -1827,8 +2111,9 @@ class CodeGenerator {
                     "'?' on an Optional value needs the enclosing function to also return " ~
                     "an Optional<T> (or 'T?')", currentModulePath, propExpr.line, propExpr.column);
             }
-            return format("({ %s* %s = %s; if (!%s->has_value) { return %s_new(); } %s->value; })",
-                operandMangled, tmp, operandCode, tmp, currentReturnType.name, tmp);
+            return format("({ %s* %s = %s; if (!%s->has_value) { %s return %s_new(); } %s->value; })",
+                operandMangled, tmp, operandCode, tmp, cleanupCodeForFunctionExit(),
+                currentReturnType.name, tmp);
         }
 
         if (operandMangled in resultInstantiations) {
@@ -1838,25 +2123,22 @@ class CodeGenerator {
             // No new Result/trace to build here, unlike the plain
             // early-return path below - we're not returning a Result to
             // anyone, just capturing the raw error value locally.
-            if (tryFrameStack.length > 0 && tryFrameStack[$ - 1].catchLabel.length > 0) {
+            int catchIndex = nearestCatchFrameIndex();
+            if (catchIndex >= 0) {
                 auto recorded = operandMangled in monomorphizedTypeArgs;
                 if (recorded is null || recorded.length != 2) {
                     throw new CompileError("Cannot determine the error type of '?' inside a try block",
                         currentModulePath, propExpr.line, propExpr.column);
                 }
                 Type errorType = (*recorded)[1];
-                auto frame = &tryFrameStack[$ - 1];
-                if (frame.errorType is null) {
-                    frame.errorType = errorType;
-                } else if (frame.errorType.name != errorType.name || frame.errorType.isPointer != errorType.isPointer) {
-                    throw new CompileError(format(
-                        "All '?' propagations inside one 'try' block must use the same Result " ~
-                        "error type - this one is '%s', but an earlier one in the same try block " ~
-                        "was '%s'", errorType.toString(), frame.errorType.toString()),
-                        currentModulePath, propExpr.line, propExpr.column);
-                }
-                return format("({ %s* %s = %s; if (!%s->ok) { %s = %s->error; goto %s; } %s->value; })",
-                    operandMangled, tmp, operandCode, tmp, frame.errorVarName, tmp, frame.catchLabel, tmp);
+                recordTryFrameErrorType(catchIndex, errorType, propExpr.line, propExpr.column, "'?'");
+                auto frame = tryFrameStack[catchIndex];
+                string popFrame = frame.frameVarName.length > 0
+                    ? format("llpl_eh_pop(&%s); ", frame.frameVarName)
+                    : "";
+                return format("({ %s* %s = %s; if (!%s->ok) { %s%s = %s->error; %sgoto %s; } %s->value; })",
+                    operandMangled, tmp, operandCode, tmp, finallyCodeAboveFrame(catchIndex),
+                    frame.errorVarName, tmp, popFrame, frame.catchLabel, tmp);
             }
 
             if (currentReturnType is null || (currentReturnType.name !in resultInstantiations)) {
@@ -1871,13 +2153,13 @@ class CodeGenerator {
                 "({ static char %s[] = %s; static char %s[512]; %s* %s = %s; " ~
                 "if (!%s->ok) { %s* __e = %s_new(); " ~
                 "if (%s->trace) { ksnprintf(%s, 512, \"%%s -> %%s\", %s->trace, %s); %s_set_err_with_trace(__e, %s->error, %s); } " ~
-                "else { %s_set_err_with_trace(__e, %s->error, %s); } return __e; } %s->value; })",
+                "else { %s_set_err_with_trace(__e, %s->error, %s); } %s return __e; } %s->value; })",
                 locVar, cStringLiteral(loc), traceVar,
                 operandMangled, tmp, operandCode, tmp,
                 currentReturnType.name, currentReturnType.name,
                 tmp, traceVar, tmp, locVar, currentReturnType.name, tmp, traceVar,
                 currentReturnType.name, tmp, locVar,
-                tmp);
+                cleanupCodeForFunctionExit(), tmp);
         }
 
         throw new CompileError(format("'?' can only be used on an Optional<T> or Result<T, E> value, not '%s'",
@@ -1995,18 +2277,8 @@ class CodeGenerator {
             // Replay any enclosing try block(s)' finally code first
             // (innermost-to-outermost), then function-level defers - see
             // TryFrame's own comment for why finally must run before defer.
-            if (!isDeferred && tryFrameStack.length > 0) {
-                foreach_reverse (frame; tryFrameStack) {
-                    foreach (finallyStmt; frame.finallyCode) {
-                        code ~= finallyStmt;
-                    }
-                }
-            }
-            // Execute deferred statements before return
-            if (!isDeferred && deferredStatements.length > 0) {
-                foreach_reverse (deferStmt; deferredStatements) {
-                    code ~= deferStmt;
-                }
+            if (!isDeferred) {
+                code ~= cleanupCodeForFunctionExit();
             }
             code ~= indent() ~ "return";
             if (returnStmt.value) {
@@ -2022,9 +2294,9 @@ class CodeGenerator {
             }
             code ~= ";\n";
         } else if (auto deferStmt = cast(DeferStmt)node) {
-            // Store deferred statement for later
-            string deferCode = generateStatement(deferStmt.statement, true);
-            deferredStatements ~= deferCode;
+            code ~= generateDeferStmt(deferStmt);
+        } else if (auto throwStmt = cast(ThrowStmt)node) {
+            code ~= generateThrowStmt(throwStmt, isDeferred);
         } else if (auto tryStmt = cast(TryStmt)node) {
             code ~= generateTryStmt(tryStmt, isDeferred);
         } else if (auto block = cast(Block)node) {
@@ -2180,7 +2452,9 @@ class CodeGenerator {
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
             Parameter[] lps;
             foreach (p; lambdaExpr.params) lps ~= new Parameter(p.name, cloneType(p.type, typeSubs));
-            return new LambdaExpr(lambdaExpr.captures.dup, lps, cloneType(lambdaExpr.returnType, typeSubs),
+            Capture[] caps;
+            foreach (c; lambdaExpr.captures) caps ~= new Capture(c.name, c.byRef);
+            return new LambdaExpr(caps, lps, cloneType(lambdaExpr.returnType, typeSubs),
                 cloneBlock(lambdaExpr.body_, subs, typeSubs), lambdaExpr.line, lambdaExpr.column);
         } else if (auto varDecl = cast(VarDecl)node) {
             return new VarDecl(varDecl.name, cloneType(varDecl.type, typeSubs), cloneNode(varDecl.initializer, subs, typeSubs),
@@ -2208,10 +2482,13 @@ class CodeGenerator {
             return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(cloneNode(deferStmt.statement, subs, typeSubs));
+        } else if (auto throwStmt = cast(ThrowStmt)node) {
+            return new ThrowStmt(cloneNode(throwStmt.value, subs, typeSubs),
+                throwStmt.line, throwStmt.column);
         } else if (auto tryStmt = cast(TryStmt)node) {
             return new TryStmt(cloneBlock(tryStmt.tryBlock, subs, typeSubs), tryStmt.catchVar,
-                cloneBlock(tryStmt.catchBlock, subs, typeSubs), cloneBlock(tryStmt.finallyBlock, subs, typeSubs),
-                tryStmt.line, tryStmt.column);
+                cloneType(tryStmt.catchType, typeSubs), cloneBlock(tryStmt.catchBlock, subs, typeSubs),
+                cloneBlock(tryStmt.finallyBlock, subs, typeSubs), tryStmt.line, tryStmt.column);
         } else if (auto block = cast(Block)node) {
             return cloneBlock(block, subs, typeSubs);
         } else if (auto exprStmt = cast(ExprStmt)node) {
@@ -2387,10 +2664,13 @@ class CodeGenerator {
             return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(expandQuotedNode(deferStmt.statement, subs));
+        } else if (auto throwStmt = cast(ThrowStmt)node) {
+            return new ThrowStmt(expandQuotedNode(throwStmt.value, subs),
+                throwStmt.line, throwStmt.column);
         } else if (auto tryStmt = cast(TryStmt)node) {
             return new TryStmt(expandQuotedBlock(tryStmt.tryBlock, subs), tryStmt.catchVar,
-                expandQuotedBlock(tryStmt.catchBlock, subs), expandQuotedBlock(tryStmt.finallyBlock, subs),
-                tryStmt.line, tryStmt.column);
+                cloneType(tryStmt.catchType), expandQuotedBlock(tryStmt.catchBlock, subs),
+                expandQuotedBlock(tryStmt.finallyBlock, subs), tryStmt.line, tryStmt.column);
         } else if (auto block = cast(Block)node) {
             return expandQuotedBlock(block, subs);
         } else if (auto exprStmt = cast(ExprStmt)node) {
@@ -2905,6 +3185,11 @@ class CodeGenerator {
     // (ast.StructLiteral's doc comment) - the same "context supplies T"
     // relationship generateNullableWrap's Optional<T> already relies on.
     private StructDecl resolveStructLiteralTarget(StructLiteral lit, Type expectedType, out string mangledName) {
+        string aliased = resolveLocalImportAlias(lit.typeName);
+        if (aliased.length > 0) {
+            lit.typeName = aliased;
+        }
+
         if (lit.typeName in structRegistry) {
             mangledName = lit.typeName;
             return structRegistry[mangledName];
@@ -3604,6 +3889,14 @@ class CodeGenerator {
     // are already fully qualified/unresolvable.
     private void resolveType(Type t) {
         if (t is null) return;
+
+        // A name brought in by a selective import (possibly aliased) is
+        // stored under its local spelling but refers to the target symbol.
+        string localAliasTarget = resolveLocalImportAlias(t.name);
+        if (localAliasTarget.length > 0) {
+            t.name = localAliasTarget;
+        }
+
         if (auto aliased = t.name in typeAliases) {
             // Substitute the alias's own type in place. `||`/best-effort
             // merge, not a proper multi-level pointer: if the use site
@@ -3616,6 +3909,11 @@ class CodeGenerator {
             t.isArray = t.isArray || aliased.isArray;
             if (aliased.arraySize > 0) t.arraySize = aliased.arraySize;
         }
+
+        // Resolve module-alias prefixes in qualified type names (e.g.
+        // `G.Point` flattened to `G_Point`) before generic instantiation
+        // or class/struct lookup sees them.
+        t.name = resolveAliasedTypeName(t.name);
 
         // Generic instantiation, e.g. Vector<int> - resolve nested type
         // arguments first (handles Vector<Vector<int>>), then monomorphize
@@ -3915,6 +4213,151 @@ class CodeGenerator {
     }
 
     // Tries to resolve a dotted chain as a namespace-qualified reference
+    // Collect alias/selective-import metadata from every ImportStmt.
+    private void collectImports(Program[] programs) {
+        foreach (prog; programs) {
+            if (baseName(prog.modulePath) == "prelude.llpl") {
+                preludeModulePath = prog.modulePath;
+            }
+            foreach (decl; prog.declarations) {
+                auto imp = cast(ImportStmt)decl;
+                if (imp is null) continue;
+
+                if (imp.resolvedPath.length == 0) {
+                    if (imp.alias_.length > 0 || imp.isSelective) {
+                        throw new CompileError(format("Could not resolve import '%s'", imp.modulePath),
+                            prog.modulePath, imp.line, imp.column);
+                    }
+                    continue;
+                }
+
+                ModuleImportInfo info;
+                info.targetModulePath = imp.resolvedPath;
+                info.alias_ = imp.alias_;
+                info.isSelective = imp.isSelective;
+                foreach (n; imp.names) {
+                    info.names ~= ImportedNameInfo(n.original, n.alias_);
+                }
+                moduleImports[prog.modulePath] ~= info;
+
+                if (imp.alias_.length > 0) {
+                    moduleAliases[prog.modulePath][imp.alias_] = imp.resolvedPath;
+                }
+
+                if (imp.isSelective) {
+                    foreach (n; imp.names) {
+                        string target = findSymbolInModule(imp.resolvedPath, n.original);
+                        if (target.length == 0) {
+                            throw new CompileError(
+                                format("Selective import '%s' not found in module '%s'",
+                                    n.original, imp.modulePath),
+                                prog.modulePath, imp.line, imp.column);
+                        }
+                        string localName = n.alias_.length > 0 ? n.alias_ : n.original;
+                        auto localAliases = prog.modulePath in selectiveLocalAliases;
+                        if (localAliases !is null && (localName in *localAliases)) {
+                            throw new CompileError(
+                                format("Duplicate selective import name '%s'", localName),
+                                prog.modulePath, imp.line, imp.column);
+                        }
+                        selectiveLocalAliases[prog.modulePath][localName] = target;
+                    }
+                }
+            }
+        }
+    }
+
+    // Find the mangled name exported by `targetModule` whose final segment
+    // matches `name`. Returns "" if none, and throws if ambiguous.
+    private string findSymbolInModule(string targetModule, string name) {
+        if (targetModule !in exportsByModule) return "";
+        string[] candidates;
+        foreach (key; exportsByModule[targetModule].keys) {
+            if (key == name || key.endsWith("_" ~ name)) {
+                candidates ~= key;
+            }
+        }
+        if (candidates.length == 0) return "";
+        if (candidates.length == 1) return candidates[0];
+        throw new CompileError(
+            format("Selective import '%s' is ambiguous in module '%s'", name, targetModule),
+            currentModulePath, 0, 0);
+    }
+
+    // If `name` was brought into the current module by a selective import
+    // (possibly aliased), return the mangled name it refers to.
+    private string resolveLocalImportAlias(string name) {
+        auto aliases = currentModulePath in selectiveLocalAliases;
+        if (aliases is null) return "";
+        auto target = name in *aliases;
+        return target ? *target : "";
+    }
+
+    // If `flatName` starts with a module alias, resolve it to the actual
+    // mangled name exported by that module. The caller's `exists` predicate
+    // then validates the kind (function, variable, generic template, ...).
+    private string resolveAliasedQualifiedName(string flatName) {
+        auto aliases = currentModulePath in moduleAliases;
+        if (aliases is null) return "";
+
+        foreach (alias_, targetModule; *aliases) {
+            string prefix = alias_ ~ "_";
+            if (!flatName.startsWith(prefix)) continue;
+            string suffix = flatName[prefix.length .. $];
+            if (suffix.length == 0) continue;
+
+            string[] candidates;
+            foreach (key; exportsByModule[targetModule].keys) {
+                if (key == suffix || key.endsWith("_" ~ suffix)) {
+                    candidates ~= key;
+                }
+            }
+            if (candidates.length == 0) continue;
+            if (candidates.length > 1) {
+                throw new CompileError(
+                    format("'%s' is ambiguous in module alias '%s'", suffix, alias_),
+                    currentModulePath, 0, 0);
+            }
+            return candidates[0];
+        }
+        return "";
+    }
+
+    // Resolve a module-alias-prefixed type name (e.g. `G_Vector` for
+    // `G.Vector`) to the actual mangled type name exported by the module.
+    private string resolveAliasedTypeName(string name) {
+        auto aliases = currentModulePath in moduleAliases;
+        if (aliases is null) return name;
+
+        foreach (alias_, targetModule; *aliases) {
+            string prefix = alias_ ~ "_";
+            if (!name.startsWith(prefix)) continue;
+            string suffix = name[prefix.length .. $];
+            if (suffix.length == 0) continue;
+
+            string[] candidates;
+            foreach (key; exportsByModule[targetModule].keys) {
+                bool isType = (key in classRegistry) !is null ||
+                              (key in structRegistry) !is null ||
+                              (key in genericClassTemplates) !is null ||
+                              (key in genericStructTemplates) !is null ||
+                              (key in typeAliases) !is null;
+                if (!isType) continue;
+                if (key == suffix || key.endsWith("_" ~ suffix)) {
+                    candidates ~= key;
+                }
+            }
+            if (candidates.length == 0) continue;
+            if (candidates.length > 1) {
+                throw new CompileError(
+                    format("Type '%s' is ambiguous in module alias '%s'", suffix, alias_),
+                    currentModulePath, 0, 0);
+            }
+            return candidates[0];
+        }
+        return name;
+    }
+
     // (checked via `exists`, e.g. against functionRegistry or variableTypes)
     // rather than instance member access. Returns "" if it isn't one.
     private string tryResolveQualifiedPath(ASTNode expr, bool delegate(string) exists) {
@@ -3925,6 +4368,9 @@ class CodeGenerator {
 
         string flat = flattenPath(expr);
         if (flat.length == 0) return "";
+
+        string aliased = resolveAliasedQualifiedName(flat);
+        if (aliased.length > 0 && exists(aliased)) return aliased;
 
         if (exists(flat)) return flat;
         foreach (candidate; enclosingQualifications(flat)) {
@@ -3951,8 +4397,12 @@ class CodeGenerator {
 
     // Resolves a bare (unqualified) name, letting sibling code inside a
     // namespace refer to other members of that namespace (or an enclosing
-    // one) without prefixing.
+    // one) without prefixing. A name brought in by a selective import (or
+    // aliased selective import) takes priority over ordinary scope.
     private string resolveName(string name, bool delegate(string) exists) {
+        string aliased = resolveLocalImportAlias(name);
+        if (aliased.length > 0 && exists(aliased)) return aliased;
+
         if (exists(name)) return name;
         foreach (candidate; enclosingQualifications(name)) {
             if (exists(candidate)) return candidate;
@@ -3960,16 +4410,21 @@ class CodeGenerator {
         return name;
     }
 
-    // `func[cap1, cap2](params) -> T { ... }` - see ast.d's LambdaExpr and
+    // `func[cap1, &cap2](params) -> T { ... }` - see ast.d's LambdaExpr and
     // runtime.h's __LLPL_Closure for the overall design: every closure
     // shares the same two-word {fn, env} runtime representation regardless
     // of its signature, so this only needs to synthesize a per-lambda
     // environment struct (one field per capture) and a trampoline function
     // taking that environment (cast back from void*) as an extra leading
     // parameter, then return a single C expression building the closure
-    // value - its env allocated fresh, by value, from the *current* value
-    // of each captured variable (a snapshot, never a live reference back
-    // into the enclosing scope).
+    // value.
+    //
+    // Captures are explicit: `func[x]` copies `x` by value at lambda-creation
+    // time; `func[&x]` stores a pointer to `x` so the lambda sees live updates
+    // and can write back. A reference capture of an outer lambda's by-value
+    // capture takes the address of that outer environment slot; a reference
+    // capture of an outer reference capture just copies the pointer, so all
+    // closures involved alias the same original variable.
     private string generateLambdaExpr(LambdaExpr lambdaExpr) {
         int id = lambdaCounter++;
         string envType = format("__LambdaEnv%d", id);
@@ -3979,36 +4434,59 @@ class CodeGenerator {
         resolveType(lambdaExpr.returnType);
         foreach (p; lambdaExpr.params) resolveType(p.type);
 
-        // Resolve each capture's current type and the C expression that
-        // reads its current value. A capture named in currentLambdaCaptureAccess
-        // is itself an outer lambda's own capture (a lambda nested in
-        // another lambda's body, re-capturing one of the enclosing
-        // lambda's captures) - otherwise it's an ordinary in-scope
-        // variable, resolved the same way any other identifier is.
-        Type[] captureTypes;
-        string[] captureAccess;
+        struct CaptureGen {
+            Type ty;
+            bool byRef;
+            string initExpr;
+            string useExpr;
+            string lvalueExpr;
+        }
+        CaptureGen[] caps;
+
         foreach (cap; lambdaExpr.captures) {
-            string accessExpr;
+            bool outerByRef = false;
+            string lvalueExpr;
             Type capType;
-            if (auto outerAccess = cap in currentLambdaCaptureAccess) {
-                accessExpr = *outerAccess;
-                capType = variableTypes[cap];
+            if (auto outer = cap.name in currentLambdaCaptures) {
+                outerByRef = outer.byRef;
+                lvalueExpr = outer.lvalueExpr;
+                capType = variableTypes[cap.name];
             } else {
-                string resolved = resolveName(cap, (n) => (n in variableTypes) !is null);
+                string resolved = resolveName(cap.name, (n) => (n in variableTypes) !is null);
                 if ((resolved in variableTypes) is null) {
-                    throw new CompileError(format("Unknown capture '%s'", cap),
+                    throw new CompileError(format("Unknown capture '%s'", cap.name),
                         currentModulePath, lambdaExpr.line, lambdaExpr.column);
                 }
-                accessExpr = resolved;
+                lvalueExpr = resolved;
                 capType = variableTypes[resolved];
             }
-            captureAccess ~= accessExpr;
-            captureTypes ~= capType;
+
+            string myLvalue = format("__env->%s", cap.name);
+            string initExpr;
+            string useExpr;
+            if (cap.byRef) {
+                useExpr = "(*" ~ myLvalue ~ ")";
+                if (outerByRef) {
+                    initExpr = lvalueExpr;
+                } else {
+                    initExpr = "&(" ~ lvalueExpr ~ ")";
+                }
+            } else {
+                useExpr = myLvalue;
+                if (outerByRef) {
+                    initExpr = "(*" ~ lvalueExpr ~ ")";
+                } else {
+                    initExpr = lvalueExpr;
+                }
+            }
+
+            caps ~= CaptureGen(capType, cap.byRef, initExpr, useExpr, myLvalue);
         }
 
         string envDecl = "typedef struct {\n";
         foreach (i, cap; lambdaExpr.captures) {
-            envDecl ~= format("    %s %s;\n", typeToC(captureTypes[i]), cap);
+            string fieldType = caps[i].byRef ? (typeToC(caps[i].ty) ~ "*") : typeToC(caps[i].ty);
+            envDecl ~= format("    %s %s;\n", fieldType, cap.name);
         }
         envDecl ~= format("} %s;\n\n", envType);
 
@@ -4024,19 +4502,26 @@ class CodeGenerator {
         // mirroring generateFunction/generateMethod: this trampoline is a
         // real top-level C function with its own fresh defer-stack, and
         // its own params/captures must not leak into the surrounding
-        // function's variableTypes once it's done generating (the same
-        // param-leak discipline every other generator function follows).
-        string[] savedDeferred = deferredStatements;
+        // function's variableTypes once it's done generating.
+        DeferInfo[] savedDeferred = deferredStatements;
         deferredStatements = [];
-        string[string] savedCaptureAccess = currentLambdaCaptureAccess.dup;
+        LambdaCaptureCtx[string] savedCaptures = currentLambdaCaptures.dup;
         Type prevReturnType = currentReturnType;
         currentReturnType = lambdaExpr.returnType;
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
         currentReturnTypeAsWritten = lambdaReturnTypeAsWritten;
 
+        Type[string] savedCaptureTypes;
         foreach (i, cap; lambdaExpr.captures) {
-            currentLambdaCaptureAccess[cap] = format("__env->%s", cap);
-            variableTypes[cap] = captureTypes[i];
+            if (auto prev = cap.name in variableTypes) {
+                savedCaptureTypes[cap.name] = *prev;
+            }
+            LambdaCaptureCtx ctx;
+            ctx.useExpr = caps[i].useExpr;
+            ctx.lvalueExpr = caps[i].lvalueExpr;
+            ctx.byRef = caps[i].byRef;
+            currentLambdaCaptures[cap.name] = ctx;
+            variableTypes[cap.name] = caps[i].ty;
         }
         foreach (p; lambdaExpr.params) {
             variableTypes[p.name] = p.type;
@@ -4044,23 +4529,26 @@ class CodeGenerator {
 
         int savedIndent = indentLevel;
         indentLevel = 1;
+        string bodyCode = "";
         foreach (stmt; lambdaExpr.body_.statements) {
-            trampolineCode ~= generateBodyStatement(stmt, false);
+            bodyCode ~= generateBodyStatement(stmt, false);
         }
-        if (deferredStatements.length > 0) {
-            foreach_reverse (deferStmt; deferredStatements) {
-                trampolineCode ~= deferStmt;
-            }
-        }
+        trampolineCode ~= deferFrameDeclarations();
+        trampolineCode ~= bodyCode;
+        trampolineCode ~= deferredCleanupCode();
         indentLevel = savedIndent;
 
         foreach (cap; lambdaExpr.captures) {
-            variableTypes.remove(cap);
+            if (auto prev = cap.name in savedCaptureTypes) {
+                variableTypes[cap.name] = *prev;
+            } else {
+                variableTypes.remove(cap.name);
+            }
         }
         foreach (p; lambdaExpr.params) {
             variableTypes.remove(p.name);
         }
-        currentLambdaCaptureAccess = savedCaptureAccess;
+        currentLambdaCaptures = savedCaptures;
         deferredStatements = savedDeferred;
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
@@ -4073,7 +4561,7 @@ class CodeGenerator {
 
         string envInit = format("({ %s* __e = (%s*)rc_alloc(sizeof(%s)); ", envType, envType, envType);
         foreach (i, cap; lambdaExpr.captures) {
-            envInit ~= format("__e->%s = %s; ", cap, captureAccess[i]);
+            envInit ~= format("__e->%s = %s; ", cap.name, caps[i].initExpr);
         }
         envInit ~= "(void*)__e; })";
 
@@ -4331,8 +4819,8 @@ class CodeGenerator {
             return format("%s[%s]", generateExpression(indexExpr.array),
                          generateExpression(indexExpr.index));
         } else if (auto ident = cast(Identifier)node) {
-            if (auto access = ident.name in currentLambdaCaptureAccess) {
-                return *access;
+            if (auto ctx = ident.name in currentLambdaCaptures) {
+                return ctx.useExpr;
             }
             string resolved = resolveName(ident.name,
                 (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null);

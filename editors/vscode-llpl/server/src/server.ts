@@ -94,8 +94,9 @@ const KEYWORDS = [
     'import', 'namespace', 'class', 'struct', 'packed', 'enum', 'macro',
     'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'if',
     'else', 'while', 'for', 'foreach', 'in', 'return', 'defer', 'unless',
-    'asm', 'new', 'true', 'false', 'null', 'extern', 'as', 'match', 'case',
-    'default', 'alias', 'operator', 'trait', 'impl', 'quote', 'unquote',
+    'try', 'catch', 'finally', 'throw', 'asm', 'new', 'true', 'false', 'null',
+    'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait',
+    'impl', 'quote', 'unquote',
     'sizeof', 'self', 'int', 'uint', 'int16', 'uint16', 'int32', 'uint32',
     'char', 'bool', 'void',
 ];

@@ -200,6 +200,19 @@
         "body": "defer ${1:statement}",
         "description": "Defer a statement to run at scope exit (LIFO order)"
     },
+    "Try/Catch/Finally": {
+        "prefix": "try",
+        "body": [
+            "try {",
+            "\t$1",
+            "} catch (${2:e}: ${3:int}) {",
+            "\t$0",
+            "} finally {",
+            "\t",
+            "}"
+        ],
+        "description": "Try block with typed catch and finally"
+    },
     "Lambda": {
         "prefix": "lambda",
         "body": "func[${1:captures}](${2:param}: ${3:int}) -> ${4:int} { $0 }",

@@ -91,6 +91,7 @@ class ModuleResolver {
 
                 // Resolve the imported module
                 string importPath = resolveImportPath(importStmt.modulePath, absPath);
+                importStmt.resolvedPath = importPath;
                 if (importPath.length > 0) {
                     resolveModule(importPath);
                 }

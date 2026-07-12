@@ -39,6 +39,7 @@ enum TokenType {
     Null,
     Extern,
     As,
+    From,
     Match,
     Case,
     Default,
@@ -56,6 +57,7 @@ enum TokenType {
     Try,
     Catch,
     Finally,
+    Throw,
 
     // Operators
     Plus,
@@ -167,6 +169,7 @@ class Lexer {
             "null": "Null",
             "extern": "Extern",
             "as": "As",
+            "from": "From",
             "match": "Match",
             "case": "Case",
             "default": "Default",
@@ -182,7 +185,8 @@ class Lexer {
             "impl": "Impl",
             "try": "Try",
             "catch": "Catch",
-            "finally": "Finally"
+            "finally": "Finally",
+            "throw": "Throw"
         ];
     }
 
@@ -432,6 +436,7 @@ class Lexer {
                 case "Null": type = TokenType.Null; break;
                 case "Extern": type = TokenType.Extern; break;
                 case "As": type = TokenType.As; break;
+                case "From": type = TokenType.From; break;
                 case "Match": type = TokenType.Match; break;
                 case "Case": type = TokenType.Case; break;
                 case "Default": type = TokenType.Default; break;
@@ -448,6 +453,7 @@ class Lexer {
                 case "Try": type = TokenType.Try; break;
                 case "Catch": type = TokenType.Catch; break;
                 case "Finally": type = TokenType.Finally; break;
+                case "Throw": type = TokenType.Throw; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);

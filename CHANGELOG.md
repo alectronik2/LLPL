@@ -4,6 +4,25 @@
 
 ### Major Features
 
+#### Import Aliases and Selective Imports
+- `import "path" as alias` lets a module's exports be accessed through a
+  shorter qualifier (`alias.Name`).
+- `import { Foo, Bar as Baz } from "path"` brings only the selected names
+  into the importing file's scope (with optional local renaming).
+- `from` is now a keyword; existing code using it as an identifier
+  (e.g. a parameter name) must be renamed.
+- Added `test/import_alias.llpl`, `test/import_selective.llpl`, and their
+  library modules under `test/modules/`.
+
+#### Closure Capture-by-Reference
+- Lambda capture lists now support `&name` to capture a variable by reference.
+- The closure environment stores a pointer to the original variable, so the
+  lambda sees live updates and assignments write back to the enclosing scope.
+- Nested lambdas can re-capture an outer reference capture, aliasing the same
+  original variable.
+- Added `test/closures_by_ref.llpl` demonstrating mutation through a reference
+  capture and a nested re-capture.
+
 #### Traits / Bounded Generics
 - `trait` declarations define method-signature contracts.
 - `impl Trait for Type { ... }` provides method bodies for primitives, structs,

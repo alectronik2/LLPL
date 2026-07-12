@@ -10,8 +10,9 @@ find-references) for [LLPL](../../README.md) (`.llpl`) files.
   (with `packed`), `enum`, `macro` (with `NAME!(args)` invocations),
   `constructor`/`destructor`, `func` (including `interrupt func` and
   operator overloads like `func operator+`), `let`/`const`, `alias`,
-  control flow (`if`/`else`/`while`/`for`/`return`/`defer`/`match`/`case`/
-  `default`/`unless`), `import`, `extern`, `new`/`as` casts, inline
+  control flow (`if`/`else`/`while`/`for`/`return`/`defer`/`try`/`catch`/
+  `finally`/`throw`/`match`/`case`/`default`/`unless`), `import`, `extern`,
+  `new`/`as` casts, inline
   `asm(...)`, and the built-in types (`int`, `uint`, `int16`/`uint16`/
   `int32`/`uint32`, `char`, `bool`, `void`).
 - Type-annotation aware highlighting, including pointers (`char*`), fixed
@@ -21,7 +22,7 @@ find-references) for [LLPL](../../README.md) (`.llpl`) files.
 - Comment toggling (`//` and `/* */`), bracket matching/auto-closing.
 - Snippets for common constructs (`func`, `class`, `struct`, `namespace`,
   `enum`, `macro`, `match`, `alias`, `unless`, `if`, `while`, `for`,
-  `extern`, `import`, `asm`, `bitfield`).
+  `try`/`catch`/`finally`, `extern`, `import`, `asm`, `bitfield`).
 - **Language server** (`server/`): diagnostics, completion, hover,
   go-to-definition and find-references, backed directly by the `llpl`
   compiler's own name resolution (`llpl --lsp-symbols <file>` - see
