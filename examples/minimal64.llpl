@@ -1,7 +1,7 @@
 // Absolutely minimal 64-bit kernel
 
 func kernel_main() {
-    let vga: uint* = 753664 as uint*  // 0xB8000
+    let vga: uint* = 0xB8000 as uint*  // 0xB8000
 
     // Write "LLPL" in white
     vga[0] = 0x0f4c0f4c  // "LL"
@@ -10,5 +10,6 @@ func kernel_main() {
     // Infinite loop
     while true {
         // Hang forever
+        asm("hlt")
     }
 }

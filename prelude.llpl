@@ -569,6 +569,125 @@ func slice_set<T>(s: Slice<T>, index: uint, value: T) {
     s.ptr[index] = value
 }
 
+// Defer-friendly owner for a raw heap byte buffer. Use:
+//
+//   let buf: OwnedBuffer = new OwnedBuffer(128)
+//   defer buf.free()
+//
+// `free()` is idempotent, so explicit early release and deferred cleanup are
+// safe together. `take()` transfers the raw pointer out and disables cleanup.
+class OwnedBuffer {
+    let ptr: char*
+    let length: uint
+
+    constructor(size: uint) {
+        self.ptr = llpl_alloc(size)
+        self.length = size
+    }
+
+    destructor() {
+        self.free()
+    }
+
+    func free() {
+        if self.ptr != null {
+            llpl_free(self.ptr)
+            self.ptr = null
+            self.length = 0
+        }
+    }
+
+    func data() -> char* {
+        return self.ptr
+    }
+
+    func len() -> uint {
+        return self.length
+    }
+
+    func is_null() -> bool {
+        return self.ptr == null
+    }
+
+    func byte_at(index: uint) -> char {
+        if index >= self.length {
+            llpl_panic("OwnedBuffer.byte_at: index out of bounds")
+        }
+        return self.ptr[index as int]
+    }
+
+    func set(index: uint, value: char) {
+        if index >= self.length {
+            llpl_panic("OwnedBuffer.set: index out of bounds")
+        }
+        self.ptr[index as int] = value
+    }
+
+    func as_slice() -> Slice<char> {
+        let s: Slice<char>
+        s.ptr = self.ptr
+        s.len = self.length
+        return s
+    }
+
+    func take() -> char* {
+        let out: char* = self.ptr
+        self.ptr = null
+        self.length = 0
+        return out
+    }
+}
+
+// Defer-friendly owner for one heap-allocated T value. This avoids the
+// common pattern of manually pairing `llpl_alloc(sizeof(T)) as T*` with a
+// later `llpl_free(ptr as char*)`.
+class Owned<T> {
+    let ptr: T*
+
+    constructor() {
+        self.ptr = llpl_alloc(sizeof(T)) as T*
+    }
+
+    destructor() {
+        self.free()
+    }
+
+    func free() {
+        if self.ptr != null {
+            llpl_free(self.ptr as char*)
+            self.ptr = null
+        }
+    }
+
+    func as_ptr() -> T* {
+        return self.ptr
+    }
+
+    func is_null() -> bool {
+        return self.ptr == null
+    }
+
+    func get() -> T {
+        if self.ptr == null {
+            llpl_panic("Owned.get: null owner")
+        }
+        return self.ptr[0]
+    }
+
+    func set(value: T) {
+        if self.ptr == null {
+            llpl_panic("Owned.set: null owner")
+        }
+        self.ptr[0] = value
+    }
+
+    func take() -> T* {
+        let out: T* = self.ptr
+        self.ptr = null
+        return out
+    }
+}
+
 // A dynamic, growable array - the generic analogue of manually managing an
 // `llpl_alloc`'d buffer + length + capacity by hand. `sizeof(T)` (see
 // codegen.d's SizeofExpr handling) is what makes this possible without any
@@ -831,6 +950,14 @@ struct HashEntry<K, V> {
     let next: HashEntry<K, V>*
 }
 
+// Public value yielded by `foreach let entry in map`. It deliberately
+// copies key/value out of the internal chain node so callers cannot mutate
+// HashMap internals while iterating.
+struct HashMapEntry<K, V> {
+    let key: K
+    let value: V
+}
+
 // A trait a type implements to provide its own hash/equality for use as a
 // HashMap key - see HashMap<K: Hashable, V> below. `Self` inside a trait's
 // signatures and inside a matching `impl` block's bodies refers to whatever
@@ -1025,8 +1152,9 @@ trait Mul {
     func operator*(other: Self) -> Self
 }
 
-// A basic hash table, separate chaining, fixed bucket count (no rehashing -
-// a real limitation, acceptable for a first generic-container implementation).
+// A basic hash table using separate chaining. It grows automatically once
+// the load factor reaches roughly 75%, and implements the iterator protocol
+// so `foreach let entry in map { ... }` yields HashMapEntry<K, V> values.
 //
 // Keys hash/compare via K's own Hashable impl (key.hash()/key.equals(other))
 // rather than raw bytes, so a `char*` key now hashes/compares by string
@@ -1035,10 +1163,14 @@ class HashMap<K: Hashable, V> {
     let buckets: HashBucket<K, V>*
     let bucket_count: int
     let count: int
+    let iter_bucket: int
+    let iter_entry: HashEntry<K, V>*
 
     constructor() {
         self.bucket_count = 16
         self.count = 0
+        self.iter_bucket = 0
+        self.iter_entry = null
         self.buckets = llpl_alloc((self.bucket_count as uint) * sizeof(HashBucket<K, V>)) as HashBucket<K, V>*
         let i: int = 0
         while i < self.bucket_count {
@@ -1061,6 +1193,47 @@ class HashMap<K: Hashable, V> {
         llpl_free(self.buckets as char*)
     }
 
+    func init_buckets(buckets: HashBucket<K, V>*, bucket_count: int) {
+        let i: int = 0
+        while i < bucket_count {
+            buckets[i].head = null
+            i = i + 1
+        }
+    }
+
+    func resize(new_bucket_count: int) {
+        let old_buckets: HashBucket<K, V>* = self.buckets
+        let old_bucket_count: int = self.bucket_count
+
+        let new_buckets: HashBucket<K, V>* =
+            llpl_alloc((new_bucket_count as uint) * sizeof(HashBucket<K, V>)) as HashBucket<K, V>*
+        self.init_buckets(new_buckets, new_bucket_count)
+
+        let i: int = 0
+        while i < old_bucket_count {
+            let entry: HashEntry<K, V>* = old_buckets[i].head
+            while entry != null {
+                let next_entry: HashEntry<K, V>* = entry.next
+                let idx: int = (entry.key.hash() % (new_bucket_count as uint)) as int
+                entry.next = new_buckets[idx].head
+                new_buckets[idx].head = entry
+                entry = next_entry
+            }
+            i = i + 1
+        }
+
+        self.buckets = new_buckets
+        self.bucket_count = new_bucket_count
+        self.iter_reset()
+        llpl_free(old_buckets as char*)
+    }
+
+    func ensure_capacity_for_insert() {
+        if (self.count + 1) * 4 >= self.bucket_count * 3 {
+            self.resize(self.bucket_count * 2)
+        }
+    }
+
     func insert(key: K, value: V) {
         let idx: int = (key.hash() % (self.bucket_count as uint)) as int
         let entry: HashEntry<K, V>* = self.buckets[idx].head
@@ -1071,11 +1244,13 @@ class HashMap<K: Hashable, V> {
             }
             entry = entry.next
         }
+        self.ensure_capacity_for_insert()
+        let new_idx: int = (key.hash() % (self.bucket_count as uint)) as int
         let new_entry: HashEntry<K, V>* = llpl_alloc(sizeof(HashEntry<K, V>)) as HashEntry<K, V>*
         new_entry.key = key
         new_entry.value = value
-        new_entry.next = self.buckets[idx].head
-        self.buckets[idx].head = new_entry
+        new_entry.next = self.buckets[new_idx].head
+        self.buckets[new_idx].head = new_entry
         self.count = self.count + 1
     }
 
@@ -1116,6 +1291,48 @@ class HashMap<K: Hashable, V> {
 
     func len() -> int {
         return self.count
+    }
+
+    func capacity() -> int {
+        return self.bucket_count
+    }
+
+    func iter_reset() {
+        self.iter_bucket = 0
+        self.iter_entry = null
+    }
+
+    func iter_has_next() -> bool {
+        if self.iter_entry != null {
+            return true
+        }
+
+        while self.iter_bucket < self.bucket_count {
+            let entry: HashEntry<K, V>* = self.buckets[self.iter_bucket].head
+            self.iter_bucket = self.iter_bucket + 1
+            if entry != null {
+                self.iter_entry = entry
+                return true
+            }
+        }
+
+        return false
+    }
+
+    func iter_next() -> HashMapEntry<K, V> {
+        if self.iter_entry == null {
+            if !self.iter_has_next() {
+                llpl_panic("HashMap.iter_next: iterator exhausted")
+            }
+        }
+
+        let entry: HashEntry<K, V>* = self.iter_entry
+        self.iter_entry = entry.next
+
+        let item: HashMapEntry<K, V>
+        item.key = entry.key
+        item.value = entry.value
+        return item
     }
 }
 

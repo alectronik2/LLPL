@@ -2385,22 +2385,30 @@ class CodeGenerator {
             // Replay any enclosing try block(s)' finally code first
             // (innermost-to-outermost), then function-level defers - see
             // TryFrame's own comment for why finally must run before defer.
-            if (!isDeferred) {
-                code ~= cleanupCodeForFunctionExit();
-            }
-            code ~= indent() ~ "return";
             if (returnStmt.value) {
+                string valueCode;
                 if (currentReturnType !is null && currentReturnType.isNullableSugar) {
-                    code ~= " " ~ generateNullableWrap(currentReturnType, returnStmt.value);
+                    valueCode = generateNullableWrap(currentReturnType, returnStmt.value);
                 } else if (auto tupleLit = cast(TupleLiteral)returnStmt.value) {
-                    code ~= " " ~ generateTupleLiteral(tupleLit, currentReturnTypeAsWritten);
+                    valueCode = generateTupleLiteral(tupleLit, currentReturnTypeAsWritten);
                 } else if (auto structLit = cast(StructLiteral)returnStmt.value) {
-                    code ~= " " ~ generateStructLiteralValue(structLit, currentReturnTypeAsWritten);
+                    valueCode = generateStructLiteralValue(structLit, currentReturnTypeAsWritten);
                 } else {
-                    code ~= " " ~ generateExpression(returnStmt.value);
+                    valueCode = generateExpression(returnStmt.value);
                 }
+                tempVarCounter++;
+                string retName = format("__llpl_ret%d", tempVarCounter);
+                code ~= indent() ~ format("%s %s = %s;\n", typeToC(currentReturnType), retName, valueCode);
+                if (!isDeferred) {
+                    code ~= cleanupCodeForFunctionExit();
+                }
+                code ~= indent() ~ format("return %s;\n", retName);
+            } else {
+                if (!isDeferred) {
+                    code ~= cleanupCodeForFunctionExit();
+                }
+                code ~= indent() ~ "return;\n";
             }
-            code ~= ";\n";
         } else if (auto deferStmt = cast(DeferStmt)node) {
             code ~= generateDeferStmt(deferStmt);
         } else if (auto throwStmt = cast(ThrowStmt)node) {
