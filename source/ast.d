@@ -49,7 +49,8 @@ enum NodeType {
     TraitDecl,
     ImplDecl,
     DestructuringStmt,
-    PatternExpr
+    PatternExpr,
+    TryStmt
 }
 
 abstract class ASTNode {
@@ -479,9 +480,10 @@ class VarDecl : ASTNode {
     bool isVolatile;
     int bitWidth = -1; // -1 means "not a bit-field"; only meaningful for class fields
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+    VarAttribute[] attributes;
 
     this(string name, Type type, ASTNode initializer = null, bool isConst = false, int line = 0, int column = 0,
-         int bitWidth = -1, bool isVolatile = false) {
+         int bitWidth = -1, bool isVolatile = false, VarAttribute[] attributes = []) {
         super(NodeType.VarDecl, line, column);
         this.name = name;
         this.type = type;
@@ -489,6 +491,23 @@ class VarDecl : ASTNode {
         this.isConst = isConst;
         this.bitWidth = bitWidth;
         this.isVolatile = isVolatile;
+        this.attributes = attributes;
+    }
+}
+
+class VarAttribute {
+    string name;
+    string stringValue;
+    long intValue;
+    bool hasStringValue;
+    bool hasIntValue;
+    int line;
+    int column;
+
+    this(string name, int line = 0, int column = 0) {
+        this.name = name;
+        this.line = line;
+        this.column = column;
     }
 }
 
@@ -642,6 +661,51 @@ class DeferStmt : ASTNode {
     this(ASTNode statement) {
         super(NodeType.DeferStmt);
         this.statement = statement;
+    }
+}
+
+// `try { ... } catch (e) { ... } finally { ... }` - pure compile-time
+// sugar over the existing Result<T, E>/`?`/defer machinery (see
+// codegen.d's generateTryStmt), *not* real stack-unwinding exceptions:
+// this compiler transpiles to plain C with no unwind-table/landing-pad
+// machinery, freestanding targets have no setjmp/longjmp (no libc), and a
+// real unwind jumping through a function via a mechanism the compiler
+// doesn't control would skip defer's own compile-time replay-at-return
+// and silently break its guarantee. Instead, a `?` inside `tryBlock`
+// redirects (via a plain C `goto`) to this try's catch label instead of
+// returning from the enclosing function - the key new capability plain
+// `?` doesn't have: code inside `try` can call Result-returning helpers
+// without the *enclosing function* itself needing to return a compatible
+// Result. `finallyBlock` is generated once and replayed at every exit
+// path (normal completion, via catch, or an early `return` from inside
+// either), the same "generate the code once, replay the string at every
+// exit point" trick codegen.d's deferredStatements already uses for defer.
+//
+// `catchBlock`/`finallyBlock` are each independently optional, but at
+// least one must be present (enforced by the parser) - a bare `try { }`
+// with neither would do nothing. `catchVar`'s type is inferred from
+// whichever `Result<T, E>` the first redirected `?` inside `tryBlock`
+// targets; every other redirected `?` in the *same* try block must
+// resolve to the same `E` (checked in codegen.d) - one try block only
+// ever catches one error type, since LLPL has no error-union type.
+// Deliberately scoped to `Result<T, E>` only, not `Optional<T>` - `None`
+// carries no error *value* to bind `catchVar` to; a plain `?`/`is_none()`
+// on an Optional still works fine inside a `try`, it just isn't caught by
+// that try's `catch` (propagates out of the enclosing function exactly
+// like it does today, unaffected by an enclosing try aimed at a Result).
+class TryStmt : ASTNode {
+    Block tryBlock;
+    string catchVar;    // "" if there's no catch clause
+    Block catchBlock;   // null if there's no catch clause
+    Block finallyBlock; // null if there's no finally clause
+
+    this(Block tryBlock, string catchVar, Block catchBlock, Block finallyBlock,
+            int line = 0, int column = 0) {
+        super(NodeType.TryStmt, line, column);
+        this.tryBlock = tryBlock;
+        this.catchVar = catchVar;
+        this.catchBlock = catchBlock;
+        this.finallyBlock = finallyBlock;
     }
 }
 

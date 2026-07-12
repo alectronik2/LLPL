@@ -13,8 +13,6 @@ LDFLAGS = -m elf_x86_64 -T linker.ld -nostdlib
 KERNEL_LLPL = kernel.llpl
 KERNEL_C = kernel.c
 KERNEL_O = kernel.o
-LIMINE_REQ_C = limine_requests.c
-LIMINE_REQ_O = limine_requests.o
 RUNTIME_SRC = ../../runtime/runtime.c
 RUNTIME_O = runtime.o
 KERNEL_ELF = kernel.elf
@@ -46,13 +44,9 @@ $(RUNTIME_O): $(RUNTIME_SRC)
 	@echo "Compiling runtime..."
 	$(CC) $(CFLAGS) -c $(RUNTIME_SRC) -o $(RUNTIME_O)
 
-$(LIMINE_REQ_O): $(LIMINE_REQ_C)
-	@echo "Compiling Limine requests..."
-	$(CC) $(CFLAGS) -c $(LIMINE_REQ_C) -o $(LIMINE_REQ_O)
-
-$(KERNEL_ELF): $(KERNEL_O) $(LIMINE_REQ_O) $(RUNTIME_O) linker.ld
+$(KERNEL_ELF): $(KERNEL_O) $(RUNTIME_O) linker.ld
 	@echo "Linking kernel..."
-	$(LD) $(LDFLAGS) $(KERNEL_O) $(LIMINE_REQ_O) $(RUNTIME_O) -o $(KERNEL_ELF)
+	$(LD) $(LDFLAGS) $(KERNEL_O) $(RUNTIME_O) -o $(KERNEL_ELF)
 
 $(ISO): $(KERNEL_ELF) limine.conf check-limine
 	@echo "Creating Limine ISO..."
@@ -76,5 +70,5 @@ run: $(ISO)
 	$(QEMU) -cdrom $(ISO) -serial stdio -m 256
 
 clean:
-	rm -f $(KERNEL_C) $(KERNEL_O) $(LIMINE_REQ_O) $(RUNTIME_O) $(KERNEL_ELF) $(ISO)
+	rm -f $(KERNEL_C) $(KERNEL_O) $(RUNTIME_O) $(KERNEL_ELF) $(ISO)
 	rm -rf isodir

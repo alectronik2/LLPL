@@ -76,7 +76,58 @@ packed struct LimineFramebuffer {
     let modes: uint
 }
 
-extern func limine_get_framebuffer() -> LimineFramebuffer*
+packed struct LimineFramebufferRequest {
+    let id: uint[4]
+    let revision: uint
+    let response: uint
+}
+
+packed struct LimineFramebufferResponse {
+    let revision: uint
+    let framebuffer_count: uint
+    let framebuffers: uint
+}
+
+@section(".limine_requests_start")
+@used
+let limine_requests_start_marker: uint[4] = [
+    0xf6b8f4b39de7d1ae,
+    0xfab91a6940fcb9cf,
+    0x785c6ed015d3e316,
+    0x181e920a7852b9d9
+]
+
+@section(".limine_requests")
+@used
+let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x9d5827dcd881dd75,
+        0xa3148604f6fab11b
+    ],
+    revision: 0,
+    response: 0
+}
+
+@section(".limine_requests_end")
+@used
+let limine_requests_end_marker: uint[2] = [
+    0xadc0e0531bb10d03,
+    0x9572709f31764c62
+]
+
+func limine_get_framebuffer() -> LimineFramebuffer* {
+    if framebuffer_request.response == 0 {
+        return null
+    }
+    let response: LimineFramebufferResponse* = framebuffer_request.response as LimineFramebufferResponse*
+    if response.framebuffer_count == 0 {
+        return null
+    }
+    let framebuffers: uint* = response.framebuffers as uint*
+    return framebuffers[0] as LimineFramebuffer*
+}
 
 func put_pixel(fb: LimineFramebuffer*, x: uint, y: uint, rgb: uint32) {
     if fb.bpp != 32 as uint16 {

@@ -53,6 +53,9 @@ enum TokenType {
     Sizeof,
     Trait,
     Impl,
+    Try,
+    Catch,
+    Finally,
 
     // Operators
     Plus,
@@ -102,6 +105,7 @@ enum TokenType {
     Dot,
     Ellipsis,
     Colon,
+    At,
 
     // Special
     Newline,
@@ -175,7 +179,10 @@ class Lexer {
             "unquote": "Unquote",
             "sizeof": "Sizeof",
             "trait": "Trait",
-            "impl": "Impl"
+            "impl": "Impl",
+            "try": "Try",
+            "catch": "Catch",
+            "finally": "Finally"
         ];
     }
 
@@ -438,6 +445,9 @@ class Lexer {
                 case "Sizeof": type = TokenType.Sizeof; break;
                 case "Trait": type = TokenType.Trait; break;
                 case "Impl": type = TokenType.Impl; break;
+                case "Try": type = TokenType.Try; break;
+                case "Catch": type = TokenType.Catch; break;
+                case "Finally": type = TokenType.Finally; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);
@@ -651,6 +661,9 @@ class Lexer {
                 case ':':
                     advance();
                     return Token(TokenType.Colon, ":", startLine, startColumn);
+                case '@':
+                    advance();
+                    return Token(TokenType.At, "@", startLine, startColumn);
                 default:
                     stderr.writefln("Unexpected character: '%s' at %d:%d", current, line, column);
                     advance();

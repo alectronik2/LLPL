@@ -156,17 +156,23 @@ class Parser {
 
     // Converts the raw text of an Integer token (as produced by the lexer,
     // radix prefix and all) to its value. Shared by primary() and enum
-    // member value parsing.
+    // member value parsing. IntLiteral.value is a `long`, but that's just
+    // this compiler's 64-bit bit-container for integer literals, not a
+    // claim that literals are signed - `uint`'s full range (up to
+    // 2^64 - 1, e.g. 0xFFFFFFFFFFFFFFFF or the decimal 18446744073709551615)
+    // doesn't fit `long.max`, so parsing as `ulong` first and reinterpreting
+    // the bit pattern via a cast (not `to!long`, which throws on exactly
+    // these values) is required to accept them at all.
     private long parseIntegerValue(string numStr) {
         string prefix = numStr.length > 2 ? numStr[0..2] : "";
         if (prefix == "0x" || prefix == "0X") {
-            return to!long(numStr[2..$], 16);
+            return cast(long) to!ulong(numStr[2..$], 16);
         } else if (prefix == "0b" || prefix == "0B") {
-            return to!long(numStr[2..$], 2);
+            return cast(long) to!ulong(numStr[2..$], 2);
         } else if (prefix == "0o" || prefix == "0O") {
-            return to!long(numStr[2..$], 8);
+            return cast(long) to!ulong(numStr[2..$], 8);
         }
-        return to!long(numStr);
+        return cast(long) to!ulong(numStr);
     }
 
     Program parse() {
@@ -178,6 +184,10 @@ class Parser {
     }
 
     private ASTNode declaration() {
+        VarAttribute[] attrs = parseAttributes();
+        if (attrs.length > 0 && !(check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile))) {
+            error("Attributes are currently only supported on global let/const/volatile declarations");
+        }
         if (check(TokenType.Import)) {
             return importStmt();
         } else if (check(TokenType.Namespace)) {
@@ -201,11 +211,39 @@ class Parser {
         } else if (check(TokenType.Impl)) {
             return implDecl();
         } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
-            return letDecl();
+            auto decl = letDecl();
+            if (auto varDecl = cast(VarDecl)decl) {
+                varDecl.attributes = attrs;
+            }
+            return decl;
         } else {
             error("Expected declaration");
             return null;
         }
+    }
+
+    private VarAttribute[] parseAttributes() {
+        VarAttribute[] attrs;
+        while (match(TokenType.At)) {
+            Token nameTok = expect(TokenType.Identifier, "Expected attribute name after '@'");
+            auto attr = new VarAttribute(nameTok.value, nameTok.line, nameTok.column);
+            if (match(TokenType.LeftParen)) {
+                if (check(TokenType.String)) {
+                    attr.stringValue = current.value;
+                    attr.hasStringValue = true;
+                    advance();
+                } else if (check(TokenType.Integer)) {
+                    attr.intValue = parseIntegerValue(current.value);
+                    attr.hasIntValue = true;
+                    advance();
+                } else {
+                    error("Expected string or integer attribute argument");
+                }
+                expect(TokenType.RightParen);
+            }
+            attrs ~= attr;
+        }
+        return attrs;
     }
 
     private NamespaceDecl namespaceDecl() {
@@ -1076,6 +1114,8 @@ class Parser {
             return returnStmt();
         } else if (check(TokenType.Defer)) {
             return deferStmt();
+        } else if (check(TokenType.Try)) {
+            return tryStmt();
         } else if (check(TokenType.Asm)) {
             return asmStmt();
         } else if (check(TokenType.Match)) {
@@ -1358,6 +1398,37 @@ class Parser {
         expect(TokenType.Defer);
         ASTNode stmt = statement();
         return new DeferStmt(stmt);
+    }
+
+    // `try { ... } [catch (e) { ... }] [finally { ... }]` - catch and
+    // finally are each independently optional, but at least one must be
+    // present (see ast.TryStmt's doc comment for why a bare `try` with
+    // neither would do nothing).
+    private TryStmt tryStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Try);
+        Block tryBlock = block();
+
+        string catchVar = "";
+        Block catchBlock = null;
+        if (match(TokenType.Catch)) {
+            expect(TokenType.LeftParen);
+            catchVar = expect(TokenType.Identifier).value;
+            expect(TokenType.RightParen);
+            catchBlock = block();
+        }
+
+        Block finallyBlock = null;
+        if (match(TokenType.Finally)) {
+            finallyBlock = block();
+        }
+
+        if (catchBlock is null && finallyBlock is null) {
+            errorAt(startLine, startColumn, "'try' needs at least a 'catch' or a 'finally'");
+        }
+
+        return new TryStmt(tryBlock, catchVar, catchBlock, finallyBlock, startLine, startColumn);
     }
 
     private ExprStmt exprStmt() {

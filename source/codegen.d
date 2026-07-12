@@ -40,9 +40,31 @@ struct UsageInfo {
     int column;
 }
 
+// One active `try` block's redirect/replay state - see generateTryStmt
+// and generatePropagateExpr's use of tryFrameStack below.
+private struct TryFrame {
+    string catchLabel;    // "" disables ?-redirection (no catch clause, or
+                           // we're generating *this* try's own catch block)
+    string errorVarName;  // C variable a redirecting `?` assigns the error into
+    Type errorType;       // set by the first redirected `?` seen in this
+                           // try's tryBlock; every later one in the same
+                           // try must match (see generatePropagateExpr)
+    string[] finallyCode; // this try's finally block, pre-generated once
+                           // (empty if there's no finally clause)
+}
+
 class CodeGenerator {
     private int indentLevel;
     private string[] deferredStatements;
+    // Stack of TryFrames, innermost last - what a `?` inside a try block
+    // redirects to (see generatePropagateExpr) instead of returning from
+    // the enclosing function, and what a `return` anywhere inside a try or
+    // its catch block needs to replay (that try's finally) before actually
+    // returning - see generateStatement's ReturnStmt case, which replays
+    // this (innermost-to-outermost) *before* deferredStatements, so a
+    // try's own cleanup runs before any function-level defer.
+    private TryFrame[] tryFrameStack;
+    private int tryCounter; // numbers each try block's labels/temp uniquely
     private int tempVarCounter;
     private string currentClassName;
     private Type currentReturnType; // Enclosing function/method/lambda's declared return type, for ReturnStmt's nullable-sugar auto-wrap (see generateNullableWrap)
@@ -1244,15 +1266,17 @@ class CodeGenerator {
             constVariables[cName] = true;
         }
 
+        string attrPrefix = globalVarAttributes(varDecl);
+
         // Handle array declarations specially
         string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
         string code;
         if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
             string baseType = primitiveToC(varDecl.type.name);
             if (varDecl.type.isPointer) baseType ~= "*";
-            code = format("%s%s %s[%d]", constPrefix, baseType, cName, varDecl.type.arraySize);
+            code = format("%s%s%s %s[%d]", attrPrefix, constPrefix, baseType, cName, varDecl.type.arraySize);
         } else {
-            code = format("%s%s %s", constPrefix, typeToC(varDecl.type), cName);
+            code = format("%s%s%s %s", attrPrefix, constPrefix, typeToC(varDecl.type), cName);
         }
 
         if (varDecl.initializer) {
@@ -1264,6 +1288,48 @@ class CodeGenerator {
         }
         code ~= ";\n";
         return code;
+    }
+
+    private string escapeCAttrString(string s) {
+        string out_;
+        foreach (ch; s) {
+            if (ch == '\\') out_ ~= "\\\\";
+            else if (ch == '"') out_ ~= "\\\"";
+            else out_ ~= ch;
+        }
+        return out_;
+    }
+
+    private string globalVarAttributes(VarDecl varDecl) {
+        string[] attrs;
+        foreach (attr; varDecl.attributes) {
+            switch (attr.name) {
+                case "used":
+                    attrs ~= "used";
+                    break;
+                case "section":
+                    if (!attr.hasStringValue) {
+                        throw new CompileError("@section requires a string argument",
+                            currentModulePath, attr.line, attr.column);
+                    }
+                    attrs ~= format("section(\"%s\")", escapeCAttrString(attr.stringValue));
+                    break;
+                case "align":
+                    if (!attr.hasIntValue) {
+                        throw new CompileError("@align requires an integer argument",
+                            currentModulePath, attr.line, attr.column);
+                    }
+                    attrs ~= format("aligned(%d)", attr.intValue);
+                    break;
+                default:
+                    throw new CompileError(format("Unknown global variable attribute '@%s'", attr.name),
+                        currentModulePath, attr.line, attr.column);
+            }
+        }
+        if (attrs.length == 0) {
+            return "";
+        }
+        return "__attribute__((" ~ attrs.join(", ") ~ ")) ";
     }
 
     private string generateClass(ClassDecl classDecl) {
@@ -1664,6 +1730,85 @@ class CodeGenerator {
     // mismatch surfaces as an ordinary C type error, same as everywhere
     // else this compiler leans on the C backend to catch a deeper type
     // mismatch rather than checking it itself).
+    // Desugars `try { ... } [catch (e) { ... }] [finally { ... }]` into plain
+    // C blocks/goto/labels - see ast.TryStmt's doc comment for the overall
+    // design and TryFrame's own comment for the per-try state this pushes
+    // onto tryFrameStack while generating the try/catch bodies (consulted
+    // by generatePropagateExpr to redirect a `?` here instead of returning,
+    // and by generateStatement's ReturnStmt case to replay finallyCode
+    // before any actual return).
+    private string generateTryStmt(TryStmt stmt, bool isDeferred) {
+        string[] finallyCode;
+        if (stmt.finallyBlock !is null) {
+            foreach (finStmt; stmt.finallyBlock.statements) {
+                finallyCode ~= generateBodyStatement(finStmt, isDeferred);
+            }
+        }
+
+        tryCounter++;
+        int myId = tryCounter;
+        string catchLabel = stmt.catchBlock !is null ? format("__catch_%d", myId) : "";
+        string errorVarName = format("__llpl_try_err%d", myId);
+
+        // Generate the try block's own statements first (at the indent depth
+        // they'll actually be spliced back in at, below) so myFrame.errorType
+        // is known before we have to emit errorVarName's declaration - a `?`
+        // inside tryBodyCode already refers to errorVarName by name, so the
+        // declaration has to exist somewhere that both it and the __catch_N
+        // label below can see, i.e. the wrapping `{ }` this function emits.
+        tryFrameStack ~= TryFrame(catchLabel, errorVarName, null, finallyCode);
+        indentLevel++;
+        string tryBodyCode = "";
+        foreach (tstmt; stmt.tryBlock.statements) {
+            tryBodyCode ~= generateBodyStatement(tstmt, isDeferred);
+        }
+        indentLevel--;
+        TryFrame myFrame = tryFrameStack[$ - 1];
+        tryFrameStack = tryFrameStack[0 .. $ - 1];
+
+        if (stmt.catchBlock !is null && myFrame.errorType is null) {
+            throw new CompileError(
+                "'try' has a 'catch' clause but no '?' inside the try block to determine " ~
+                "the caught error's type",
+                currentModulePath, stmt.line, stmt.column);
+        }
+
+        string code = "";
+        code ~= indent() ~ "{\n";
+        indentLevel++;
+        if (stmt.catchBlock !is null) {
+            code ~= indent() ~ format("%s %s;\n", typeToC(myFrame.errorType), errorVarName);
+        }
+        code ~= tryBodyCode;
+
+        if (stmt.catchBlock !is null) {
+            code ~= indent() ~ format("goto __try_done_%d;\n", myId);
+            code ~= format("%s: ;\n", catchLabel);
+            code ~= indent() ~ "{\n";
+            indentLevel++;
+            code ~= indent() ~ format("%s %s = %s;\n",
+                typeToC(myFrame.errorType), stmt.catchVar, errorVarName);
+            variableTypes[stmt.catchVar] = myFrame.errorType;
+            tryFrameStack ~= TryFrame("", errorVarName, myFrame.errorType, finallyCode);
+            foreach (cstmt; stmt.catchBlock.statements) {
+                code ~= generateBodyStatement(cstmt, isDeferred);
+            }
+            tryFrameStack = tryFrameStack[0 .. $ - 1];
+            indentLevel--;
+            code ~= indent() ~ "}\n";
+            code ~= format("__try_done_%d: ;\n", myId);
+        }
+
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+
+        foreach (finStmt; finallyCode) {
+            code ~= finStmt;
+        }
+
+        return code;
+    }
+
     private string generatePropagateExpr(PropagateExpr propExpr) {
         Type operandType;
         try {
@@ -1687,6 +1832,33 @@ class CodeGenerator {
         }
 
         if (operandMangled in resultInstantiations) {
+            // Inside a `try` block with a catch clause - redirect to that
+            // try's catch label instead of returning from the enclosing
+            // function (see ast.TryStmt/generateTryStmt's own comments).
+            // No new Result/trace to build here, unlike the plain
+            // early-return path below - we're not returning a Result to
+            // anyone, just capturing the raw error value locally.
+            if (tryFrameStack.length > 0 && tryFrameStack[$ - 1].catchLabel.length > 0) {
+                auto recorded = operandMangled in monomorphizedTypeArgs;
+                if (recorded is null || recorded.length != 2) {
+                    throw new CompileError("Cannot determine the error type of '?' inside a try block",
+                        currentModulePath, propExpr.line, propExpr.column);
+                }
+                Type errorType = (*recorded)[1];
+                auto frame = &tryFrameStack[$ - 1];
+                if (frame.errorType is null) {
+                    frame.errorType = errorType;
+                } else if (frame.errorType.name != errorType.name || frame.errorType.isPointer != errorType.isPointer) {
+                    throw new CompileError(format(
+                        "All '?' propagations inside one 'try' block must use the same Result " ~
+                        "error type - this one is '%s', but an earlier one in the same try block " ~
+                        "was '%s'", errorType.toString(), frame.errorType.toString()),
+                        currentModulePath, propExpr.line, propExpr.column);
+                }
+                return format("({ %s* %s = %s; if (!%s->ok) { %s = %s->error; goto %s; } %s->value; })",
+                    operandMangled, tmp, operandCode, tmp, frame.errorVarName, tmp, frame.catchLabel, tmp);
+            }
+
             if (currentReturnType is null || (currentReturnType.name !in resultInstantiations)) {
                 throw new CompileError(
                     "'?' on a Result value needs the enclosing function to also return a Result<T, E>",
@@ -1820,6 +1992,16 @@ class CodeGenerator {
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             code ~= generateForeachStmt(foreachStmt, isDeferred);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
+            // Replay any enclosing try block(s)' finally code first
+            // (innermost-to-outermost), then function-level defers - see
+            // TryFrame's own comment for why finally must run before defer.
+            if (!isDeferred && tryFrameStack.length > 0) {
+                foreach_reverse (frame; tryFrameStack) {
+                    foreach (finallyStmt; frame.finallyCode) {
+                        code ~= finallyStmt;
+                    }
+                }
+            }
             // Execute deferred statements before return
             if (!isDeferred && deferredStatements.length > 0) {
                 foreach_reverse (deferStmt; deferredStatements) {
@@ -1843,6 +2025,8 @@ class CodeGenerator {
             // Store deferred statement for later
             string deferCode = generateStatement(deferStmt.statement, true);
             deferredStatements ~= deferCode;
+        } else if (auto tryStmt = cast(TryStmt)node) {
+            code ~= generateTryStmt(tryStmt, isDeferred);
         } else if (auto block = cast(Block)node) {
             code ~= indent() ~ "{\n";
             indentLevel++;
@@ -2000,7 +2184,8 @@ class CodeGenerator {
                 cloneBlock(lambdaExpr.body_, subs, typeSubs), lambdaExpr.line, lambdaExpr.column);
         } else if (auto varDecl = cast(VarDecl)node) {
             return new VarDecl(varDecl.name, cloneType(varDecl.type, typeSubs), cloneNode(varDecl.initializer, subs, typeSubs),
-                varDecl.isConst, varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile);
+                varDecl.isConst, varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile,
+                varDecl.attributes.dup);
         } else if (auto destructStmt = cast(DestructuringStmt)node) {
             return new DestructuringStmt(clonePattern(destructStmt.pattern, subs, typeSubs),
                 cloneType(destructStmt.type, typeSubs), cloneNode(destructStmt.initializer, subs, typeSubs),
@@ -2023,6 +2208,10 @@ class CodeGenerator {
             return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(cloneNode(deferStmt.statement, subs, typeSubs));
+        } else if (auto tryStmt = cast(TryStmt)node) {
+            return new TryStmt(cloneBlock(tryStmt.tryBlock, subs, typeSubs), tryStmt.catchVar,
+                cloneBlock(tryStmt.catchBlock, subs, typeSubs), cloneBlock(tryStmt.finallyBlock, subs, typeSubs),
+                tryStmt.line, tryStmt.column);
         } else if (auto block = cast(Block)node) {
             return cloneBlock(block, subs, typeSubs);
         } else if (auto exprStmt = cast(ExprStmt)node) {
@@ -2179,7 +2368,8 @@ class CodeGenerator {
         } else if (auto varDecl = cast(VarDecl)node) {
             return new VarDecl(varDecl.name, cloneType(varDecl.type),
                 expandQuotedNode(varDecl.initializer, subs), varDecl.isConst,
-                varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile);
+                varDecl.line, varDecl.column, varDecl.bitWidth, varDecl.isVolatile,
+                varDecl.attributes.dup);
         } else if (auto ifStmt = cast(IfStmt)node) {
             return new IfStmt(expandQuotedNode(ifStmt.condition, subs),
                 expandQuotedBlock(ifStmt.thenBlock, subs), expandQuotedBlock(ifStmt.elseBlock, subs));
@@ -2197,6 +2387,10 @@ class CodeGenerator {
             return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(expandQuotedNode(deferStmt.statement, subs));
+        } else if (auto tryStmt = cast(TryStmt)node) {
+            return new TryStmt(expandQuotedBlock(tryStmt.tryBlock, subs), tryStmt.catchVar,
+                expandQuotedBlock(tryStmt.catchBlock, subs), expandQuotedBlock(tryStmt.finallyBlock, subs),
+                tryStmt.line, tryStmt.column);
         } else if (auto block = cast(Block)node) {
             return expandQuotedBlock(block, subs);
         } else if (auto exprStmt = cast(ExprStmt)node) {
@@ -3110,7 +3304,14 @@ class CodeGenerator {
             // *complete* definition when it's a plain class/struct (e.g. a
             // `self.x` field access) - so it can't go in genericInstanceDecls
             // (spliced before declCode); see deferredFunctionBodies's doc comment.
+            //
+            // Snapshot/restore variableTypes around this - see the matching
+            // comment in resolveGenericFunctionCall for why (this call isn't
+            // known to be reentrant today, but the guard costs nothing and
+            // keeps both eager-instantiation sites consistent).
+            Type[string] savedVarTypes = variableTypes.dup;
             deferredFunctionBodies ~= generateFunction(asFunction);
+            variableTypes = savedVarTypes;
         }
     }
 
@@ -3248,7 +3449,17 @@ class CodeGenerator {
                         typeToC(returnTypeForFwd), mangledName, method.name, methodParams);
                 }
 
+                // Snapshot/restore variableTypes around this - see the
+                // matching comment in resolveGenericFunctionCall for why:
+                // resolveType (and therefore this whole instantiation) can
+                // run reentrantly while a caller is mid-generation of its
+                // own body, and generateClass -> generateConstructor/
+                // generateMethod/generateDestructor's own "self"/param
+                // cleanup would otherwise delete a same-named live binding
+                // the caller still needs.
+                Type[string] savedVarTypes = variableTypes.dup;
                 genericInstanceDecls ~= generateClass(clone);
+                variableTypes = savedVarTypes;
             } else {
                 auto clone = cloneStructDeclWithTypeSubs(genericStructTemplates[templateKey], typeSubs, mangledName);
                 structRegistry[mangledName] = clone;
@@ -3365,7 +3576,22 @@ class CodeGenerator {
             // incomplete-type problem processImplBlock hits when a plain
             // class/struct type argument is used by value (see
             // deferredFunctionBodies's doc comment).
+            //
+            // This call is reentrant: resolveGenericFunctionCall can itself
+            // be invoked from generateExpression/inferType while a *caller*
+            // is mid-generation of its own body (the first time a given
+            // instantiation is seen). generateFunction ends by removing
+            // just its own params from variableTypes, on the assumption
+            // that's a clean, top-level entry/exit - but if a caller's own
+            // local happens to share a name with one of *this* function's
+            // params (very possible for common names like "n"/"self"),
+            // that removal would delete the caller's still-live binding
+            // too. Snapshotting/restoring the whole map around the call
+            // isolates this instantiation's variable scope from whatever
+            // the caller had before, regardless of name collisions.
+            Type[string] savedVarTypes = variableTypes.dup;
             deferredFunctionBodies ~= generateFunction(clone);
+            variableTypes = savedVarTypes;
         }
 
         return mangledName;

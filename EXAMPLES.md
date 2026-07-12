@@ -10,6 +10,20 @@ protocol companion demo. It builds a higher-half kernel ELF, publishes a
 Limine framebuffer request, writes to COM1 serial, and draws directly into the
 framebuffer returned by Limine.
 
+Global variables can opt into backend/linker attributes when bare-metal ABIs
+need exact ELF placement or retention:
+
+```swift
+@section(".limine_requests")
+@used
+@align(16)
+let request: uint[4] = [1, 2, 3, 4]
+```
+
+`@section("NAME")` emits a C section attribute, `@used` prevents dead
+stripping, and `@align(N)` emits an alignment attribute. These attributes are
+currently supported on global `let`/`const`/`volatile` declarations.
+
 ## Basic Examples
 
 ### Hello World (with C FFI)
@@ -758,6 +772,69 @@ func main() -> int {
     return 0
 }
 ```
+
+## try/catch/finally
+
+`try { ... } catch (e) { ... } finally { ... }` is compile-time sugar over
+`Result<T, E>` and `?` - not real stack-unwinding exceptions (this
+compiler transpiles to plain C with no unwind tables, and freestanding
+targets have no `setjmp`/`longjmp`). A `?` inside a `try` block redirects
+to that try's `catch` (via a plain C `goto`) instead of returning from the
+enclosing function - that's the capability this adds over plain `?`:
+calling Result-returning helpers and handling their errors *locally*, even
+from a function that doesn't itself return a compatible Result (`main`,
+for instance). See `test/try_catch_demo.llpl` for the full runnable
+version this is taken from:
+
+```swift
+func safe_div(a: int, b: int) -> Result<int, int> {
+    let r: Result<int, int> = new Result<int, int>()
+    if b == 0 {
+        r.set_err(-1)
+        return r
+    }
+    r.set_ok(a / b)
+    return r
+}
+
+// main returns plain `int`, not a Result - a bare `?` wouldn't compile
+// here, but wrapped in `try` it's fine: an error redirects to catch.
+func main() -> int {
+    try {
+        let x: int = safe_div(10, 0)?
+        print_int("x", x)
+    } catch (e) {
+        print_int("caught", e)
+    } finally {
+        puts("finally always runs")
+    }
+    return 0
+}
+```
+
+`catch` and `finally` are each independently optional, but at least one of
+them must be present - a bare `try { }` with neither is a parse error.
+`catch (e)`'s type is inferred from whichever `Result<T, E>` the *first*
+`?` inside that try block targets; every other `?` in the same try block
+must resolve to the same `E` (checked at compile time - a mismatch is a
+compile error, since LLPL has no error-union type and one try block only
+ever catches one error type). A `finally` block always runs - on normal
+completion, after a caught error, and before any `return` from inside the
+try or catch block (which also still runs any enclosing `defer`s, in
+innermost-to-outermost order: this try's `finally`, then any others
+further out, then function-level `defer`s last).
+
+Known v1 limitations:
+- One error type per `try` block - no catching more than one distinct
+  `Result<T, E>` error type in the same try.
+- `Optional<T>`'s `None` isn't catchable via `catch` (there's no error
+  *value* to bind `e` to) - a plain `?`/`is_none()` still works inside a
+  `try`, it just propagates out of the enclosing function as it does
+  today, unaffected by an enclosing try aimed at a different (Result)
+  error.
+- No re-throw - a `catch` block can't hand the same error back out to an
+  enclosing `try`/function via `?` again; it can still build and
+  return/propagate a *new* `Result` to signal failure upward.
 
 ## Panics
 
