@@ -13,6 +13,10 @@ class Klass {
     destructor() {
         puts("Klass destructor")
     }
+
+    func stringof() -> string {
+        "Overridden: Klass"
+    }
 }
 
 func dbl( first: string, second: string = "world") -> (string, string) {
@@ -43,10 +47,11 @@ func main() -> int {
     let result = inner( 6 )
     puts("result = \(result)")
 
-    let res = /[a-z]+/.match("f")
+    let res = /[a-z]+/.captures("f")
     puts("res = \(res.stringof)")
 
     let k = new Klass()
+    puts("k = \(k.stringof)")
 
     result
 }
