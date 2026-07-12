@@ -1366,6 +1366,30 @@ class Parser {
         return new IfStmt(condition, thenBlock, elseBlock);
     }
 
+    // `if <cond> { expr } else { expr }` as an expression - see
+    // ast.IfExpr's doc comment. Unlike ifStmt(), `else` isn't optional
+    // here: an if-expression with no else would have no value on the
+    // untaken path.
+    private IfExpr ifExpr() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.If);
+        ASTNode condition = expressionNoStructLiteral();
+        Block thenBlock = block();
+        expect(TokenType.Else);
+        Block elseBlock;
+        if (check(TokenType.If)) {
+            // `else if ... else ...` - the nested if-expression's own
+            // value becomes this branch's value, so wrap it in a single
+            // ExprStmt to satisfy the "last statement is an expression"
+            // rule the same way an ordinary trailing expression does.
+            elseBlock = new Block([new ExprStmt(ifExpr())]);
+        } else {
+            elseBlock = block();
+        }
+        return new IfExpr(condition, thenBlock, elseBlock, startLine, startColumn);
+    }
+
     private WhileStmt whileStmt() {
         expect(TokenType.While);
         ASTNode condition = expressionNoStructLiteral();
@@ -1819,6 +1843,9 @@ class Parser {
 
         if (check(TokenType.Function)) {
             return lambdaExpr();
+        }
+        if (check(TokenType.If)) {
+            return ifExpr();
         }
         if (match(TokenType.Sizeof)) {
             expect(TokenType.LeftParen);

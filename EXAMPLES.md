@@ -195,6 +195,97 @@ func clamp(value: int, min: int, max: int) -> int {
 }
 ```
 
+### `if` as an Expression
+
+`if cond { expr } else { expr }` can be used anywhere an expression is
+expected, not just as a statement - `else` is mandatory (there's no
+sensible value for a branch that's never taken), and each branch must end
+with an expression to supply its value. Earlier statements in a branch
+still run for their side effects/bindings; only the last one supplies the
+value. See `test/if_expr_demo.llpl` for the full runnable version this is
+taken from:
+
+```swift
+func classify(n: int) -> char* {
+    return if n < 0 {
+        "negative"
+    } else if n == 0 {
+        "zero"
+    } else {
+        "positive"
+    }
+}
+
+func main() -> int {
+    let x: int = if true { 128 } else { 256 }
+
+    // type inferred from the branches, no explicit annotation needed
+    let y = if false { 1 } else { 2 }
+
+    // earlier statements run for their side effects; only the trailing
+    // expression supplies the branch's value
+    let z: int = if true {
+        let a: int = 10
+        let b: int = 20
+        a + b
+    } else {
+        0
+    }
+    return 0
+}
+```
+
+Both branches' trailing expressions must resolve to the same type (a
+mismatch is a compile error, the same "nominal, single-type" stance this
+compiler takes elsewhere). A bare, unparenthesized `if` as the very last
+line of a branch is parsed as a nested if-*statement*, not this
+if-expression's value (there's no other way to tell them apart at that
+position) - wrap it in parens (`(if ... else ...)`) to use a nested
+if-expression as a branch's trailing value.
+
+### Implicit Returns
+
+A function/method/lambda body's trailing bare expression is its return
+value, unless the return type is `void` - `func square(n: int) -> int { n
+* n }` behaves exactly like `func square(n: int) -> int { return n * n }`.
+Only the true *last* statement counts; an expression anywhere else in the
+body is still just evaluated for its side effects and discarded, same as
+today. See `test/implicit_return_demo.llpl` for the full runnable version
+this is taken from:
+
+```swift
+func square(n: int) -> int {
+    n * n
+}
+
+// earlier statements still run for their side effects/bindings
+func sum_of_squares(a: int, b: int) -> int {
+    let sa: int = square(a)
+    let sb: int = square(b)
+    sa + sb
+}
+
+// explicit `return` still works, including mixed with an implicit one
+func abs_value(n: int) -> int {
+    if n < 0 {
+        return -n
+    }
+    n
+}
+```
+
+Composes with `if` as an expression the same way any other trailing
+expression does - including the same parenthesization rule when the
+if-expression is itself the very last thing in the body (a bare, un-
+parenthesized `if` there is parsed as a statement, not this function's
+implicit return value):
+
+```swift
+func abs_value2(n: int) -> int {
+    (if n < 0 { -n } else { n })
+}
+```
+
 ## Enums and Pattern Matching
 
 ### Plain Enums

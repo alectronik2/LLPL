@@ -1567,6 +1567,28 @@ class CodeGenerator {
         }
     }
 
+    // If a function/method/lambda body's last statement is a bare
+    // expression (not already a `return`) and its return type isn't
+    // `void`, treats that trailing expression as an implicit return value -
+    // `func foo() -> int { 128 }` behaves exactly like
+    // `func foo() -> int { return 128 }`. Only the true last statement
+    // qualifies (the same "only the last statement supplies a value" rule
+    // ast.IfExpr's branches use) - an expression anywhere else in the body
+    // is still just evaluated for its side effects and discarded, unchanged
+    // from today. Reusing ReturnStmt's own codegen (rather than
+    // duplicating its logic here) means the implicit return gets exactly
+    // the same defer/try-finally replay and nullable/tuple/struct-literal
+    // return-value handling an explicit `return` already gets.
+    private ASTNode[] withImplicitReturn(ASTNode[] statements, Type returnType) {
+        if (returnType is null || returnType.name == "void") return statements;
+        if (statements.length == 0) return statements;
+        auto exprStmt = cast(ExprStmt)statements[$ - 1];
+        if (exprStmt is null) return statements;
+        auto result = statements.dup;
+        result[$ - 1] = new ReturnStmt(exprStmt.expression);
+        return result;
+    }
+
     private string generateConstructor(ClassDecl classDecl, FunctionDecl constructor) {
         string cName = mangledClass(classDecl);
         string code = "";
@@ -1713,7 +1735,7 @@ class CodeGenerator {
 
         string bodyCode = "";
         if (method.body_) {
-            foreach (stmt; method.body_.statements) {
+            foreach (stmt; withImplicitReturn(method.body_.statements, method.returnType)) {
                 bodyCode ~= generateBodyStatement(stmt, false);
             }
         }
@@ -1782,7 +1804,7 @@ class CodeGenerator {
 
         string bodyCode = "";
         if (funcDecl.body_) {
-            foreach (stmt; funcDecl.body_.statements) {
+            foreach (stmt; withImplicitReturn(funcDecl.body_.statements, funcDecl.returnType)) {
                 bodyCode ~= generateBodyStatement(stmt, false);
             }
         }
@@ -2274,6 +2296,102 @@ class CodeGenerator {
             operandMangled), currentModulePath, propExpr.line, propExpr.column);
     }
 
+    // Returns `block`'s trailing expression - see ast.IfExpr's doc comment
+    // for why only the *last* statement can supply a branch's value.
+    // Shared by generateIfExpr (which also emits every earlier statement
+    // first, for their side effects) and inferIfExprType (which only needs
+    // the value's type).
+    private ASTNode ifExprBranchValue(Block block, string branchName, IfExpr ifExpr) {
+        if (block.statements.length == 0) {
+            throw new CompileError(format(
+                "if-expression's '%s' branch is empty - it needs a trailing expression to supply a value",
+                branchName), currentModulePath, ifExpr.line, ifExpr.column);
+        }
+        auto exprStmt = cast(ExprStmt)block.statements[$ - 1];
+        if (exprStmt is null) {
+            throw new CompileError(format(
+                "if-expression's '%s' branch must end with an expression to supply its value",
+                branchName), currentModulePath, ifExpr.line, ifExpr.column);
+        }
+        return exprStmt.expression;
+    }
+
+    // Both branches' trailing expressions must produce the same type - no
+    // implicit widening/coercion here, matching this compiler's existing
+    // "nominal, single-type" simplifications elsewhere (tagged enums,
+    // try/catch's one-error-type-per-block, ...).
+    private Type checkIfExprBranchTypesMatch(Type thenType, Type elseType, IfExpr ifExpr) {
+        if (thenType.name != elseType.name || thenType.isPointer != elseType.isPointer) {
+            throw new CompileError(format(
+                "if-expression's branches have different types - 'then' is '%s', 'else' is '%s'",
+                thenType.toString(), elseType.toString()),
+                currentModulePath, ifExpr.line, ifExpr.column);
+        }
+        return thenType;
+    }
+
+    // Resolves an if-expression's result type when it's needed *without*
+    // also generating its code (e.g. VarDecl inferring `let y = if ... `'s
+    // type with no explicit annotation, before it ever calls
+    // generateExpression on the initializer) - see generateIfExpr's own
+    // comment for why a branch's preceding statements have to be generated
+    // (here, generated and thrown away) before the trailing value can be
+    // typed at all: a trailing expression referencing a variable the same
+    // branch just declared (`if c { let a = 1; a } else { 0 }`) can't be
+    // typed otherwise. Harmless duplicate work, not a correctness issue -
+    // generateIfExpr repeats this generation for real afterward; nothing
+    // from this throwaway pass is ever emitted.
+    private Type inferIfExprType(IfExpr ifExpr) {
+        // ifExprBranchValue validates non-emptiness first - checked before
+        // ever slicing off "everything but the last statement" below,
+        // since that slice underflows (`$ - 1` on a length-0 array) if the
+        // block turns out to be empty.
+        ASTNode thenValue = ifExprBranchValue(ifExpr.thenBlock, "then", ifExpr);
+        foreach (stmt; ifExpr.thenBlock.statements[0 .. $ - 1]) generateBodyStatement(stmt, false);
+        Type thenType = inferType(thenValue);
+        ASTNode elseValue = ifExprBranchValue(ifExpr.elseBlock, "else", ifExpr);
+        foreach (stmt; ifExpr.elseBlock.statements[0 .. $ - 1]) generateBodyStatement(stmt, false);
+        Type elseType = inferType(elseValue);
+        return checkIfExprBranchTypesMatch(thenType, elseType, ifExpr);
+    }
+
+    // Desugars an if-expression (e.g. `let x = if cond { 128 } else { 256 }`)
+    // into a GCC statement expression - the same `({ ... })` trick
+    // generatePropagateExpr already relies on for `?`, so this needs
+    // nothing beyond what this compiler already emits for freestanding
+    // targets. Each branch's preceding statements are generated first (so
+    // they're available to type/generate that branch's trailing value,
+    // same reasoning as inferIfExprType above), then spliced together once
+    // both branches are fully known.
+    private string generateIfExpr(IfExpr ifExpr) {
+        // ifExprBranchValue validates non-emptiness before the `[0 .. $ - 1]`
+        // prefix slice below, which would otherwise underflow on an empty
+        // block (see inferIfExprType's matching comment).
+        ASTNode thenValue = ifExprBranchValue(ifExpr.thenBlock, "then", ifExpr);
+        string thenPrefix = "";
+        foreach (stmt; ifExpr.thenBlock.statements[0 .. $ - 1]) thenPrefix ~= generateBodyStatement(stmt, false);
+        Type thenType = inferType(thenValue);
+        string thenValueCode = generateExpression(thenValue);
+
+        ASTNode elseValue = ifExprBranchValue(ifExpr.elseBlock, "else", ifExpr);
+        string elsePrefix = "";
+        foreach (stmt; ifExpr.elseBlock.statements[0 .. $ - 1]) elsePrefix ~= generateBodyStatement(stmt, false);
+        Type elseType = inferType(elseValue);
+        string elseValueCode = generateExpression(elseValue);
+
+        Type resultType = checkIfExprBranchTypesMatch(thenType, elseType, ifExpr);
+        resolveType(resultType);
+
+        string tmp = format("__llpl_ifexpr%d", tempVarCounter++);
+        string conditionCode = generateExpression(ifExpr.condition);
+
+        return format("({ %s %s; if (%s) { %s%s = %s; } else { %s%s = %s; } %s; })",
+            typeToC(resultType), tmp, conditionCode,
+            thenPrefix, tmp, thenValueCode,
+            elsePrefix, tmp, elseValueCode,
+            tmp);
+    }
+
     private string generateStatement(ASTNode node, bool isDeferred) {
         string code = "";
 
@@ -2567,6 +2685,9 @@ class CodeGenerator {
                 tupleLit.line, tupleLit.column);
         } else if (auto propExpr = cast(PropagateExpr)node) {
             return new PropagateExpr(cloneNode(propExpr.operand, subs, typeSubs), propExpr.line, propExpr.column);
+        } else if (auto ifExpr = cast(IfExpr)node) {
+            return new IfExpr(cloneNode(ifExpr.condition, subs, typeSubs), cloneBlock(ifExpr.thenBlock, subs, typeSubs),
+                cloneBlock(ifExpr.elseBlock, subs, typeSubs), ifExpr.line, ifExpr.column);
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
             Parameter[] lps;
             foreach (p; lambdaExpr.params) lps ~= new Parameter(p.name, cloneType(p.type, typeSubs));
@@ -4659,7 +4780,7 @@ class CodeGenerator {
         int savedIndent = indentLevel;
         indentLevel = 1;
         string bodyCode = "";
-        foreach (stmt; lambdaExpr.body_.statements) {
+        foreach (stmt; withImplicitReturn(lambdaExpr.body_.statements, lambdaExpr.returnType)) {
             bodyCode ~= generateBodyStatement(stmt, false);
         }
         trampolineCode ~= deferFrameDeclarations();
@@ -4805,6 +4926,8 @@ class CodeGenerator {
             return generateTupleLiteral(tupleLit, null);
         } else if (auto propExpr = cast(PropagateExpr)node) {
             return generatePropagateExpr(propExpr);
+        } else if (auto ifExpr = cast(IfExpr)node) {
+            return generateIfExpr(ifExpr);
         } else if (auto callExpr = cast(CallExpr)node) {
             if (isEmbedCall(callExpr)) {
                 return generateEmbedCall(callExpr);
@@ -5093,6 +5216,8 @@ class CodeGenerator {
                 }
             }
             throw inferError(expr, "Cannot infer type of '?' expression");
+        } else if (auto ifExpr = cast(IfExpr)expr) {
+            return inferIfExprType(ifExpr);
         } else if (auto castExpr = cast(CastExpr)expr) {
             resolveType(castExpr.type);
             return castExpr.type;

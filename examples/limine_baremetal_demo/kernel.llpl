@@ -118,15 +118,15 @@ packed struct LimineHhdmResponse {
     let offset: uint
 }
 
-const MEMMAP_USABLE = 0
-const MEMMAP_RESERVED = 1
-const MEMMAP_ACPI_RECLAIMABLE = 2
-const MEMMAP_ACPI_NVS = 3
-const MEMMAP_BAD_MEMORY = 4
+const MEMMAP_USABLE                 = 0
+const MEMMAP_RESERVED               = 1
+const MEMMAP_ACPI_RECLAIMABLE       = 2
+const MEMMAP_ACPI_NVS               = 3
+const MEMMAP_BAD_MEMORY             = 4
 const MEMMAP_BOOTLOADER_RECLAIMABLE = 5
 const MEMMAP_EXECUTABLE_AND_MODULES = 6
-const MEMMAP_FRAMEBUFFER = 7
-const MEMMAP_RESERVED_MAPPED = 8
+const MEMMAP_FRAMEBUFFER            = 7
+const MEMMAP_RESERVED_MAPPED        = 8
 
 @section(".limine_requests_start") @used
 let limine_requests_start_marker: uint[4] = [
@@ -195,64 +195,35 @@ func limine_get_hhdm() -> LimineHhdmResponse* {
     return hhdm_request.response
 }
 
-func serial_write_hex(value: uint) {
-    let hex_chars: string = "0123456789abcdef"
-    let buffer: char[17]
-    buffer[16] = 0
-    let i: int = 15
-    while i >= 0 {
-        buffer[i] = hex_chars[value & 15]
-        value = value >> 4
-        i = i - 1
-    }
-    HAL.Serial.write("0x")
-    HAL.Serial.write(buffer as string)
-}
 
-func serial_write_dec(value: uint) {
-    let buffer: char[21]
-    buffer[20] = 0
-    if value == 0 {
-        HAL.Serial.write("0")
-        return
-    }
-    let i: int = 19 
-    while value > 0 && i >= 0 {
-        let digit: uint = value % 10
-        buffer[i] = (48 + digit) as char
-        value = value / 10
-        i = i - 1
-    }
-    HAL.Serial.write((buffer as string) + i + 1)
-}
 
 func memmap_type_name(t: uint) -> string {
     match t {
-        case MEMMAP_USABLE => { return "usable" }
-        case MEMMAP_RESERVED => { return "reserved" }
-        case MEMMAP_ACPI_RECLAIMABLE => { return "acpi-reclaimable" }
-        case MEMMAP_ACPI_NVS => { return "acpi-nvs" }
-        case MEMMAP_BAD_MEMORY => { return "bad-memory" }
+        case MEMMAP_USABLE =>                 { return "usable" }
+        case MEMMAP_RESERVED =>               { return "reserved" }
+        case MEMMAP_ACPI_RECLAIMABLE =>       { return "acpi-reclaimable" }
+        case MEMMAP_ACPI_NVS =>               { return "acpi-nvs" }
+        case MEMMAP_BAD_MEMORY =>             { return "bad-memory" }
         case MEMMAP_BOOTLOADER_RECLAIMABLE => { return "bootloader-reclaimable" }
         case MEMMAP_EXECUTABLE_AND_MODULES => { return "kernel/modules" }
-        case MEMMAP_FRAMEBUFFER => { return "framebuffer" }
-        case MEMMAP_RESERVED_MAPPED => { return "reserved-mapped" }
-        case _ => { return "unknown" }
+        case MEMMAP_FRAMEBUFFER =>            { return "framebuffer" }
+        case MEMMAP_RESERVED_MAPPED =>        { return "reserved-mapped" }
+        case _ =>                             { return "unknown" }
     }
 }
 
 func memmap_type_color(t: uint) -> uint32 {
     match t {
-        case MEMMAP_USABLE => { return 0x1fbf75 as uint32 }
-        case MEMMAP_RESERVED => { return 0x777777 as uint32 }
-        case MEMMAP_ACPI_RECLAIMABLE => { return 0x44b5ff as uint32 }
-        case MEMMAP_ACPI_NVS => { return 0xffc857 as uint32 }
-        case MEMMAP_BAD_MEMORY => { return 0xff2020 as uint32 }
+        case MEMMAP_USABLE =>                 { return 0x1fbf75 as uint32 }
+        case MEMMAP_RESERVED =>               { return 0x777777 as uint32 }
+        case MEMMAP_ACPI_RECLAIMABLE =>       { return 0x44b5ff as uint32 }
+        case MEMMAP_ACPI_NVS =>               { return 0xffc857 as uint32 }
+        case MEMMAP_BAD_MEMORY =>             { return 0xff2020 as uint32 }
         case MEMMAP_BOOTLOADER_RECLAIMABLE => { return 0x44b5ff as uint32 }
         case MEMMAP_EXECUTABLE_AND_MODULES => { return 0xffc857 as uint32 }
-        case MEMMAP_FRAMEBUFFER => { return 0xff4f8b as uint32 }
-        case MEMMAP_RESERVED_MAPPED => { return 0x777777 as uint32 }\
-        case _ => { return 0x777777 as uint32 }
+        case MEMMAP_FRAMEBUFFER =>            { return 0xff4f8b as uint32 }
+        case MEMMAP_RESERVED_MAPPED =>        { return 0x777777 as uint32 }\
+        case _ =>                             { return 0x777777 as uint32 }
     }
 }
 
@@ -304,21 +275,14 @@ func draw_demo(fb: LimineFramebuffer*) {
 }
 
 func print_memmap(memmap: LimineMemmapResponse*) {
-    HAL.Serial.write("Limine memory map entries: ")
-    serial_write_dec(memmap.entry_count)
+    HAL.Serial.write("Limine memory map entries: \(memmap.entry_count)\n")
     HAL.Serial.write("\n")
 
-    let entries: uint* = memmap.entries as uint*
+    let entries = memmap.entries as uint*
     let i: uint = 0
     while i < memmap.entry_count {
         let entry = entries[i] as LimineMemmapEntry*
-        HAL.Serial.write("  ")
-        serial_write_hex(entry.base)
-        HAL.Serial.write("..")
-        serial_write_hex(entry.base + entry.length)
-        HAL.Serial.write(" len=")
-        serial_write_hex(entry.length)
-        HAL.Serial.write(" ")
+        HAL.Serial.write("  \(entry.base:hex) - \(entry.base + entry.length:hex) ")
         HAL.Serial.write(memmap_type_name(entry.entry_type))
         HAL.Serial.write("\n")
         i = i + 1

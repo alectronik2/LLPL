@@ -1,0 +1,21 @@
+extern func puts(s: string) -> int
+
+func dbl() -> (string, string) {
+    ("hello", "world")
+}
+
+func main() -> int {
+    "123" |> puts() unless false
+
+    let x = if true {
+        "Working"
+    } else {
+        "Not working"
+    }
+    "x = \(x)" |> puts()
+
+    let (a, b) = dbl()
+    "a = \(a), b = \(b)" |> puts()
+
+    100
+}

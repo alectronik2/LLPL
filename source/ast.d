@@ -52,7 +52,8 @@ enum NodeType {
     DestructuringStmt,
     PatternExpr,
     TryStmt,
-    ThrowStmt
+    ThrowStmt,
+    IfExpr
 }
 
 abstract class ASTNode {
@@ -617,6 +618,30 @@ class IfStmt : ASTNode {
 
     this(ASTNode condition, Block thenBlock, Block elseBlock = null) {
         super(NodeType.IfStmt);
+        this.condition = condition;
+        this.thenBlock = thenBlock;
+        this.elseBlock = elseBlock;
+    }
+}
+
+// `if <cond> { ...; expr } else { ...; expr }` used as an expression, not
+// a statement - e.g. `let x = if cond { 128 } else { 256 }`. Distinct from
+// IfStmt in two ways: `else` is mandatory (there's no sensible value for a
+// branch that was never taken), and each block's *last* statement must be
+// an expression (an ExprStmt) - that trailing expression supplies this
+// construct's value (earlier statements in the same branch still run for
+// their side effects/bindings, they just can't supply the value
+// themselves; see codegen.d's ifExprBranchValue). Both branches' trailing
+// expressions must resolve to the same type (see codegen.d's
+// inferIfExprType) - there's no implicit widening, matching the rest of
+// this compiler's "nominal, single-type" simplifications.
+class IfExpr : ASTNode {
+    ASTNode condition;
+    Block thenBlock;
+    Block elseBlock;
+
+    this(ASTNode condition, Block thenBlock, Block elseBlock, int line = 0, int column = 0) {
+        super(NodeType.IfExpr, line, column);
         this.condition = condition;
         this.thenBlock = thenBlock;
         this.elseBlock = elseBlock;
