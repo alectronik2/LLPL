@@ -77,6 +77,35 @@ func main() -> int {
 }
 ```
 
+### Pointer-to-Pointer
+
+Any level of indirection is allowed - `int*`, `int**`, `int***`, ... -
+`&` adds one level (`&ptr` where `ptr: int*` gives `int**`, not `int*`
+again), `*` removes one. See `test/pointer_to_pointer_demo.llpl` for the
+full runnable version this is taken from:
+
+```swift
+func set_via_pp(pp: int**, v: int) {
+    **pp = v
+}
+
+func main() -> int {
+    let x: int = 5
+    let p: int* = &x
+    let pp: int** = &p
+
+    set_via_pp(pp, 42)
+    return x  // 42
+}
+```
+
+A statement starting with `*` (dereference) directly after another
+statement can be misread as that statement's own trailing expression
+continuing via multiplication (`foo() \n *p = 1` parses as `foo() * p =
+1`) - a pre-existing parsing quirk, not specific to double pointers.
+Prefer assigning through a helper function (as above) or make the
+dereferencing statement the first one in its block.
+
 ### Named Arguments and Default Values
 
 A parameter can declare a default value (`p2: string = "none"`), making it

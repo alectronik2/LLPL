@@ -386,7 +386,7 @@ class Parser {
         foreach (i, memberName; memberNames) {
             long value = memberHasValue[i] ? memberValues[i] : nextValue;
             nextValue = value + 1;
-            Type memberType = new Type(backingType.name, backingType.isPointer,
+            Type memberType = new Type(backingType.name, backingType.pointerDepth,
                 backingType.isArray, backingType.arraySize);
             members ~= new VarDecl(memberName, memberType, new IntLiteral(value, memberLines[i], memberColumns[i]),
                 true, memberLines[i], memberColumns[i]);
@@ -432,11 +432,11 @@ class Parser {
         // A trailing `*`/`[...]` (or a bare primitive name with neither)
         // marks this as a *type* alias rather than a symbol alias - see
         // the AliasDecl doc comment.
-        bool isPointer = false;
+        int pointerDepth = 0;
         bool isArray = false;
         int arraySize = 0;
-        if (match(TokenType.Star)) {
-            isPointer = true;
+        while (match(TokenType.Star)) {
+            pointerDepth++;
         }
         if (match(TokenType.LeftBracket)) {
             isArray = true;
@@ -447,7 +447,7 @@ class Parser {
             expect(TokenType.RightBracket);
         }
 
-        return new AliasDecl(name, targetPath, isPointer, isArray, arraySize, startLine, startColumn);
+        return new AliasDecl(name, targetPath, pointerDepth, isArray, arraySize, startLine, startColumn);
     }
 
     private ImportStmt importStmt() {
@@ -1081,12 +1081,12 @@ class Parser {
             expectGreaterOrSplit();
         }
 
-        bool isPointer = false;
+        int pointerDepth = 0;
         bool isArray = false;
         int arraySize = 0;
 
-        if (match(TokenType.Star)) {
-            isPointer = true;
+        while (match(TokenType.Star)) {
+            pointerDepth++;
         }
 
         if (match(TokenType.LeftBracket)) {
@@ -1098,7 +1098,7 @@ class Parser {
             expect(TokenType.RightBracket);
         }
 
-        Type t = new Type(name, isPointer, isArray, arraySize);
+        Type t = new Type(name, pointerDepth, isArray, arraySize);
         t.typeArgs = typeArgs;
 
         // `T?` - sugar for `Optional<T>` (see ast.Type.isNullableSugar).

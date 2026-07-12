@@ -800,12 +800,12 @@ class CodeGenerator {
         foreach (prog; programs) {
             foreach (decl; prog.declarations) {
                 if (auto aliasDecl = cast(AliasDecl)decl) {
-                    bool isTypeAlias = aliasDecl.targetIsPointer || aliasDecl.targetIsArray ||
+                    bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
                         (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
                     if (isTypeAlias) {
                         string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
                         string baseName = aliasDecl.targetPath.join("_");
-                        typeAliases[mangledName] = new Type(baseName, aliasDecl.targetIsPointer,
+                        typeAliases[mangledName] = new Type(baseName, aliasDecl.targetPointerDepth,
                             aliasDecl.targetIsArray, aliasDecl.targetArraySize);
                         typeAliasModulePath[mangledName] = prog.modulePath;
                         exportsByModule[prog.modulePath][mangledName] = true;
@@ -1071,7 +1071,7 @@ class CodeGenerator {
                         // within their own file).
                     } else if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
                         string baseType = primitiveToC(varDecl.type.name);
-                        if (varDecl.type.isPointer) baseType ~= "*";
+                        baseType ~= pointerStars(varDecl.type);
                         earlyDeclCode ~= format("extern %s%s %s[%d];\n", constPrefix, baseType, cName, varDecl.type.arraySize);
                     } else {
                         earlyDeclCode ~= format("extern %s%s %s;\n", constPrefix, typeToC(varDecl.type), cName);
@@ -1278,7 +1278,7 @@ class CodeGenerator {
         // registered into typeAliases up front (see generateMultiple), so
         // resolveType() substitutes it correctly regardless of where this
         // declaration sits relative to its uses - nothing left to do here.
-        bool isTypeAlias = aliasDecl.targetIsPointer || aliasDecl.targetIsArray ||
+        bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
             (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
         if (isTypeAlias) {
             return "";
@@ -1404,7 +1404,7 @@ class CodeGenerator {
         }
         if (type.isArray && type.arraySize > 0) {
             string baseType = primitiveToC(type.name);
-            if (type.isPointer) baseType ~= "*";
+            baseType ~= pointerStars(type);
             return format("    %s %s[%d];\n", baseType, name, type.arraySize);
         }
         return format("    %s %s;\n", typeToC(type), name);
@@ -1460,7 +1460,7 @@ class CodeGenerator {
         string code;
         if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
             string baseType = primitiveToC(varDecl.type.name);
-            if (varDecl.type.isPointer) baseType ~= "*";
+            baseType ~= pointerStars(varDecl.type);
             code = format("%s%s%s %s[%d]", attrPrefix, constPrefix, baseType, cName, varDecl.type.arraySize);
         } else {
             code = format("%s%s%s %s", attrPrefix, constPrefix, typeToC(varDecl.type), cName);
@@ -1956,7 +1956,7 @@ class CodeGenerator {
     // mismatch rather than checking it itself).
     private bool sameErrorType(Type a, Type b) {
         if (a is null || b is null) return a is b;
-        return a.name == b.name && a.isPointer == b.isPointer &&
+        return a.name == b.name && a.pointerDepth == b.pointerDepth &&
             a.isArray == b.isArray && a.arraySize == b.arraySize;
     }
 
@@ -2332,7 +2332,7 @@ class CodeGenerator {
     // "nominal, single-type" simplifications elsewhere (tagged enums,
     // try/catch's one-error-type-per-block, ...).
     private Type checkIfExprBranchTypesMatch(Type thenType, Type elseType, IfExpr ifExpr) {
-        if (thenType.name != elseType.name || thenType.isPointer != elseType.isPointer) {
+        if (thenType.name != elseType.name || thenType.pointerDepth != elseType.pointerDepth) {
             throw new CompileError(format(
                 "if-expression's branches have different types - 'then' is '%s', 'else' is '%s'",
                 thenType.toString(), elseType.toString()),
@@ -2434,7 +2434,7 @@ class CodeGenerator {
             string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
             if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
                 string baseType = primitiveToC(varDecl.type.name);
-                if (varDecl.type.isPointer) baseType ~= "*";
+                baseType ~= pointerStars(varDecl.type);
                 code ~= indent() ~ format("%s%s %s[%d]", constPrefix, baseType, varDecl.name, varDecl.type.arraySize);
             } else {
                 code ~= indent() ~ format("%s%s %s", constPrefix, typeToC(varDecl.type), varDecl.name);
@@ -2579,13 +2579,12 @@ class CodeGenerator {
         if (t is null) return null;
         if (typeSubs !is null) {
             if (auto sub = t.name in typeSubs) {
-                // Merge best-effort, same as resolveType's alias
-                // substitution: a use site that also wrote its own
-                // `*`/`[...]` on top of an already-pointer/array type
-                // parameter binding just ORs the flags together (no way to
-                // represent "pointer to pointer" in this single-flag Type
-                // model, same limitation as everywhere else).
-                auto merged = new Type(sub.name, t.isPointer || sub.isPointer, t.isArray || sub.isArray,
+                // Merge, same as resolveType's alias substitution: a use
+                // site that also wrote its own `*` on top of an
+                // already-pointer type parameter binding (`T*` where `T`
+                // is bound to `int*`) stacks depth (`int**`) rather than
+                // collapsing back to a single `*`.
+                auto merged = new Type(sub.name, t.pointerDepth + sub.pointerDepth, t.isArray || sub.isArray,
                     t.arraySize > 0 ? t.arraySize : sub.arraySize);
                 merged.typeArgs = sub.typeArgs.map!(a => cloneType(a, typeSubs)).array;
                 merged.closureParams = sub.closureParams;
@@ -2593,7 +2592,7 @@ class CodeGenerator {
                 return merged;
             }
         }
-        auto copy = new Type(t.name, t.isPointer, t.isArray, t.arraySize);
+        auto copy = new Type(t.name, t.pointerDepth, t.isArray, t.arraySize);
         copy.typeArgs = t.typeArgs.map!(a => cloneType(a, typeSubs)).array;
         if (t.closureReturnType !is null) {
             Parameter[] cps;
@@ -3856,14 +3855,15 @@ class CodeGenerator {
     }
 
     // The instantiation-suffix fragment for one concrete type argument,
-    // e.g. Type("int") -> "int", Type("char", isPointer: true) -> "char_ptr".
-    // By the time this runs, a nested generic argument (Vector<Vector<int>>)
-    // has already had its own name rewritten to its mangled instantiation
-    // name by the recursive resolveType call in instantiateGenericTypeArgs,
-    // so this never needs to recurse into typeArgs itself.
+    // e.g. Type("int") -> "int", Type("char", pointerDepth: 1) -> "char_ptr",
+    // Type("char", pointerDepth: 2) -> "char_ptr_ptr". By the time this
+    // runs, a nested generic argument (Vector<Vector<int>>) has already had
+    // its own name rewritten to its mangled instantiation name by the
+    // recursive resolveType call in instantiateGenericTypeArgs, so this
+    // never needs to recurse into typeArgs itself.
     private string mangleTypeArg(Type t) {
         string s = t.name;
-        if (t.isPointer) s ~= "_ptr";
+        foreach (i; 0 .. t.pointerDepth) s ~= "_ptr";
         if (t.isArray) s ~= format("_arr%d", t.arraySize);
         return s;
     }
@@ -4156,14 +4156,12 @@ class CodeGenerator {
         }
 
         if (auto aliased = t.name in typeAliases) {
-            // Substitute the alias's own type in place. `||`/best-effort
-            // merge, not a proper multi-level pointer: if the use site
-            // *also* wrote `*`/`[...]` on an already-pointer/array alias
-            // (`string*` where `string` is `char*`), there's no way to
-            // represent "pointer to pointer" in this single-flag Type
-            // model - same limitation as everywhere else in the language.
+            // Substitute the alias's own type in place - a use site that
+            // *also* wrote its own `*` on an already-pointer alias
+            // (`string*` where `string` is `char*`) stacks depth (giving
+            // `char**`) rather than collapsing back to a single `*`.
             t.name = aliased.name;
-            t.isPointer = t.isPointer || aliased.isPointer;
+            t.pointerDepth = t.pointerDepth + aliased.pointerDepth;
             t.isArray = t.isArray || aliased.isArray;
             if (aliased.arraySize > 0) t.arraySize = aliased.arraySize;
         }
@@ -4174,7 +4172,7 @@ class CodeGenerator {
         // char* feature also applies to string.
         if (t.name == "string") {
             t.name = "char";
-            t.isPointer = true;
+            t.pointerDepth += 1;
         }
 
         // Resolve module-alias prefixes in qualified type names (e.g.
@@ -5351,9 +5349,11 @@ class CodeGenerator {
             // the same way `.stringof` does (custom method, or the type's
             // own name) instead of reinterpreting the object as a raw
             // char* - see generateStringofValue. Only when the source is
-            // actually a known class/struct; every other cast (including
-            // an already-char* value) is unaffected.
-            if (castExpr.type.name == "char" && castExpr.type.isPointer) {
+            // actually a known class/struct and the target is exactly
+            // `char*` (not `char**` or deeper - that isn't "cast to
+            // string"); every other cast (including an already-char*
+            // value) is unaffected.
+            if (castExpr.type.name == "char" && castExpr.type.pointerDepth == 1) {
                 try {
                     Type srcType = inferType(castExpr.expression);
                     if ((srcType.name in classRegistry) !is null || (srcType.name in structRegistry) !is null) {
@@ -5538,20 +5538,30 @@ class CodeGenerator {
             if (unaryExpr.op == "!") {
                 return new Type("bool");
             } else if (unaryExpr.op == "&") {
+                // Address-of adds one level of indirection on top of
+                // whatever the operand already was - &ptr where
+                // ptr: int* yields int**, not int* again.
                 Type inner = inferType(unaryExpr.operand);
-                return new Type(inner.name, true, inner.isArray, inner.arraySize);
+                return new Type(inner.name, inner.pointerDepth + 1, inner.isArray, inner.arraySize);
             } else if (unaryExpr.op == "*") {
                 Type inner = inferType(unaryExpr.operand);
-                if (!inner.isPointer) {
+                if (inner.pointerDepth == 0) {
                     throw inferError(expr, "Cannot infer type: dereferencing a non-pointer");
                 }
-                return new Type(inner.name, false, inner.isArray, inner.arraySize);
+                return new Type(inner.name, inner.pointerDepth - 1, inner.isArray, inner.arraySize);
             }
             return inferType(unaryExpr.operand);
         } else if (auto indexExpr = cast(IndexExpr)expr) {
             Type arrType = inferType(indexExpr.array);
-            if (arrType.isArray || arrType.isPointer) {
-                return new Type(arrType.name, false, false, 0);
+            // Indexing consumes exactly one level of indirection: an
+            // array's element keeps whatever pointer depth it already had
+            // (int*[5] indexed gives int*, not int); a pointer's pointee
+            // drops one level (int** indexed/dereferenced gives int*).
+            if (arrType.isArray) {
+                return new Type(arrType.name, arrType.pointerDepth, false, 0);
+            }
+            if (arrType.pointerDepth > 0) {
+                return new Type(arrType.name, arrType.pointerDepth - 1, false, 0);
             }
             if (auto classDecl = arrType.name in classRegistry) {
                 string methodName = operatorMethodName("[]", false);
@@ -5577,6 +5587,13 @@ class CodeGenerator {
     // anything else (class names) unchanged. Shared by typeToC and the
     // array-declaration code paths, which need the base type without
     // typeToC's pointer-star handling.
+    // "*" repeated once per level of indirection - shared by typeToC and
+    // the array/bitfield declaration sites that hand-build a base-type
+    // string instead of going through typeToC itself.
+    private string pointerStars(Type t) {
+        return "*".replicate(t.pointerDepth);
+    }
+
     private string primitiveToC(string name) {
         switch (name) {
             case "int": return "int64_t";    // 64-bit integer
@@ -5604,9 +5621,7 @@ class CodeGenerator {
             }
         }
 
-        if (type.isPointer) {
-            cType ~= "*";
-        }
+        cType ~= pointerStars(type);
 
         // Don't add array notation here - it's handled specially in var declarations
         // because C requires array size after variable name

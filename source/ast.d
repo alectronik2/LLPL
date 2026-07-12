@@ -2,6 +2,7 @@ module ast;
 
 import std.variant;
 import std.conv;
+import std.array : replicate;
 
 enum NodeType {
     Program,
@@ -128,7 +129,7 @@ class NamespaceDecl : ASTNode {
 // or is a bare primitive name (`alias string = char*`, `alias Bytes =
 // char[256]`, `alias Cell = int`): there's no symbol to point a #define
 // at, so the code generator instead registers `name` to substitute for
-// `targetPath`/`targetIsPointer`/`targetIsArray`/`targetArraySize`
+// `targetPath`/`targetPointerDepth`/`targetIsArray`/`targetArraySize`
 // wherever it's resolved as a *type* (see CodeGenerator.resolveType and
 // the `typeAliases` map). `targetPath` a dotted class/struct name with no
 // such suffix still goes through the plain symbol-alias path above,
@@ -136,17 +137,17 @@ class NamespaceDecl : ASTNode {
 class AliasDecl : ASTNode {
     string name;
     string[] targetPath;
-    bool targetIsPointer;
+    int targetPointerDepth;
     bool targetIsArray;
     int targetArraySize;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
 
-    this(string name, string[] targetPath, bool targetIsPointer = false, bool targetIsArray = false,
+    this(string name, string[] targetPath, int targetPointerDepth = 0, bool targetIsArray = false,
          int targetArraySize = 0, int line = 0, int column = 0) {
         super(NodeType.AliasDecl, line, column);
         this.name = name;
         this.targetPath = targetPath;
-        this.targetIsPointer = targetIsPointer;
+        this.targetPointerDepth = targetPointerDepth;
         this.targetIsArray = targetIsArray;
         this.targetArraySize = targetArraySize;
     }
@@ -218,9 +219,23 @@ class UnquoteExpr : ASTNode {
 
 class Type {
     string name;
-    bool isPointer;
+    // Levels of indirection: 0 = not a pointer, 1 = `T*`, 2 = `T**`, ...
+    int pointerDepth;
     bool isArray;
     int arraySize;
+
+    // Read-only on purpose (no setter) - lets every existing simple
+    // boolean check ("is this a pointer at all") keep working unchanged,
+    // while the D compiler flags any attempted *assignment* to `isPointer`
+    // as a compile error: those are exactly the call sites that need to
+    // be upgraded to real depth arithmetic (`pointerDepth`) instead,
+    // rather than silently collapsing back down to a single flag - see
+    // codegen.d's resolveType/cloneType for the two places that used to
+    // do exactly that (documented there as "no way to represent pointer
+    // to pointer in this single-flag Type model").
+    @property bool isPointer() const {
+        return pointerDepth > 0;
+    }
 
     // Parsed `<T1, T2, ...>` type arguments, e.g. `Vector<int>` parses to
     // Type("Vector", typeArgs: [Type("int")]). Empty for every ordinary,
@@ -250,9 +265,9 @@ class Type {
     // just a shorter way to spell the same explicit new+set() dance.
     bool isNullableSugar;
 
-    this(string name, bool isPointer = false, bool isArray = false, int arraySize = 0) {
+    this(string name, int pointerDepth = 0, bool isArray = false, int arraySize = 0) {
         this.name = name;
-        this.isPointer = isPointer;
+        this.pointerDepth = pointerDepth;
         this.isArray = isArray;
         this.arraySize = arraySize;
     }
@@ -275,7 +290,7 @@ class Type {
                 result ~= arg.toString();
             }
             result ~= ")";
-            if (isPointer) result ~= "*";
+            result ~= "*".replicate(pointerDepth);
             if (isArray) result ~= "[]";
             return result;
         }
@@ -288,7 +303,7 @@ class Type {
             }
             result ~= ">";
         }
-        if (isPointer) result ~= "*";
+        result ~= "*".replicate(pointerDepth);
         if (isArray) result ~= "[]";
         return result;
     }
