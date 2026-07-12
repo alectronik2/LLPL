@@ -61,6 +61,17 @@ private struct DeferInfo {
     string activeVarName;
 }
 
+// resolveGenericFunctionCall's result - the monomorphized function's
+// mangled name plus the call's arguments already resolved to plain
+// positional form (named args placed, defaults substituted) - see
+// CodeGenerator.resolveCallArguments. Every caller needs mangledName;
+// only the one that actually generates the call's C argument list needs
+// resolvedArgs too.
+private struct GenericCallResolution {
+    string mangledName;
+    ASTNode[] resolvedArgs;
+}
+
 class CodeGenerator {
     private int indentLevel;
     private DeferInfo[] deferredStatements;
@@ -2662,7 +2673,7 @@ class CodeGenerator {
                 unaryExpr.line, unaryExpr.column);
         } else if (auto callExpr = cast(CallExpr)node) {
             return new CallExpr(cloneNode(callExpr.callee, subs, typeSubs), cloneNodes(callExpr.args, subs, typeSubs),
-                callExpr.line, callExpr.column);
+                callExpr.line, callExpr.column, callExpr.argNames.dup);
         } else if (auto memberExpr = cast(MemberExpr)node) {
             return new MemberExpr(cloneNode(memberExpr.object, subs, typeSubs), memberExpr.member,
                 memberExpr.line, memberExpr.column);
@@ -2671,7 +2682,7 @@ class CodeGenerator {
                 indexExpr.line, indexExpr.column);
         } else if (auto newExpr = cast(NewExpr)node) {
             return new NewExpr(cloneType(newExpr.type, typeSubs), cloneNodes(newExpr.args, subs, typeSubs),
-                newExpr.line, newExpr.column);
+                newExpr.line, newExpr.column, newExpr.argNames.dup);
         } else if (auto castExpr = cast(CastExpr)node) {
             return new CastExpr(cloneType(castExpr.type, typeSubs), cloneNode(castExpr.expression, subs, typeSubs),
                 castExpr.line, castExpr.column);
@@ -2777,7 +2788,10 @@ class CodeGenerator {
     // mangled name instead), so clearing it here is harmless either way.
     private FunctionDecl cloneFunctionDeclWithTypeSubs(FunctionDecl fn, Type[string] typeSubs, string newName) {
         Parameter[] params;
-        foreach (p; fn.params) params ~= new Parameter(p.name, cloneType(p.type, typeSubs));
+        foreach (p; fn.params) {
+            ASTNode defaultValue = p.defaultValue is null ? null : cloneNode(p.defaultValue, null, typeSubs);
+            params ~= new Parameter(p.name, cloneType(p.type, typeSubs), defaultValue);
+        }
         auto clone = new FunctionDecl(newName, params, cloneType(fn.returnType, typeSubs),
             cloneBlock(fn.body_, null, typeSubs), fn.isExtern, fn.isInterrupt, fn.isVariadic,
             fn.line, fn.column);
@@ -2870,7 +2884,7 @@ class CodeGenerator {
                 unaryExpr.line, unaryExpr.column);
         } else if (auto callExpr = cast(CallExpr)node) {
             return new CallExpr(expandQuotedNode(callExpr.callee, subs),
-                expandQuotedNodes(callExpr.args, subs), callExpr.line, callExpr.column);
+                expandQuotedNodes(callExpr.args, subs), callExpr.line, callExpr.column, callExpr.argNames.dup);
         } else if (auto memberExpr = cast(MemberExpr)node) {
             return new MemberExpr(expandQuotedNode(memberExpr.object, subs), memberExpr.member,
                 memberExpr.line, memberExpr.column);
@@ -2879,7 +2893,7 @@ class CodeGenerator {
                 expandQuotedNode(indexExpr.index, subs), indexExpr.line, indexExpr.column);
         } else if (auto newExpr = cast(NewExpr)node) {
             return new NewExpr(cloneType(newExpr.type), expandQuotedNodes(newExpr.args, subs),
-                newExpr.line, newExpr.column);
+                newExpr.line, newExpr.column, newExpr.argNames.dup);
         } else if (auto castExpr = cast(CastExpr)node) {
             return new CastExpr(cloneType(castExpr.type), expandQuotedNode(castExpr.expression, subs),
                 castExpr.line, castExpr.column);
@@ -4008,8 +4022,11 @@ class CodeGenerator {
     // on why generic operators/calls stay unambiguous), so every type
     // parameter is instead inferred from whichever parameter position(s)
     // mention it, using the argument expressions actually passed here.
-    private string resolveGenericFunctionCall(string templateKey, ASTNode[] args) {
+    private GenericCallResolution resolveGenericFunctionCall(string templateKey, ASTNode[] args,
+            string[] argNames) {
         FunctionDecl tmpl = genericFunctionTemplates[templateKey];
+        args = resolveCallArguments(tmpl.params, false, args, argNames,
+            format("generic function '%s'", templateKey), 0, 0);
 
         Type[string] bindings;
         foreach (i, param; tmpl.params) {
@@ -4120,7 +4137,7 @@ class CodeGenerator {
             variableTypes = savedVarTypes;
         }
 
-        return mangledName;
+        return GenericCallResolution(mangledName, args);
     }
 
     // Resolves a possibly-unqualified class type name to its mangled form
@@ -4239,6 +4256,83 @@ class CodeGenerator {
             }
         }
         return null;
+    }
+
+    private bool hasNamedArgs(string[] argNames) {
+        foreach (n; argNames) if (n.length > 0) return true;
+        return false;
+    }
+
+    // Matches a call's raw (possibly named, possibly omitting trailing
+    // defaulted) arguments against a callee's declared parameter list,
+    // producing a plain positional ASTNode[] - one entry per `params[i]`
+    // (defaults substituted for anything the call omitted), plus any extra
+    // *variadic* tail arguments appended unchanged. This is the only place
+    // named-argument/default-value resolution happens; every existing
+    // call-generation path downstream already expects exactly this shape
+    // (a positional ASTNode[] the same length as `params`, give or take a
+    // variadic tail) and needs no further changes.
+    private ASTNode[] resolveCallArguments(Parameter[] params, bool isVariadic, ASTNode[] args,
+            string[] argNames, string calleeDescription, int line, int column) {
+        // Fast path: every call before this feature existed, and the
+        // overwhelming majority of calls after it - all positional, arity
+        // matches exactly (or overflows into a variadic tail).
+        if (!hasNamedArgs(argNames) && args.length == params.length) {
+            return args;
+        }
+        if (!hasNamedArgs(argNames) && isVariadic && args.length >= params.length) {
+            return args;
+        }
+
+        ASTNode[] resolved = new ASTNode[params.length];
+        bool[] filled = new bool[params.length];
+        ASTNode[] variadicTail;
+        size_t nextPositional = 0;
+
+        foreach (i, arg; args) {
+            string name = i < argNames.length ? argNames[i] : "";
+            if (name.length == 0) {
+                if (nextPositional >= params.length) {
+                    if (isVariadic) {
+                        variadicTail ~= arg;
+                        continue;
+                    }
+                    throw new CompileError(format("Too many arguments to %s - expected at most %d, got %d",
+                        calleeDescription, params.length, args.length), currentModulePath, line, column);
+                }
+                resolved[nextPositional] = arg;
+                filled[nextPositional] = true;
+                nextPositional++;
+            } else {
+                long idx = -1;
+                foreach (j, p; params) {
+                    if (p.name == name) { idx = j; break; }
+                }
+                if (idx < 0) {
+                    throw new CompileError(format("%s has no parameter named '%s'", calleeDescription, name),
+                        currentModulePath, line, column);
+                }
+                if (filled[idx]) {
+                    throw new CompileError(
+                        format("Argument '%s' of %s was already supplied", name, calleeDescription),
+                        currentModulePath, line, column);
+                }
+                resolved[idx] = arg;
+                filled[idx] = true;
+            }
+        }
+
+        foreach (i, p; params) {
+            if (filled[i]) continue;
+            if (p.defaultValue !is null) {
+                resolved[i] = p.defaultValue;
+                continue;
+            }
+            throw new CompileError(format("Missing required argument '%s' of %s", p.name, calleeDescription),
+                currentModulePath, line, column);
+        }
+
+        return resolved ~ variadicTail;
     }
 
     // The iterator protocol a class opts into to support `foreach let x in
@@ -4962,8 +5056,10 @@ class CodeGenerator {
                 // realistic use calls through a closure-typed variable,
                 // parameter or field, none of which have side effects to
                 // duplicate.
+                ASTNode[] resolvedArgs = resolveCallArguments(closureType.closureParams, false,
+                    callExpr.args, callExpr.argNames, "this closure", callExpr.line, callExpr.column);
                 string cargs = format("(%s).env", calleeCode);
-                foreach (arg; callExpr.args) {
+                foreach (arg; resolvedArgs) {
                     cargs ~= ", " ~ generateExpression(arg);
                 }
                 return format("((%s (*)(%s))(%s).fn)(%s)", retC, paramTypesC, calleeCode, cargs);
@@ -4984,14 +5080,14 @@ class CodeGenerator {
                     (n) => (n in genericFunctionTemplates) !is null);
             }
             if (genericTemplateKey.length > 0) {
-                string mangledName = resolveGenericFunctionCall(genericTemplateKey, callExpr.args);
-                recordUsage(mangledName, callExpr.line, callExpr.column);
+                auto resolution = resolveGenericFunctionCall(genericTemplateKey, callExpr.args, callExpr.argNames);
+                recordUsage(resolution.mangledName, callExpr.line, callExpr.column);
                 string gargs = "";
-                foreach (i, arg; callExpr.args) {
+                foreach (i, arg; resolution.resolvedArgs) {
                     if (i > 0) gargs ~= ", ";
                     gargs ~= generateExpression(arg);
                 }
-                return format("%s(%s)", mangledName, gargs);
+                return format("%s(%s)", resolution.mangledName, gargs);
             }
             // Check if this is a method call
             if (auto memberExpr = cast(MemberExpr)callExpr.callee) {
@@ -5005,8 +5101,11 @@ class CodeGenerator {
                 if (qualifiedFunc.length > 0) {
                     recordUsage(qualifiedFunc, memberExpr.line, memberExpr.column);
                     FunctionDecl qualifiedDecl = functionRegistry[qualifiedFunc];
+                    ASTNode[] resolvedArgs = resolveCallArguments(qualifiedDecl.params, qualifiedDecl.isVariadic,
+                        callExpr.args, callExpr.argNames, format("function '%s'", qualifiedFunc),
+                        callExpr.line, callExpr.column);
                     string qargs = "";
-                    foreach (i, arg; callExpr.args) {
+                    foreach (i, arg; resolvedArgs) {
                         if (i > 0) qargs ~= ", ";
                         string argCode = generateExpression(arg);
                         if (qualifiedDecl.isVariadic && i >= qualifiedDecl.params.length) {
@@ -5043,9 +5142,37 @@ class CodeGenerator {
                     // CLASS_ placeholder below
                 }
 
+                // Find the target method's own FunctionDecl (if the class
+                // was resolved) to resolve named/default arguments against
+                // - unlike the plain/qualified-call paths, there was no
+                // FunctionDecl lookup here at all before named arguments
+                // existed, since dispatch is just a string-built C call.
+                FunctionDecl methodDecl = null;
+                if (className.length > 0) {
+                    if (auto cd = className in classRegistry) {
+                        foreach (m; cd.methods) {
+                            if (m.name == methodName) { methodDecl = m; break; }
+                        }
+                    }
+                }
+                ASTNode[] resolvedArgs;
+                if (methodDecl !is null) {
+                    resolvedArgs = resolveCallArguments(methodDecl.params, false, callExpr.args,
+                        callExpr.argNames, format("method '%s.%s'", className, methodName),
+                        callExpr.line, callExpr.column);
+                } else {
+                    if (hasNamedArgs(callExpr.argNames)) {
+                        throw new CompileError(
+                            format("Cannot resolve named arguments for '%s' - its target method " ~
+                                "couldn't be determined at compile time", methodName),
+                            currentModulePath, callExpr.line, callExpr.column);
+                    }
+                    resolvedArgs = callExpr.args;
+                }
+
                 // Generate method call with object as first parameter
                 string args = objectExpr;
-                foreach (arg; callExpr.args) {
+                foreach (arg; resolvedArgs) {
                     args ~= ", " ~ generateExpression(arg);
                 }
 
@@ -5061,8 +5188,22 @@ class CodeGenerator {
                 // recordUsage needed here.
                 string callee = generateExpression(callExpr.callee);
                 FunctionDecl calleeDecl = resolveCalledFunction(callExpr.callee);
+                ASTNode[] resolvedArgs;
+                if (calleeDecl !is null) {
+                    resolvedArgs = resolveCallArguments(calleeDecl.params, calleeDecl.isVariadic,
+                        callExpr.args, callExpr.argNames, format("function '%s'", calleeDecl.name),
+                        callExpr.line, callExpr.column);
+                } else {
+                    if (hasNamedArgs(callExpr.argNames)) {
+                        throw new CompileError(
+                            "Cannot resolve named arguments - this call's target couldn't be " ~
+                            "determined at compile time",
+                            currentModulePath, callExpr.line, callExpr.column);
+                    }
+                    resolvedArgs = callExpr.args;
+                }
                 string args = "";
-                foreach (i, arg; callExpr.args) {
+                foreach (i, arg; resolvedArgs) {
                     if (i > 0) args ~= ", ";
                     string argCode = generateExpression(arg);
                     if (calleeDecl !is null && calleeDecl.isVariadic && i >= calleeDecl.params.length) {
@@ -5150,8 +5291,24 @@ class CodeGenerator {
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
             recordUsage(newExpr.type.name, newExpr.line, newExpr.column);
+            FunctionDecl ctor = null;
+            if (auto cd = newExpr.type.name in classRegistry) {
+                ctor = cd.constructor;
+            }
+            ASTNode[] resolvedArgs;
+            if (ctor !is null) {
+                resolvedArgs = resolveCallArguments(ctor.params, false, newExpr.args, newExpr.argNames,
+                    format("constructor of '%s'", newExpr.type.name), newExpr.line, newExpr.column);
+            } else {
+                if (hasNamedArgs(newExpr.argNames)) {
+                    throw new CompileError(
+                        format("Cannot resolve named arguments for '%s''s constructor", newExpr.type.name),
+                        currentModulePath, newExpr.line, newExpr.column);
+                }
+                resolvedArgs = newExpr.args;
+            }
             string args = "";
-            foreach (i, arg; newExpr.args) {
+            foreach (i, arg; resolvedArgs) {
                 if (i > 0) args ~= ", ";
                 args ~= generateExpression(arg);
             }
@@ -5278,8 +5435,8 @@ class CodeGenerator {
                 string genericKey = tryResolveQualifiedPath(memberCallee,
                     (n) => (n in genericFunctionTemplates) !is null);
                 if (genericKey.length > 0) {
-                    string mangledName = resolveGenericFunctionCall(genericKey, callExpr.args);
-                    return functionRegistry[mangledName].returnType;
+                    auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args, callExpr.argNames);
+                    return functionRegistry[resolution.mangledName].returnType;
                 }
 
                 Type objType = inferType(memberCallee.object);
@@ -5303,8 +5460,8 @@ class CodeGenerator {
                 string genericKey = findGenericTemplateKey(calleeIdent.name,
                     (n) => (n in genericFunctionTemplates) !is null);
                 if (genericKey.length > 0) {
-                    string mangledName = resolveGenericFunctionCall(genericKey, callExpr.args);
-                    return functionRegistry[mangledName].returnType;
+                    auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args, callExpr.argNames);
+                    return functionRegistry[resolution.mangledName].returnType;
                 }
                 throw inferError(expr, format("Cannot infer type: unknown function '%s'", calleeIdent.name));
             }

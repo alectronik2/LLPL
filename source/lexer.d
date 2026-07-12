@@ -269,17 +269,22 @@ class Lexer {
             num ~= current; advance(); // '0'
             num ~= current; advance(); // radix marker
 
+            // '_' is a digit-group separator (e.g. 0x100_0000_0000) - just
+            // dropped here, so parseIntegerValue never sees it and needs
+            // no changes. Not validated (leading/trailing/doubled '_' are
+            // silently accepted) - a loose separator, not a strict grammar.
             while (current != '\0' && (isDigit(current) ||
-                   (current >= 'a' && current <= 'f') || (current >= 'A' && current <= 'F'))) {
-                num ~= current;
+                   (current >= 'a' && current <= 'f') || (current >= 'A' && current <= 'F') ||
+                   current == '_')) {
+                if (current != '_') num ~= current;
                 advance();
             }
 
             return Token(TokenType.Integer, num, startLine, startColumn);
         }
 
-        while (current != '\0' && isDigit(current)) {
-            num ~= current;
+        while (current != '\0' && (isDigit(current) || current == '_')) {
+            if (current != '_') num ~= current;
             advance();
         }
 

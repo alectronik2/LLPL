@@ -499,10 +499,15 @@ class Parser {
     // Parses a comma-separated `name: Type` parameter list, with an optional
     // trailing `...` marking the function as variadic (used to bind to a C
     // vararg function like the runtime's `snprintf`). ISO C requires at
-    // least one named parameter before `...`, so this does too.
+    // least one named parameter before `...`, so this does too. A
+    // parameter can also declare `= expression` as a default value (see
+    // ast.Parameter.defaultValue/codegen.d's resolveCallArguments) - once
+    // one parameter has a default, every parameter after it must too, so a
+    // purely positional call always unambiguously fills left-to-right.
     private Parameter[] paramList(out bool isVariadic) {
         Parameter[] params;
         isVariadic = false;
+        bool sawDefault = false;
         if (!check(TokenType.RightParen)) {
             do {
                 if (match(TokenType.Ellipsis)) {
@@ -512,7 +517,16 @@ class Parser {
                 string paramName = expect(TokenType.Identifier).value;
                 expect(TokenType.Colon);
                 Type paramType = parseType();
-                params ~= new Parameter(paramName, paramType);
+                ASTNode defaultValue = null;
+                if (match(TokenType.Assign)) {
+                    defaultValue = expression();
+                    sawDefault = true;
+                } else if (sawDefault) {
+                    error(format(
+                        "Parameter '%s' has no default value, but appears after a parameter that does",
+                        paramName));
+                }
+                params ~= new Parameter(paramName, paramType, defaultValue);
             } while (match(TokenType.Comma));
         }
         if (isVariadic && params.length == 0) {
@@ -799,14 +813,10 @@ class Parser {
         expect(TokenType.Constructor);
         expect(TokenType.LeftParen);
 
-        Parameter[] params;
-        if (!check(TokenType.RightParen)) {
-            do {
-                string paramName = expect(TokenType.Identifier).value;
-                expect(TokenType.Colon);
-                Type paramType = parseType();
-                params ~= new Parameter(paramName, paramType);
-            } while (match(TokenType.Comma));
+        bool isVariadic;
+        Parameter[] params = paramList(isVariadic);
+        if (isVariadic) {
+            error("A constructor cannot be variadic");
         }
         expect(TokenType.RightParen);
 
@@ -1190,21 +1200,41 @@ class Parser {
         return new MacroInvocation(name, args, startLine, startColumn);
     }
 
-    private ASTNode[] argumentList() {
-        // A call's own `(...)` already has an unambiguous terminator, so
-        // struct literals are fine again inside it even if we're currently
-        // inside a suppressed if/while/for/match/foreach expression - see
-        // noStructLiteral's comment.
+    // Parses a call's `(...)` argument list - shared by ordinary function
+    // calls, `new Foo(...)`, and macro invocations. An argument may be
+    // named (`identifier ':' expression`, recognized by an unambiguous
+    // one-token lookahead: an identifier immediately followed by ':' - a
+    // call's `(...)` is already its own unambiguous terminator, the same
+    // reasoning that lets struct literals appear again inside it even in a
+    // suppressed if/while/for/match/foreach expression, see
+    // noStructLiteral's comment). `argNames` is parallel to the returned
+    // args: "" for a positional argument, the parameter name otherwise.
+    // Once a named argument appears, a later positional one is a parse
+    // error - see codegen.d's resolveCallArguments for why.
+    private ASTNode[] argumentList(out string[] argNames) {
         bool savedNoStructLiteral = noStructLiteral;
         noStructLiteral = false;
         ASTNode[] args;
+        string[] names;
+        bool sawNamed = false;
         if (!check(TokenType.RightParen)) {
             do {
+                string argName = "";
+                if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
+                    argName = current.value;
+                    advance();
+                    advance(); // consume ':'
+                    sawNamed = true;
+                } else if (sawNamed) {
+                    error("A positional argument cannot follow a named argument");
+                }
+                names ~= argName;
                 args ~= expression();
             } while (match(TokenType.Comma));
         }
         expect(TokenType.RightParen);
         noStructLiteral = savedNoStructLiteral;
+        argNames = names;
         return args;
     }
 
@@ -1593,9 +1623,13 @@ class Parser {
             ASTNode callee = postfix();
 
             if (auto callExpr = cast(CallExpr)callee) {
-                expr = new CallExpr(callExpr.callee, expr ~ callExpr.args, opLine, opColumn);
+                // The piped-in value is always a positional first argument,
+                // regardless of whether the callee's own trailing args used
+                // any names.
+                expr = new CallExpr(callExpr.callee, expr ~ callExpr.args, opLine, opColumn,
+                    [""] ~ callExpr.argNames);
             } else {
-                expr = new CallExpr(callee, [expr], opLine, opColumn);
+                expr = new CallExpr(callee, [expr], opLine, opColumn, [""]);
             }
         }
 
@@ -1754,21 +1788,12 @@ class Parser {
 
         while (true) {
             if (match(TokenType.LeftParen)) {
-                // Function call - own unambiguous terminator, so struct
-                // literals are fine inside even if we're currently in a
-                // suppressed if/while/for/match/foreach expression (see
-                // noStructLiteral's comment).
-                bool savedNoStructLiteral = noStructLiteral;
-                noStructLiteral = false;
-                ASTNode[] args;
-                if (!check(TokenType.RightParen)) {
-                    do {
-                        args ~= expression();
-                    } while (match(TokenType.Comma));
-                }
-                expect(TokenType.RightParen);
-                noStructLiteral = savedNoStructLiteral;
-                expr = new CallExpr(expr, args, startLine, startColumn);
+                // Function call - see argumentList()'s own comment for the
+                // named-argument/struct-literal-inside-suppressed-context
+                // reasoning.
+                string[] argNames;
+                ASTNode[] args = argumentList(argNames);
+                expr = new CallExpr(expr, args, startLine, startColumn, argNames);
             } else if (match(TokenType.Dot)) {
                 // Member access
                 int memberLine = current.line;
@@ -1906,7 +1931,12 @@ class Parser {
             }
             if (match(TokenType.Not)) {
                 expect(TokenType.LeftParen);
-                return new MacroInvocation(name, argumentList(), tokLine, tokColumn);
+                string[] macroArgNames;
+                ASTNode[] macroArgs = argumentList(macroArgNames);
+                foreach (n; macroArgNames) {
+                    if (n.length > 0) error("Macro arguments must be positional");
+                }
+                return new MacroInvocation(name, macroArgs, tokLine, tokColumn);
             }
             if (!qualifiedMacro && !noStructLiteral && check(TokenType.LeftBrace)) {
                 return structLiteral(name, tokLine, tokColumn);
@@ -1916,8 +1946,9 @@ class Parser {
         if (match(TokenType.New)) {
             Type type = parseType();
             expect(TokenType.LeftParen);
-            ASTNode[] args = argumentList();
-            return new NewExpr(type, args, tokLine, tokColumn);
+            string[] argNames;
+            ASTNode[] args = argumentList(argNames);
+            return new NewExpr(type, args, tokLine, tokColumn, argNames);
         }
         if (check(TokenType.Quote)) {
             return quoteExpr();

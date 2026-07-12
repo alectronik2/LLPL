@@ -1,7 +1,12 @@
 extern func puts(s: string) -> int
 
-func dbl() -> (string, string) {
-    ("hello", "world")
+struct List<T> {
+    let head: T
+    let tail: List<T>*
+}
+
+func dbl( first: string, second: string = "world") -> (string, string) {
+    (first, second)
 }
 
 func main() -> int {
@@ -14,8 +19,17 @@ func main() -> int {
     }
     "x = \(x)" |> puts()
 
-    let (a, b) = dbl()
+    let (a, b) = dbl( "hello", "world" )
     "a = \(a), b = \(b)" |> puts()
 
-    100
+    let l: List<int> 
+
+    let xx = 666
+    let inner = func[xx]( l: int ) -> int {
+        xx + 1 + l
+    }
+    let result = inner( 6 )
+    puts("result = \(result)")
+
+    result
 }

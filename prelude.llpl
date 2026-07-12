@@ -16,6 +16,7 @@
 alias string = char*
 
 alias u8 = char
+alias u64 = uint
 
 // Minimal printf-style formatter, always available without an `extern
 // func` declaration of your own. Backed by runtime/runtime.c; see that

@@ -77,6 +77,45 @@ func main() -> int {
 }
 ```
 
+### Named Arguments and Default Values
+
+A parameter can declare a default value (`p2: string = "none"`), making it
+optional at call sites that don't care about it, and any argument can be
+passed by name, in any order - resolved entirely at the call site, at
+compile time (no change to the callee's own generated signature, so this
+works for `extern func` too). Works uniformly for free functions, methods,
+constructors, generic functions, and closures. See
+`test/named_args_demo.llpl` for the full runnable version this is taken
+from:
+
+```swift
+func greet(name: char*, greeting: char* = "Hello") {
+    puts(greeting)
+    puts(name)
+}
+
+func main() -> int {
+    greet("Alice", "Hi")                  // all-positional
+    greet("Bob")                          // trailing default omitted
+    greet(name: "Cara", greeting: "Yo")    // named, in order
+    greet(greeting: "Hey", name: "Dave")   // named, any order
+    return 0
+}
+```
+
+Rules:
+- Once a parameter has a default, every parameter after it in the same
+  list must also have one - keeps a purely positional call unambiguous.
+- Once any named argument appears in a call, no further positional
+  argument may follow (same rule as Python/C#).
+- Missing a required argument, an unknown argument name, supplying the
+  same parameter twice, or exceeding a non-variadic callee's arity are all
+  compile errors.
+
+Not supported: tagged-enum variant construction (`Shape.Circle(3)`) and
+macro invocations stay positional-only - their parameter lists are a
+simpler `string[]`/field-list shape with no notion of a default.
+
 ## Classes and Objects
 
 ### Simple Class

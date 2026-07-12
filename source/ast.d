@@ -297,10 +297,17 @@ class Type {
 class Parameter {
     string name;
     Type type;
+    // null if this parameter is required; otherwise the expression spliced
+    // into a call's generated argument list whenever the caller omits it -
+    // see codegen.d's resolveCallArguments. Resolved entirely at each call
+    // site, at compile time - the callee's own generated C signature never
+    // changes, so this works uniformly for extern functions too.
+    ASTNode defaultValue;
 
-    this(string name, Type type) {
+    this(string name, Type type, ASTNode defaultValue = null) {
         this.name = name;
         this.type = type;
+        this.defaultValue = defaultValue;
     }
 }
 
@@ -849,11 +856,17 @@ class UnaryExpr : ASTNode {
 class CallExpr : ASTNode {
     ASTNode callee;
     ASTNode[] args;
+    // Parallel to args: "" for a positional argument, the parameter name
+    // for a `name: value` named argument - see codegen.d's
+    // resolveCallArguments. Empty (never indexed) when every argument is
+    // positional, the only shape this had before named arguments existed.
+    string[] argNames;
 
-    this(ASTNode callee, ASTNode[] args, int line = 0, int column = 0) {
+    this(ASTNode callee, ASTNode[] args, int line = 0, int column = 0, string[] argNames = null) {
         super(NodeType.CallExpr, line, column);
         this.callee = callee;
         this.args = args;
+        this.argNames = argNames;
     }
 }
 
@@ -1017,11 +1030,13 @@ class NullLiteral : ASTNode {
 class NewExpr : ASTNode {
     Type type;
     ASTNode[] args;
+    string[] argNames; // parallel to args - see CallExpr.argNames
 
-    this(Type type, ASTNode[] args, int line = 0, int column = 0) {
+    this(Type type, ASTNode[] args, int line = 0, int column = 0, string[] argNames = null) {
         super(NodeType.NewExpr, line, column);
         this.type = type;
         this.args = args;
+        this.argNames = argNames;
     }
 }
 
