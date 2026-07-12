@@ -28,6 +28,24 @@ typedef struct {
 } __LLPL_Closure;
 
 typedef struct {
+    char* name;
+    char* type_name;
+    uint64_t offset;
+    uint64_t size;
+} LLPL_FieldInfo;
+
+typedef struct {
+    char* name;
+    char* kind;
+    uint64_t size;
+    LLPL_FieldInfo* fields;
+    uint64_t field_count;
+} LLPL_TypeInfo;
+
+extern LLPL_TypeInfo __llpl_reflect_types[];
+extern uint64_t __llpl_reflect_type_count;
+
+typedef struct {
     uint64_t rbx;
     uint64_t rbp;
     uint64_t r12;
@@ -82,6 +100,25 @@ int strcmp(const char* a, const char* b);
 // ksnprintf below - hence separate wrappers instead of reusing the names.
 uint64_t llpl_strlen(char* s);
 int64_t llpl_strcmp(char* a, char* b);
+int llpl_utf8_valid(char* s);
+uint64_t llpl_utf8_len(char* s);
+uint64_t llpl_utf8_byte_offset(char* s, uint64_t char_index);
+uint64_t llpl_utf8_char_index(char* s, uint64_t byte_offset);
+uint64_t llpl_utf8_codepoint_at(char* s, uint64_t char_index);
+int llpl_regex_match(char* pattern, char* text);
+uint64_t llpl_regex_group_count(char* pattern);
+int llpl_regex_capture_bounds(char* pattern, char* text, uint64_t group, int64_t* start, int64_t* end);
+char* llpl_regex_capture(char* pattern, char* text, uint64_t group);
+char* llpl_reflect_type(char* name);
+char* llpl_reflect_type_name(char* type);
+char* llpl_reflect_type_kind(char* type);
+uint64_t llpl_reflect_type_size(char* type);
+uint64_t llpl_reflect_field_count(char* type);
+char* llpl_reflect_field(char* type, uint64_t index);
+char* llpl_reflect_field_name(char* field);
+char* llpl_reflect_field_type_name(char* field);
+uint64_t llpl_reflect_field_offset(char* field);
+uint64_t llpl_reflect_field_size(char* field);
 char* llpl_alloc(uint64_t size);
 void llpl_free(char* ptr);
 void llpl_memcpy(char* dest, char* src, uint64_t count);

@@ -8,6 +8,7 @@ import std.array;
 import std.algorithm;
 import std.range;
 import std.path;
+import std.file;
 import ast;
 import errors;
 
@@ -114,6 +115,8 @@ class CodeGenerator {
     private enum interpBufferSize = 256; // Scratch buffer size for one interpolated string's result
     private int lambdaCounter; // Numbers each lambda literal's env struct/trampoline function uniquely
     private string[] lambdaDecls; // Per-lambda `struct __LambdaEnvN {...};` + trampoline function decls, emitted up front
+    private int embeddedFileCounter; // Numbers each embed("path") static blob uniquely
+    private string[] embeddedFileDecls; // Static byte arrays emitted before function bodies
 
     // Per-capture context while generating a lambda body: how to read the
     // capture's value (useExpr), how to refer to its storage location
@@ -1166,6 +1169,14 @@ class CodeGenerator {
             code ~= "\n";
         }
 
+        if (embeddedFileDecls.length > 0) {
+            code ~= "// Embedded file blobs from embed(\"path\")\n";
+            foreach (embedDecl; embeddedFileDecls) {
+                code ~= embedDecl;
+            }
+            code ~= "\n";
+        }
+
         code ~= declCode;
 
         if (deferredFunctionBodies.length > 0) {
@@ -1174,6 +1185,12 @@ class CodeGenerator {
                 code ~= b;
             }
             code ~= "\n";
+        }
+
+        string reflectionMetadata = generateReflectionMetadata(programs);
+        if (reflectionMetadata.length > 0) {
+            code ~= "// Runtime reflection metadata for @reflect types\n";
+            code ~= reflectionMetadata;
         }
 
         collectSymbolTable(programs);
@@ -1269,6 +1286,97 @@ class CodeGenerator {
         if (auto vt = target in variableTypes) variableTypes[mangledName] = *vt;
 
         return format("#define %s %s\n", mangledName, target);
+    }
+
+    private bool hasAttribute(VarAttribute[] attrs, string name) {
+        foreach (attr; attrs) {
+            if (attr.name == name) return true;
+        }
+        return false;
+    }
+
+    private string reflectionTypeName(Type t) {
+        Type copy = cloneType(t);
+        resolveType(copy);
+        return copy.toString();
+    }
+
+    private void validateReflectAttributes(VarAttribute[] attrs) {
+        foreach (attr; attrs) {
+            if (attr.name != "reflect") {
+                throw new CompileError(format("Unknown type attribute '@%s'", attr.name),
+                    currentModulePath, attr.line, attr.column);
+            }
+            if (attr.hasStringValue || attr.hasIntValue) {
+                throw new CompileError("@reflect does not take an argument",
+                    currentModulePath, attr.line, attr.column);
+            }
+        }
+    }
+
+    private string generateReflectionMetadata(Program[] programs) {
+        string code = "";
+        string[] typeEntries;
+        int typeIndex = 0;
+
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                if (auto classDecl = cast(ClassDecl)decl) {
+                    validateReflectAttributes(classDecl.attributes);
+                    if (!hasAttribute(classDecl.attributes, "reflect")) continue;
+                    if (classDecl.typeParams.length > 0) continue;
+
+                    currentNamespaceSegments = classDecl.namespaceSegments;
+                    string cName = mangledClass(classDecl);
+                    string fieldsName = format("__llpl_reflect_fields_%d", typeIndex);
+                    code ~= format("static LLPL_FieldInfo %s[%d] = {\n", fieldsName,
+                        classDecl.fields.length == 0 ? 1 : classDecl.fields.length);
+                    foreach (field; classDecl.fields) {
+                        code ~= format("    { %s, %s, offsetof(%s, %s), sizeof(((%s*)0)->%s) },\n",
+                            cStringLiteral(field.name), cStringLiteral(reflectionTypeName(field.type)),
+                            cName, field.name, cName, field.name);
+                    }
+                    if (classDecl.fields.length == 0) {
+                        code ~= "    { 0, 0, 0, 0 },\n";
+                    }
+                    code ~= "};\n";
+                    typeEntries ~= format("    { %s, \"class\", sizeof(%s), %s, %d },\n",
+                        cStringLiteral(cName), cName, fieldsName, classDecl.fields.length);
+                    typeIndex++;
+                } else if (auto structDecl = cast(StructDecl)decl) {
+                    validateReflectAttributes(structDecl.attributes);
+                    if (!hasAttribute(structDecl.attributes, "reflect")) continue;
+                    if (structDecl.typeParams.length > 0) continue;
+
+                    currentNamespaceSegments = structDecl.namespaceSegments;
+                    string sName = mangledStruct(structDecl);
+                    string fieldsName = format("__llpl_reflect_fields_%d", typeIndex);
+                    code ~= format("static LLPL_FieldInfo %s[%d] = {\n", fieldsName,
+                        structDecl.fields.length == 0 ? 1 : structDecl.fields.length);
+                    foreach (field; structDecl.fields) {
+                        code ~= format("    { %s, %s, offsetof(%s, %s), sizeof(((%s*)0)->%s) },\n",
+                            cStringLiteral(field.name), cStringLiteral(reflectionTypeName(field.type)),
+                            sName, field.name, sName, field.name);
+                    }
+                    if (structDecl.fields.length == 0) {
+                        code ~= "    { 0, 0, 0, 0 },\n";
+                    }
+                    code ~= "};\n";
+                    typeEntries ~= format("    { %s, \"struct\", sizeof(%s), %s, %d },\n",
+                        cStringLiteral(sName), sName, fieldsName, structDecl.fields.length);
+                    typeIndex++;
+                }
+            }
+        }
+
+        if (typeEntries.length == 0) return "";
+
+        code ~= "LLPL_TypeInfo __llpl_reflect_types[] = {\n";
+        foreach (entry; typeEntries) code ~= entry;
+        code ~= "};\n";
+        code ~= format("uint64_t __llpl_reflect_type_count = %d;\n\n", typeEntries.length);
+        return code;
     }
 
     // A struct/class field's C declaration - `type name;`, `type name[N];`
@@ -2409,6 +2517,8 @@ class CodeGenerator {
             return new IntLiteral(intLit.value, intLit.line, intLit.column);
         } else if (auto strLit = cast(StringLiteral)node) {
             return new StringLiteral(strLit.value, strLit.line, strLit.column);
+        } else if (auto regexLit = cast(RegexLiteral)node) {
+            return new RegexLiteral(regexLit.pattern, regexLit.line, regexLit.column);
         } else if (auto interp = cast(InterpolatedStringLiteral)node) {
             return new InterpolatedStringLiteral(interp.literalParts.dup, cloneNodes(interp.expressions, subs, typeSubs),
                 interp.specs.dup, interp.line, interp.column);
@@ -2611,6 +2721,8 @@ class CodeGenerator {
             return new IntLiteral(intLit.value, intLit.line, intLit.column);
         } else if (auto strLit = cast(StringLiteral)node) {
             return new StringLiteral(strLit.value, strLit.line, strLit.column);
+        } else if (auto regexLit = cast(RegexLiteral)node) {
+            return new RegexLiteral(regexLit.pattern, regexLit.line, regexLit.column);
         } else if (auto interp = cast(InterpolatedStringLiteral)node) {
             return new InterpolatedStringLiteral(interp.literalParts.dup,
                 expandQuotedNodes(interp.expressions, subs), interp.specs.dup,
@@ -3074,7 +3186,7 @@ class CodeGenerator {
             case "int": case "uint":
             case "int16": case "uint16":
             case "int32": case "uint32":
-            case "char": case "bool": case "void":
+            case "char": case "bool": case "void": case "string":
                 return true;
             default:
                 return false;
@@ -3910,6 +4022,15 @@ class CodeGenerator {
             if (aliased.arraySize > 0) t.arraySize = aliased.arraySize;
         }
 
+        // Built-in lowercase `string` is syntax sugar for `char*`, not a
+        // distinct runtime type. Canonicalize it before generics, trait impl
+        // keys, operator lookup and C type emission see it, so every existing
+        // char* feature also applies to string.
+        if (t.name == "string") {
+            t.name = "char";
+            t.isPointer = true;
+        }
+
         // Resolve module-alias prefixes in qualified type names (e.g.
         // `G.Point` flattened to `G_Point`) before generic instantiation
         // or class/struct lookup sees them.
@@ -4568,6 +4689,52 @@ class CodeGenerator {
         return format("((__LLPL_Closure){ .fn = (void*)%s, .env = %s })", trampolineName, envInit);
     }
 
+    private bool isEmbedCall(CallExpr callExpr) {
+        auto calleeIdent = cast(Identifier)callExpr.callee;
+        return calleeIdent !is null && calleeIdent.name == "embed";
+    }
+
+    private string embedPath(CallExpr callExpr) {
+        if (callExpr.args.length != 1) {
+            throw new CompileError("embed(path) expects exactly one string literal argument",
+                currentModulePath, callExpr.line, callExpr.column);
+        }
+        auto lit = cast(StringLiteral)callExpr.args[0];
+        if (lit is null) {
+            throw new CompileError("embed(path) requires a string literal path",
+                currentModulePath, callExpr.args[0].line, callExpr.args[0].column);
+        }
+        string baseDir = currentModulePath.length > 0 ? dirName(currentModulePath) : ".";
+        return buildNormalizedPath(baseDir, lit.value);
+    }
+
+    private string generateEmbedCall(CallExpr callExpr) {
+        string path = embedPath(callExpr);
+        if (!exists(path)) {
+            throw new CompileError(format("Embedded file not found: %s", path),
+                currentModulePath, callExpr.line, callExpr.column);
+        }
+
+        ubyte[] bytes = cast(ubyte[])read(path);
+        int id = embeddedFileCounter++;
+        string dataName = format("__llpl_embed_%d", id);
+
+        string decl = format("static unsigned char %s[%d] = {", dataName,
+            bytes.length == 0 ? 1 : bytes.length);
+        if (bytes.length == 0) {
+            decl ~= "0";
+        } else {
+            foreach (i, b; bytes) {
+                if (i > 0) decl ~= ", ";
+                decl ~= to!string(b);
+            }
+        }
+        decl ~= "};\n";
+        embeddedFileDecls ~= decl;
+
+        return format("((EmbeddedFile){ .data = (char*)%s, .len = %dULL })", dataName, bytes.length);
+    }
+
     private string generateExpression(ASTNode node) {
         if (auto binExpr = cast(BinaryExpr)node) {
             if (binExpr.op == "=") {
@@ -4631,6 +4798,9 @@ class CodeGenerator {
         } else if (auto propExpr = cast(PropagateExpr)node) {
             return generatePropagateExpr(propExpr);
         } else if (auto callExpr = cast(CallExpr)node) {
+            if (isEmbedCall(callExpr)) {
+                return generateEmbedCall(callExpr);
+            }
             // Closure call: if the callee's own type resolves to a closure
             // type (a closure-typed variable, parameter, or field - never a
             // plain function/method name, which has no Type of its own),
@@ -4830,6 +5000,8 @@ class CodeGenerator {
             return to!string(intLit.value);
         } else if (auto strLit = cast(StringLiteral)node) {
             return format("\"%s\"", escapeCString(strLit.value));
+        } else if (auto regexLit = cast(RegexLiteral)node) {
+            return format("Regex_new(\"%s\")", escapeCString(regexLit.pattern));
         } else if (auto interp = cast(InterpolatedStringLiteral)node) {
             return generateInterpolatedString(interp);
         } else if (auto arrLit = cast(ArrayLiteral)node) {
@@ -4877,6 +5049,8 @@ class CodeGenerator {
             return new Type("int");
         } else if (cast(StringLiteral)expr) {
             return new Type("char", true);
+        } else if (cast(RegexLiteral)expr) {
+            return new Type("Regex");
         } else if (cast(InterpolatedStringLiteral)expr) {
             return new Type("char", true);
         } else if (cast(BoolLiteral)expr) {
@@ -4956,6 +5130,9 @@ class CodeGenerator {
             }
             throw inferError(expr, format("Cannot infer type of field '%s'", memberExpr.member));
         } else if (auto callExpr = cast(CallExpr)expr) {
+            if (isEmbedCall(callExpr)) {
+                return new Type("EmbeddedFile");
+            }
             if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
                 string qualifiedFunc = tryResolveQualifiedPath(memberCallee, (n) => (n in functionRegistry) !is null);
                 if (qualifiedFunc.length == 0) {
@@ -5067,6 +5244,7 @@ class CodeGenerator {
             case "int32": return "int32_t";
             case "uint32": return "uint32_t";
             case "char": return "char";
+            case "string": return "char*";
             case "bool": return "int";
             case "void": return "void";
             default: return name;

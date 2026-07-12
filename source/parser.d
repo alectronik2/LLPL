@@ -84,6 +84,16 @@ class Parser {
         return tok;
     }
 
+    private Token expectName(string message = "Expected identifier") {
+        if (check(TokenType.Identifier) || check(TokenType.Match)) {
+            Token tok = current;
+            advance();
+            return tok;
+        }
+        error(message);
+        return current;
+    }
+
     private void error(string message) {
         throw new CompileError(message, filePath, current.line, current.column);
     }
@@ -185,8 +195,10 @@ class Parser {
 
     private ASTNode declaration() {
         VarAttribute[] attrs = parseAttributes();
-        if (attrs.length > 0 && !(check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile))) {
-            error("Attributes are currently only supported on global let/const/volatile declarations");
+        if (attrs.length > 0 && !(check(TokenType.Let) || check(TokenType.Const) ||
+                check(TokenType.Volatile) || check(TokenType.Class) ||
+                check(TokenType.Struct) || check(TokenType.Packed))) {
+            error("Attributes are currently only supported on global variables, classes, and structs");
         }
         if (check(TokenType.Import)) {
             return importStmt();
@@ -201,9 +213,9 @@ class Parser {
         } else if (check(TokenType.Interrupt) || check(TokenType.Function)) {
             return functionDecl();
         } else if (check(TokenType.Class)) {
-            return classDecl();
+            return classDecl(attrs);
         } else if (check(TokenType.Struct) || check(TokenType.Packed)) {
-            return structDecl();
+            return structDecl(attrs);
         } else if (check(TokenType.Extern)) {
             return externDecl();
         } else if (check(TokenType.Trait)) {
@@ -604,7 +616,7 @@ class Parser {
             }
             name = rawOp; // placeholder; resolved to its C-safe name below
         } else {
-            name = expect(TokenType.Identifier).value;
+            name = expectName("Expected function name").value;
             typeParams = typeParamList(typeParamBounds);
         }
 
@@ -635,7 +647,7 @@ class Parser {
             startLine, startColumn, typeParams, typeParamBounds);
     }
 
-    private ClassDecl classDecl() {
+    private ClassDecl classDecl(VarAttribute[] attrs = []) {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Class);
@@ -665,10 +677,10 @@ class Parser {
 
         expect(TokenType.RightBrace);
         return new ClassDecl(name, fields, constructor, destructor, methods, startLine, startColumn,
-            typeParams, typeParamBounds);
+            typeParams, typeParamBounds, attrs);
     }
 
-    private StructDecl structDecl() {
+    private StructDecl structDecl(VarAttribute[] attrs = []) {
         int startLine = current.line;
         int startColumn = current.column;
         bool packed = match(TokenType.Packed);
@@ -688,7 +700,7 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new StructDecl(name, fields, packed, startLine, startColumn, typeParams, typeParamBounds);
+        return new StructDecl(name, fields, packed, startLine, startColumn, typeParams, typeParamBounds, attrs);
     }
 
     // `trait Name { func sig(...) -> T  func sig2(...) -> T  ... }` -
@@ -1737,7 +1749,7 @@ class Parser {
                 // Member access
                 int memberLine = current.line;
                 int memberColumn = current.column;
-                string member = expect(TokenType.Identifier).value;
+                string member = expectName("Expected member name after '.'").value;
                 expr = new MemberExpr(expr, member, memberLine, memberColumn);
             } else if (match(TokenType.LeftBracket)) {
                 // Array indexing - same unambiguous-terminator reasoning as `(` above.
@@ -1829,6 +1841,9 @@ class Parser {
         }
         if (match(TokenType.String)) {
             return new StringLiteral(tokens[pos - 1].value, tokLine, tokColumn);
+        }
+        if (match(TokenType.Regex)) {
+            return new RegexLiteral(tokens[pos - 1].value, tokLine, tokColumn);
         }
         if (match(TokenType.InterpolatedString)) {
             string[] interpParts = tokens[pos - 1].interpParts;

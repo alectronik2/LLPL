@@ -9,6 +9,7 @@ enum TokenType {
     // Literals
     Integer,
     String,
+    Regex,
     Identifier,
 
     // Keywords
@@ -137,6 +138,8 @@ class Lexer {
     private int line;
     private int column;
     private char current;
+    private TokenType previousTokenType;
+    private bool hasPreviousToken;
 
     private static string[string] keywords;
 
@@ -395,6 +398,83 @@ class Lexer {
         return tok;
     }
 
+    private bool regexLiteralAllowed() {
+        if (!hasPreviousToken) return true;
+        switch (previousTokenType) {
+            case TokenType.Assign:
+            case TokenType.LeftParen:
+            case TokenType.LeftBracket:
+            case TokenType.LeftBrace:
+            case TokenType.Comma:
+            case TokenType.Colon:
+            case TokenType.Return:
+            case TokenType.Case:
+            case TokenType.FatArrow:
+            case TokenType.PipeForward:
+            case TokenType.Plus:
+            case TokenType.Minus:
+            case TokenType.Star:
+            case TokenType.Slash:
+            case TokenType.Percent:
+            case TokenType.Equal:
+            case TokenType.NotEqual:
+            case TokenType.Less:
+            case TokenType.Greater:
+            case TokenType.LessEqual:
+            case TokenType.GreaterEqual:
+            case TokenType.And:
+            case TokenType.Or:
+            case TokenType.Not:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private Token regex_() {
+        int startLine = line;
+        int startColumn = column;
+        advance(); // skip opening '/'
+
+        string pattern = "";
+        bool escaped = false;
+        bool inClass = false;
+        while (current != '\0') {
+            if (escaped) {
+                pattern ~= '\\';
+                pattern ~= current;
+                escaped = false;
+                advance();
+                continue;
+            }
+            if (current == '\\') {
+                escaped = true;
+                advance();
+                continue;
+            }
+            if (current == '[') {
+                inClass = true;
+                pattern ~= current;
+                advance();
+                continue;
+            }
+            if (current == ']' && inClass) {
+                inClass = false;
+                pattern ~= current;
+                advance();
+                continue;
+            }
+            if (current == '/' && !inClass) {
+                advance();
+                return Token(TokenType.Regex, pattern, startLine, startColumn);
+            }
+            pattern ~= current;
+            advance();
+        }
+
+        return Token(TokenType.Regex, pattern, startLine, startColumn);
+    }
+
     private Token identifier() {
         int startLine = line;
         int startColumn = column;
@@ -491,6 +571,12 @@ class Lexer {
             // Strings
             if (current == '"') {
                 return string_();
+            }
+
+            // Regex literals. Kept context-sensitive so ordinary division
+            // still tokenizes as Slash in positions like `a / b`.
+            if (current == '/' && regexLiteralAllowed()) {
+                return regex_();
             }
 
             // Identifiers and keywords
@@ -686,6 +772,10 @@ class Lexer {
             Token tok = nextToken();
             if (tok.type != TokenType.Newline) { // Skip newlines for now
                 tokens ~= tok;
+                if (tok.type != TokenType.EOF) {
+                    previousTokenType = tok.type;
+                    hasPreviousToken = true;
+                }
             }
             if (tok.type == TokenType.EOF) break;
         }

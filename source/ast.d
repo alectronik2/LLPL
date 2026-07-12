@@ -31,6 +31,7 @@ enum NodeType {
     Identifier,
     IntLiteral,
     StringLiteral,
+    RegexLiteral,
     BoolLiteral,
     NullLiteral,
     NewExpr,
@@ -350,9 +351,11 @@ class ClassDecl : ASTNode {
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     string[] typeParams; // `<T, U>` after the class name - see FunctionDecl.typeParams
     string[] typeParamBounds; // parallel to typeParams - see FunctionDecl.typeParamBounds
+    VarAttribute[] attributes;
 
     this(string name, VarDecl[] fields, FunctionDecl constructor, FunctionDecl destructor, FunctionDecl[] methods,
-         int line = 0, int column = 0, string[] typeParams = [], string[] typeParamBounds = []) {
+         int line = 0, int column = 0, string[] typeParams = [], string[] typeParamBounds = [],
+         VarAttribute[] attributes = []) {
         super(NodeType.ClassDecl, line, column);
         this.name = name;
         this.fields = fields;
@@ -361,6 +364,7 @@ class ClassDecl : ASTNode {
         this.methods = methods;
         this.typeParams = typeParams;
         this.typeParamBounds = typeParamBounds;
+        this.attributes = attributes;
     }
 }
 
@@ -380,15 +384,17 @@ class StructDecl : ASTNode {
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     string[] typeParams; // `<T, U>` after the struct name - see FunctionDecl.typeParams
     string[] typeParamBounds; // parallel to typeParams - see FunctionDecl.typeParamBounds
+    VarAttribute[] attributes;
 
     this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0,
-         string[] typeParams = [], string[] typeParamBounds = []) {
+         string[] typeParams = [], string[] typeParamBounds = [], VarAttribute[] attributes = []) {
         super(NodeType.StructDecl, line, column);
         this.name = name;
         this.fields = fields;
         this.packed = packed;
         this.typeParams = typeParams;
         this.typeParamBounds = typeParamBounds;
+        this.attributes = attributes;
     }
 }
 
@@ -956,6 +962,15 @@ class StringLiteral : ASTNode {
     this(string value, int line = 0, int column = 0) {
         super(NodeType.StringLiteral, line, column);
         this.value = value;
+    }
+}
+
+class RegexLiteral : ASTNode {
+    string pattern;
+
+    this(string pattern, int line = 0, int column = 0) {
+        super(NodeType.RegexLiteral, line, column);
+        this.pattern = pattern;
     }
 }
 

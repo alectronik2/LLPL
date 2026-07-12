@@ -1,0 +1,36 @@
+extern func puts(s: string) -> int
+
+func print_int(label: string, value: int) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func print_str(label: string, value: string) {
+    let buf: char[128]
+    ksnprintf(buf as string, 128, "%s = %s", label, value)
+    puts(buf as string)
+}
+
+@reflect
+struct User {
+    let id: int
+    let name: string
+}
+
+func main() -> int {
+    let t: ReflectType = reflect_type("User")
+    print_str("type", t.name())
+    print_str("kind", t.kind())
+    print_int("fields", t.field_count())
+
+    let i: int = 0
+    while i < t.field_count() {
+        let f: ReflectField = t.field(i)
+        print_str("field", f.name())
+        print_str("field type", f.type_name())
+        i = i + 1
+    }
+
+    return 0
+}

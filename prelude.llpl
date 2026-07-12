@@ -30,6 +30,25 @@ extern func ksnprintf(buf: char*, size: uint, fmt: char*, ...) -> int
 // themselves (same "conflicting types" trap as ksnprintf above).
 extern func llpl_strlen(s: char*) -> uint
 extern func llpl_strcmp(a: char*, b: char*) -> int
+extern func llpl_utf8_valid(s: char*) -> bool
+extern func llpl_utf8_len(s: char*) -> uint
+extern func llpl_utf8_byte_offset(s: char*, char_index: uint) -> uint
+extern func llpl_utf8_char_index(s: char*, byte_offset: uint) -> uint
+extern func llpl_utf8_codepoint_at(s: char*, char_index: uint) -> uint
+extern func llpl_regex_match(pattern: char*, text: char*) -> bool
+extern func llpl_regex_group_count(pattern: char*) -> uint
+extern func llpl_regex_capture_bounds(pattern: char*, text: char*, group: uint, start: int*, end: int*) -> bool
+extern func llpl_regex_capture(pattern: char*, text: char*, group: uint) -> char*
+extern func llpl_reflect_type(name: char*) -> char*
+extern func llpl_reflect_type_name(type: char*) -> char*
+extern func llpl_reflect_type_kind(type: char*) -> char*
+extern func llpl_reflect_type_size(type: char*) -> uint
+extern func llpl_reflect_field_count(type: char*) -> uint
+extern func llpl_reflect_field(type: char*, index: uint) -> char*
+extern func llpl_reflect_field_name(field: char*) -> char*
+extern func llpl_reflect_field_type_name(field: char*) -> char*
+extern func llpl_reflect_field_offset(field: char*) -> uint
+extern func llpl_reflect_field_size(field: char*) -> uint
 extern func llpl_alloc(size: uint) -> char*
 extern func llpl_free(ptr: char*)
 extern func llpl_memcpy(dest: char*, src: char*, count: uint)
@@ -42,6 +61,182 @@ extern func llpl_memcpy(dest: char*, src: char*, count: uint)
 // Used below by Slice<T>/Vector<T>'s bounds checks.
 extern func llpl_panic(msg: char*)
 
+struct EmbeddedFile {
+    let data: char*
+    let len: uint
+}
+
+class ReflectField {
+    let raw: char*
+
+    constructor(raw: char*) {
+        self.raw = raw
+    }
+
+    destructor() {}
+
+    func exists() -> bool {
+        return (self.raw as uint) != 0
+    }
+
+    func name() -> string {
+        return llpl_reflect_field_name(self.raw)
+    }
+
+    func type_name() -> string {
+        return llpl_reflect_field_type_name(self.raw)
+    }
+
+    func offset() -> int {
+        return llpl_reflect_field_offset(self.raw) as int
+    }
+
+    func size() -> int {
+        return llpl_reflect_field_size(self.raw) as int
+    }
+}
+
+class ReflectType {
+    let raw: char*
+
+    constructor(raw: char*) {
+        self.raw = raw
+    }
+
+    destructor() {}
+
+    func exists() -> bool {
+        return (self.raw as uint) != 0
+    }
+
+    func name() -> string {
+        return llpl_reflect_type_name(self.raw)
+    }
+
+    func kind() -> string {
+        return llpl_reflect_type_kind(self.raw)
+    }
+
+    func size() -> int {
+        return llpl_reflect_type_size(self.raw) as int
+    }
+
+    func field_count() -> int {
+        return llpl_reflect_field_count(self.raw) as int
+    }
+
+    func field(index: int) -> ReflectField {
+        if index < 0 {
+            return new ReflectField(null)
+        }
+        return new ReflectField(llpl_reflect_field(self.raw, index as uint))
+    }
+}
+
+func reflect_type(name: string) -> ReflectType {
+    return new ReflectType(llpl_reflect_type(name))
+}
+
+class RegexMatch {
+    let matched: bool
+    let pattern: char*
+    let text: char*
+
+    constructor(pattern: string, text: string) {
+        let pattern_len: int = llpl_strlen(pattern) as int
+        self.pattern = llpl_alloc((pattern_len + 1) as uint)
+        llpl_memcpy(self.pattern, pattern, (pattern_len + 1) as uint)
+
+        let text_len: int = llpl_strlen(text) as int
+        self.text = llpl_alloc((text_len + 1) as uint)
+        llpl_memcpy(self.text, text, (text_len + 1) as uint)
+
+        self.matched = llpl_regex_match(self.pattern, self.text)
+    }
+
+    destructor() {
+        llpl_free(self.pattern)
+        llpl_free(self.text)
+    }
+
+    func is_match() -> bool {
+        return self.matched
+    }
+
+    func group_count() -> int {
+        return llpl_regex_group_count(self.pattern) as int
+    }
+
+    func has_group(index: int) -> bool {
+        if index < 0 {
+            return false
+        }
+        let start: int = 0
+        let end: int = 0
+        return llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end)
+    }
+
+    func group_start(index: int) -> int {
+        if index < 0 {
+            return -1
+        }
+        let start: int = 0
+        let end: int = 0
+        if llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end) {
+            return start
+        }
+        return -1
+    }
+
+    func group_end(index: int) -> int {
+        if index < 0 {
+            return -1
+        }
+        let start: int = 0
+        let end: int = 0
+        if llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end) {
+            return end
+        }
+        return -1
+    }
+
+    func group(index: int) -> String {
+        if index < 0 {
+            return new String("")
+        }
+        let raw: char* = llpl_regex_capture(self.pattern, self.text, index as uint)
+        let out: String = new String(raw)
+        llpl_free(raw)
+        return out
+    }
+}
+
+class Regex {
+    let pattern: char*
+
+    constructor(pattern: string) {
+        let len: int = llpl_strlen(pattern) as int
+        self.pattern = llpl_alloc((len + 1) as uint)
+        llpl_memcpy(self.pattern, pattern, (len + 1) as uint)
+    }
+
+    destructor() {
+        llpl_free(self.pattern)
+    }
+
+    func match(text: string) -> bool {
+        return llpl_regex_match(self.pattern, text)
+    }
+
+    func captures(text: string) -> RegexMatch {
+        return new RegexMatch(self.pattern, text)
+    }
+
+    func source() -> string {
+        return self.pattern
+    }
+}
+
 // An owned, heap-allocated, NUL-terminated byte string - unlike `string`
 // (a bare `char*` alias with no ownership of its own), a String copies its
 // data in on construction and frees it on destruction, so it's safe to
@@ -50,12 +245,13 @@ extern func llpl_panic(msg: char*)
 //
 // Demonstrates LLPL's operator overloading (`func operator+(...)`, see
 // ast.operatorMethodName) end to end: `+` concatenates, `==`/`!=`/`<`/`>`
-// compare lexicographically (byte order, via llpl_strcmp), and `[]` reads
-// a byte by index (`func operator[](index: int) -> char` - LLPL has no
-// `operator[]=`, so mutation goes through `set()` instead). It also
-// implements the `foreach` iterator protocol (iter_has_next/iter_next/
-// iter_reset - see codegen.d's ITER_HAS_NEXT et al.), so `foreach let c in
-// s { ... }` walks a String one character at a time.
+// compare lexicographically by UTF-8 byte order (via llpl_strcmp), and
+// `[]` reads a Unicode codepoint by character index. Byte-level APIs
+// (`byte_len`, `byte_at`, `byte_set`, `byte_substring`, `byte_find`) remain
+// available for code that needs raw UTF-8 storage. It also implements the
+// `foreach` iterator protocol (iter_has_next/iter_next/iter_reset - see
+// codegen.d's ITER_HAS_NEXT et al.), so `foreach let c in s { ... }` walks
+// Unicode codepoints.
 //
 // Every method that takes another string takes it as `string` (`char*`),
 // not `String` - LLPL has no function/method overloading, so a single
@@ -77,8 +273,37 @@ class String {
         llpl_free(self.buf)
     }
 
-    func len() -> int {
+    func byte_len() -> int {
         return self.length
+    }
+
+    func len() -> int {
+        return llpl_utf8_len(self.buf) as int
+    }
+
+    func is_utf8() -> bool {
+        return llpl_utf8_valid(self.buf)
+    }
+
+    func byte_index(char_index: int) -> int {
+        if char_index < 0 {
+            return 0
+        }
+        return llpl_utf8_byte_offset(self.buf, char_index as uint) as int
+    }
+
+    func char_index(byte_offset: int) -> int {
+        if byte_offset < 0 {
+            return 0
+        }
+        return llpl_utf8_char_index(self.buf, byte_offset as uint) as int
+    }
+
+    func codepoint_at(char_index: int) -> uint {
+        if char_index < 0 {
+            return 0
+        }
+        return llpl_utf8_codepoint_at(self.buf, char_index as uint)
     }
 
     // The owned buffer as a plain `char*` - for passing a String to
@@ -88,8 +313,12 @@ class String {
         return self.buf
     }
 
-    func operator[](index: int) -> char {
+    func byte_at(index: int) -> char {
         return self.buf[index]
+    }
+
+    func operator[](index: int) -> uint {
+        return self.codepoint_at(index)
     }
 
     // iter_reset is optional in the protocol, but String defines it so
@@ -101,16 +330,16 @@ class String {
     }
 
     func iter_has_next() -> bool {
-        return self.iter_pos < self.length
+        return self.iter_pos < self.len()
     }
 
-    func iter_next() -> char {
-        let c: char = self.buf[self.iter_pos]
+    func iter_next() -> uint {
+        let c: uint = self.codepoint_at(self.iter_pos)
         self.iter_pos = self.iter_pos + 1
         return c
     }
 
-    func set(index: int, value: char) {
+    func byte_set(index: int, value: char) {
         self.buf[index] = value
     }
 
@@ -145,11 +374,9 @@ class String {
         return new String(joined)
     }
 
-    // Clamps `start`/`count` into range rather than faulting on an
-    // out-of-bounds request - same "don't crash on bad input" spirit as
-    // the rest of String's bounds handling (operator[]/set() are the only
-    // unchecked, direct-access exceptions, matching plain array indexing).
-    func substring(start: int, count: int) -> String {
+    // Clamps byte `start`/`count` into range rather than faulting on an
+    // out-of-bounds request. Prefer substring() for character-indexed text.
+    func byte_substring(start: int, count: int) -> String {
         if start < 0 {
             start = 0
         }
@@ -170,9 +397,33 @@ class String {
         return new String(piece)
     }
 
-    // First index of `needle`, or -1 if it doesn't occur. An empty needle
-    // matches at 0, mirroring most languages' find()/indexOf().
-    func find(needle: string) -> int {
+    func substring(start: int, count: int) -> String {
+        if start < 0 {
+            start = 0
+        }
+        let total_chars: int = self.len()
+        if start > total_chars {
+            start = total_chars
+        }
+        let max_count: int = total_chars - start
+        if count > max_count {
+            count = max_count
+        }
+        if count < 0 {
+            count = 0
+        }
+
+        let byte_start: int = self.byte_index(start)
+        let byte_end: int = self.byte_index(start + count)
+        return self.byte_substring(byte_start, byte_end - byte_start)
+    }
+
+    func utf8_substring(start: int, count: int) -> String {
+        return self.substring(start, count)
+    }
+
+    // First byte index of `needle`, or -1 if it doesn't occur.
+    func byte_find(needle: string) -> int {
         let needle_len: int = llpl_strlen(needle) as int
         if needle_len == 0 {
             return 0
@@ -193,6 +444,16 @@ class String {
             i = i + 1
         }
         return -1
+    }
+
+    // First character index of `needle`, or -1 if it doesn't occur. An
+    // empty needle matches at 0, mirroring most languages' find()/indexOf().
+    func find(needle: string) -> int {
+        let byte_pos: int = self.byte_find(needle)
+        if byte_pos < 0 {
+            return -1
+        }
+        return self.char_index(byte_pos)
     }
 
     func contains(needle: string) -> bool {
@@ -274,7 +535,7 @@ class String {
                 self.buf[end - 1] == 10 || self.buf[end - 1] == 13) {
             end = end - 1
         }
-        return self.substring(start, end - start)
+        return self.byte_substring(start, end - start)
     }
 }
 
@@ -675,6 +936,59 @@ impl Comparable for char {
         if self < other { return -1 }
         if self > other { return 1 }
         return 0
+    }
+}
+
+// Content-aware comparison operators for lowercase `string`/`char*`. The
+// compiler treats `string` as sugar for `char*`, so these overloads make
+// ordinary comparisons do string comparison rather than pointer comparison.
+trait StringOperators {
+    func operator==(other: Self) -> bool
+    func operator!=(other: Self) -> bool
+    func operator<(other: Self) -> bool
+    func operator>(other: Self) -> bool
+    func operator<=(other: Self) -> bool
+    func operator>=(other: Self) -> bool
+}
+
+impl StringOperators for char* {
+    func operator==(other: char*) -> bool {
+        let self_null: bool = (self as uint) == 0
+        let other_null: bool = (other as uint) == 0
+        if self_null || other_null {
+            return self_null && other_null
+        }
+        return llpl_strcmp(self, other) == 0
+    }
+
+    func operator!=(other: char*) -> bool {
+        return !(self == other)
+    }
+
+    func operator<(other: char*) -> bool {
+        let self_null: bool = (self as uint) == 0
+        let other_null: bool = (other as uint) == 0
+        if self_null || other_null {
+            return self_null && !other_null
+        }
+        return llpl_strcmp(self, other) < 0
+    }
+
+    func operator>(other: char*) -> bool {
+        let self_null: bool = (self as uint) == 0
+        let other_null: bool = (other as uint) == 0
+        if self_null || other_null {
+            return !self_null && other_null
+        }
+        return llpl_strcmp(self, other) > 0
+    }
+
+    func operator<=(other: char*) -> bool {
+        return !(self > other)
+    }
+
+    func operator>=(other: char*) -> bool {
+        return !(self < other)
     }
 }
 
