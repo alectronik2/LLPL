@@ -23,6 +23,8 @@ func main() -> int {
     "a = \(a), b = \(b)" |> puts()
 
     let l: List<int> 
+    l.head = 1
+    l.tail = null
 
     let xx = 666
     let inner = func[xx]( l: int ) -> int {
