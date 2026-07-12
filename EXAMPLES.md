@@ -197,6 +197,59 @@ func main() -> int {
 }
 ```
 
+### `.stringof`
+
+`x.stringof` (no call parens - `x.stringof()` already works as an ordinary
+method call, no special support needed) resolves to a class's own
+no-argument `stringof()` method if it defines one, or a compile-time
+string literal of the type's name otherwise - the same fallback a struct
+(which can't have methods at all) or a primitive gets. Casting a
+class/struct value `as string` resolves the same way, instead of
+reinterpreting the value as a raw `char*`. See `test/stringof_demo.llpl`
+for the full runnable version this is taken from:
+
+```swift
+class Point3D {
+    let x: int
+    let y: int
+    let z: int
+
+    constructor(x: int, y: int, z: int) {
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+
+    destructor() {}
+
+    func stringof() -> string {
+        if self.x == 0 && self.y == 0 && self.z == 0 {
+            return "Point3D(origin)"
+        }
+        return "Point3D(non-origin)"
+    }
+}
+
+class Plain {
+    let n: int
+    constructor(n: int) { self.n = n }
+    destructor() {}
+}
+
+func main() -> int {
+    let p: Point3D = new Point3D(1, 2, 3)
+    puts(p.stringof)   // "Point3D(non-origin)" - custom method
+    puts(p as string)  // same, via a cast
+
+    let q: Plain = new Plain(5)
+    puts(q.stringof)   // "Plain" - no stringof() defined, falls back to the type name
+
+    let n: int = 42
+    puts(n.stringof)   // "int" - primitives fall back too
+    return 0
+}
+```
+
 ## Control Flow
 
 ### Nested Loops

@@ -5,6 +5,16 @@ struct List<T> {
     let tail: List<T>*
 }
 
+class Klass {
+    constructor() {
+        puts("Klass constructor")
+    }
+
+    destructor() {
+        puts("Klass destructor")
+    }
+}
+
 func dbl( first: string, second: string = "world") -> (string, string) {
     (first, second)
 }
@@ -19,7 +29,7 @@ func main() -> int {
     }
     "x = \(x)" |> puts()
 
-    let (a, b) = dbl( "hello", "world" )
+    let (a, b) = dbl( first: "hello" )
     "a = \(a), b = \(b)" |> puts()
 
     let l: List<int> 
@@ -32,6 +42,11 @@ func main() -> int {
     }
     let result = inner( 6 )
     puts("result = \(result)")
+
+    let res = /[a-z]+/.match("f")
+    puts("res = \(res.stringof)")
+
+    let k = new Klass()
 
     result
 }

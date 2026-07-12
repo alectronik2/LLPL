@@ -4462,6 +4462,25 @@ class CodeGenerator {
         return code;
     }
 
+    // Shared by the `.stringof` property (see generateExpression's
+    // MemberExpr case) and casting a class/struct value `as string`/`as
+    // char*` (see its CastExpr case): a class defining a no-argument
+    // `stringof()` method has it called; everything else (a struct, which
+    // can't have methods at all, or a class that doesn't define one) falls
+    // back to a compile-time string literal of the type's own name -
+    // there's always *something* meaningful to produce either way.
+    private string generateStringofValue(Type objType, ASTNode objectExpr, int line, int column) {
+        if (auto classDecl = objType.name in classRegistry) {
+            foreach (m; classDecl.methods) {
+                if (m.name == "stringof" && m.params.length == 0) {
+                    recordUsage(objType.name ~ ".stringof", line, column);
+                    return format("%s_stringof(%s)", objType.name, generateExpression(objectExpr));
+                }
+            }
+        }
+        return format("\"%s\"", escapeCString(objType.toString()));
+    }
+
     // Decides whether member access on `object` should use "." (a value
     // type: struct, array element, or dereferenced pointer) or "->" (a class
     // instance, always heap-allocated, or an explicit pointer type). Falls
@@ -5214,6 +5233,19 @@ class CodeGenerator {
                 return format("%s(%s)", callee, args);
             }
         } else if (auto memberExpr = cast(MemberExpr)node) {
+            // `.stringof` (no call parens - `x.stringof()` already works
+            // as an ordinary method call without any special-casing here)
+            // - see generateStringofValue's own comment.
+            if (memberExpr.member == "stringof") {
+                Type objType;
+                try {
+                    objType = inferType(memberExpr.object);
+                } catch (Exception e) {
+                    throw new CompileError("'.stringof' needs a typed value",
+                        currentModulePath, memberExpr.line, memberExpr.column);
+                }
+                return generateStringofValue(objType, memberExpr.object, memberExpr.line, memberExpr.column);
+            }
             // A namespace-qualified global reference (e.g. Graphics.origin)
             // takes priority over instance field access.
             string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
@@ -5315,6 +5347,23 @@ class CodeGenerator {
             return format("%s_new(%s)", newExpr.type.name, args);
         } else if (auto castExpr = cast(CastExpr)node) {
             resolveType(castExpr.type);
+            // Casting a class/struct value `as string`/`as char*` resolves
+            // the same way `.stringof` does (custom method, or the type's
+            // own name) instead of reinterpreting the object as a raw
+            // char* - see generateStringofValue. Only when the source is
+            // actually a known class/struct; every other cast (including
+            // an already-char* value) is unaffected.
+            if (castExpr.type.name == "char" && castExpr.type.isPointer) {
+                try {
+                    Type srcType = inferType(castExpr.expression);
+                    if ((srcType.name in classRegistry) !is null || (srcType.name in structRegistry) !is null) {
+                        return generateStringofValue(srcType, castExpr.expression, castExpr.line, castExpr.column);
+                    }
+                } catch (Exception e) {
+                    // Not a typed value inferType can see through - fall
+                    // through to the ordinary reinterpret cast below.
+                }
+            }
             return format("((%s)%s)", typeToC(castExpr.type), generateExpression(castExpr.expression));
         } else if (auto macroInvocation = cast(MacroInvocation)node) {
             return generateMacroExpression(macroInvocation);
@@ -5392,6 +5441,9 @@ class CodeGenerator {
             }
             throw inferError(expr, format("Cannot infer type: unknown variable '%s'", ident.name));
         } else if (auto memberExpr = cast(MemberExpr)expr) {
+            if (memberExpr.member == "stringof") {
+                return new Type("char", true);
+            }
             string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
             if (qualifiedVar.length > 0) {
                 return variableTypes[qualifiedVar];
