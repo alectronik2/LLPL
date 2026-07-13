@@ -731,6 +731,8 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.Trait);
         string name = expect(TokenType.Identifier).value;
+        string[] typeParamBounds;
+        string[] typeParams = typeParamList(typeParamBounds);
         expect(TokenType.LeftBrace);
 
         FunctionDecl[] methods;
@@ -788,7 +790,7 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new TraitDecl(name, methods, startLine, startColumn);
+        return new TraitDecl(name, methods, startLine, startColumn, typeParams);
     }
 
     // `impl TraitName for TargetType { func method(...) -> T { body } ... }` -
@@ -799,6 +801,17 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.Impl);
         string traitName = expect(TokenType.Identifier).value;
+        // `impl Iterator<int> for Countdown { ... }` - type args on a
+        // generic trait's name are parsed but discarded: like the trait's
+        // own <T>, they're a signature-writing convenience only, never
+        // substituted or verified against the impl's concrete method types
+        // (see TraitDecl.typeParams and processImplBlock).
+        if (match(TokenType.Less)) {
+            do {
+                parseType();
+            } while (match(TokenType.Comma));
+            expect(TokenType.Greater);
+        }
         expect(TokenType.For);
         Type targetType = parseType();
         expect(TokenType.LeftBrace);

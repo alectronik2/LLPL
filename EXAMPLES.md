@@ -464,6 +464,59 @@ func main() -> int {
 }
 ```
 
+### `for`/`foreach` Over Custom Iterators
+
+`for item in collection { ... }` and `foreach let item in collection {
+... }` both already work for any fixed-size array *and* for any class
+implementing the iterator protocol: an `iter_has_next() -> bool` and
+`iter_next() -> T` method pair (an optional `iter_reset()` is called
+automatically before the loop if present, so an object can be looped over
+more than once without resetting iteration state by hand). `String` and
+`HashMap<K, V>` (in `prelude.llpl`) already implement this by defining
+those methods directly in their own bodies.
+
+`trait Iterator<T> { func iter_has_next() -> bool; func iter_next() -> T }`
+(also in `prelude.llpl`) formalizes this convention so a class can
+document/opt into it explicitly via an `impl` block instead, with the
+usual trait/impl arity checking catching a missing method at compile
+time. `for`/`foreach` dispatch on either style identically - a class
+implementing the protocol via `impl Iterator<T> for X { ... }` is exactly
+as foreach-able as one that writes the methods inline. See
+`test/iterator_trait_demo.llpl` for the full runnable version this is
+taken from:
+
+```swift
+class Countdown {
+    let n: int
+    constructor(n: int) { self.n = n }
+    destructor() {}
+}
+
+impl Iterator<int> for Countdown {
+    func iter_has_next() -> bool {
+        return self.n > 0
+    }
+    func iter_next() -> int {
+        self.n = self.n - 1
+        return self.n + 1
+    }
+}
+
+func main() -> int {
+    let c: Countdown = new Countdown(3)
+    for x in c {
+        print_int("x", x)  // 3, 2, 1
+    }
+    return 0
+}
+```
+
+The trait's own `<T>` and an impl's `<int>` type argument are a
+signature-writing convenience, not type-checked against the impl's
+concrete methods - a trait's return/param types are never resolved or
+generate code (traits are signature-only everywhere in this language);
+only the method names and arities are verified to match.
+
 ### Conditional Logic
 
 ```swift

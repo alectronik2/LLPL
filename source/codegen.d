@@ -468,7 +468,8 @@ class CodeGenerator {
     private string traitSignature(TraitDecl t, string displayName) {
         string[] methodSigs;
         foreach (m; t.methods) methodSigs ~= functionSignature(m, m.name);
-        return format("trait %s { %s }", displayName, methodSigs.join("; "));
+        string[] noBounds = new string[](t.typeParams.length);
+        return format("trait %s%s { %s }", displayName, genericSuffix(t.typeParams, noBounds), methodSigs.join("; "));
     }
 
     // Builds the flat, declaration-only symbol table (see SymbolInfo) from
@@ -4673,6 +4674,21 @@ class CodeGenerator {
         return null;
     }
 
+    // Same lookup, but also falls back to a method an `impl Iterator<T> for
+    // ThisClass { ... }` block provided instead of an inline one.
+    // processImplBlock desugars impl methods into free functions named
+    // "<targetKey>_<methodName>" in functionRegistry - never added to
+    // classDecl.methods (see its own comment) - so findIterMethod alone
+    // can't see them. mangledClass(classDecl) matches mangleTypeArg's output
+    // for a plain (non-generic, non-pointer) class target, so this reuses
+    // the exact same key processImplBlock registered the method under.
+    private FunctionDecl findIterMethodOrImpl(ClassDecl classDecl, string name) {
+        if (auto m = findIterMethod(classDecl, name)) return m;
+        string key = mangledClass(classDecl) ~ "_" ~ name;
+        if (auto f = key in functionRegistry) return *f;
+        return null;
+    }
+
     // `foreach let x in iterable { ... }` desugars to either a counted
     // index loop (iterable is a fixed-size array) or a has_next/next loop
     // (iterable is a class implementing the iterator protocol above) -
@@ -4708,8 +4724,8 @@ class CodeGenerator {
         }
 
         if (auto classDecl = iterType.name in classRegistry) {
-            FunctionDecl hasNextMethod = findIterMethod(*classDecl, ITER_HAS_NEXT);
-            FunctionDecl nextMethod = findIterMethod(*classDecl, ITER_NEXT);
+            FunctionDecl hasNextMethod = findIterMethodOrImpl(*classDecl, ITER_HAS_NEXT);
+            FunctionDecl nextMethod = findIterMethodOrImpl(*classDecl, ITER_NEXT);
             if (hasNextMethod !is null && nextMethod !is null) {
                 return generateClassForeach(foreachStmt, *classDecl, nextMethod, isDeferred);
             }
@@ -4796,7 +4812,7 @@ class CodeGenerator {
         code ~= indent() ~ format("%s %s = %s;\n",
             typeToC(new Type(cName)), objName, generateExpression(foreachStmt.iterable));
 
-        if (findIterMethod(classDecl, ITER_RESET) !is null) {
+        if (findIterMethodOrImpl(classDecl, ITER_RESET) !is null) {
             code ~= indent() ~ format("%s_%s(%s);\n", cName, ITER_RESET, objName);
         }
 

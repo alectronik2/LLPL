@@ -293,7 +293,7 @@ func validate_elf64(file: char*, size: uint) -> bool {
         return false
     }
 
-    let hdr: Elf64Header* = file as Elf64Header*
+    let hdr = file as Elf64Header*
     if hdr.ident[0] != 0x7F as char || hdr.ident[1] != 69 as char ||
        hdr.ident[2] != 76 as char || hdr.ident[3] != 70 as char {
         return false

@@ -1144,6 +1144,22 @@ struct HashMapEntry<K, V> {
     let value: V
 }
 
+// Documents the method-name convention `for x in instance { ... }` and
+// `foreach let x in instance { ... }` dispatch on (see codegen.d's
+// ITER_HAS_NEXT/ITER_NEXT/ITER_RESET, and generateForeachStmt/
+// generateClassForeach) - a class is foreach-able once it defines
+// iter_has_next()/iter_next() with matching arity, whether written
+// directly in its own body (like String and HashMap<K, V> below) or via
+// an explicit `impl Iterator<T> for ThisClass { ... }` block. iter_reset()
+// is optional - called automatically before the loop if present, so an
+// object can be foreach-ed more than once without the caller resetting
+// iteration state by hand, but it isn't required for a single-use iterator
+// that's naturally exhausted after one pass.
+trait Iterator<T> {
+    func iter_has_next() -> bool
+    func iter_next() -> T
+}
+
 // A trait a type implements to provide its own hash/equality for use as a
 // HashMap key - see HashMap<K: Hashable, V> below. `Self` inside a trait's
 // signatures and inside a matching `impl` block's bodies refers to whatever

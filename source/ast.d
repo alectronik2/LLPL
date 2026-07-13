@@ -445,10 +445,22 @@ class TraitDecl : ASTNode {
     FunctionDecl[] methods;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
 
-    this(string name, FunctionDecl[] methods, int line = 0, int column = 0) {
+    // `<T, U>` after the trait name, e.g. `trait Iterator<T> { func
+    // iter_next() -> T }` - purely a signature-writing/display convenience
+    // (functionSignature/traitSignature render them via toString(), and a
+    // trait method's return/param types are never resolveType'd or codegen'd
+    // - traits are signature-only). Not substituted or verified against an
+    // `impl TraitName for Target { ... }` block's concrete types the way a
+    // generic class/function's type params are at monomorphization time;
+    // an impl just needs matching method names/arity, same as a
+    // non-generic trait (see processImplBlock).
+    string[] typeParams;
+
+    this(string name, FunctionDecl[] methods, int line = 0, int column = 0, string[] typeParams = []) {
         super(NodeType.TraitDecl, line, column);
         this.name = name;
         this.methods = methods;
+        this.typeParams = typeParams;
     }
 }
 

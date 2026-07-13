@@ -6,12 +6,15 @@ struct List<T> {
 }
 
 class Klass {
+    let i: int
+
     constructor() {
         puts("Klass constructor")
     }
 
     constructor( s: string ) {
         puts("Klass constructor with string: \(s)")
+        self.i = 10
     }
 
     destructor() {
@@ -20,6 +23,16 @@ class Klass {
 
     func stringof() -> string {
         "Overridden: Klass"
+    }
+}
+
+impl Iterator for Klass {
+    func iter_has_next() -> bool {
+        return self.i> 0
+    }
+    func iter_next() -> int {
+        self.i = self.i- 1
+        return self.i + 1
     }
 }
 
@@ -89,6 +102,10 @@ func main() -> uint32 {
     }
 
     let kl = new Klass("With a string")
+
+    for x in kl {
+        puts("x = \(x)")
+    }
 
     let ss = "Hello, world!"
     match ss {
