@@ -59,6 +59,7 @@ enum TokenType {
     Catch,
     Finally,
     Throw,
+    Delete,
 
     // Operators
     Plus,
@@ -106,6 +107,7 @@ enum TokenType {
     RightBracket,
     Comma,
     Dot,
+    DotDot,
     Ellipsis,
     Colon,
     At,
@@ -189,7 +191,8 @@ class Lexer {
             "try": "Try",
             "catch": "Catch",
             "finally": "Finally",
-            "throw": "Throw"
+            "throw": "Throw",
+            "delete": "Delete"
         ];
     }
 
@@ -539,6 +542,7 @@ class Lexer {
                 case "Catch": type = TokenType.Catch; break;
                 case "Finally": type = TokenType.Finally; break;
                 case "Throw": type = TokenType.Throw; break;
+                case "Delete": type = TokenType.Delete; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);
@@ -647,6 +651,10 @@ class Lexer {
             if (current == '.' && peek(1) == '.' && peek(2) == '.') {
                 advance(); advance(); advance();
                 return Token(TokenType.Ellipsis, "...", startLine, startColumn);
+            }
+            if (current == '.' && peek(1) == '.') {
+                advance(); advance();
+                return Token(TokenType.DotDot, "..", startLine, startColumn);
             }
             // Compound assignment operators (`+=`, `-=`, ...) - each is its
             // plain operator's single-character token plus `=`, so these

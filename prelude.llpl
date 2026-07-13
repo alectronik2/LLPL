@@ -142,8 +142,15 @@ class RegexMatch {
     let matched: bool
     let pattern: char*
     let text: char*
+    // Added to group_start/group_end's reported offsets - 0 for an
+    // ordinary top-level match, non-zero when `text` is itself a suffix
+    // of some larger original string (see RegexMatchIterator, which
+    // searches one suffix at a time but wants callers to see positions
+    // relative to the whole original text). Never affects group()'s
+    // returned *content*, which is read out of `text` directly regardless.
+    let base_offset: int
 
-    constructor(pattern: string, text: string) {
+    constructor(pattern: string, text: string, base_offset: int = 0) {
         let pattern_len: int = llpl_strlen(pattern) as int
         self.pattern = llpl_alloc((pattern_len + 1) as uint)
         llpl_memcpy(self.pattern, pattern, (pattern_len + 1) as uint)
@@ -152,6 +159,7 @@ class RegexMatch {
         self.text = llpl_alloc((text_len + 1) as uint)
         llpl_memcpy(self.text, text, (text_len + 1) as uint)
 
+        self.base_offset = base_offset
         self.matched = llpl_regex_match(self.pattern, self.text)
     }
 
@@ -184,7 +192,7 @@ class RegexMatch {
         let start: int = 0
         let end: int = 0
         if llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end) {
-            return start
+            return start + self.base_offset
         }
         return -1
     }
@@ -196,7 +204,7 @@ class RegexMatch {
         let start: int = 0
         let end: int = 0
         if llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end) {
-            return end
+            return end + self.base_offset
         }
         return -1
     }
@@ -209,6 +217,129 @@ class RegexMatch {
         let out: String = new String(raw)
         llpl_free(raw)
         return out
+    }
+
+    // Expands `$0`/`$1`/... backreferences in `template` against this
+    // match's own captured groups (`$$` for a literal `$`; a `$` not
+    // followed by a digit or another `$` is left as-is). Shared by
+    // Regex.replace/replace_all, but also independently useful against a
+    // match obtained directly from Regex.captures().
+    func expand(template: string) -> String {
+        let ts: String = new String(template)
+        let result: String = new String("")
+        let len: int = ts.byte_len()
+        let lit_start: int = 0
+        let i: int = 0
+        while i < len {
+            if ts.byte_at(i) == 36 && i + 1 < len {
+                if i > lit_start {
+                    result = result + ts.byte_substring(lit_start, i - lit_start).c_str()
+                }
+                let next: char = ts.byte_at(i + 1)
+                if next == 36 {
+                    result = result + "$"
+                    i = i + 2
+                } else if next >= 48 && next <= 57 {
+                    let group_index: int = (next as int) - 48
+                    let j: int = i + 2
+                    while j < len && ts.byte_at(j) >= 48 && ts.byte_at(j) <= 57 {
+                        group_index = group_index * 10 + ((ts.byte_at(j) as int) - 48)
+                        j = j + 1
+                    }
+                    if self.has_group(group_index) {
+                        result = result + self.group(group_index).c_str()
+                    }
+                    i = j
+                } else {
+                    result = result + "$"
+                    i = i + 1
+                }
+                lit_start = i
+            } else {
+                i = i + 1
+            }
+        }
+        if len > lit_start {
+            result = result + ts.byte_substring(lit_start, len - lit_start).c_str()
+        }
+        return result
+    }
+}
+
+// Walks every non-overlapping match of `pattern` in `text`, left to
+// right - implements the `foreach` iterator protocol (see codegen.d's
+// ITER_HAS_NEXT et al.), so `foreach let m in re.find_all(text) { ... }`
+// works directly. Searches one suffix of `text` at a time (there's no
+// "search starting at an offset" primitive at the C level, only "search
+// from the start of this string") - each yielded RegexMatch is
+// constructed with that suffix's offset as its base_offset, so its own
+// group_start/group_end still read as positions into the *original*
+// text. An empty match (a pattern like `x*` that can match zero-width)
+// still advances by at least one byte each step, so this always
+// terminates.
+class RegexMatchIterator {
+    let pattern: char*
+    let text: char*
+    let text_len: int
+    let pos: int
+    let current: RegexMatch
+    let has_current: bool
+    let done: bool
+
+    constructor(pattern: string, text: string) {
+        let pattern_len: int = llpl_strlen(pattern) as int
+        self.pattern = llpl_alloc((pattern_len + 1) as uint)
+        llpl_memcpy(self.pattern, pattern, (pattern_len + 1) as uint)
+
+        self.text_len = llpl_strlen(text) as int
+        self.text = llpl_alloc((self.text_len + 1) as uint)
+        llpl_memcpy(self.text, text, (self.text_len + 1) as uint)
+
+        self.pos = 0
+        self.has_current = false
+        self.done = false
+    }
+
+    destructor() {
+        llpl_free(self.pattern)
+        llpl_free(self.text)
+    }
+
+    func advance() -> bool {
+        if self.done || self.pos > self.text_len {
+            self.done = true
+            return false
+        }
+        let m: RegexMatch = new RegexMatch(self.pattern, self.text + self.pos, self.pos)
+        if !m.is_match() {
+            self.done = true
+            return false
+        }
+        self.current = m
+        let end_in_suffix: int = m.group_end(0) - self.pos
+        let start_in_suffix: int = m.group_start(0) - self.pos
+        if end_in_suffix == start_in_suffix {
+            self.pos = self.pos + end_in_suffix + 1
+        } else {
+            self.pos = self.pos + end_in_suffix
+        }
+        return true
+    }
+
+    func iter_has_next() -> bool {
+        if self.has_current {
+            return true
+        }
+        self.has_current = self.advance()
+        return self.has_current
+    }
+
+    func iter_next() -> RegexMatch {
+        if !self.has_current {
+            self.advance()
+        }
+        self.has_current = false
+        return self.current
     }
 }
 
@@ -231,6 +362,51 @@ class Regex {
 
     func captures(text: string) -> RegexMatch {
         return new RegexMatch(self.pattern, text)
+    }
+
+    // All non-overlapping matches, left to right - `foreach let m in
+    // re.find_all(text) { ... }`.
+    func find_all(text: string) -> RegexMatchIterator {
+        return new RegexMatchIterator(self.pattern, text)
+    }
+
+    // Replaces just the first match with `replacement` (see
+    // RegexMatch.expand for its `$0`/`$1`/`$$` backreference syntax).
+    // Returns `text` unchanged (as a new String) if there's no match.
+    func replace(text: string, replacement: string) -> String {
+        let m: RegexMatch = self.captures(text)
+        if !m.is_match() {
+            return new String(text)
+        }
+        let ts: String = new String(text)
+        let start: int = m.group_start(0)
+        let end: int = m.group_end(0)
+        let result: String = ts.byte_substring(0, start)
+        result = result + m.expand(replacement).c_str()
+        result = result + ts.byte_substring(end, ts.byte_len() - end).c_str()
+        return result
+    }
+
+    // Replaces every non-overlapping match with `replacement`.
+    func replace_all(text: string, replacement: string) -> String {
+        let ts: String = new String(text)
+        let result: String = new String("")
+        let it: RegexMatchIterator = self.find_all(text)
+        let last_end: int = 0
+        while it.iter_has_next() {
+            let m: RegexMatch = it.iter_next()
+            let start: int = m.group_start(0)
+            let end: int = m.group_end(0)
+            if start > last_end {
+                result = result + ts.byte_substring(last_end, start - last_end).c_str()
+            }
+            result = result + m.expand(replacement).c_str()
+            last_end = end
+        }
+        if last_end < ts.byte_len() {
+            result = result + ts.byte_substring(last_end, ts.byte_len() - last_end).c_str()
+        }
+        return result
     }
 
     func source() -> string {

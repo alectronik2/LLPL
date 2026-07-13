@@ -1,0 +1,50 @@
+extern func puts(s: char*) -> int
+func print_int(label: char*, value: int) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> int {
+    let re = /[0-9]+/
+    let text: char* = "abc 123 def 4567 ghi"
+
+    let count: int = 0
+    foreach let m in re.find_all(text) {
+        puts(m.group(0).c_str())
+        print_int("start", m.group_start(0))
+        print_int("end", m.group_end(0))
+        count = count + 1
+    }
+    print_int("total matches", count)
+
+    return 0
+}
+
+func main() -> int {
+    let digits = /[0-9]+/
+    let text: char* = "abc 123 def 4567 ghi"
+
+    let r1: String = digits.replace(text, "#")
+    puts(r1.c_str())
+
+    let r2: String = digits.replace_all(text, "#")
+    puts(r2.c_str())
+
+    let pair = /([a-z]+)-([0-9]+)/
+    let r3: String = pair.replace("id-42!", "$2:$1")
+    puts(r3.c_str())
+
+    let r4: String = pair.replace("no match here", "$2:$1")
+    puts(r4.c_str())
+
+    let literal_dollar = /x/
+    let r5: String = literal_dollar.replace("x", "$$100")
+    puts(r5.c_str())
+
+    let empty = /a*/
+    let r6: String = empty.replace_all("bbb", "-")
+    puts(r6.c_str())
+
+    return 0
+}

@@ -186,6 +186,15 @@
         ],
         "description": "For loop"
     },
+    "Range For": {
+        "prefix": "forin",
+        "body": [
+            "for ${1:i} in ${2:0}..${3:count} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "For loop counting over a range (exclusive of the end)"
+    },
     "Foreach": {
         "prefix": "foreach",
         "body": [
@@ -199,6 +208,11 @@
         "prefix": "defer",
         "body": "defer ${1:statement}",
         "description": "Defer a statement to run at scope exit (LIFO order)"
+    },
+    "Delete": {
+        "prefix": "delete",
+        "body": "delete ${1:instance}",
+        "description": "Release a reference to a class instance - runs its destructor and frees the memory if this was the last reference"
     },
     "Try/Catch/Finally": {
         "prefix": "try",

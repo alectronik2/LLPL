@@ -91,12 +91,12 @@ interface AnalysisResult {
 const EMPTY_RESULT: AnalysisResult = { diagnostics: [], symbols: [], usages: [] };
 
 const KEYWORDS = [
-    'import', 'namespace', 'class', 'struct', 'packed', 'enum', 'macro',
+    'import', 'from', 'namespace', 'class', 'struct', 'packed', 'enum', 'macro',
     'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'if',
     'else', 'while', 'for', 'foreach', 'in', 'return', 'defer', 'unless',
-    'try', 'catch', 'finally', 'throw', 'asm', 'new', 'true', 'false', 'null',
+    'try', 'catch', 'finally', 'throw', 'delete', 'asm', 'new', 'true', 'false', 'null',
     'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait',
-    'impl', 'quote', 'unquote',
+    'impl', 'quote', 'unquote', 'interrupt',
     'sizeof', 'self', 'int', 'uint', 'int16', 'uint16', 'int32', 'uint32',
     'char', 'bool', 'void',
 ];
@@ -116,26 +116,31 @@ const cache = new Map<string, AnalysisResult>();
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Walks up from `startDir` looking for an executable file literally named
-// `llpl` (the layout this extension ships in: editors/vscode-llpl/server
-// under a checkout that builds the compiler to its repo root). Falls back
-// to bare "llpl", relying on PATH, if that search comes up empty.
+// `llpl` (`llpl.exe` on Windows, tried first since that's what `dub build`
+// actually produces there) - the layout this extension ships in:
+// editors/vscode-llpl/server under a checkout that builds the compiler to
+// its repo root. Falls back to bare "llpl"/"llpl.exe", relying on PATH, if
+// that search comes up empty.
 function findCompiler(startDir: string): string {
+    const names = process.platform === 'win32' ? ['llpl.exe', 'llpl'] : ['llpl'];
     let dir = startDir;
     for (let i = 0; i < 12; i++) {
-        const candidate = path.join(dir, 'llpl');
-        if (fs.existsSync(candidate)) {
-            try {
-                fs.accessSync(candidate, fs.constants.X_OK);
-                return candidate;
-            } catch {
-                // Exists but isn't executable - keep looking upward.
+        for (const name of names) {
+            const candidate = path.join(dir, name);
+            if (fs.existsSync(candidate)) {
+                try {
+                    fs.accessSync(candidate, fs.constants.X_OK);
+                    return candidate;
+                } catch {
+                    // Exists but isn't executable - keep looking upward.
+                }
             }
         }
         const parent = path.dirname(dir);
         if (parent === dir) break;
         dir = parent;
     }
-    return 'llpl';
+    return process.platform === 'win32' ? 'llpl.exe' : 'llpl';
 }
 
 function runQuery(entryPath: string): Promise<AnalysisResult> {

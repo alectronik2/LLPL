@@ -10,19 +10,24 @@ find-references) for [LLPL](../../README.md) (`.llpl`) files.
   (with `packed`), `enum`, `macro` (with `NAME!(args)` invocations),
   `constructor`/`destructor`, `func` (including `interrupt func` and
   operator overloads like `func operator+`), `let`/`const`, `alias`,
-  control flow (`if`/`else`/`while`/`for`/`return`/`defer`/`try`/`catch`/
-  `finally`/`throw`/`match`/`case`/`default`/`unless`), `import`, `extern`,
+  control flow (`if`/`else`/`while`/`for`/`foreach`/`return`/`defer`/`try`/
+  `catch`/`finally`/`throw`/`delete`/`match`/`case`/`default`/`unless`),
+  range-based `for i in 0..5 { }`, `import`/`from`, `extern`,
   `new`/`as` casts, inline
   `asm(...)`, and the built-in types (`int`, `uint`, `int16`/`uint16`/
   `int32`/`uint32`, `char`, `bool`, `void`).
-- Type-annotation aware highlighting, including pointers (`char*`), fixed
-  arrays (`char[17]`), and bit-fields (`let flags: uint32 : 3`).
+- Type-annotation aware highlighting, including pointers/pointers-to-pointers
+  (`char*`, `int**`), fixed arrays (`char[17]`), and bit-fields
+  (`let flags: uint32 : 3`).
+- Numeric literals with `_` digit-group separators (`0x100_0000_0000`,
+  `1_000_000`).
 - String interpolation (`"total = \(a + b)"`) highlighted as embedded code
   inside the string, including nested calls/parens.
 - Comment toggling (`//` and `/* */`), bracket matching/auto-closing.
 - Snippets for common constructs (`func`, `class`, `struct`, `namespace`,
   `enum`, `macro`, `match`, `alias`, `unless`, `if`, `while`, `for`,
-  `try`/`catch`/`finally`, `extern`, `import`, `asm`, `bitfield`).
+  range-based `for`, `defer`, `delete`, `try`/`catch`/`finally`, `extern`,
+  `import`, `asm`, `bitfield`).
 - **Language server** (`server/`): diagnostics, completion, hover,
   go-to-definition and find-references, backed directly by the `llpl`
   compiler's own name resolution (`llpl --lsp-symbols <file>` - see

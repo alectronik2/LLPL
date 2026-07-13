@@ -357,8 +357,34 @@ class CodeGenerator {
             fmt ~= escapeCString(part).replace("%", "%%");
             if (i < interp.expressions.length) {
                 ASTNode expr = interp.expressions[i];
-                fmt ~= interpFormatSpecifier(expr, interp.specs[i]);
-                args ~= ", " ~ variadicPromote(expr, generateExpression(expr));
+                InterpFormat spec = interp.specs[i];
+                // A class/struct value has no sensible textual form on its
+                // own (interpFormatSpecifier would otherwise reject it) -
+                // implicitly resolve it the same way `.stringof`/`as
+                // string` do (a custom stringof() method, or the type's
+                // own name) instead of requiring `"\(f.stringof)"` to be
+                // spelled out every time. Not offered alongside an
+                // explicit width/radix modifier (`\(f:016)`) - that's
+                // still a plain-integer-only error, unchanged.
+                bool useStringof = false;
+                Type stringofType;
+                if (spec.radix.length == 0 && spec.width == 0) {
+                    try {
+                        stringofType = inferType(expr);
+                        resolveType(stringofType);
+                        useStringof = (stringofType.name in classRegistry) !is null ||
+                            (stringofType.name in structRegistry) !is null;
+                    } catch (Exception e) {
+                        // fall through to the ordinary path below
+                    }
+                }
+                if (useStringof) {
+                    fmt ~= "%s";
+                    args ~= ", " ~ generateStringofValue(stringofType, expr, expr.line, expr.column);
+                } else {
+                    fmt ~= interpFormatSpecifier(expr, spec);
+                    args ~= ", " ~ variadicPromote(expr, generateExpression(expr));
+                }
             }
         }
 
@@ -2234,6 +2260,32 @@ class CodeGenerator {
         return code;
     }
 
+    // `delete expr` - see ast.DeleteStmt's own comment for why this is
+    // exactly rc_release(ptr, ClassName_destroy), the same call
+    // generateDestructor already emits to release a reference-counted
+    // field. Only classes are reference-counted/heap-allocated at all -
+    // structs are plain values, so "delete"-ing one is a compile error
+    // (the same kind of "clear error over silently generating nonsense
+    // C" this compiler prefers elsewhere).
+    private string generateDeleteStmt(DeleteStmt stmt) {
+        Type t;
+        try {
+            t = inferType(stmt.value);
+        } catch (Exception e) {
+            throw new CompileError("Cannot infer the type of 'delete's operand",
+                currentModulePath, stmt.line, stmt.column);
+        }
+        resolveType(t);
+        if ((t.name in classRegistry) is null) {
+            throw new CompileError(format(
+                "'delete' can only be used on a class instance, not '%s' - structs and " ~
+                "primitives aren't reference-counted", t.toString()),
+                currentModulePath, stmt.line, stmt.column);
+        }
+        return indent() ~ format("rc_release(%s, %s_destroy);\n",
+            generateExpression(stmt.value), t.name);
+    }
+
     private string generatePropagateExpr(PropagateExpr propExpr) {
         Type operandType;
         try {
@@ -2544,6 +2596,8 @@ class CodeGenerator {
             code ~= generateThrowStmt(throwStmt, isDeferred);
         } else if (auto tryStmt = cast(TryStmt)node) {
             code ~= generateTryStmt(tryStmt, isDeferred);
+        } else if (auto deleteStmt = cast(DeleteStmt)node) {
+            code ~= generateDeleteStmt(deleteStmt);
         } else if (auto block = cast(Block)node) {
             code ~= indent() ~ "{\n";
             indentLevel++;
@@ -2727,6 +2781,9 @@ class CodeGenerator {
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             return new ForeachStmt(foreachStmt.varName, cloneNode(foreachStmt.iterable, subs, typeSubs),
                 cloneBlock(foreachStmt.body_, subs, typeSubs), foreachStmt.line, foreachStmt.column);
+        } else if (auto rangeExpr = cast(RangeExpr)node) {
+            return new RangeExpr(cloneNode(rangeExpr.start, subs, typeSubs), cloneNode(rangeExpr.end, subs, typeSubs),
+                rangeExpr.line, rangeExpr.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
@@ -2734,6 +2791,9 @@ class CodeGenerator {
         } else if (auto throwStmt = cast(ThrowStmt)node) {
             return new ThrowStmt(cloneNode(throwStmt.value, subs, typeSubs),
                 throwStmt.line, throwStmt.column);
+        } else if (auto deleteStmt = cast(DeleteStmt)node) {
+            return new DeleteStmt(cloneNode(deleteStmt.value, subs, typeSubs),
+                deleteStmt.line, deleteStmt.column);
         } else if (auto tryStmt = cast(TryStmt)node) {
             return new TryStmt(cloneBlock(tryStmt.tryBlock, subs, typeSubs), tryStmt.catchVar,
                 cloneType(tryStmt.catchType, typeSubs), cloneBlock(tryStmt.catchBlock, subs, typeSubs),
@@ -2914,6 +2974,9 @@ class CodeGenerator {
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             return new ForeachStmt(foreachStmt.varName, expandQuotedNode(foreachStmt.iterable, subs),
                 expandQuotedBlock(foreachStmt.body_, subs), foreachStmt.line, foreachStmt.column);
+        } else if (auto rangeExpr = cast(RangeExpr)node) {
+            return new RangeExpr(expandQuotedNode(rangeExpr.start, subs), expandQuotedNode(rangeExpr.end, subs),
+                rangeExpr.line, rangeExpr.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
         } else if (auto deferStmt = cast(DeferStmt)node) {
@@ -2921,6 +2984,9 @@ class CodeGenerator {
         } else if (auto throwStmt = cast(ThrowStmt)node) {
             return new ThrowStmt(expandQuotedNode(throwStmt.value, subs),
                 throwStmt.line, throwStmt.column);
+        } else if (auto deleteStmt = cast(DeleteStmt)node) {
+            return new DeleteStmt(expandQuotedNode(deleteStmt.value, subs),
+                deleteStmt.line, deleteStmt.column);
         } else if (auto tryStmt = cast(TryStmt)node) {
             return new TryStmt(expandQuotedBlock(tryStmt.tryBlock, subs), tryStmt.catchVar,
                 cloneType(tryStmt.catchType), expandQuotedBlock(tryStmt.catchBlock, subs),
@@ -4359,6 +4425,14 @@ class CodeGenerator {
     // whichever matches is decided purely from iterable's inferred type,
     // the same way operator overloading is resolved from an operand's type.
     private string generateForeachStmt(ForeachStmt foreachStmt, bool isDeferred) {
+        // `for i in start..end { ... }` - see ast.RangeExpr's own comment
+        // for why this is checked before ever calling inferType: a range
+        // isn't a typed value the way an array or iterator-protocol class
+        // is, it's pure control-flow sugar.
+        if (auto range = cast(RangeExpr)foreachStmt.iterable) {
+            return generateRangeForeach(foreachStmt, range, isDeferred);
+        }
+
         Type iterType;
         try {
             iterType = inferType(foreachStmt.iterable);
@@ -4392,6 +4466,36 @@ class CodeGenerator {
                 "implementing the iterator protocol (%s() -> bool and %s() -> T methods)",
                 iterType.toString(), ITER_HAS_NEXT, ITER_NEXT),
             currentModulePath, foreachStmt.line, foreachStmt.column);
+    }
+
+    // `for i in start..end { ... }` desugars to a plain counting loop -
+    // `end` is evaluated once, up front, into its own temporary (not
+    // re-evaluated every iteration), matching this compiler's existing
+    // "evaluate loop bounds once" stance elsewhere (e.g. array foreach's
+    // fixed arraySize). The range is exclusive of `end`, like Rust's.
+    private string generateRangeForeach(ForeachStmt foreachStmt, RangeExpr range, bool isDeferred) {
+        tempVarCounter++;
+        string endName = format("__range_end%d", tempVarCounter);
+
+        string code = indent() ~ "{\n";
+        indentLevel++;
+        code ~= indent() ~ format("int64_t %s = %s;\n", endName, generateExpression(range.end));
+        code ~= indent() ~ format("int64_t %s = %s;\n", foreachStmt.varName, generateExpression(range.start));
+        code ~= indent() ~ format("while (%s < %s) {\n", foreachStmt.varName, endName);
+        indentLevel++;
+
+        variableTypes[foreachStmt.varName] = new Type("int");
+        foreach (stmt; foreachStmt.body_.statements) {
+            code ~= generateStatement(stmt, isDeferred);
+        }
+        variableTypes.remove(foreachStmt.varName);
+
+        code ~= indent() ~ format("%s = %s + 1;\n", foreachStmt.varName, foreachStmt.varName);
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        return code;
     }
 
     private string generateArrayForeach(ForeachStmt foreachStmt, Type arrType, bool isDeferred) {
@@ -5244,6 +5348,23 @@ class CodeGenerator {
                 }
                 return generateStringofValue(objType, memberExpr.object, memberExpr.line, memberExpr.column);
             }
+            // `.sizeof` - unlike the existing `sizeof(TypeName)` (a real
+            // type reference only), this works on any typed *value*
+            // (`x.sizeof`), inferring its type the same way `.stringof`
+            // does. For a bare type name, `sizeof(TypeName)` is still the
+            // spelling to use.
+            if (memberExpr.member == "sizeof") {
+                Type objType;
+                try {
+                    objType = inferType(memberExpr.object);
+                } catch (Exception e) {
+                    throw new CompileError(
+                        "'.sizeof' needs a typed value - use 'sizeof(TypeName)' for a bare type",
+                        currentModulePath, memberExpr.line, memberExpr.column);
+                }
+                resolveType(objType);
+                return format("sizeof(%s)", typeToC(objType));
+            }
             // A namespace-qualified global reference (e.g. Graphics.origin)
             // takes priority over instance field access.
             string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
@@ -5443,6 +5564,9 @@ class CodeGenerator {
         } else if (auto memberExpr = cast(MemberExpr)expr) {
             if (memberExpr.member == "stringof") {
                 return new Type("char", true);
+            }
+            if (memberExpr.member == "sizeof") {
+                return new Type("uint");
             }
             string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
             if (qualifiedVar.length > 0) {

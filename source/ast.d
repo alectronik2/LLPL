@@ -54,7 +54,9 @@ enum NodeType {
     PatternExpr,
     TryStmt,
     ThrowStmt,
-    IfExpr
+    IfExpr,
+    DeleteStmt,
+    RangeExpr
 }
 
 abstract class ASTNode {
@@ -777,6 +779,43 @@ class ThrowStmt : ASTNode {
     this(ASTNode value, int line = 0, int column = 0) {
         super(NodeType.ThrowStmt, line, column);
         this.value = value;
+    }
+}
+
+// `delete expr` - releases this reference to a class instance (only
+// classes: they're the only reference-counted, heap-allocated type;
+// structs are plain values with no such lifetime to manage). Exactly the
+// same rc_release(ptr, ClassName_destroy) call generateDestructor already
+// emits to release a reference-counted *field* when its owning object is
+// destroyed (see codegen.d) - `delete` just gives a way to trigger that
+// same release explicitly, on demand, for an object that was never
+// stored as anyone's field (e.g. a `new Foo()` a container never took
+// ownership of). Decrements the refcount rather than unconditionally
+// freeing: if this was the last reference, the destructor runs and the
+// memory is freed; if other references to the same object still exist,
+// it survives, exactly like every other release point in this model.
+class DeleteStmt : ASTNode {
+    ASTNode value;
+
+    this(ASTNode value, int line = 0, int column = 0) {
+        super(NodeType.DeleteStmt, line, column);
+        this.value = value;
+    }
+}
+
+// `start..end` (exclusive of `end`, like Rust) - only ever meaningful as
+// `for i in start..end { ... }`'s iterable (see ForeachStmt and
+// codegen.d's generateRangeForeach); not a first-class value usable
+// anywhere else an expression is (no range variables, no range
+// arithmetic) - it's control-flow sugar, not a runtime type.
+class RangeExpr : ASTNode {
+    ASTNode start;
+    ASTNode end;
+
+    this(ASTNode start, ASTNode end, int line = 0, int column = 0) {
+        super(NodeType.RangeExpr, line, column);
+        this.start = start;
+        this.end = end;
     }
 }
 

@@ -32,6 +32,7 @@
         { "include": "#primitive-types" },
         { "include": "#macro-invocation" },
         { "include": "#function-call" },
+        { "include": "#range-operator" },
         { "include": "#member-access" },
         { "include": "#operators" },
         { "include": "#punctuation" }
@@ -108,22 +109,23 @@
             ]
         },
         "numbers": {
+            "comment": "'_' is an accepted digit-group separator everywhere (e.g. 0x100_0000_0000, 1_000_000) - see lexer.d's number().",
             "patterns": [
                 {
                     "name": "constant.numeric.hex.llpl",
-                    "match": "\\b0[xX][0-9a-fA-F]+\\b"
+                    "match": "\\b0[xX][0-9a-fA-F_]+\\b"
                 },
                 {
                     "name": "constant.numeric.binary.llpl",
-                    "match": "\\b0[bB][01]+\\b"
+                    "match": "\\b0[bB][01_]+\\b"
                 },
                 {
                     "name": "constant.numeric.octal.llpl",
-                    "match": "\\b0[oO][0-7]+\\b"
+                    "match": "\\b0[oO][0-7_]+\\b"
                 },
                 {
                     "name": "constant.numeric.decimal.llpl",
-                    "match": "\\b[0-9]+\\b"
+                    "match": "\\b[0-9_]+\\b"
                 }
             ]
         },
@@ -198,7 +200,7 @@
             "name": "keyword.control.llpl"
         },
         "other-keywords": {
-            "match": "\\b(import|let|const|extern|constructor|destructor|quote|unquote)\\b",
+            "match": "\\b(import|from|let|const|extern|constructor|destructor|quote|unquote|delete)\\b",
             "name": "keyword.other.llpl"
         },
         "modifier-keywords": {
@@ -401,6 +403,11 @@
         "function-call": {
             "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
             "name": "entity.name.function.call.llpl"
+        },
+        "range-operator": {
+            "comment": "`start..end` (for i in start..end { ... }) - matched ahead of #member-access so the second '.' isn't mistaken for the start of a member access.",
+            "match": "\\.\\.",
+            "name": "keyword.operator.range.llpl"
         },
         "member-access": {
             "match": "(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b(?!\\s*\\()",

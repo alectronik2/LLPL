@@ -226,6 +226,38 @@ func main() -> int {
 }
 ```
 
+### `delete`
+
+Classes are reference-counted: a field pointing at another class instance
+already gets released automatically when its owning object's destructor
+runs. `delete expr` gives an explicit way to release a reference on
+demand - for an object that was never stored as anyone's field (e.g. a
+`new Foo()` a container never took ownership of). It releases *this*
+reference: if it was the last one, the destructor runs and the memory is
+freed; if other references to the same object still exist, it survives.
+Only classes are reference-counted at all - `delete` on a struct or
+primitive is a compile error. See `test/delete_demo.llpl` for the full
+runnable version this is taken from:
+
+```swift
+class Foo {
+    let n: int
+    constructor(n: int) {
+        self.n = n
+        puts("Foo constructed")
+    }
+    destructor() {
+        puts("Foo destructed")
+    }
+}
+
+func main() -> int {
+    let f: Foo = new Foo(5)
+    delete f  // prints "Foo destructed" right here
+    return 0
+}
+```
+
 ### `.stringof`
 
 `x.stringof` (no call parens - `x.stringof()` already works as an ordinary
@@ -234,8 +266,10 @@ no-argument `stringof()` method if it defines one, or a compile-time
 string literal of the type's name otherwise - the same fallback a struct
 (which can't have methods at all) or a primitive gets. Casting a
 class/struct value `as string` resolves the same way, instead of
-reinterpreting the value as a raw `char*`. See `test/stringof_demo.llpl`
-for the full runnable version this is taken from:
+reinterpreting the value as a raw `char*` - and so does string
+interpolation (`"\(x)"`), implicitly, with no need to spell out
+`"\(x.stringof)"`. See `test/stringof_demo.llpl` for the full runnable
+version this is taken from:
 
 ```swift
 class Point3D {
@@ -275,9 +309,39 @@ func main() -> int {
 
     let n: int = 42
     puts(n.stringof)   // "int" - primitives fall back too
+
+    puts("interpolated: \(p)")  // implicit stringof inside "\(...)"
     return 0
 }
 ```
+
+### `.sizeof`
+
+`x.sizeof` (no call parens) works on any typed *value*, inferring its
+type - unlike the existing `sizeof(TypeName)`, which only ever takes a
+real type reference. See `test/sizeof_demo.llpl` for the full runnable
+version this is taken from:
+
+```swift
+struct Pair {
+    let x: int
+    let y: int
+}
+
+func main() -> int {
+    let n: int = 5
+    let p: Pair = Pair { x: 1, y: 2 }
+
+    let a: uint = n.sizeof        // 8 - same as sizeof(int)
+    let b: uint = p.sizeof        // 16 - same as sizeof(Pair)
+    let c: uint = sizeof(int)     // the type-only spelling still works
+    return 0
+}
+```
+
+A class-typed value's `.sizeof` reflects the *pointer's* size, not the
+underlying object's - classes are always heap-allocated and accessed by
+pointer, so that's what the value itself actually is at runtime.
 
 ## Control Flow
 
@@ -291,6 +355,24 @@ func print_multiplication_table(size: int) {
             // Print product
         }
     }
+}
+```
+
+### Range-Based `for`
+
+`for i in start..end { ... }` counts from `start` up to (not including)
+`end` - sugar for `foreach let i in ... { ... }`, spelled without `let`
+and using `for` instead of `foreach`. The bounds can be any expression,
+not just literals, and nests like any other loop. See
+`test/range_for_demo.llpl` for the full runnable version this is taken
+from:
+
+```swift
+func main() -> int {
+    for i in 0..5 {
+        print_int("i", i)  // 0, 1, 2, 3, 4
+    }
+    return 0
 }
 ```
 
@@ -1078,6 +1160,8 @@ func main() -> int {
 
 `catch` and `finally` are each independently optional, but at least one of
 them must be present - a bare `try { }` with neither is a parse error.
+The parens around the caught variable are optional too - `catch e`,
+`catch e: int`, `catch (e)`, and `catch (e: int)` all parse the same way.
 `catch (e: T)` catches thrown values whose static type string matches `T`.
 If the type annotation is omitted, the compiler infers the type from local
 `throw` or failed `Result<T, E>?` paths in the try body. A `finally` block
@@ -1531,6 +1615,65 @@ exactly its live elements (valid only until the next reallocating `push`),
 so a function like `sum` above works on a fixed array, a `Vector<T>`, or
 any other buffer without needing to know which. See `test/slice_demo.llpl`
 for the full runnable version this is taken from.
+
+## Regular Expressions
+
+A regex literal is `/pattern/` (`Regex`, in `prelude.llpl`). `match()`
+tests whether a pattern matches anywhere in a string; `captures()` runs it
+once and returns a `RegexMatch` for inspecting capture groups:
+
+```swift
+let r = /([a-z]+)-([0-9]+)/
+let m = r.captures("id-42!")
+m.is_match()      // true
+m.group(0)        // "id-42" (the whole match) - a String
+m.group(1)        // "id"
+m.group(2)        // "42"
+m.group_start(2)  // byte offset of group 2's start in the original text
+m.group_end(2)
+m.has_group(3)    // false - this pattern only has 2 groups
+```
+
+### Iterating Every Match
+
+`find_all(text)` returns a `RegexMatchIterator` implementing the
+`foreach` iterator protocol, so it works directly in a `foreach` loop -
+each yielded `RegexMatch`'s `group_start`/`group_end` are positions into
+the *original* text, even though finding "the next match" internally means
+re-searching a suffix of it. See `test/regex_replace_demo.llpl` for the
+full runnable version this is taken from:
+
+```swift
+func main() -> int {
+    let digits = /[0-9]+/
+    let text: char* = "abc 123 def 4567 ghi"
+
+    foreach let m in digits.find_all(text) {
+        puts(m.group(0).c_str())  // "123", then "4567"
+    }
+    return 0
+}
+```
+
+### Replacement
+
+`replace()` substitutes just the first match; `replace_all()` substitutes
+every non-overlapping one. Both return a `String`, and both accept
+`$0`/`$1`/... backreferences in the replacement text (`$0` is the whole
+match; `$$` is a literal `$`):
+
+```swift
+func main() -> int {
+    let digits = /[0-9]+/
+    let text: char* = "abc 123 def 4567 ghi"
+    digits.replace(text, "#")      // "abc # def 4567 ghi"
+    digits.replace_all(text, "#")  // "abc # def # ghi"
+
+    let pair = /([a-z]+)-([0-9]+)/
+    pair.replace("id-42!", "$2:$1")  // "42:id!"
+    return 0
+}
+```
 
 ## Data Structures
 

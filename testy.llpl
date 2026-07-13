@@ -30,7 +30,15 @@ func pointer_to_pointer() {
     puts("Before: *p = \( *p ), **pp = \( **pp )")
 }
 
-func main() -> int {
+func throw_func() {
+    throw "This is a test exception"
+}
+
+func throw_func( l: int ) {
+    throw "This is another test exception"
+}
+
+func main() -> uint32 {
     "123" |> puts() unless false
 
     let x = if true {
@@ -55,12 +63,26 @@ func main() -> int {
     puts("result = \(result)")
 
     let res = /[a-z]+/.captures("f")
-    puts("res = \(res.stringof)")
+    puts("res = \(res)")
 
     let k = new Klass()
-    puts("k = \(k.stringof)")
+    puts("k = \(k) is of size \(k.sizeof)")
+    delete k
+
+    try {
+        throw_func()
+    } catch error: string {
+        puts("Caught an exception: \(error)")
+    } finally {
+        puts("Finally block executed")
+    }
 
     pointer_to_pointer()
+
+    let to = 5
+    for i in 0..to {
+        puts("i = \(i)")
+    }
 
     result
 }

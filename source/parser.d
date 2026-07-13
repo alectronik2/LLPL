@@ -85,7 +85,12 @@ class Parser {
     }
 
     private Token expectName(string message = "Expected identifier") {
-        if (check(TokenType.Identifier) || check(TokenType.Match)) {
+        // `match` and `sizeof` are reserved keywords everywhere else, but
+        // still need to work as a member name after `.` - `x.match` (a
+        // field/method literally named "match") and `x.sizeof` (see
+        // codegen.d's `.sizeof` property) are both unambiguous in that
+        // position, so allow them there specifically.
+        if (check(TokenType.Identifier) || check(TokenType.Match) || check(TokenType.Sizeof)) {
             Token tok = current;
             advance();
             return tok;
@@ -1162,6 +1167,8 @@ class Parser {
             return tryStmt();
         } else if (check(TokenType.Throw)) {
             return throwStmt();
+        } else if (check(TokenType.Delete)) {
+            return deleteStmt();
         } else if (check(TokenType.Asm)) {
             return asmStmt();
         } else if (check(TokenType.Match)) {
@@ -1427,8 +1434,26 @@ class Parser {
         return new WhileStmt(condition, body_);
     }
 
-    private ForStmt forStmt() {
+    private ASTNode forStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
         expect(TokenType.For);
+
+        // `for i in <range-or-iterable> { ... }` - sugar for `foreach let
+        // i in ... { ... }` (see ForeachStmt), spelled without `let` and
+        // using `for` instead of `foreach`. Unambiguous via one token of
+        // lookahead: the ordinary C-style for's own initializer can also
+        // start with a bare identifier (`for i = 0, i < 5, i = i + 1 {
+        // }`), but never one immediately followed by `in`.
+        if (check(TokenType.Identifier) && peek(1).type == TokenType.In) {
+            string varName = current.value;
+            advance();
+            expect(TokenType.In);
+            ASTNode iterable = expressionNoStructLiteral();
+            Block forInBody = block();
+            return new ForeachStmt(varName, iterable, forInBody, startLine, startColumn);
+        }
+
         ASTNode initializer = null;
         ASTNode condition = null;
         ASTNode update = null;
@@ -1494,6 +1519,16 @@ class Parser {
         return new ThrowStmt(expression(), startLine, startColumn);
     }
 
+    private DeleteStmt deleteStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Delete);
+        if (check(TokenType.RightBrace) || check(TokenType.EOF)) {
+            errorAt(startLine, startColumn, "'delete' requires a value");
+        }
+        return new DeleteStmt(expression(), startLine, startColumn);
+    }
+
     private DeferStmt deferStmt() {
         expect(TokenType.Defer);
         ASTNode stmt = statement();
@@ -1514,12 +1549,17 @@ class Parser {
         Type catchType = null;
         Block catchBlock = null;
         if (match(TokenType.Catch)) {
-            expect(TokenType.LeftParen);
+            // Parens are optional - `catch e` and `catch (e)` (and their
+            // `: Type` variants) both work; only meaningful when present
+            // is that the closing `)` is then required back.
+            bool hasParen = match(TokenType.LeftParen);
             catchVar = expect(TokenType.Identifier).value;
             if (match(TokenType.Colon)) {
                 catchType = parseType();
             }
-            expect(TokenType.RightParen);
+            if (hasParen) {
+                expect(TokenType.RightParen);
+            }
             catchBlock = block();
         }
 
@@ -1615,7 +1655,7 @@ class Parser {
     // binary expression, so `x |> f + 1` is a parse error rather than the
     // ambiguous-looking `f(x) + 1` vs `f(x + 1)`.
     private ASTNode pipe() {
-        ASTNode expr = logicalOr();
+        ASTNode expr = rangeExpr();
 
         while (match(TokenType.PipeForward)) {
             int opLine = tokens[pos - 1].line;
@@ -1633,6 +1673,20 @@ class Parser {
             }
         }
 
+        return expr;
+    }
+
+    // `start..end` (exclusive of `end`) - only ever meaningful as a `for i
+    // in start..end { ... }` iterable (see ast.RangeExpr's own comment).
+    // Non-associative (no `a..b..c`); binds looser than every ordinary
+    // binary operator but tighter than `|>`/assignment, so `0..n - 1`
+    // means `0..(n - 1)`.
+    private ASTNode rangeExpr() {
+        ASTNode expr = logicalOr();
+        if (match(TokenType.DotDot)) {
+            ASTNode end = logicalOr();
+            expr = new RangeExpr(expr, end, expr.line, expr.column);
+        }
         return expr;
     }
 
