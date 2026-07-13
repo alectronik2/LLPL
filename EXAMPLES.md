@@ -366,6 +366,61 @@ func main() -> int {
 }
 ```
 
+### Weak References
+
+`Weak<T>` (prelude.llpl) is a non-owning reference - unlike an ordinary
+class-typed field, it never keeps its target alive, and safely reports
+whether the target is still alive instead of leaving a dangling pointer
+once it isn't. Its main use is breaking a reference cycle between two
+classes that hold each other (a parent/child or doubly-linked pair): make
+one direction `Weak<T>` and only the other an ordinary owning field, so
+destroying the owner doesn't try to cascade back through an already-
+destroyed instance. See `test/weak_reference_demo.llpl` for the full
+runnable version this is taken from:
+
+```swift
+class Child {
+    let name: char*
+    let parent: Weak<Parent>
+    constructor(name: char*) {
+        self.name = name
+    }
+    destructor() { puts("Child destroyed") }
+
+    func link_parent(p: Parent) {
+        self.parent = new Weak<Parent>(p)
+    }
+}
+
+class Parent {
+    let child: Child
+    constructor(name: char*) {
+        self.child = new Child(name)
+        self.child.link_parent(self)
+    }
+    destructor() { puts("Parent destroyed") }
+}
+
+func main() -> int {
+    let p: Parent = new Parent("kid")
+
+    // .upgrade() returns a real, retained reference if the target is
+    // still alive (the caller now owns it, like any `new` result), or
+    // null if it's already gone.
+    let parent_ref: Parent = p.child.parent.upgrade()
+    if parent_ref != null {
+        delete parent_ref
+    }
+
+    delete p  // Parent destroyed, then Child destroyed - no crash
+    return 0
+}
+```
+
+`is_alive() -> bool` checks liveness without upgrading. Only meaningful
+for a class `T` - `Weak<T>` relies on the same reference-counting header
+every class instance already has.
+
 ### Overloading
 
 Methods, constructors, and free functions can share a name as long as
@@ -913,6 +968,45 @@ func main() -> int {
     return 0
 }
 ```
+
+### Namespace Aliases
+
+`alias NAME = a.b` can also name a *namespace path* rather than a single
+symbol - a short prefix for a deeply-nested namespace, usable anywhere
+the real path would be (function calls, types, `new`). See
+`test/namespace_alias_demo.llpl` for the full runnable version this is
+taken from:
+
+```swift
+namespace HAL {
+    namespace Foo {
+        class Bar {
+            let n: int
+            constructor(n: int) { self.n = n }
+            destructor() {}
+            func value() -> int { return self.n }
+        }
+
+        func greet() {
+            puts("hello from HAL.Foo")
+        }
+    }
+}
+
+alias hf = HAL.Foo
+
+func main() -> int {
+    hf.greet()
+    let b: hf.Bar = new hf.Bar(7)
+    return 0
+}
+```
+
+Unlike an ordinary symbol alias (`alias name = a.b.c` naming one
+function/class/struct/global directly), a namespace alias's target is
+never itself a real symbol - only a prefix of ones that are (`HAL.Foo`
+has no symbol of its own, only members like `HAL.Foo.Bar`) - which is how
+the compiler tells the two kinds apart.
 
 ## Modules and Imports
 

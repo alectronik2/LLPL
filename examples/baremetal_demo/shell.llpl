@@ -23,6 +23,8 @@ import ata
 import vfs
 import tmpfs
 import task
+import eventlog
+import vmm
 
 namespace Shell {
     const LINE_MAX = 128
@@ -388,8 +390,11 @@ namespace Shell {
         print("  clear         - clear the screen\n")
         print("  colors        - show the 16-color palette\n")
         print("  ticks         - show the timer tick count\n")
+        print("  dmesg         - show the kernel event ring buffer\n")
+        print("  dmesg clear   - clear the kernel event ring buffer\n")
         print("  bt            - print a raw frame-pointer backtrace\n")
         print("  panic         - deliberately trigger a bounds-check panic (never returns)\n")
+        print("  fault TYPE    - trigger: int3, div0, page, gpf, ud, panic\n")
         print("  echo T        - print T back\n")
         print("  peek ADDR     - read one byte at a hex address\n")
         print("  poke ADDR VAL - write one byte at a hex address\n")
@@ -401,6 +406,9 @@ namespace Shell {
         print("  kfree ADDR    - free a kernel heap block\n")
         print("  kheap         - show kernel heap stats\n")
         print("  tasks         - show scheduler/task stats\n")
+        print("  ipc           - show message-passing state\n")
+        print("  stacks        - check kernel stack canaries and user guards\n")
+        print("  sleep TICKS   - put the shell task to sleep briefly\n")
         print("  spawn         - spawn another idle background task\n")
         print("  ls [PATH]     - list a directory (default: current)\n")
         print("  cd PATH       - change the current directory\n")
@@ -446,15 +454,98 @@ namespace Shell {
         Backtrace.print()
     }
 
+    func cmd_dmesg(args: char*) {
+        if starts_with(args, "clear") {
+            EventLog.clear()
+            log("<WHITE>dmesg cleared\n</>")
+            return
+        }
+
+        let dropped: uint = EventLog.dropped()
+        if dropped > 0 {
+            log("<YELLOW>\(dropped) older event(s) overwritten\n</>")
+        }
+
+        let n: int = EventLog.size()
+        if n == 0 {
+            print("(empty)\n")
+            return
+        }
+
+        let i: int = 0
+        while i < n {
+            log("<WHITE>[\(EventLog.seq_at(i)) t=\(EventLog.tick_at(i))] </>")
+            log("<CYAN>")
+            print(EventLog.source_at(i))
+            log("</> ")
+            print(EventLog.message_at(i))
+            let argc: int = EventLog.arg_count_at(i)
+            if argc >= 1 {
+                log(" a=\(EventLog.arg_a_at(i):016:hex)")
+            }
+            if argc >= 2 {
+                log(" b=\(EventLog.arg_b_at(i):016:hex)")
+            }
+            print("\n")
+            i = i + 1
+        }
+    }
+
     // Deliberately triggers Vector<T>'s bounds-check panic (prelude.llpl) -
     // proof that llpl_panic actually reaches the screen/serial and halts
     // cleanly here (see kernel.llpl's llpl_panic_putc/llpl_panic_halt
     // overrides), instead of the runtime's default silent-hang weak hooks.
     // This never returns.
     func cmd_panic() {
+        EventLog.add0("fault", "panic command")
         let v: Vector<int> = new Vector<int>()
         v.push(1)
         v.get(5) // out of bounds - panics
+    }
+
+    func cmd_fault(args: char*) {
+        if starts_with(args, "int3") {
+            EventLog.add0("fault", "int3 command")
+            log("<YELLOW>triggering breakpoint; this one should return\n</>")
+            asm("int3")
+            log("<GREEN>returned from breakpoint\n</>")
+            return
+        }
+        if starts_with(args, "div0") {
+            EventLog.add0("fault", "divide by zero command")
+            log("<YELLOW>triggering divide-by-zero; kernel will halt\n</>")
+            let zero: uint = 0
+            let value: uint = 1 / zero
+            log("<WHITE>unreachable \(value)\n</>")
+            return
+        }
+        if starts_with(args, "page") {
+            EventLog.add0("fault", "page fault command")
+            log("<YELLOW>reading unmapped memory; kernel will halt\n</>")
+            let p: char* = 0x400000000 as char*
+            let value: int = (p[0] as int) & 255
+            log("<WHITE>unreachable \(value)\n</>")
+            return
+        }
+        if starts_with(args, "gpf") {
+            EventLog.add0("fault", "gpf command")
+            log("<YELLOW>loading an invalid data selector; kernel will halt\n</>")
+            asm("movw %0, %%ax"
+                "movw %%ax, %%ds"
+                : : "i"(0xDEAD) : "ax")
+            return
+        }
+        if starts_with(args, "ud") {
+            EventLog.add0("fault", "invalid opcode command")
+            log("<YELLOW>executing UD2; kernel will halt\n</>")
+            asm("ud2")
+            return
+        }
+        if starts_with(args, "panic") {
+            cmd_panic()
+            return
+        }
+        log("<LIGHT_RED>usage: fault <int3|div0|page|gpf|ud|panic>\n</>")
     }
 
     // "alloc" - reserves one 4KB physical page frame and reports its
@@ -527,6 +618,84 @@ namespace Shell {
         log("<WHITE>current id:   \(Task.current_id())\n</>")
         log("<WHITE>bg_counter:   \(bg_counter)\n</>")
         log("<WHITE>timer_ticks:  \(timer_ticks)\n</>")
+
+        let i: int = 0
+        while i < Task.task_count {
+            log("<CYAN>task \(Task.id_at(i))</> ")
+            print(Task.name_at(i))
+            if Task.mode_at(i) == Task.MODE_USER {
+                log(" <YELLOW>user</>")
+            } else {
+                log(" <GREEN>kernel</>")
+            }
+            if Task.state_at(i) == Task.STATE_SLEEPING {
+                log(" sleeping until \(Task.wake_tick_at(i))\n")
+            } else {
+                print(" ")
+                print(Task.state_name_at(i))
+                print("\n")
+            }
+            if Task.ipc_peer_at(i) >= 0 {
+                log("  ipc_peer=\(Task.ipc_peer_at(i)) ipc_len=\(Task.ipc_len_at(i))\n")
+            }
+            log("  stack=\(Task.stack_base_at(i):016:hex)..\(Task.stack_base_at(i) + Task.STACK_SIZE:016:hex) rsp=\(Task.saved_rsp_at(i):016:hex)\n")
+            log("  pml4=\(Task.pml4_at(i):016:hex) switches=\(Task.switches_at(i)) syscalls=\(Task.syscalls_at(i)) last_tick=\(Task.last_tick_at(i))\n")
+            i = i + 1
+        }
+    }
+
+    func cmd_ipc() {
+        let i: int = 0
+        while i < Task.task_count {
+            let state: int = Task.state_at(i)
+            if state == Task.STATE_SEND_BLOCKED || state == Task.STATE_RECV_BLOCKED || state == Task.STATE_REPLY_BLOCKED {
+                log("<CYAN>task \(Task.id_at(i))</> ")
+                print(Task.name_at(i))
+                print(" ")
+                print(Task.state_name_at(i))
+                log(" peer=\(Task.ipc_peer_at(i)) len=\(Task.ipc_len_at(i))\n")
+            }
+            i = i + 1
+        }
+    }
+
+    func cmd_stacks() {
+        let bad: int = Task.check_all_stacks()
+        if bad == 0 {
+            log("<GREEN>all kernel stack canaries intact\n</>")
+        } else {
+            log("<LIGHT_RED>\(bad) kernel stack canary failure(s)\n</>")
+        }
+
+        let i: int = 0
+        while i < Task.task_count {
+            log("<CYAN>task \(Task.id_at(i))</> ")
+            print(Task.name_at(i))
+            print("\n")
+            log("  kernel stack: \(Task.stack_base_at(i):016:hex)..\(Task.stack_base_at(i) + Task.STACK_SIZE:016:hex)\n")
+            log("  canary:       \(Task.canary_addr_at(i):016:hex) ")
+            if Task.canary_ok_at(i) {
+                log("<GREEN>ok</>\n")
+            } else {
+                log("<LIGHT_RED>CORRUPT</>\n")
+            }
+            if Task.mode_at(i) == Task.MODE_USER {
+                log("  user stack:   \(Task.user_stack_base_at(i):016:hex)..\(VMM.USER_STACK_TOP:016:hex)\n")
+                log("  guard page:   \(Task.user_guard_base_at(i):016:hex)..\(Task.user_stack_base_at(i):016:hex) <YELLOW>unmapped</>\n")
+            } else {
+                log("  guard page:   <YELLOW>not mapped separately for identity-mapped kernel stacks</>\n")
+            }
+            i = i + 1
+        }
+    }
+
+    func cmd_sleep(args: char*) {
+        let ticks: uint = parse_hex(args)
+        if ticks == 0 {
+            ticks = 1
+        }
+        log("<WHITE>sleeping shell task for \(ticks) tick(s)\n</>")
+        Task.sleep_current(ticks)
     }
 
     // Spawns another idle_task_entry (kernel.llpl) - proof the task list
@@ -534,7 +703,7 @@ namespace Shell {
     // fails when the heap itself runs out, so this can be called far more
     // than 16 times in a row and keep succeeding.
     func cmd_spawn() {
-        let id: int = Task.spawn(idle_task_entry as uint)
+        let id: int = Task.spawn_named(idle_task_entry as uint, "idle")
         if id < 0 {
             log("<LIGHT_RED>spawn failed (out of heap memory)\n</>")
         } else {
@@ -733,10 +902,16 @@ namespace Shell {
 
     func cmd_run(args: char*) {
         if args[0] == 0 {
-            log("<LIGHT_RED>usage: run <path>\n</>")
+            log("<LIGHT_RED>usage: run <path> [args...]\n</>")
             return
         }
-        run_user_executable(args)
+        let sep: int = find_space(args)
+        if args[sep] == 0 {
+            run_user_executable_with_args(args, "")
+        } else {
+            args[sep] = 0
+            run_user_executable_with_args(args, args + sep + 1)
+        }
     }
 
     func run_line(line: char*) {
@@ -759,6 +934,9 @@ namespace Shell {
             case "ticks" => {
                 cmd_ticks()
             }
+            case "dmesg" => {
+                cmd_dmesg("")
+            }
             case "bt" => {
                 cmd_bt()
             }
@@ -776,6 +954,15 @@ namespace Shell {
             }
             case "tasks" => {
                 cmd_tasks()
+            }
+            case "ipc" => {
+                cmd_ipc()
+            }
+            case "stacks" => {
+                cmd_stacks()
+            }
+            case "checkstacks" => {
+                cmd_stacks()
             }
             case "spawn" => {
                 cmd_spawn()
@@ -796,6 +983,12 @@ namespace Shell {
                     cmd_poke(line + 5)
                 } else if starts_with(line, "dump ") {
                     cmd_dump(line + 5)
+                } else if starts_with(line, "dmesg ") {
+                    cmd_dmesg(line + 6)
+                } else if starts_with(line, "fault ") {
+                    cmd_fault(line + 6)
+                } else if starts_with(line, "sleep ") {
+                    cmd_sleep(line + 6)
                 } else if starts_with(line, "kmalloc ") {
                     cmd_kmalloc(line + 8)
                 } else if starts_with(line, "kfree ") {

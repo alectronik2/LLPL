@@ -388,17 +388,32 @@ All classes are reference-counted automatically. No need for manual memory manag
 
 ## Memory Management
 
-LLPL uses automatic reference counting (ARC):
+Classes are reference-counted:
 
-- Objects are allocated with `new`
-- Reference count is incremented on assignment
-- Reference count is decremented when variables go out of scope
-- Objects are automatically freed when reference count reaches zero
+- `new` allocates and sets the reference count to 1
+- A field pointing at another class instance is released automatically
+  when its *owning* object's destructor runs (cascading, not scope-based -
+  there's no implicit release when a local variable simply goes out of
+  scope)
+- `delete expr` releases a reference explicitly - for an object that was
+  never stored as anyone's field. If it was the last reference, the
+  destructor runs and the memory is freed
+- `Weak<T>` (see `EXAMPLES.md`) holds a non-owning reference that never
+  keeps its target alive and safely reports whether it's still alive -
+  use it to break a reference cycle between two classes that hold each
+  other, so releasing one doesn't cascade back through the other
 
 ```swift
+class Container {
+    let item: MyClass
+    constructor(item: MyClass) { self.item = item }
+    destructor() {}  // self.item is released here, automatically
+}
+
 func example() {
     let obj: MyClass = new MyClass()
-    // obj is automatically freed at end of function
+    let c: Container = new Container(obj)  // Container now owns obj
+    delete c  // releases obj too, via Container's destructor
 }
 ```
 
@@ -418,6 +433,11 @@ func example() {
 
 ### Other
 - `=` (assignment)
+- `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` (compound
+  assignment - `x += y` desugars to `x = x + y`)
+- `++`, `--` (postfix increment/decrement - `i++` desugars to `i = i + 1`,
+  same as `i += 1`; only recognized as their own statement or
+  parenthesized, not spliced into a larger expression like `i++ + 5`)
 - `.` (member access)
 - `[]` (array indexing)
 - `->` (function return type)

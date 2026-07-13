@@ -8,28 +8,9 @@
 
 import hal.limine
 import hal.serial
+import hal.cpu
 
-namespace HAL {
-    func outb(port: uint, value: char) {
-        asm("outb %0, %w1" : : "a"(value), "Nd"(port))
-    }
-
-    func inb(port: uint) -> char {
-        let value: char = 0
-        asm("inb %w1, %0" : "=a"(value) : "Nd"(port))
-        return value
-    }
-
-    func halt() {
-        asm("hlt")
-    }
-
-    func disable_interrupts() {
-        asm("cli")
-    }
-
-    
-}
+alias hs = HAL.Serial
 
 @section(".limine_requests_start") @used
 let limine_requests_start_marker: uint[4] = limine_start_marker_id
@@ -92,16 +73,16 @@ func memmap_type_name(t: uint) -> string {
 
 func memmap_type_color(t: uint) -> uint32 {
     match t {
-        case MemMapType.Usable =>                { return 0x1fbf75 as uint32 }
-        case MemMapType.Reserved =>              { return 0x777777 as uint32 }
-        case MemMapType.AcpiReclaimable =>       { return 0x44b5ff as uint32 }
-        case MemMapType.AcpiNvs =>               { return 0xffc857 as uint32 }
-        case MemMapType.BadMemory =>             { return 0xff2020 as uint32 }
-        case MemMapType.BootloaderReclaimable => { return 0x44b5ff as uint32 }
-        case MemMapType.ExecutableAndModules =>  { return 0xffc857 as uint32 }
-        case MemMapType.Framebuffer =>           { return 0xff4f8b as uint32 }
-        case MemMapType.ReservedMapped =>        { return 0x777777 as uint32 }\
-        case _ =>                               { return 0x777777 as uint32 }
+        case MemMapType.Usable =>                { return 0x1fbf75 }
+        case MemMapType.Reserved =>              { return 0x777777 }
+        case MemMapType.AcpiReclaimable =>       { return 0x44b5ff }
+        case MemMapType.AcpiNvs =>               { return 0xffc857 }
+        case MemMapType.BadMemory =>             { return 0xff2020 }
+        case MemMapType.BootloaderReclaimable => { return 0x44b5ff }
+        case MemMapType.ExecutableAndModules =>  { return 0xffc857 }
+        case MemMapType.Framebuffer =>           { return 0xff4f8b }
+        case MemMapType.ReservedMapped =>        { return 0x777777 }
+        case _ =>                                { return 0x777777 }
     }
 }
 
@@ -142,9 +123,9 @@ func draw_demo(fb: LimineFramebuffer*) {
     while y < max_y {
         let x: uint = 0
         while x < max_x {
-            let r: uint32 = ((x * 255 / max_x) & 255) as uint32
-            let g: uint32 = ((y * 255 / max_y) & 255) as uint32
-            let b: uint32 = 0x80
+            let r = ((x * 255 / max_x) & 255) as uint32
+            let g = ((y * 255 / max_y) & 255) as uint32
+            let b = 0x80
             put_pixel(fb, x, y, (r << 16) | (g << 8) | b)
             x = x + 1
         }
@@ -153,16 +134,13 @@ func draw_demo(fb: LimineFramebuffer*) {
 }
 
 func print_memmap(memmap: LimineMemmapResponse*) {
-    HAL.Serial.write("Limine memory map entries: \(memmap.entry_count)\n")
-    HAL.Serial.write("\n")
+    hs.write("Limine memory map entries: \(memmap.entry_count)\n")
 
     let entries = memmap.entries as uint*
     let i: uint = 0
     while i < memmap.entry_count {
         let entry = entries[i] as LimineMemmapEntry*
-        HAL.Serial.write("  \(entry.base:hex) - \(entry.base + entry.length:hex) ")
-        HAL.Serial.write(memmap_type_name(entry.entry_type))
-        HAL.Serial.write("\n")
+        hs.write("  \(entry.base:hex) - \(entry.base + entry.length:hex) \(memmap_type_name(entry.entry_type))\n")
         i = i + 1
     }
 }
@@ -183,9 +161,9 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
         return
     }
 
-    let plot_x: uint = 16
-    let plot_y: uint = 260
-    let plot_w: uint = fb.width
+    let plot_x = 16
+    let plot_y = 260
+    let plot_w = fb.width
     if plot_w > 640 {
         plot_w = 640
     }
@@ -204,11 +182,11 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
         if w == 0 {
             w = 1
         }
-        fill_rect(fb, x0, plot_y, w, 12, memmap_type_color(entry.entry_type))
-        i = i + 1
+        fb |> fill_rect(x0, plot_y, w, 12, memmap_type_color(entry.entry_type))
+        i++
     }
 
-    let legend_y: uint = plot_y + 24
+    let legend_y = plot_y + 24
     fb |> fill_rect(plot_x, legend_y, 18, 10, memmap_type_color(MemMapType.Usable))
     fb |> fill_rect(plot_x + 26, legend_y, 18, 10, memmap_type_color(MemMapType.Reserved))
     fb |> fill_rect(plot_x + 52, legend_y, 18, 10, memmap_type_color(MemMapType.BootloaderReclaimable))
@@ -217,7 +195,7 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
 }
 
 func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
-    HAL.Serial.write("Limine HHDM offset: \(hhdm.offset:hex)\n")
+    hs.write("Limine HHDM offset: \(hhdm.offset:hex)\n")
 
     let entries: uint* = memmap.entries as uint*
     let probe_phys: uint = 0
@@ -241,37 +219,37 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
         let probe_virt = hhdm.offset + probe_phys
         let p = probe_virt as char*
         let value = p[0] as uint
-        HAL.Serial.write("HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n")
+        hs.write("HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n")
     } else {
-        HAL.Serial.write("No usable memory region available for HHDM probe\n")
+        hs.write("No usable memory region available for HHDM probe\n")
     }
 }
 
 func kernel_main() {
     HAL.disable_interrupts()
-    HAL.Serial.init()
-    HAL.Serial.write("LLPL Limine bare-metal demo booted\n")
+    hs.init()
+    hs.write("LLPL Limine bare-metal demo booted\n")
 
     let fb = limine_get_framebuffer()
     let memmap = limine_get_memmap()
     let hhdm = limine_get_hhdm()
 
     if memmap == null {
-        HAL.Serial.write("No Limine memory map response\n")
+        hs.write("No Limine memory map response\n")
     } else {
         print_memmap(memmap)
     }
 
     if hhdm == null {
-        HAL.Serial.write("No Limine HHDM response\n")
+        hs.write("No Limine HHDM response\n")
     } else if memmap != null {
         demo_hhdm(memmap, hhdm)
     }
 
     if fb == null {
-        HAL.Serial.write("No Limine framebuffer response\n")
+        hs.write("No Limine framebuffer response\n")
     } else {
-        HAL.Serial.write("Drawing into Limine framebuffer\n")
+        hs.write("Drawing into Limine framebuffer\n")
         draw_demo(fb)
         if memmap != null {
             draw_memmap(fb, memmap)

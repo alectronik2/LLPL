@@ -90,6 +90,12 @@ namespace HAL {
         asm("push %0; popfq" : : "r"(flags))
     }
 
+    func read_cr2() -> uint {
+        let value: uint = 0
+        asm("mov %%cr2, %0" : "=r"(value))
+        return value
+    }
+
     // Disables interrupts (saving the prior on/off state for
     // spinlock_release to restore, rather than unconditionally turning
     // them back on - the correct behavior if a lock is ever acquired while

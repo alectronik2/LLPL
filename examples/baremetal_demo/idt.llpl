@@ -10,6 +10,7 @@ import hal
 import kbd
 import backtrace
 import task
+import eventlog
 
 alias hsw = HAL.Serial.write
 
@@ -36,21 +37,58 @@ macro haltWithFault(msg) {
 // its C declaration order too.
 
 interrupt func isr_divide_by_zero() {
+    EventLog.add0("fault", "divide by zero")
     haltWithFault!("FAULT: divide by zero (#DE) - halting\n")
 }
 
 interrupt func isr_breakpoint() {
+    EventLog.add0("fault", "breakpoint")
     hsw("Breakpoint (int3) handled, resuming...\n")
 
     Backtrace.print()
 }
 
+interrupt func isr_invalid_opcode() {
+    EventLog.add0("fault", "invalid opcode")
+    haltWithFault!("FAULT: invalid opcode (#UD) - halting\n")
+}
+
 interrupt func isr_general_protection(error_code: uint) {
+    EventLog.add1("fault", "general protection", error_code)
     haltWithFault!("FAULT: general protection (#GP) - halting\n")
 }
 
 interrupt func isr_page_fault(error_code: uint) {
-    haltWithFault!("FAULT: page fault (#PF) - halting\n")
+    let addr: uint = HAL.read_cr2()
+    EventLog.add2("fault", "page fault", addr, error_code)
+    hsw("FAULT: page fault (#PF) - halting\n")
+    HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
+                      "  cr2=%016llx error=%llx task=%lld\n",
+                      addr, error_code, Task.current_id())
+    HAL.Log.flush()
+    if Task.current_user_guard_hit(addr) {
+        hsw("  reason: user stack guard page\n")
+    }
+    if (error_code & 1) == 0 {
+        hsw("  present: no\n")
+    } else {
+        hsw("  present: yes\n")
+    }
+    if (error_code & 2) == 0 {
+        hsw("  access: read\n")
+    } else {
+        hsw("  access: write\n")
+    }
+    if (error_code & 4) == 0 {
+        hsw("  mode: kernel\n")
+    } else {
+        hsw("  mode: user\n")
+    }
+    Backtrace.print()
+    HAL.disable_interrupts()
+    while true {
+        HAL.halt()
+    }
 }
 
 interrupt func isr_keyboard() {
@@ -103,6 +141,7 @@ namespace IDT {
 
         set_gate(0, isr_divide_by_zero as uint, 0x08, 0x8E)
         set_gate(3, isr_breakpoint as uint, 0x08, 0x8E)
+        set_gate(6, isr_invalid_opcode as uint, 0x08, 0x8E)
         set_gate(13, isr_general_protection as uint, 0x08, 0x8E)
         set_gate(14, isr_page_fault as uint, 0x08, 0x8E)
         // IRQ0 after PIC remap - hand-written asm entry point. Ring-3 entries

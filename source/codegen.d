@@ -162,6 +162,16 @@ class CodeGenerator {
     private bool[string][string] exportsByModule;           // module -> set of mangled names it declares
     private string preludeModulePath;                       // treated as implicitly imported everywhere
 
+    // `alias hf = HAL.Foo` - a name standing in for a *namespace path*
+    // rather than a single symbol (see generateAlias, which detects this:
+    // "HAL_Foo" itself is never a real registered symbol, only a prefix
+    // of ones like "HAL_Foo_Bar"). Keyed by the alias's own mangled name,
+    // valued by the mangled namespace prefix it stands for - unlike
+    // moduleAliases this is process-wide, not per-importing-module, since
+    // it names a namespace within the same compiled program, not another
+    // file's exports.
+    private string[string] namespaceAliases;
+
     // Monomorphization engine (see resolveType's typeArgs branch and
     // resolveGenericFunctionCall): a generic class/struct/function is
     // never generated directly, only registered here as a template; each
@@ -377,8 +387,12 @@ class CodeGenerator {
                     try {
                         stringofType = inferType(expr);
                         resolveType(stringofType);
-                        useStringof = (stringofType.name in classRegistry) !is null ||
-                            (stringofType.name in structRegistry) !is null;
+                        // pointerDepth == 0 only - see the matching check
+                        // in CastExpr's own `as char*` handling for why an
+                        // explicit pointer (Foo*) must not be stringified.
+                        useStringof = stringofType.pointerDepth == 0 &&
+                            ((stringofType.name in classRegistry) !is null ||
+                             (stringofType.name in structRegistry) !is null);
                     } catch (Exception e) {
                         // fall through to the ordinary path below
                     }
@@ -1311,6 +1325,40 @@ class CodeGenerator {
         return "";
     }
 
+    // True if some real, registered symbol's mangled name starts with
+    // `prefix ~ "_"` - i.e. `prefix` names an actual namespace (or part of
+    // one), even though it's never a symbol in its own right the way
+    // resolveAliasTarget's exact-match check requires. Checked once, at
+    // an `alias`'s own declaration (see generateAlias); not on any hot
+    // path.
+    private bool isNamespacePrefix(string prefix) {
+        string withUnderscore = prefix ~ "_";
+        foreach (key; functionRegistry.byKey()) if (key.startsWith(withUnderscore)) return true;
+        foreach (key; classRegistry.byKey()) if (key.startsWith(withUnderscore)) return true;
+        foreach (key; structRegistry.byKey()) if (key.startsWith(withUnderscore)) return true;
+        foreach (key; variableTypes.byKey()) if (key.startsWith(withUnderscore)) return true;
+        return false;
+    }
+
+    // If `flatName` starts with a namespace alias's own mangled name
+    // (see namespaceAliases), substitutes that alias for the real
+    // namespace prefix it stands for - e.g. "hf_Bar" -> "HAL_Foo_Bar".
+    // Unlike resolveAliasedQualifiedName (module aliases), there's no
+    // separate "does the target module actually export this" check
+    // needed: a namespace alias names a prefix within this same compiled
+    // program, so the substituted name either is a real registered
+    // symbol (checked by the caller's own `exists` predicate) or isn't.
+    private string resolveNamespaceAlias(string flatName) {
+        foreach (aliasName, prefix; namespaceAliases) {
+            string withUnderscore = aliasName ~ "_";
+            if (!flatName.startsWith(withUnderscore)) continue;
+            string suffix = flatName[withUnderscore.length .. $];
+            if (suffix.length == 0) continue;
+            return prefix ~ "_" ~ suffix;
+        }
+        return "";
+    }
+
     private bool isKnownSymbol(string name) {
         return (name in functionRegistry) !is null || (name in classRegistry) !is null ||
                (name in structRegistry) !is null || (name in variableTypes) !is null;
@@ -1359,6 +1407,21 @@ class CodeGenerator {
         bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
             (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
         if (isTypeAlias) {
+            return "";
+        }
+
+        // `alias hf = HAL.Foo` - "HAL_Foo" is never a symbol in its own
+        // right (namespaces don't register anything themselves, only
+        // their contents do), so resolveAliasTarget's exact-match lookup
+        // below would always fail for one. Checked first: if no exact
+        // symbol matches but "HAL_Foo_" is a real prefix of something
+        // that does exist, this names a namespace, not a single symbol -
+        // register it and emit nothing (there's no one C symbol to
+        // #define against), the same "nothing left to do here" stance
+        // a type alias already takes.
+        string flatTarget = aliasDecl.targetPath.join("_");
+        if (!isKnownSymbol(flatTarget) && isNamespacePrefix(flatTarget)) {
+            namespaceAliases[mangledName] = flatTarget;
             return "";
         }
 
@@ -4187,6 +4250,22 @@ class CodeGenerator {
             // pass) - this is that same mechanism, just triggered lazily.
             genericForwardDecls ~= format("typedef struct %s %s;\n", mangledName, mangledName);
 
+            // A type argument that's itself a user-defined class/struct
+            // (e.g. Weak<Foo>, Vector<Foo>) needs its OWN typedef visible
+            // here too - the constructor/method forward declarations
+            // below reference it by name, but the ordinary per-class
+            // forward-decl pass (generateMultiple) might not have run
+            // yet if monomorphizing this instantiation is the first
+            // thing to need Foo's name at all. Same idempotent-
+            // redeclaration trick processImplBlock's targetNeedsTypedef
+            // already relies on - repeating an identical `typedef struct
+            // X X;` is legal C11.
+            foreach (typeArg; typeArgs) {
+                if ((typeArg.name in classRegistry) !is null || (typeArg.name in structRegistry) !is null) {
+                    genericForwardDecls ~= format("typedef struct %s %s;\n", typeArg.name, typeArg.name);
+                }
+            }
+
             if (isClass) {
                 auto clone = cloneClassDeclWithTypeSubs(genericClassTemplates[templateKey], typeSubs, mangledName);
                 classRegistry[mangledName] = clone;
@@ -4441,6 +4520,11 @@ class CodeGenerator {
         // `G.Point` flattened to `G_Point`) before generic instantiation
         // or class/struct lookup sees them.
         t.name = resolveAliasedTypeName(t.name);
+
+        // Same, for a namespace alias (`alias hf = HAL.Foo` - `hf.Bar`
+        // flattened to `hf_Bar`, standing in for `HAL_Foo_Bar`).
+        string nsResolved = resolveNamespaceAlias(t.name);
+        if (nsResolved.length > 0) t.name = nsResolved;
 
         // Generic instantiation, e.g. Vector<int> - resolve nested type
         // arguments first (handles Vector<Vector<int>>), then monomorphize
@@ -5198,6 +5282,9 @@ class CodeGenerator {
 
         string aliased = resolveAliasedQualifiedName(flat);
         if (aliased.length > 0 && exists(aliased)) return aliased;
+
+        string nsAliased = resolveNamespaceAlias(flat);
+        if (nsAliased.length > 0 && exists(nsAliased)) return nsAliased;
 
         if (exists(flat)) return flat;
         foreach (candidate; enclosingQualifications(flat)) {
@@ -5964,7 +6051,14 @@ class CodeGenerator {
             if (castExpr.type.name == "char" && castExpr.type.pointerDepth == 1) {
                 try {
                     Type srcType = inferType(castExpr.expression);
-                    if ((srcType.name in classRegistry) !is null || (srcType.name in structRegistry) !is null) {
+                    // pointerDepth == 0 only - an already-explicit pointer
+                    // to a class/struct (Foo*, Foo**, ...) is unambiguously
+                    // a raw-reinterpret request (matching how a generic
+                    // T* field must keep working when T is a class - see
+                    // Weak<T>/Vector<T> in prelude.llpl), not "stringify
+                    // this value" the way a plain Foo value's cast is.
+                    if (srcType.pointerDepth == 0 &&
+                            ((srcType.name in classRegistry) !is null || (srcType.name in structRegistry) !is null)) {
                         return generateStringofValue(srcType, castExpr.expression, castExpr.line, castExpr.column);
                     }
                 } catch (Exception e) {

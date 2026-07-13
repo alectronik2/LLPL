@@ -9,14 +9,43 @@
 import hal
 import task
 import vmm
+import eventlog
+import vfs
+import tmpfs
 
 namespace Syscall {
     const SYS_EXIT  = 0
     const SYS_PRINT = 1
     const SYS_MMAP  = 2
+    const SYS_GETPID = 3
+    const SYS_YIELD  = 4
+    const SYS_SLEEP  = 5
+    const SYS_OPEN   = 6
+    const SYS_READ   = 7
+    const SYS_WRITE  = 8
+    const SYS_CLOSE  = 9
+    const SYS_MSG_SEND  = 10
+    const SYS_MSG_RECV  = 11
+    const SYS_MSG_REPLY = 12
+
+    const MAX_FDS = 16
+    const FD_PATH_MAX = 96
+    const IO_MAX = 4096
+
+    packed struct FileDesc {
+        let used: bool
+        let owner: int
+        let offset: uint
+        let path: char[96]
+    }
+
+    let fds: FileDesc[16]
 
     func dispatch(number: uint, a: uint, b: uint, c: uint) -> uint {
+        Task.record_syscall()
+        EventLog.add2("syscall", "dispatch", number, a)
         if number == SYS_EXIT {
+            EventLog.add0("syscall", "exit")
             Task.exit_current()
             return 0
         }
@@ -26,7 +55,132 @@ namespace Syscall {
         if number == SYS_MMAP {
             return sys_mmap(a, b, c)
         }
+        if number == SYS_GETPID {
+            return Task.current_id() as uint
+        }
+        if number == SYS_YIELD {
+            Task.yield_current()
+            return 0
+        }
+        if number == SYS_SLEEP {
+            Task.sleep_current(a)
+            return 0
+        }
+        if number == SYS_OPEN {
+            return sys_open(a, b)
+        }
+        if number == SYS_READ {
+            return sys_read(a, b, c)
+        }
+        if number == SYS_WRITE {
+            return sys_write(a, b, c)
+        }
+        if number == SYS_CLOSE {
+            return sys_close(a)
+        }
+        if number == SYS_MSG_SEND {
+            return sys_msg_send(a, b, c)
+        }
+        if number == SYS_MSG_RECV {
+            return sys_msg_recv(a, b)
+        }
+        if number == SYS_MSG_REPLY {
+            return sys_msg_reply(a, b, c)
+        }
+        EventLog.add1("syscall", "unknown", number)
         return 0
+    }
+
+    func user_read_byte(pml4: uint, addr: uint, out: char*) -> bool {
+        let page: uint = VMM.virt_to_phys(pml4, addr)
+        if page == 0 {
+            return false
+        }
+        let ptr: char* = page as char*
+        out[0] = ptr[addr & 0xFFF]
+        return true
+    }
+
+    func user_write_byte(pml4: uint, addr: uint, value: char) -> bool {
+        let page: uint = VMM.virt_to_phys(pml4, addr)
+        if page == 0 {
+            return false
+        }
+        let ptr: char* = page as char*
+        ptr[addr & 0xFFF] = value
+        return true
+    }
+
+    func copy_user_string(user_addr: uint, out: char*, max_len: int) -> bool {
+        let pml4: uint = Task.get_current_pml4()
+        let i: int = 0
+        let ch: char = 0
+        while i < max_len - 1 {
+            if !user_read_byte(pml4, user_addr + (i as uint), &ch) {
+                out[0] = 0
+                return false
+            }
+            out[i] = ch
+            if ch == 0 {
+                return true
+            }
+            i = i + 1
+        }
+        out[i] = 0
+        return true
+    }
+
+    func copy_from_user(user_addr: uint, out: char*, len: uint) -> uint {
+        let pml4: uint = Task.get_current_pml4()
+        let i: uint = 0
+        let ch: char = 0
+        while i < len {
+            if !user_read_byte(pml4, user_addr + i, &ch) {
+                return i
+            }
+            out[i] = ch
+            i = i + 1
+        }
+        return i
+    }
+
+    func copy_to_user(user_addr: uint, src: char*, len: uint) -> uint {
+        let pml4: uint = Task.get_current_pml4()
+        return copy_to_user_pml4(pml4, user_addr, src, len)
+    }
+
+    func copy_to_user_pml4(pml4: uint, user_addr: uint, src: char*, len: uint) -> uint {
+        let i: uint = 0
+        while i < len {
+            if !user_write_byte(pml4, user_addr + i, src[i]) {
+                return i
+            }
+            i = i + 1
+        }
+        return i
+    }
+
+    func min_u(a: uint, b: uint) -> uint {
+        if a < b {
+            return a
+        }
+        return b
+    }
+
+    func path_copy(dst: char*, src: char*) {
+        let i: int = 0
+        while src[i] != 0 && i < FD_PATH_MAX - 1 {
+            dst[i] = src[i]
+            i = i + 1
+        }
+        dst[i] = 0
+    }
+
+    func valid_fd(fd: int) -> bool {
+        if fd < 0 || fd >= MAX_FDS {
+            return false
+        }
+        return fds[fd].used && fds[fd].owner == Task.current_id()
     }
 
     func sys_print(buf: uint, len: uint) -> uint {
@@ -53,5 +207,200 @@ namespace Syscall {
         // Hint addresses are ignored in this demo; the allocator hands out
         // consecutive pages starting at USER_MMAP_BASE.
         return VMM.mmap(aspace, pages)
+    }
+
+    func sys_open(path_addr: uint, mode: uint) -> uint {
+        let path: char[96]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        match VFS.resolve(path as char*) {
+            case VFS.Node.NotFound() => {
+                if mode == 0 {
+                    return 0xFFFFFFFFFFFFFFFF
+                }
+            }
+            case VFS.Node.TmpfsRoot() => {
+                return 0xFFFFFFFFFFFFFFFF
+            }
+            case VFS.Node.Disk(idx) => {
+                if VFS.inode_kind(idx) != VFS.KIND_FILE {
+                    return 0xFFFFFFFFFFFFFFFF
+                }
+            }
+            default => {
+                // Tmpfs files are valid read-only opens.
+            }
+        }
+
+        let i: int = 0
+        while i < MAX_FDS {
+            if !fds[i].used {
+                fds[i].used = true
+                fds[i].owner = Task.current_id()
+                fds[i].offset = 0
+                path_copy(fds[i].path as char*, path as char*)
+                EventLog.add1("syscall", "open fd", i as uint)
+                return i as uint
+            }
+            i = i + 1
+        }
+        return 0xFFFFFFFFFFFFFFFF
+    }
+
+    func sys_close(fd_u: uint) -> uint {
+        let fd: int = fd_u as int
+        if !valid_fd(fd) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        fds[fd].used = false
+        fds[fd].path[0] = 0
+        return 0
+    }
+
+    func sys_read(fd_u: uint, buf: uint, len: uint) -> uint {
+        let fd: int = fd_u as int
+        if !valid_fd(fd) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let max: uint = len
+        if max > IO_MAX {
+            max = IO_MAX
+        }
+        let tmp: char[4096]
+        let n: int = -1
+        match VFS.resolve(fds[fd].path as char*) {
+            case VFS.Node.TmpfsFile(idx) => {
+                n = TmpFS.read(idx, tmp as char*, max)
+            }
+            case VFS.Node.Disk(idx) => {
+                if VFS.inode_kind(idx) == VFS.KIND_FILE {
+                    n = VFS.read(fds[fd].path as char*, tmp as char*, max)
+                }
+            }
+            default => {
+                n = -1
+            }
+        }
+        if n < 0 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return copy_to_user(buf, tmp as char*, n as uint)
+    }
+
+    func sys_write(fd_u: uint, buf: uint, len: uint) -> uint {
+        let fd: int = fd_u as int
+        if !valid_fd(fd) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let max: uint = len
+        if max > IO_MAX {
+            max = IO_MAX
+        }
+        let tmp: char[4096]
+        let copied: uint = copy_from_user(buf, tmp as char*, max)
+        if copied != max {
+            return copied
+        }
+        match VFS.resolve(fds[fd].path as char*) {
+            case VFS.Node.TmpfsFile(idx) => {
+                return 0xFFFFFFFFFFFFFFFF
+            }
+            case VFS.Node.TmpfsRoot() => {
+                return 0xFFFFFFFFFFFFFFFF
+            }
+            default => {
+                if VFS.write(fds[fd].path as char*, tmp as char*, copied) {
+                    return copied
+                }
+            }
+        }
+        return 0xFFFFFFFFFFFFFFFF
+    }
+
+    func sys_msg_send(peer_u: uint, buf: uint, len: uint) -> uint {
+        let peer_id: int = peer_u as int
+        let peer: Task.TCB* = Task.find_by_id(peer_id)
+        if peer == null || len > Task.IPC_MAX {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        let tmp: char[128]
+        let copied: uint = copy_from_user(buf, tmp as char*, len)
+        if copied != len {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        let cur: Task.TCB* = Task.current_tcb()
+        if cur == null {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        if peer.state == Task.STATE_RECV_BLOCKED {
+            let deliver: uint = min_u(len, peer.ipc_recv_len)
+            copy_to_user_pml4(peer.pml4, peer.ipc_recv_buf, tmp as char*, deliver)
+            peer.ipc_len = deliver
+            peer.ipc_peer = cur.id
+            Task.wake_with_return(peer, cur.id as uint)
+
+            cur.state = Task.STATE_REPLY_BLOCKED
+            cur.resched_requested = true
+            cur.ipc_peer = peer.id
+            cur.ipc_reply_buf = buf
+            cur.ipc_reply_len = len
+            EventLog.add2("ipc", "send delivered", cur.id as uint, peer.id as uint)
+        } else {
+            Task.block_current_send(peer_id, buf, len, tmp as char*, len)
+            EventLog.add2("ipc", "send blocked", cur.id as uint, peer.id as uint)
+        }
+        return 0
+    }
+
+    func sys_msg_recv(buf: uint, len: uint) -> uint {
+        let cur: Task.TCB* = Task.current_tcb()
+        if cur == null || len > Task.IPC_MAX {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        let sender: Task.TCB* = Task.first_sender_for(cur.id)
+        if sender == null {
+            Task.block_current_recv(buf, len)
+            EventLog.add1("ipc", "recv blocked", cur.id as uint)
+            return 0
+        }
+
+        let deliver: uint = min_u(sender.ipc_len, len)
+        copy_to_user(buf, sender.ipc_msg as char*, deliver)
+        sender.state = Task.STATE_REPLY_BLOCKED
+        sender.ipc_peer = cur.id
+        cur.ipc_peer = sender.id
+        EventLog.add2("ipc", "recv delivered", sender.id as uint, cur.id as uint)
+        return sender.id as uint
+    }
+
+    func sys_msg_reply(peer_u: uint, buf: uint, len: uint) -> uint {
+        let sender_id: int = peer_u as int
+        let sender: Task.TCB* = Task.find_by_id(sender_id)
+        let cur: Task.TCB* = Task.current_tcb()
+        if sender == null || cur == null || len > Task.IPC_MAX {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if sender.state != Task.STATE_REPLY_BLOCKED || sender.ipc_peer != cur.id {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        let tmp: char[128]
+        let copied: uint = copy_from_user(buf, tmp as char*, len)
+        if copied != len {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let deliver: uint = min_u(len, sender.ipc_reply_len)
+        let written: uint = copy_to_user_pml4(sender.pml4, sender.ipc_reply_buf, tmp as char*, deliver)
+        sender.ipc_len = written
+        sender.ipc_peer = -1
+        Task.wake_with_return(sender, written)
+        EventLog.add2("ipc", "reply", cur.id as uint, sender.id as uint)
+        return written
     }
 }

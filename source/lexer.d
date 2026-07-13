@@ -86,6 +86,8 @@ enum TokenType {
     RightShift,
     Arrow,
     FatArrow,
+    PlusPlus,
+    MinusMinus,
     PlusEqual,
     MinusEqual,
     StarEqual,
@@ -658,6 +660,16 @@ class Lexer {
             if (current == '.' && peek(1) == '.') {
                 advance(); advance();
                 return Token(TokenType.DotDot, "..", startLine, startColumn);
+            }
+            // `++`/`--` - checked ahead of the plain `+`/`-` single-
+            // character tokens below for the same reason `+=`/`-=` are.
+            if (current == '+' && peek() == '+') {
+                advance(); advance();
+                return Token(TokenType.PlusPlus, "++", startLine, startColumn);
+            }
+            if (current == '-' && peek() == '-') {
+                advance(); advance();
+                return Token(TokenType.MinusMinus, "--", startLine, startColumn);
             }
             // Compound assignment operators (`+=`, `-=`, ...) - each is its
             // plain operator's single-character token plus `=`, so these

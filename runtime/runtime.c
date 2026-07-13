@@ -222,9 +222,10 @@ void rc_free(void* ptr) {
 
 void rc_init(RefCount* rc) {
     rc->count = 1;
+    rc->weak_count = 0;
 }
 
-void rc_retain(void* ptr) {
+void rc_retain(char* ptr) {
     if (!ptr) return;
     RefCount* rc = (RefCount*)ptr;
     rc->count++;
@@ -240,8 +241,35 @@ void rc_release(void* ptr, void (*destructor)(void*)) {
         if (destructor) {
             destructor(ptr);
         }
-        rc_free(ptr);
+        // Only the memory backing a still-outstanding Weak<T> is kept
+        // around past this point (so it can safely observe "count == 0"
+        // instead of reading freed/reused memory) - the value itself is
+        // already gone, same as before weak references existed.
+        if (rc->weak_count == 0) {
+            rc_free(ptr);
+        }
     }
+}
+
+void rc_weak_retain(char* ptr) {
+    if (!ptr) return;
+    RefCount* rc = (RefCount*)ptr;
+    rc->weak_count++;
+}
+
+void rc_weak_release(char* ptr) {
+    if (!ptr) return;
+    RefCount* rc = (RefCount*)ptr;
+    rc->weak_count--;
+    if (rc->weak_count == 0 && rc->count == 0) {
+        rc_free((void*)ptr);
+    }
+}
+
+int rc_is_alive(char* ptr) {
+    if (!ptr) return 0;
+    RefCount* rc = (RefCount*)ptr;
+    return rc->count > 0;
 }
 
 void* memset(void* dest, int val, size_t count) {

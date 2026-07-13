@@ -53,6 +53,14 @@ extern func llpl_reflect_field_size(field: char*) -> uint
 extern func llpl_alloc(size: uint) -> char*
 extern func llpl_free(ptr: char*)
 extern func llpl_memcpy(dest: char*, src: char*, count: uint)
+// Weak<T>'s own building blocks - see runtime.h/runtime.c's own comments
+// on RefCount.weak_count. `ptr` is always a class instance's own address
+// (its RefCount header is its first field), cast to char* the same way
+// every other raw-pointer runtime call in this file already does.
+extern func rc_retain(ptr: char*)
+extern func rc_weak_retain(ptr: char*)
+extern func rc_weak_release(ptr: char*)
+extern func rc_is_alive(ptr: char*) -> bool
 // Symbolized panic backtraces - see runtime.h's own comment. `addr` is a
 // raw instruction-pointer value (as already used throughout
 // examples/baremetal_demo/backtrace.llpl), not necessarily a function's
@@ -871,6 +879,55 @@ class Owned<T> {
         let out: T* = self.ptr
         self.ptr = null
         return out
+    }
+}
+
+// A non-owning reference to a class instance - it never keeps its target
+// alive (unlike an ordinary class-typed field, which the owning class's
+// auto-generated destructor releases when *it* is destroyed), and safely
+// reports whether the target is still alive instead of leaving a dangling
+// pointer once it isn't. The main use is breaking a reference cycle
+// between two classes that hold each other (a parent/child or doubly-
+// linked pair): make one direction `Weak<T>` and only the other an
+// ordinary owning field, so destroying the owner doesn't try to cascade
+// back through an already-destroyed instance.
+//
+// `target: T*` - an explicit pointer, not a bare `T` - is what makes this
+// safe: a plain class-typed field is exactly what the owning class's
+// destructor auto-releases (see generateDestructor's own comment, and
+// typeToC's identical `!field.type.isPointer` check) - writing the
+// pointer star here excludes this field from that cascade, the same
+// trick Owned<T>'s `ptr: T*` field already relies on to manage its own
+// memory by hand instead of through rc_alloc/rc_release.
+class Weak<T> {
+    let target: T*
+
+    constructor(t: T) {
+        self.target = t
+        if self.target != null {
+            rc_weak_retain(self.target as char*)
+        }
+    }
+
+    destructor() {
+        if self.target != null {
+            rc_weak_release(self.target as char*)
+        }
+    }
+
+    // The target if it's still alive - a real, retained reference the
+    // caller now owns, exactly like any other `new`-obtained one - or
+    // `null` if it's already been destroyed.
+    func upgrade() -> T {
+        if self.target != null && rc_is_alive(self.target as char*) {
+            rc_retain(self.target as char*)
+            return self.target
+        }
+        return null
+    }
+
+    func is_alive() -> bool {
+        return self.target != null && rc_is_alive(self.target as char*)
     }
 }
 

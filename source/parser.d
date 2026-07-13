@@ -1739,6 +1739,22 @@ class Parser {
             return new BinaryExpr("=", expr, combined, expr.line, expr.column);
         }
 
+        // `i++`/`i--` - desugars to `i = i + 1`/`i = i - 1`, exactly like
+        // `i += 1`/`i -= 1` just above (including that same "evaluates to
+        // the new value, not the old one" simplification - a true C
+        // postfix's old-value capture isn't offered). Only recognized
+        // here (assignment's own precedence level), not at every
+        // expression precedence, so `i++` works as its own statement or
+        // parenthesized, but not spliced into a larger expression like
+        // `i++ + 5` - the same restriction `i += 1` already has.
+        if (check(TokenType.PlusPlus) || check(TokenType.MinusMinus)) {
+            string incDecOp = current.type == TokenType.PlusPlus ? "+" : "-";
+            advance();
+            ASTNode one = new IntLiteral(1, expr.line, expr.column);
+            ASTNode combined = new BinaryExpr(incDecOp, expr, one, expr.line, expr.column);
+            return new BinaryExpr("=", expr, combined, expr.line, expr.column);
+        }
+
         return expr;
     }
 

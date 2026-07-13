@@ -1,0 +1,19 @@
+namespace HAL { 
+    func outb(port: uint, value: char) {
+        asm("outb %0, %w1" : : "a"(value), "Nd"(port))
+    }
+
+    func inb(port: uint) -> char {
+        let value: char = 0
+        asm("inb %w1, %0" : "=a"(value) : "Nd"(port))
+        value
+    }
+
+    func halt() {
+        asm("hlt")
+    }
+
+    func disable_interrupts() {
+        asm("cli")
+    }
+}

@@ -1,0 +1,195 @@
+// Fixed-size kernel event ring buffer.
+//
+// This is intentionally allocation-free and panic-safe enough for early boot:
+// entries live in .bss, messages are copied into fixed arrays, and writers
+// briefly disable interrupts instead of taking a spinlock. On this single-core
+// demo that is enough to keep an event append from being preempted halfway.
+
+import hal
+
+namespace EventLog {
+    const CAPACITY = 128
+    const SOURCE_MAX = 16
+    const MESSAGE_MAX = 64
+
+    packed struct Entry {
+        let seq: uint
+        let tick: uint
+        let source: char[16]
+        let message: char[64]
+        let arg_count: int
+        let a: uint
+        let b: uint
+    }
+
+    let entries: Entry[128]
+    let head: int = 0       // next slot to write
+    let entry_count: int = 0      // capped at CAPACITY
+    let next_seq: uint = 0
+
+    func copy_string(dst: char*, max_len: int, src: char*) {
+        let i: int = 0
+        while src[i] != 0 && i < max_len - 1 {
+            dst[i] = src[i]
+            i = i + 1
+        }
+        dst[i] = 0
+    }
+
+    func add2(src: char*, message: char*, a: uint, b: uint) {
+        let flags: uint = HAL.read_flags()
+        HAL.disable_interrupts()
+
+        let e: Entry* = &entries[head]
+        e.seq = next_seq
+        e.tick = timer_ticks
+        copy_string(e.source as char*, SOURCE_MAX, src)
+        copy_string(e.message as char*, MESSAGE_MAX, message)
+        e.arg_count = 2
+        e.a = a
+        e.b = b
+
+        next_seq = next_seq + 1
+        head = (head + 1) % CAPACITY
+        if entry_count < CAPACITY {
+            entry_count = entry_count + 1
+        }
+
+        HAL.write_flags(flags)
+    }
+
+    func add1(src: char*, message: char*, a: uint) {
+        let flags: uint = HAL.read_flags()
+        HAL.disable_interrupts()
+
+        let e: Entry* = &entries[head]
+        e.seq = next_seq
+        e.tick = timer_ticks
+        copy_string(e.source as char*, SOURCE_MAX, src)
+        copy_string(e.message as char*, MESSAGE_MAX, message)
+        e.arg_count = 1
+        e.a = a
+        e.b = 0
+
+        next_seq = next_seq + 1
+        head = (head + 1) % CAPACITY
+        if entry_count < CAPACITY {
+            entry_count = entry_count + 1
+        }
+
+        HAL.write_flags(flags)
+    }
+
+    func add0(src: char*, message: char*) {
+        let flags: uint = HAL.read_flags()
+        HAL.disable_interrupts()
+
+        let e: Entry* = &entries[head]
+        e.seq = next_seq
+        e.tick = timer_ticks
+        copy_string(e.source as char*, SOURCE_MAX, src)
+        copy_string(e.message as char*, MESSAGE_MAX, message)
+        e.arg_count = 0
+        e.a = 0
+        e.b = 0
+
+        next_seq = next_seq + 1
+        head = (head + 1) % CAPACITY
+        if entry_count < CAPACITY {
+            entry_count = entry_count + 1
+        }
+
+        HAL.write_flags(flags)
+    }
+
+    func clear() {
+        let flags: uint = HAL.read_flags()
+        HAL.disable_interrupts()
+        head = 0
+        entry_count = 0
+        next_seq = 0
+        HAL.write_flags(flags)
+    }
+
+    func size() -> int {
+        return entry_count
+    }
+
+    func dropped() -> uint {
+        if next_seq > entry_count as uint {
+            return next_seq - (entry_count as uint)
+        }
+        return 0
+    }
+
+    func physical_index(logical: int) -> int {
+        let oldest: int = 0
+        if entry_count == CAPACITY {
+            oldest = head
+        }
+        return (oldest + logical) % CAPACITY
+    }
+
+    func entry_at(logical: int) -> Entry* {
+        if logical < 0 || logical >= entry_count {
+            return null
+        }
+        return &entries[physical_index(logical)]
+    }
+
+    func seq_at(logical: int) -> uint {
+        let e: Entry* = entry_at(logical)
+        if e == null {
+            return 0
+        }
+        return e.seq
+    }
+
+    func tick_at(logical: int) -> uint {
+        let e: Entry* = entry_at(logical)
+        if e == null {
+            return 0
+        }
+        return e.tick
+    }
+
+    func source_at(logical: int) -> char* {
+        let e: Entry* = entry_at(logical)
+        if e == null {
+            return ""
+        }
+        return e.source as char*
+    }
+
+    func message_at(logical: int) -> char* {
+        let e: Entry* = entry_at(logical)
+        if e == null {
+            return ""
+        }
+        return e.message as char*
+    }
+
+    func arg_count_at(logical: int) -> int {
+        let e: Entry* = entry_at(logical)
+        if e == null {
+            return 0
+        }
+        return e.arg_count
+    }
+
+    func arg_a_at(logical: int) -> uint {
+        let e: Entry* = entry_at(logical)
+        if e == null {
+            return 0
+        }
+        return e.a
+    }
+
+    func arg_b_at(logical: int) -> uint {
+        let e: Entry* = entry_at(logical)
+        if e == null {
+            return 0
+        }
+        return e.b
+    }
+}

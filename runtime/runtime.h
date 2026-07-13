@@ -5,9 +5,17 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-// Reference counting structure
+// Reference counting structure. `count` (strong references) drives
+// destruction - the destructor runs and the object's *value* is gone the
+// moment it hits zero, exactly as before weak references existed.
+// `weak_count` only delays the underlying memory's actual rc_free: a
+// Weak<T> (prelude.llpl) doesn't keep the value alive, but does need the
+// RefCount header itself to remain valid memory so it can safely check
+// "is this still alive?" after the strong owner is gone, instead of
+// reading freed/reused memory. See rc_release/rc_weak_release.
 typedef struct {
     uint32_t count;
+    uint32_t weak_count;
 } RefCount;
 
 // A closure value (see codegen.d's LambdaExpr handling): `fn` and `env`
@@ -98,8 +106,22 @@ void rc_free(void* ptr);
 
 // Reference counting functions
 void rc_init(RefCount* rc);
-void rc_retain(void* ptr);
 void rc_release(void* ptr, void (*destructor)(void*));
+
+// `char*`, not `void*` - unlike rc_init/rc_release (compiler-generated
+// code only), these four are also called directly from LLPL source (see
+// prelude.llpl's `extern func` declarations for them, and Weak<T>) -
+// their C parameter type has to match that extern declaration exactly,
+// or two conflicting prototypes for the same symbol is a compile error.
+//
+// Weak references (see prelude.llpl's Weak<T>) never keep `ptr`'s value
+// alive (rc_weak_retain never runs its destructor), only its memory, for
+// exactly as long as it takes every weak reference to also let go (see
+// rc_release/rc_weak_release's comments in runtime.c).
+void rc_retain(char* ptr);
+void rc_weak_retain(char* ptr);
+void rc_weak_release(char* ptr);
+int rc_is_alive(char* ptr);
 
 // Memory functions for kernel
 void* memset(void* dest, int val, size_t count);

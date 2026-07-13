@@ -375,7 +375,7 @@ timer_isr_entry:
 ; it after iretq.
 global syscall_isr_entry
 extern Syscall_dispatch
-extern Task_is_current_dead
+extern Task_should_reschedule_current
 extern Task_pick_next
 syscall_isr_entry:
     push rax
@@ -403,9 +403,9 @@ syscall_isr_entry:
     call Syscall_dispatch
     mov [rsp + 112], rax        ; write return value into saved RAX
 
-    ; If the syscall was SYS_EXIT, switch away from the dead task now instead
-    ; of returning to it.
-    call Task_is_current_dead
+    ; If the syscall exited, slept, or yielded, switch away now instead of
+    ; returning straight to the same task.
+    call Task_should_reschedule_current
     test eax, eax
     jz .return
 
