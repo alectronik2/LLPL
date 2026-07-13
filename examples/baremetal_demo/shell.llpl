@@ -25,6 +25,7 @@ import tmpfs
 import task
 import eventlog
 import vmm
+import ldso
 
 namespace Shell {
     const LINE_MAX = 128
@@ -407,6 +408,7 @@ namespace Shell {
         print("  kheap         - show kernel heap stats\n")
         print("  tasks         - show scheduler/task stats\n")
         print("  ipc           - show message-passing state\n")
+        print("  ldso          - show loaded user shared libraries\n")
         print("  stacks        - check kernel stack canaries and user guards\n")
         print("  sleep TICKS   - put the shell task to sleep briefly\n")
         print("  spawn         - spawn another idle background task\n")
@@ -957,6 +959,9 @@ namespace Shell {
             }
             case "ipc" => {
                 cmd_ipc()
+            }
+            case "ldso" => {
+                LdSo.status()
             }
             case "stacks" => {
                 cmd_stacks()

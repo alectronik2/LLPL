@@ -42,6 +42,7 @@ import shell
 import vmm
 import syscall
 import eventlog
+import ldso
 
 let screen: Console.Screen = null
 
@@ -528,6 +529,8 @@ func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*
         return false
     }
 
+    LdSo.load_default_user_libraries(aspace)
+
     // Allocate and map one user stack page.
     let stack_phys: uint = PageAlloc.alloc()
     let stack_setup: UserStackSetup
@@ -715,6 +718,7 @@ func kernel_main(multiboot_ptr: uint) {
     print("namespace TmpFS      -> read-only tmpfs over multiboot2 modules\n")
     print("namespace Task       -> preemptive round-robin task switching\n")
     print("namespace Shell      -> a tiny interactive command line\n")
+    print("namespace LdSo       -> user shared-object loader + libsys preload\n")
     print("\n")
 
     log("colors: <RED>red</> <GREEN>green</> <YELLOW>yellow</> <CYAN>cyan</> - a single log() call, tags inline\n")

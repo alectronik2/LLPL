@@ -80,6 +80,18 @@ extra_links:
       script: userapp/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static, --gc-sections]
       objects: [userapp/llpl_userapp.o]
+  - name: libsys
+    llpl_sources:
+      - src: libsys/libsys.llpl
+        c_output: libsys/libsys.c
+        output: libsys/libsys.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=default, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: libsys.so
+      script: libsys/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -soname, libsys.so, --hash-style=sysv, --gc-sections, --version-script, libsys/exports.map]
+      objects: [libsys/libsys.o]
 
 # Includes two small files loaded as multiboot2 modules (grub.cfg's
 # `module2` directive) purely to give tmpfs.llpl something real to
@@ -91,6 +103,7 @@ package:
     - copy: {from: kernel.bin, to: isodir/boot/kernel.bin}
     - copy: {from: userapp.elf, to: isodir/boot/userapp.elf}
     - copy: {from: llpl_userapp.elf, to: isodir/boot/llpl_userapp.elf}
+    - copy: {from: libsys.so, to: isodir/boot/libsys.so}
     - write:
         to: isodir/boot/hello.txt
         content: "Hello from a GRUB module!"
@@ -108,6 +121,7 @@ package:
               module2 /boot/readme.txt readme.txt
               module2 /boot/userapp.elf userapp.elf
               module2 /boot/llpl_userapp.elf llpl_userapp.elf
+              module2 /boot/libsys.so libsys.so
           }
     - run: "grub-mkrescue -o kernel.iso isodir"
       allow_failure: true
