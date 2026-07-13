@@ -1,0 +1,115 @@
+packed struct LimineFramebuffer {
+    let address: uint
+    let width: uint
+    let height: uint
+    let pitch: uint
+    let bpp: uint16
+    let memory_model: char
+    let red_mask_size: char
+    let red_mask_shift: char
+    let green_mask_size: char
+    let green_mask_shift: char
+    let blue_mask_size: char
+    let blue_mask_shift: char
+    let unused: char[7]
+    let edid_size: uint
+    let edid: uint
+    let mode_count: uint
+    let modes: uint
+}
+
+packed struct LimineFramebufferRequest {
+    let id: uint[4]
+    let revision: uint
+    let response: LimineFramebufferResponse*
+}
+
+packed struct LimineFramebufferResponse {
+    let revision: uint
+    let framebuffer_count: uint
+    let framebuffers: uint*
+}
+
+packed struct LimineMemmapEntry {
+    let base: uint
+    let length: uint
+    let entry_type: uint
+}
+
+packed struct LimineMemmapRequest {
+    let id: uint[4]
+    let revision: uint
+    let response: LimineMemmapResponse*
+}
+
+packed struct LimineMemmapResponse {
+    let revision: uint
+    let entry_count: uint
+    let entries: uint
+}
+
+packed struct LimineHhdmRequest {
+    let id: uint[4]
+    let revision: uint
+    let response: LimineHhdmResponse*
+}
+
+packed struct LimineHhdmResponse {
+    let revision: uint
+    let offset: uint
+}
+
+// Limine's fixed protocol magic numbers - see the Limine boot protocol
+// spec's "Requests" section. `alias NAME = [ ... ]` names an array
+// literal at compile time only (never its own addressable symbol); each
+// use below is expanded back into these same values, either as a whole
+// initializer or spliced into a larger array literal it's one element of
+// (see codegen.d's arrayLiteralAliases).
+alias limine_start_marker_id = [
+    0xf6b8f4b39de7d1ae,
+    0xfab91a6940fcb9cf,
+    0x785c6ed015d3e316,
+    0x181e920a7852b9d9
+]
+
+alias limine_end_marker_id = [
+    0xadc0e0531bb10d03,
+    0x9572709f31764c62
+]
+
+// Common to every request's `id` field - the first two of its four
+// words never change, only the last two (request-specific) do.
+alias limine_common_magic = [
+    0xc7b1dd30df4c8b88,
+    0x0a82e883a194f07b
+]
+
+alias limine_framebuffer_request_id = [
+    limine_common_magic,
+    0x9d5827dcd881dd75,
+    0xa3148604f6fab11b
+]
+
+alias limine_memmap_request_id = [
+    limine_common_magic,
+    0x67cf3d9d378a806f,
+    0xe304acdfc50c3c62
+]
+
+alias limine_hhdm_request_id = [
+    limine_common_magic,
+    0x48dcf1cb8ad2b852,
+    0x63984e959a98244b
+]
+
+enum MemMapType: uint {
+    Usable = 0,
+    Reserved = 1,
+    AcpiReclaimable = 2,
+    AcpiNvs = 3,
+    BadMemory = 4,
+    BootloaderReclaimable = 5,
+    ExecutableAndModules = 6,
+    Framebuffer = 7,
+    ReservedMapped = 8,
+}

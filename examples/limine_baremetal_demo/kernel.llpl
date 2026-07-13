@@ -6,7 +6,8 @@
 // a simple visualization directly into the framebuffer returned by the
 // bootloader.
 
-import limine
+import hal.limine
+import hal.serial
 
 namespace HAL {
     func outb(port: uint, value: char) {
@@ -27,36 +28,7 @@ namespace HAL {
         asm("cli")
     }
 
-    namespace Serial {
-        const PORT = 0x3F8
-
-        func init() {
-            outb(PORT + 1, 0)
-            outb(PORT + 3, 128)
-            outb(PORT, 3)
-            outb(PORT + 1, 0)
-            outb(PORT + 3, 3)
-            outb(PORT + 2, 199)
-            outb(PORT + 4, 11)
-        }
-
-        func ready() -> bool {
-            return (inb(PORT + 5) & 32) != 0
-        }
-
-        func write_char(c: char) {
-            while !ready() {}
-            outb(PORT, c)
-        }
-
-        func write(s: string) {
-            let i: int = 0
-            while s[i] != 0 {
-                write_char(s[i])
-                i = i + 1
-            }
-        }
-    }
+    
 }
 
 @section(".limine_requests_start") @used

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LLPL Playground</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+    <h1>LLPL Playground</h1>
+    <div class="controls">
+        <select id="examples"></select>
+        <button id="run-btn">Run ▶</button>
+        <span id="status"></span>
+    </div>
+</header>
+
+<main>
+    <section class="pane" id="source-pane">
+        <h2>LLPL source</h2>
+        <textarea id="source-editor"></textarea>
+    </section>
+
+    <section class="pane" id="c-pane">
+        <h2>Generated C</h2>
+        <textarea id="c-viewer" readonly></textarea>
+    </section>
+
+    <section class="pane" id="output-pane">
+        <h2>Program output</h2>
+        <pre id="output-viewer"></pre>
+    </section>
+
+    <section class="pane" id="symbols-pane">
+        <h2>Symbol table</h2>
+        <div id="symbols-viewer"></div>
+    </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/mode/simple.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+<script src="llpl-mode.js"></script>
+<script src="examples.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

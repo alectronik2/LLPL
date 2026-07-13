@@ -1,0 +1,90 @@
+# Build config for the Limine-booted bare-metal demo - replaces the old
+# Makefile. Run with ../../tools/llplbuild/llplbuild (build|run|clean|configs)
+# from within this directory.
+#
+# Override where Limine's own assets/tooling live with
+#   ../../tools/llplbuild/llplbuild build --var LIMINE_DIR=/path/to/limine
+# (or the LIMINE_DIR environment variable) - defaults to /usr/share/limine,
+# matching the old Makefile's `LIMINE_DIR ?= /usr/share/limine`.
+
+project: llpl-limine-baremetal-demo
+entry: kernel.llpl
+llpl_compiler: ../../llpl
+
+variables:
+  LIMINE_DIR: /usr/share/limine
+
+toolchain:
+  cc: tcc
+  ld: ld
+  qemu: qemu-system-x86_64
+
+common_cflags:
+  - -m64
+  - -ffreestanding
+  - -nostdlib
+  - -nostdinc
+  - -fno-builtin
+  - -fno-stack-protector
+  - -fno-omit-frame-pointer
+  - -fno-optimize-sibling-calls
+  - -I.
+  - -mcmodel=kernel
+  - -fno-pie
+  - -mno-red-zone
+  - -mno-sse
+  - -mno-sse2
+  - -mno-mmx
+  - -mno-80387
+
+default_config: final
+configurations:
+  debug:
+    cflags: [-O0, -g]
+  final:
+    cflags: [-O2]
+
+c_sources:
+  - path: kernel.c
+    include_dirs: [../../runtime]
+  - path: ../../runtime/runtime.c
+    include_dirs: [../../runtime]
+
+link:
+  output: kernel.elf
+  script: linker.ld
+  ldflags: [-m, elf_x86_64, -nostdlib]
+  objects: [kernel.o, runtime.o]
+
+package:
+  output: kernel.iso
+  actions:
+    # Replaces the old Makefile's `check-limine` target - fails fast,
+    # before doing any ISO work, if Limine's assets/tooling aren't where
+    # LIMINE_DIR says they are.
+    - require_file:
+        path: "${LIMINE_DIR}/limine-bios.sys"
+        message: "Limine assets not found in LIMINE_DIR=${LIMINE_DIR} - install Limine, or run: llplbuild build --var LIMINE_DIR=/path/to/limine"
+    - require_file:
+        path: "${LIMINE_DIR}/limine-bios-cd.bin"
+        message: "Missing ${LIMINE_DIR}/limine-bios-cd.bin"
+    - require_file:
+        path: "${LIMINE_DIR}/limine-uefi-cd.bin"
+        message: "Missing ${LIMINE_DIR}/limine-uefi-cd.bin"
+    - run: "command -v limine >/dev/null 2>&1 || { echo 'limine command not found on PATH' >&2; exit 1; }"
+    - run: "rm -rf isodir"
+    - mkdir: isodir/boot/limine
+    - mkdir: isodir/EFI/BOOT
+    - copy: {from: kernel.elf, to: isodir/boot/kernel.elf}
+    - copy: {from: limine.conf, to: isodir/limine.conf}
+    - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}
+    - copy: {from: "${LIMINE_DIR}/limine-bios.sys", to: isodir/boot/limine/limine-bios.sys}
+    - copy: {from: "${LIMINE_DIR}/limine-bios-cd.bin", to: isodir/boot/limine/limine-bios-cd.bin}
+    - copy: {from: "${LIMINE_DIR}/limine-uefi-cd.bin", to: isodir/boot/limine/limine-uefi-cd.bin}
+    - copy: {from: "${LIMINE_DIR}/BOOTX64.EFI", to: isodir/EFI/BOOT/BOOTX64.EFI}
+      allow_failure: true
+    - run: "xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label isodir -o kernel.iso"
+    - run: "limine bios-install kernel.iso"
+
+run:
+  args: ["-cdrom", "kernel.iso", "-serial", "stdio", "-m", "256"]
