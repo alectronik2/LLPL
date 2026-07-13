@@ -24,6 +24,44 @@ let request: uint[4] = [1, 2, 3, 4]
 stripping, and `@align(N)` emits an alignment attribute. These attributes are
 currently supported on global `let`/`const`/`volatile` declarations.
 
+### Symbolized Backtraces
+
+The compiler bakes a static symbol table - one entry per compiled
+function/method/constructor, with its name, declaring `.llpl` file, and
+declaration line - directly into the binary as plain data (see
+codegen.d's `generateBacktraceSymbolTable`). No external tool (objdump,
+nm, a DWARF parser) is needed to make a bare-metal backtrace readable;
+`examples/baremetal_demo/backtrace.llpl` walks the `rbp` frame-pointer
+chain and resolves each return address through it:
+
+```swift
+extern func puts(s: char*) -> int
+
+func helper(n: int) -> int {
+    return n * 2
+}
+
+func main() -> int {
+    let addr: uint = helper as uint
+    let sym: char* = llpl_resolve_symbol(addr)
+    if sym != null {
+        puts(llpl_symbol_name(sym))  // "helper"
+        puts(llpl_symbol_file(sym))  // "example.llpl"
+    }
+    return 0
+}
+```
+
+`llpl_resolve_symbol(addr)` finds whichever compiled function *contains*
+`addr` - it doesn't need to be an exact function-start address, which is
+what makes it useful for real return addresses from a stack walk (always
+a few bytes past a `call` instruction, never a function's first byte).
+Resolves to a function's **declaration site**, not the exact call site
+within it - the table is function-granularity, not per-instruction DWARF
+line info, so two different calls into the same function report the same
+line. See `test/symbol_table_demo.llpl` for the full runnable version
+this is taken from.
+
 ## Basic Examples
 
 ### Hello World (with C FFI)

@@ -1015,6 +1015,20 @@ class Parser {
                 elems ~= parseType();
             } while (match(TokenType.Comma));
             expect(TokenType.RightParen);
+            // `(T1, T2, ...) -> R` (2+ params) - checked here too, not just
+            // after the single-param case below, so a multi-parameter
+            // closure type annotation doesn't get misread as a tuple type
+            // with the trailing `-> R` left dangling (a bug: this branch
+            // used to always return the tuple immediately).
+            if (match(TokenType.Arrow)) {
+                Type ret = parseType();
+                Type t = new Type("__LLPL_Closure");
+                Parameter[] closureParams;
+                foreach (elem; elems) closureParams ~= new Parameter("", elem);
+                t.closureParams = closureParams;
+                t.closureReturnType = ret;
+                return t;
+            }
             return makeTupleType(elems, startLine, startColumn);
         }
 

@@ -1264,6 +1264,12 @@ class CodeGenerator {
             code ~= reflectionMetadata;
         }
 
+        string backtraceSymbolTable = generateBacktraceSymbolTable();
+        if (backtraceSymbolTable.length > 0) {
+            code ~= "// Symbol table for symbolized panic backtraces\n";
+            code ~= backtraceSymbolTable;
+        }
+
         collectSymbolTable(programs);
 
         // Collected symbols/usages above are still valid (if partial) even
@@ -1447,6 +1453,55 @@ class CodeGenerator {
         foreach (entry; typeEntries) code ~= entry;
         code ~= "};\n";
         code ~= format("uint64_t __llpl_reflect_type_count = %d;\n\n", typeEntries.length);
+        return code;
+    }
+
+    // One entry per user-defined function/method/constructor actually
+    // compiled - drives symbolized panic backtraces (see
+    // examples/baremetal_demo/backtrace.llpl and runtime.c's
+    // llpl_resolve_symbol). Reads functionRegistry/classRegistry directly
+    // (rather than re-walking `programs`, the way generateReflectionMetadata
+    // does) specifically so generic instantiations and impl-block-desugared
+    // functions - synthesized during codegen, never present in the original
+    // parsed declarations at all - are automatically included too: by the
+    // time this runs (the very end of generateMultiple), every instantiation
+    // that was ever going to happen already has an entry in one of these
+    // two registries. Extern functions are skipped (no LLPL-side body/line
+    // to report). functionModulePath/classModulePath don't have entries for
+    // generic instantiations or impl methods (only ordinary top-level
+    // registrations do) - "?" is an acceptable fallback there, not a
+    // hard requirement of this being a debugging aid, not the compiler's
+    // main correctness surface.
+    private string generateBacktraceSymbolTable() {
+        string[] entries;
+
+        foreach (name, funcDecl; functionRegistry) {
+            if (funcDecl.isExtern) continue;
+            string file = name in functionModulePath ? baseName(functionModulePath[name]) : "?";
+            entries ~= format("    { %s, (void*)%s, %s, %d },\n",
+                cStringLiteral(name), name, cStringLiteral(file), funcDecl.line);
+        }
+
+        foreach (cName, classDecl; classRegistry) {
+            string file = cName in classModulePath ? baseName(classModulePath[cName]) : "?";
+            foreach (ctor; classDecl.constructors) {
+                string mangledName = mangleConstructorName(classDecl, cName, ctor);
+                entries ~= format("    { %s, (void*)%s, %s, %d },\n",
+                    cStringLiteral(mangledName), mangledName, cStringLiteral(file), ctor.line);
+            }
+            foreach (method; classDecl.methods) {
+                string mangledName = mangleMethodName(classDecl, cName, method);
+                entries ~= format("    { %s, (void*)%s, %s, %d },\n",
+                    cStringLiteral(mangledName), mangledName, cStringLiteral(file), method.line);
+            }
+        }
+
+        if (entries.length == 0) return "";
+
+        string code = "LLPL_Symbol llpl_symbol_table[] = {\n";
+        foreach (entry; entries) code ~= entry;
+        code ~= "};\n";
+        code ~= format("uint64_t llpl_symbol_table_count = %d;\n\n", entries.length);
         return code;
     }
 

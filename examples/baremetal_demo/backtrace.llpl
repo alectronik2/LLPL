@@ -1,9 +1,15 @@
-// Minimal frame-pointer backtraces for the bare-metal demo.
+// Frame-pointer backtraces for the bare-metal demo, symbolized using the
+// compiler's own baked-in symbol table (see codegen.d's
+// generateBacktraceSymbolTable / runtime.h's llpl_resolve_symbol) -
+// function name, declaring .llpl file, and declaration line, all from
+// data the compiler already emitted into this exact binary, no external
+// tool (objdump/nm) needed. Keep the build using frame pointers
+// (-fno-omit-frame-pointer) so the rbp chain below stays walkable.
 //
-// This intentionally prints raw return addresses rather than attempting
-// symbolization in the kernel. Keep the build using frame pointers
-// (-fno-omit-frame-pointer) and resolve addresses offline with objdump/nm
-// when needed.
+// This resolves to a function's *declaration* site, not the exact call
+// site within it - see EXAMPLES.md's "Symbolized Backtraces" section for
+// why (the symbol table is function-granularity, not per-instruction
+// DWARF line info).
 
 import hal
 
@@ -24,14 +30,29 @@ namespace Backtrace {
             if rip == 0 {
                 done = true
             } else {
-                HAL.Log.ksnprintf(
-                    HAL.Log.buffer as char*,
-                    128,
-                    "  #%02d rbp=0x%016x rip=0x%016x\n",
-                    depth,
-                    frame_addr,
-                    rip
-                )
+                let sym: char* = llpl_resolve_symbol(rip)
+                if sym != null {
+                    HAL.Log.ksnprintf(
+                        HAL.Log.buffer as char*,
+                        128,
+                        "  #%02d rbp=0x%016x rip=0x%016x %s (%s:%d)\n",
+                        depth,
+                        frame_addr,
+                        rip,
+                        llpl_symbol_name(sym),
+                        llpl_symbol_file(sym),
+                        llpl_symbol_line(sym)
+                    )
+                } else {
+                    HAL.Log.ksnprintf(
+                        HAL.Log.buffer as char*,
+                        128,
+                        "  #%02d rbp=0x%016x rip=0x%016x <unknown>\n",
+                        depth,
+                        frame_addr,
+                        rip
+                    )
+                }
                 HAL.Log.flush()
 
                 if next == 0 {

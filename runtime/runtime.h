@@ -45,6 +45,23 @@ typedef struct {
 extern LLPL_TypeInfo __llpl_reflect_types[];
 extern uint64_t __llpl_reflect_type_count;
 
+// One entry per user-defined function/method/constructor actually
+// compiled (including generic instantiations) - the compiler itself
+// emits llpl_symbol_table[]/llpl_symbol_table_count (see codegen.d's
+// generateBacktraceSymbolTable), the same "compiler bakes in a static
+// data table, runtime.c just reads it" pattern __llpl_reflect_types
+// above already uses. `file` is the declaring .llpl file's base name
+// (no directory), `line` its declaration's source line.
+typedef struct {
+    char* name;
+    void* addr;
+    char* file;
+    int64_t line;
+} LLPL_Symbol;
+
+extern LLPL_Symbol llpl_symbol_table[];
+extern uint64_t llpl_symbol_table_count;
+
 typedef struct {
     uint64_t rbx;
     uint64_t rbp;
@@ -122,6 +139,20 @@ uint64_t llpl_reflect_field_size(char* field);
 char* llpl_alloc(uint64_t size);
 void llpl_free(char* ptr);
 void llpl_memcpy(char* dest, char* src, uint64_t count);
+
+// Finds the llpl_symbol_table entry whose address is the closest one at
+// or before `addr` (i.e. "which function contains this return address") -
+// an opaque handle (NULL if addr is before every known symbol, or the
+// table is empty), read via llpl_symbol_name/_file/_line - the same
+// "opaque handle, then extract fields" pattern llpl_reflect_type already
+// uses. `addr` is uint64_t, not void*, to exactly match what an LLPL
+// `extern func` declaring a `uint` parameter generates (the same
+// conflicting-types trap ksnprintf's own comment documents). A simple
+// linear scan - only ever called from a panic/backtrace path.
+char* llpl_resolve_symbol(uint64_t addr);
+char* llpl_symbol_name(char* symbol);
+char* llpl_symbol_file(char* symbol);
+int64_t llpl_symbol_line(char* symbol);
 
 // Panic: print a message (hosted) or hand it to weak hooks (freestanding),
 // then halt. An optional handler is called first so user code can log/cleanup.

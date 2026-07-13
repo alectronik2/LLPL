@@ -53,6 +53,15 @@ extern func llpl_reflect_field_size(field: char*) -> uint
 extern func llpl_alloc(size: uint) -> char*
 extern func llpl_free(ptr: char*)
 extern func llpl_memcpy(dest: char*, src: char*, count: uint)
+// Symbolized panic backtraces - see runtime.h's own comment. `addr` is a
+// raw instruction-pointer value (as already used throughout
+// examples/baremetal_demo/backtrace.llpl), not necessarily a function's
+// exact start - llpl_resolve_symbol finds whichever compiled
+// function/method/constructor contains it.
+extern func llpl_resolve_symbol(addr: uint) -> char*
+extern func llpl_symbol_name(symbol: char*) -> char*
+extern func llpl_symbol_file(symbol: char*) -> char*
+extern func llpl_symbol_line(symbol: char*) -> int
 
 // Prints "PANIC: <msg>\n" and halts - stderr+abort() on a hosted target,
 // or (freestanding) whatever a kernel/port wired up via

@@ -10,6 +10,10 @@ class Klass {
         puts("Klass constructor")
     }
 
+    constructor( s: string ) {
+        puts("Klass constructor with string: \(s)")
+    }
+
     destructor() {
         puts("Klass destructor")
     }
@@ -82,6 +86,14 @@ func main() -> uint32 {
     let to = 5
     for i in 0..to {
         puts("i = \(i)")
+    }
+
+    let kl = new Klass("With a string")
+
+    let ss = "Hello, world!"
+    match ss {
+        case "Hello, world!" => { puts("Matched the string!") }
+        case _ => { puts("Did not match the string.")   }
     }
 
     result

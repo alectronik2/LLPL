@@ -914,6 +914,40 @@ void llpl_free(char* ptr) {
     rc_free((void*)ptr);
 }
 
+// Weak defaults, overridden by the compiler-generated definition in the
+// actual program whenever it has at least one eligible declaration (see
+// codegen.d's generateBacktraceSymbolTable) - mirrors __llpl_reflect_types'
+// identical weak-default trick above, so a program with nothing to put in
+// the table still links.
+__attribute__((weak)) LLPL_Symbol llpl_symbol_table[1] = {{0}};
+__attribute__((weak)) uint64_t llpl_symbol_table_count = 0;
+
+char* llpl_resolve_symbol(uint64_t addr) {
+    LLPL_Symbol* best = NULL;
+    for (uint64_t i = 0; i < llpl_symbol_table_count; i++) {
+        uint64_t candidate = (uint64_t)(uintptr_t)llpl_symbol_table[i].addr;
+        if (candidate <= addr && (!best || candidate > (uint64_t)(uintptr_t)best->addr)) {
+            best = &llpl_symbol_table[i];
+        }
+    }
+    return (char*)best;
+}
+
+char* llpl_symbol_name(char* symbol) {
+    LLPL_Symbol* s = (LLPL_Symbol*)symbol;
+    return s ? s->name : "";
+}
+
+char* llpl_symbol_file(char* symbol) {
+    LLPL_Symbol* s = (LLPL_Symbol*)symbol;
+    return s ? s->file : "";
+}
+
+int64_t llpl_symbol_line(char* symbol) {
+    LLPL_Symbol* s = (LLPL_Symbol*)symbol;
+    return s ? s->line : 0;
+}
+
 void llpl_memcpy(char* dest, char* src, uint64_t count) {
     memcpy(dest, src, (size_t)count);
 }
