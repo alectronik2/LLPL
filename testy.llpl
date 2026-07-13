@@ -35,7 +35,7 @@ func throw_func() {
 }
 
 func throw_func( l: int ) {
-    throw "This is another test exception"
+    throw "This is another test exception \(l)"
 }
 
 func main() -> uint32 {
@@ -70,7 +70,7 @@ func main() -> uint32 {
     delete k
 
     try {
-        throw_func()
+        throw_func(22)
     } catch error: string {
         puts("Caught an exception: \(error)")
     } finally {

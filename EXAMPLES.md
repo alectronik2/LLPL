@@ -258,6 +258,56 @@ func main() -> int {
 }
 ```
 
+### Overloading
+
+Methods, constructors, and free functions can share a name as long as
+their parameter types differ - the right one is picked at each call site
+by argument type (an exact match; no implicit numeric coercion). A name
+declared only once keeps its usual behavior completely unchanged; only an
+actually-overloaded name needs disambiguating. See
+`test/overloading_demo.llpl` for the full runnable version this is taken
+from:
+
+```swift
+func describe(n: int) -> char* {
+    return "an int"
+}
+func describe(s: char*) -> char* {
+    return "a string"
+}
+
+class Box {
+    let n: int
+
+    constructor() { self.n = 0 }
+    constructor(n: int) { self.n = n }
+
+    destructor() {}
+
+    func combine(x: int) -> int { return self.n + x }
+    func combine(x: int, y: int) -> int { return self.n + x + y }
+}
+
+func main() -> int {
+    puts(describe(5))     // "an int"
+    puts(describe("hi"))  // "a string"
+
+    let b: Box = new Box(10)
+    print_int("b.combine(5)", b.combine(5))       // 15
+    print_int("b.combine(5, 6)", b.combine(5, 6)) // 21
+    return 0
+}
+```
+
+Two declarations with identical parameter types (an accidental exact
+duplicate, not a real overload - nothing could ever distinguish them at
+a call site) is a compile error, as is a call that matches no overload.
+Not supported: overloaded generic function templates (still one `func
+foo<T>` per name - though a generic *class*'s own methods fully support
+overloading once monomorphized), multiple `func operator+`-style
+signatures for the same operator, and `extern func` re-declarations
+(its C symbol is a real, fixed external name).
+
 ### `.stringof`
 
 `x.stringof` (no call parens - `x.stringof()` already works as an ordinary

@@ -839,10 +839,36 @@ class CodeGenerator {
                 }
             }
         }
+        // Group every non-extern top-level function by its plain
+        // (pre-overload-suffix) mangled name first, so mangleFreeFunctionName
+        // (called below, per declaration) already knows whether each name
+        // is actually overloaded (2+ candidates) before any of them are
+        // registered. Extern functions are excluded - their C symbol is a
+        // real, fixed external name that can't be arbitrarily suffixed
+        // (see mangleFreeFunctionName's own comment).
+        string[string] candidateModulePath;
         foreach (prog; programs) {
             foreach (decl; prog.declarations) {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
-                    string key = mangledFunc(funcDecl);
+                    if (!funcDecl.isExtern) {
+                        string key = mangledFunc(funcDecl);
+                        functionCandidates[key] ~= funcDecl;
+                        if (key !in candidateModulePath) candidateModulePath[key] = prog.modulePath;
+                    }
+                }
+            }
+        }
+        foreach (key, candidates; functionCandidates) {
+            if (candidates.length > 1) {
+                currentModulePath = candidateModulePath[key];
+                checkNoDuplicateSignatures(candidates, format("function '%s'", key),
+                    candidates[0].line, candidates[0].column);
+            }
+        }
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto funcDecl = cast(FunctionDecl)decl) {
+                    string key = mangleFreeFunctionName(funcDecl);
                     functionRegistry[key] = funcDecl;
                     functionModulePath[key] = prog.modulePath;
                     exportsByModule[prog.modulePath][key] = true;
@@ -1021,20 +1047,22 @@ class CodeGenerator {
                         }
                         if (funcDecl.isVariadic) params ~= ", ...";
                         earlyDeclCode ~= format("%s %s(%s);\n",
-                            typeToC(returnTypeForFwd), mangledFunc(funcDecl), params);
+                            typeToC(returnTypeForFwd), mangleFreeFunctionName(funcDecl), params);
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
                     currentNamespaceSegments = classDecl.namespaceSegments;
                     string cName = mangledClass(classDecl);
-                    // Constructor forward declaration
-                    if (classDecl.constructor) {
+                    // Constructor forward declaration(s)
+                    checkNoDuplicateSignatures(classDecl.constructors, format("constructor of '%s'", cName),
+                        classDecl.line, classDecl.column);
+                    foreach (ctor; classDecl.constructors) {
                         string params = "";
-                        foreach (i, param; classDecl.constructor.params) {
+                        foreach (i, param; ctor.params) {
                             resolveType(param.type);
                             if (i > 0) params ~= ", ";
                             params ~= format("%s %s", typeToC(param.type), param.name);
                         }
-                        earlyDeclCode ~= format("%s* %s_new(%s);\n", cName, cName, params);
+                        earlyDeclCode ~= format("%s* %s(%s);\n", cName, mangleConstructorName(classDecl, cName, ctor), params);
                     }
 
                     // Destructor forward declaration
@@ -1043,7 +1071,13 @@ class CodeGenerator {
                     }
 
                     // Method forward declarations
+                    bool[string] checkedMethodNames;
                     foreach (method; classDecl.methods) {
+                        if (method.name !in checkedMethodNames) {
+                            checkedMethodNames[method.name] = true;
+                            checkNoDuplicateSignatures(methodCandidatesNamed(classDecl, method.name),
+                                format("method '%s.%s'", cName, method.name), method.line, method.column);
+                        }
                         // Same "resolve a clone, not the real node" reasoning
                         // as the plain-function forward-decl loop above -
                         // generateMethod needs method.returnType still
@@ -1055,8 +1089,8 @@ class CodeGenerator {
                             resolveType(param.type);
                             params ~= format(", %s %s", typeToC(param.type), param.name);
                         }
-                        earlyDeclCode ~= format("%s %s_%s(%s);\n",
-                            typeToC(returnTypeForFwd), cName, method.name, params);
+                        earlyDeclCode ~= format("%s %s(%s);\n",
+                            typeToC(returnTypeForFwd), mangleMethodName(classDecl, cName, method), params);
                     }
                 }
             }
@@ -1559,9 +1593,9 @@ class CodeGenerator {
         }
         code ~= "};\n\n";
 
-        // Generate constructor
-        if (classDecl.constructor) {
-            code ~= generateConstructor(classDecl, classDecl.constructor);
+        // Generate constructor(s)
+        foreach (ctor; classDecl.constructors) {
+            code ~= generateConstructor(classDecl, ctor);
         }
 
         // Generate destructor
@@ -1644,7 +1678,7 @@ class CodeGenerator {
             variableTypes[param.name] = param.type;
         }
 
-        code ~= format("%s* %s_new(%s) {\n", cName, cName, params);
+        code ~= format("%s* %s(%s) {\n", cName, mangleConstructorName(classDecl, cName, constructor), params);
         indentLevel++;
         code ~= indent() ~ format("%s* self = (%s*)rc_alloc(sizeof(%s));\n",
             cName, cName, cName);
@@ -1764,8 +1798,8 @@ class CodeGenerator {
             variableTypes[param.name] = param.type;
         }
 
-        code ~= format("%s %s_%s(%s) {\n",
-            typeToC(method.returnType), cName, method.name, params);
+        code ~= format("%s %s(%s) {\n",
+            typeToC(method.returnType), mangleMethodName(classDecl, cName, method), params);
         indentLevel++;
 
         deferredStatements = [];
@@ -1834,7 +1868,7 @@ class CodeGenerator {
         if (funcDecl.isVariadic) params ~= ", ...";
 
         code ~= format("%s %s(%s) {\n",
-            typeToC(funcDecl.returnType), mangledFunc(funcDecl), params);
+            typeToC(funcDecl.returnType), mangleFreeFunctionName(funcDecl), params);
         indentLevel++;
 
         deferredStatements = [];
@@ -2865,13 +2899,13 @@ class CodeGenerator {
                 f.line, f.column, f.bitWidth, f.isVolatile);
             fields ~= field;
         }
-        FunctionDecl ctor = cls.constructor is null ? null :
-            cloneFunctionDeclWithTypeSubs(cls.constructor, typeSubs, cls.constructor.name);
+        FunctionDecl[] ctors;
+        foreach (c; cls.constructors) ctors ~= cloneFunctionDeclWithTypeSubs(c, typeSubs, c.name);
         FunctionDecl dtor = cls.destructor is null ? null :
             cloneFunctionDeclWithTypeSubs(cls.destructor, typeSubs, cls.destructor.name);
         FunctionDecl[] methods;
         foreach (m; cls.methods) methods ~= cloneFunctionDeclWithTypeSubs(m, typeSubs, m.name);
-        auto clone = new ClassDecl(newName, fields, ctor, dtor, methods, cls.line, cls.column);
+        auto clone = new ClassDecl(newName, fields, ctors, dtor, methods, cls.line, cls.column);
         clone.namespaceSegments = [];
         return clone;
     }
@@ -3833,7 +3867,12 @@ class CodeGenerator {
         foreach (required; trait.methods) {
             bool found = false;
             foreach (m; impl.methods) {
-                if (m.name == required.name) {
+                // Arity too, not just name - if this impl block ever wrote
+                // more than one same-named method (overloading isn't
+                // meant to extend to impls, but nothing else stops it
+                // syntactically), a name-only match could wrongly "satisfy"
+                // the trait via the wrong overload.
+                if (m.name == required.name && m.params.length == required.params.length) {
                     found = true;
                     break;
                 }
@@ -4027,19 +4066,28 @@ class CodeGenerator {
                 // push() calling its own grow()), and this class's methods
                 // otherwise get no forward declaration at all before their
                 // bodies are generated below.
-                if (clone.constructor) {
+                checkNoDuplicateSignatures(clone.constructors, format("constructor of '%s'", mangledName),
+                    clone.line, clone.column);
+                foreach (ctor; clone.constructors) {
                     string ctorParams = "";
-                    foreach (i, param; clone.constructor.params) {
+                    foreach (i, param; ctor.params) {
                         resolveType(param.type);
                         if (i > 0) ctorParams ~= ", ";
                         ctorParams ~= format("%s %s", typeToC(param.type), param.name);
                     }
-                    genericForwardDecls ~= format("%s* %s_new(%s);\n", mangledName, mangledName, ctorParams);
+                    genericForwardDecls ~= format("%s* %s(%s);\n",
+                        mangledName, mangleConstructorName(clone, mangledName, ctor), ctorParams);
                 }
                 if (clone.destructor) {
                     genericForwardDecls ~= format("void %s_destroy(void* ptr);\n", mangledName);
                 }
+                bool[string] checkedGenericMethodNames;
                 foreach (method; clone.methods) {
+                    if (method.name !in checkedGenericMethodNames) {
+                        checkedGenericMethodNames[method.name] = true;
+                        checkNoDuplicateSignatures(methodCandidatesNamed(clone, method.name),
+                            format("method '%s.%s'", mangledName, method.name), method.line, method.column);
+                    }
                     // Resolve a *clone*, not method.returnType itself -
                     // generateClass (below) -> generateMethod needs it
                     // still as-written to resolve a bare `return
@@ -4051,8 +4099,8 @@ class CodeGenerator {
                         resolveType(param.type);
                         methodParams ~= format(", %s %s", typeToC(param.type), param.name);
                     }
-                    genericForwardDecls ~= format("%s %s_%s(%s);\n",
-                        typeToC(returnTypeForFwd), mangledName, method.name, methodParams);
+                    genericForwardDecls ~= format("%s %s(%s);\n",
+                        typeToC(returnTypeForFwd), mangleMethodName(clone, mangledName, method), methodParams);
                 }
 
                 // Snapshot/restore variableTypes around this - see the
@@ -4397,6 +4445,157 @@ class CodeGenerator {
         }
 
         return resolved ~ variadicTail;
+    }
+
+    // "(Type1, Type2)" - the parameter-types half of a human-readable
+    // signature, for overload error messages (no matching overload,
+    // ambiguous call, duplicate signature).
+    private string paramTypesDescription(Parameter[] params) {
+        string[] parts;
+        foreach (p; params) parts ~= p.type.toString();
+        return "(" ~ parts.join(", ") ~ ")";
+    }
+
+    // True if `a` and `b` declare the exact same parameter *types*, in the
+    // same order (and so the same arity) - an accidental duplicate
+    // overload, not a real one: nothing could ever distinguish them at a
+    // call site. Reuses sameErrorType's existing exact (name +
+    // pointerDepth + array-ness) comparison.
+    private bool sameParameterTypes(Parameter[] a, Parameter[] b) {
+        if (a.length != b.length) return false;
+        foreach (i, p; a) {
+            if (!sameErrorType(p.type, b[i].type)) return false;
+        }
+        return true;
+    }
+
+    // Run once per assembled candidate group (a class's methods sharing
+    // one name, a class's whole `constructors` array, or a
+    // `functionCandidates` group) - throws a clear compile error if two
+    // candidates are indistinguishable duplicates, instead of letting it
+    // surface later as a bewildering identically-mangled-C-symbol clash.
+    private void checkNoDuplicateSignatures(FunctionDecl[] candidates, string calleeDescription,
+            int line, int column) {
+        foreach (i, a; candidates) {
+            foreach (j; i + 1 .. candidates.length) {
+                if (sameParameterTypes(a.params, candidates[j].params)) {
+                    throw new CompileError(format(
+                        "%s is declared more than once with the same parameter types %s",
+                        calleeDescription, paramTypesDescription(a.params)),
+                        currentModulePath, line, column);
+                }
+            }
+        }
+    }
+
+    // Picks which of several same-named candidates (methods, constructors,
+    // or free functions - see the "Method, constructor, and free-function
+    // overloading" plan) a call's (args, argNames) actually mean, by
+    // argument type. A single candidate is returned immediately with no
+    // type inference at all, so the overwhelming non-overloaded case is
+    // completely unaffected. Otherwise, each candidate is tried through
+    // the existing named/default-argument resolver (resolveCallArguments)
+    // - a candidate only "fits" if that succeeds *and* every resolved
+    // argument's inferred type exactly matches (via sameErrorType - no
+    // implicit numeric coercion, matching this compiler's existing
+    // nominal-exact-type stance elsewhere, e.g. if-expression branch
+    // matching) that parameter's declared type.
+    private FunctionDecl resolveOverload(FunctionDecl[] candidates, ASTNode[] args, string[] argNames,
+            string calleeDescription, int line, int column) {
+        if (candidates.length == 1) return candidates[0];
+
+        FunctionDecl[] fits;
+        foreach (candidate; candidates) {
+            ASTNode[] resolved;
+            try {
+                resolved = resolveCallArguments(candidate.params, candidate.isVariadic, args, argNames,
+                    calleeDescription, line, column);
+            } catch (CompileError e) {
+                continue;
+            }
+            bool matches = true;
+            foreach (i, param; candidate.params) {
+                if (i >= resolved.length) { matches = false; break; }
+                Type argType;
+                try {
+                    argType = inferType(resolved[i]);
+                } catch (Exception e) {
+                    matches = false;
+                    break;
+                }
+                if (!sameErrorType(argType, param.type)) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) fits ~= candidate;
+        }
+
+        if (fits.length == 1) return fits[0];
+
+        string candidateList = candidates.map!(c => paramTypesDescription(c.params)).join(", ");
+        if (fits.length == 0) {
+            throw new CompileError(format("No matching overload for %s - %d candidate(s): %s",
+                calleeDescription, candidates.length, candidateList),
+                currentModulePath, line, column);
+        }
+        throw new CompileError(format("Ambiguous call to %s - matches %d overloads: %s",
+            calleeDescription, fits.length, candidateList),
+            currentModulePath, line, column);
+    }
+
+    // The "_int_int"-style suffix appended to an overloaded name's mangled
+    // C symbol - one mangleTypeArg per parameter, joined by "_". Only ever
+    // applied when a name has more than one candidate (checked by each
+    // caller below), so a non-overloaded declaration's mangled name is
+    // completely unaffected.
+    private string overloadSuffix(Parameter[] params) {
+        string suffix = "";
+        foreach (p; params) suffix ~= "_" ~ mangleTypeArg(p.type);
+        return suffix;
+    }
+
+    private FunctionDecl[] methodCandidatesNamed(ClassDecl cd, string name) {
+        FunctionDecl[] result;
+        foreach (m; cd.methods) if (m.name == name) result ~= m;
+        return result;
+    }
+
+    // `ClassName_methodName` if `method` is the only one of its class
+    // named that - the exact mangling this compiler has always used -
+    // else suffixed with its own parameter types to stay unique among its
+    // overloads.
+    private string mangleMethodName(ClassDecl cd, string cName, FunctionDecl method) {
+        auto candidates = methodCandidatesNamed(cd, method.name);
+        if (candidates.length <= 1) return format("%s_%s", cName, method.name);
+        return format("%s_%s%s", cName, method.name, overloadSuffix(method.params));
+    }
+
+    // `ClassName_new` if there's only one constructor (matches every
+    // existing class), else suffixed per constructor the same way
+    // mangleMethodName is.
+    private string mangleConstructorName(ClassDecl cd, string cName, FunctionDecl ctor) {
+        if (cd.constructors.length <= 1) return format("%s_new", cName);
+        return format("%s_new%s", cName, overloadSuffix(ctor.params));
+    }
+
+    // Groups every top-level FunctionDecl by its plain (pre-overload-
+    // suffix) mangled name - i.e. exactly what mangledFunc(fn) already
+    // produces today. A key with more than one candidate is an overloaded
+    // name; see mangleFreeFunctionName and every free-function call site.
+    private FunctionDecl[][string] functionCandidates;
+
+    // `mangledFunc(fn)` (today's plain namespace_name) if `fn` is the only
+    // function registered under that name, else suffixed per its own
+    // parameter types. Extern functions are never suffixed - their C
+    // symbol is a real, fixed external name that can't be invented a
+    // second spelling for.
+    private string mangleFreeFunctionName(FunctionDecl fn) {
+        string plain = mangledFunc(fn);
+        if (fn.isExtern) return plain;
+        auto candidates = plain in functionCandidates;
+        if (candidates is null || candidates.length <= 1) return plain;
+        return plain ~ overloadSuffix(fn.params);
     }
 
     // The iterator protocol a class opts into to support `foreach let x in
@@ -5213,17 +5412,23 @@ class CodeGenerator {
             // Check if this is a method call
             if (auto memberExpr = cast(MemberExpr)callExpr.callee) {
                 // A namespace-qualified function call (e.g. Graphics.helper())
-                // takes priority over instance-method-call syntax.
-                string qualifiedFunc = tryResolveQualifiedPath(memberExpr,
-                    (n) => (n in functionRegistry) !is null);
-                if (qualifiedFunc.length == 0) {
-                    qualifiedFunc = tryResolveExternFunctionMember(memberExpr);
-                }
-                if (qualifiedFunc.length > 0) {
+                // takes priority over instance-method-call syntax. Resolved
+                // against functionCandidates (grouped by the same
+                // pre-overload-suffix name tryResolveQualifiedPath already
+                // produces), not functionRegistry directly - see the plain
+                // (unqualified) call branch above for why an overloaded
+                // name's *bare* qualified name is no longer a real
+                // functionRegistry key on its own.
+                string qualifiedName = tryResolveQualifiedPath(memberExpr,
+                    (n) => (n in functionCandidates) !is null);
+                if (qualifiedName.length > 0) {
+                    auto candidates = functionCandidates[qualifiedName];
+                    FunctionDecl qualifiedDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                        format("function '%s'", qualifiedName), callExpr.line, callExpr.column);
+                    string qualifiedFunc = mangleFreeFunctionName(qualifiedDecl);
                     recordUsage(qualifiedFunc, memberExpr.line, memberExpr.column);
-                    FunctionDecl qualifiedDecl = functionRegistry[qualifiedFunc];
                     ASTNode[] resolvedArgs = resolveCallArguments(qualifiedDecl.params, qualifiedDecl.isVariadic,
-                        callExpr.args, callExpr.argNames, format("function '%s'", qualifiedFunc),
+                        callExpr.args, callExpr.argNames, format("function '%s'", qualifiedName),
                         callExpr.line, callExpr.column);
                     string qargs = "";
                     foreach (i, arg; resolvedArgs) {
@@ -5235,6 +5440,24 @@ class CodeGenerator {
                         qargs ~= argCode;
                     }
                     return format("%s(%s)", qualifiedFunc, qargs);
+                }
+                string externFunc = tryResolveExternFunctionMember(memberExpr);
+                if (externFunc.length > 0) {
+                    recordUsage(externFunc, memberExpr.line, memberExpr.column);
+                    FunctionDecl qualifiedDecl = functionRegistry[externFunc];
+                    ASTNode[] resolvedArgs = resolveCallArguments(qualifiedDecl.params, qualifiedDecl.isVariadic,
+                        callExpr.args, callExpr.argNames, format("function '%s'", externFunc),
+                        callExpr.line, callExpr.column);
+                    string qargs = "";
+                    foreach (i, arg; resolvedArgs) {
+                        if (i > 0) qargs ~= ", ";
+                        string argCode = generateExpression(arg);
+                        if (qualifiedDecl.isVariadic && i >= qualifiedDecl.params.length) {
+                            argCode = variadicPromote(arg, argCode);
+                        }
+                        qargs ~= argCode;
+                    }
+                    return format("%s(%s)", externFunc, qargs);
                 }
 
                 string objectExpr = generateExpression(memberExpr.object);
@@ -5263,25 +5486,26 @@ class CodeGenerator {
                     // CLASS_ placeholder below
                 }
 
-                // Find the target method's own FunctionDecl (if the class
-                // was resolved) to resolve named/default arguments against
-                // - unlike the plain/qualified-call paths, there was no
-                // FunctionDecl lookup here at all before named arguments
-                // existed, since dispatch is just a string-built C call.
-                FunctionDecl methodDecl = null;
-                if (className.length > 0) {
-                    if (auto cd = className in classRegistry) {
-                        foreach (m; cd.methods) {
-                            if (m.name == methodName) { methodDecl = m; break; }
-                        }
-                    }
-                }
+                // Find the target method's own FunctionDecl(s) (if the class
+                // was resolved) to resolve named/default arguments (and,
+                // when there's more than one same-named method, which
+                // overload) against - unlike the plain/qualified-call
+                // paths, there was no FunctionDecl lookup here at all
+                // before named arguments existed, since dispatch is just a
+                // string-built C call.
+                ClassDecl cd = className.length > 0 && className in classRegistry
+                    ? classRegistry[className] : null;
+                FunctionDecl[] candidates = cd !is null ? methodCandidatesNamed(cd, methodName) : [];
+                string calleeDescription = format("method '%s.%s'", className, methodName);
                 ASTNode[] resolvedArgs;
-                if (methodDecl !is null) {
-                    resolvedArgs = resolveCallArguments(methodDecl.params, false, callExpr.args,
-                        callExpr.argNames, format("method '%s.%s'", className, methodName),
-                        callExpr.line, callExpr.column);
-                } else {
+                // Blind fallback for a method that isn't in cd.methods at
+                // all (e.g. impl-block-provided trait methods, generated
+                // separately by processImplBlock under this exact name) -
+                // matches this compiler's existing behavior of trusting
+                // that mechanism rather than requiring every method to be
+                // registered here.
+                string methodSymbol = className.length > 0 ? format("%s_%s", className, methodName) : "";
+                if (candidates.length == 0) {
                     if (hasNamedArgs(callExpr.argNames)) {
                         throw new CompileError(
                             format("Cannot resolve named arguments for '%s' - its target method " ~
@@ -5289,6 +5513,12 @@ class CodeGenerator {
                             currentModulePath, callExpr.line, callExpr.column);
                     }
                     resolvedArgs = callExpr.args;
+                } else {
+                    FunctionDecl methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                        calleeDescription, callExpr.line, callExpr.column);
+                    resolvedArgs = resolveCallArguments(methodDecl.params, false, callExpr.args,
+                        callExpr.argNames, calleeDescription, callExpr.line, callExpr.column);
+                    methodSymbol = mangleMethodName(cd, className, methodDecl);
                 }
 
                 // Generate method call with object as first parameter
@@ -5299,29 +5529,63 @@ class CodeGenerator {
 
                 if (className.length > 0) {
                     recordUsage(className ~ "." ~ methodName, memberExpr.line, memberExpr.column);
-                    return format("%s_%s(%s)", className, methodName, args);
+                    return format("%s(%s)", methodSymbol, args);
                 } else {
                     return format("CLASS_%s(%s)", methodName, args);
                 }
             } else {
-                // generateExpression(callExpr.callee) already records this as a
-                // plain Identifier usage (see that branch below) - no separate
-                // recordUsage needed here.
-                string callee = generateExpression(callExpr.callee);
-                FunctionDecl calleeDecl = resolveCalledFunction(callExpr.callee);
+                // A plain identifier resolving to a *known* function (by
+                // its pre-overload-suffix name) has to be resolved here,
+                // overload-aware, rather than through the ordinary
+                // generateExpression(callExpr.callee) path below: that path
+                // only has the bare identifier to go on, with no way to
+                // know which overload's (possibly suffixed) mangled symbol
+                // the call's own arguments actually mean. mangleFreeFunctionName
+                // returns today's plain name unchanged whenever there's
+                // only one candidate, so this is a no-op for every
+                // non-overloaded call.
+                FunctionDecl[] candidates;
+                string resolvedName;
+                if (auto ident = cast(Identifier)callExpr.callee) {
+                    resolvedName = resolveName(ident.name, (n) => (n in functionCandidates) !is null);
+                    if (auto c = resolvedName in functionCandidates) candidates = *c;
+                }
+
+                string callee;
+                FunctionDecl calleeDecl;
                 ASTNode[] resolvedArgs;
-                if (calleeDecl !is null) {
+                if (candidates.length > 0) {
+                    calleeDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                        format("function '%s'", resolvedName), callExpr.line, callExpr.column);
+                    callee = mangleFreeFunctionName(calleeDecl);
+                    recordUsage(callee, callExpr.callee.line, callExpr.callee.column);
                     resolvedArgs = resolveCallArguments(calleeDecl.params, calleeDecl.isVariadic,
-                        callExpr.args, callExpr.argNames, format("function '%s'", calleeDecl.name),
+                        callExpr.args, callExpr.argNames, format("function '%s'", resolvedName),
                         callExpr.line, callExpr.column);
                 } else {
-                    if (hasNamedArgs(callExpr.argNames)) {
-                        throw new CompileError(
-                            "Cannot resolve named arguments - this call's target couldn't be " ~
-                            "determined at compile time",
-                            currentModulePath, callExpr.line, callExpr.column);
+                    // Not a plain identifier resolving to a known function
+                    // (a qualified/generic/closure call already handled
+                    // above, an extern function - excluded from
+                    // functionCandidates, see mangleFreeFunctionName - or
+                    // truly unresolvable) - exactly today's behavior.
+                    // generateExpression(callExpr.callee) already records
+                    // this as a plain Identifier usage - no separate
+                    // recordUsage needed here.
+                    callee = generateExpression(callExpr.callee);
+                    calleeDecl = resolveCalledFunction(callExpr.callee);
+                    if (calleeDecl !is null) {
+                        resolvedArgs = resolveCallArguments(calleeDecl.params, calleeDecl.isVariadic,
+                            callExpr.args, callExpr.argNames, format("function '%s'", calleeDecl.name),
+                            callExpr.line, callExpr.column);
+                    } else {
+                        if (hasNamedArgs(callExpr.argNames)) {
+                            throw new CompileError(
+                                "Cannot resolve named arguments - this call's target couldn't be " ~
+                                "determined at compile time",
+                                currentModulePath, callExpr.line, callExpr.column);
+                        }
+                        resolvedArgs = callExpr.args;
                     }
-                    resolvedArgs = callExpr.args;
                 }
                 string args = "";
                 foreach (i, arg; resolvedArgs) {
@@ -5442,28 +5706,32 @@ class CodeGenerator {
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
             recordUsage(newExpr.type.name, newExpr.line, newExpr.column);
-            FunctionDecl ctor = null;
-            if (auto cd = newExpr.type.name in classRegistry) {
-                ctor = cd.constructor;
-            }
+            ClassDecl cd = newExpr.type.name in classRegistry ? classRegistry[newExpr.type.name] : null;
+            FunctionDecl[] ctors = cd !is null ? cd.constructors : [];
+            string calleeDescription = format("constructor of '%s'", newExpr.type.name);
             ASTNode[] resolvedArgs;
-            if (ctor !is null) {
-                resolvedArgs = resolveCallArguments(ctor.params, false, newExpr.args, newExpr.argNames,
-                    format("constructor of '%s'", newExpr.type.name), newExpr.line, newExpr.column);
-            } else {
+            string ctorSymbol;
+            if (ctors.length == 0) {
                 if (hasNamedArgs(newExpr.argNames)) {
                     throw new CompileError(
                         format("Cannot resolve named arguments for '%s''s constructor", newExpr.type.name),
                         currentModulePath, newExpr.line, newExpr.column);
                 }
                 resolvedArgs = newExpr.args;
+                ctorSymbol = format("%s_new", newExpr.type.name);
+            } else {
+                FunctionDecl ctor = resolveOverload(ctors, newExpr.args, newExpr.argNames, calleeDescription,
+                    newExpr.line, newExpr.column);
+                resolvedArgs = resolveCallArguments(ctor.params, false, newExpr.args, newExpr.argNames,
+                    calleeDescription, newExpr.line, newExpr.column);
+                ctorSymbol = mangleConstructorName(cd, newExpr.type.name, ctor);
             }
             string args = "";
             foreach (i, arg; resolvedArgs) {
                 if (i > 0) args ~= ", ";
                 args ~= generateExpression(arg);
             }
-            return format("%s_new(%s)", newExpr.type.name, args);
+            return format("%s(%s)", ctorSymbol, args);
         } else if (auto castExpr = cast(CastExpr)node) {
             resolveType(castExpr.type);
             // Casting a class/struct value `as string`/`as char*` resolves
@@ -5600,10 +5868,14 @@ class CodeGenerator {
                 return new Type("EmbeddedFile");
             }
             if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
-                string qualifiedFunc = tryResolveQualifiedPath(memberCallee, (n) => (n in functionRegistry) !is null);
-                if (qualifiedFunc.length == 0) {
-                    qualifiedFunc = tryResolveExternFunctionMember(memberCallee);
+                string qualifiedName = tryResolveQualifiedPath(memberCallee, (n) => (n in functionCandidates) !is null);
+                if (qualifiedName.length > 0) {
+                    auto candidates = functionCandidates[qualifiedName];
+                    auto decl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                        format("function '%s'", qualifiedName), callExpr.line, callExpr.column);
+                    return decl.returnType;
                 }
+                string qualifiedFunc = tryResolveExternFunctionMember(memberCallee);
                 if (qualifiedFunc.length > 0) {
                     return functionRegistry[qualifiedFunc].returnType;
                 }
@@ -5617,10 +5889,12 @@ class CodeGenerator {
 
                 Type objType = inferType(memberCallee.object);
                 if (auto classDecl = objType.name in classRegistry) {
-                    foreach (method; classDecl.methods) {
-                        if (method.name == memberCallee.member) {
-                            return method.returnType;
-                        }
+                    auto candidates = methodCandidatesNamed(*classDecl, memberCallee.member);
+                    if (candidates.length > 0) {
+                        auto methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                            format("method '%s.%s'", objType.name, memberCallee.member),
+                            callExpr.line, callExpr.column);
+                        return methodDecl.returnType;
                     }
                 }
                 throw inferError(expr, format("Cannot infer type: unknown method '%s'", memberCallee.member));
@@ -5629,8 +5903,17 @@ class CodeGenerator {
                 if (resolvedVar in variableTypes && variableTypes[resolvedVar].closureReturnType !is null) {
                     return variableTypes[resolvedVar].closureReturnType;
                 }
-                string resolved = resolveName(calleeIdent.name, (n) => (n in functionRegistry) !is null);
-                if (auto funcDecl = resolved in functionRegistry) {
+                string resolved = resolveName(calleeIdent.name, (n) => (n in functionCandidates) !is null);
+                if (auto candidates = resolved in functionCandidates) {
+                    auto decl = resolveOverload(*candidates, callExpr.args, callExpr.argNames,
+                        format("function '%s'", resolved), callExpr.line, callExpr.column);
+                    return decl.returnType;
+                }
+                // Extern functions are excluded from functionCandidates
+                // (see mangleFreeFunctionName) - still registered in
+                // functionRegistry directly under their fixed bare name.
+                string externResolved = resolveName(calleeIdent.name, (n) => (n in functionRegistry) !is null);
+                if (auto funcDecl = externResolved in functionRegistry) {
                     return funcDecl.returnType;
                 }
                 string genericKey = findGenericTemplateKey(calleeIdent.name,

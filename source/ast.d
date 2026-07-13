@@ -370,7 +370,11 @@ class FunctionDecl : ASTNode {
 class ClassDecl : ASTNode {
     string name;
     VarDecl[] fields;
-    FunctionDecl constructor;
+    // Empty means "no constructor" (matches the old nullable field's
+    // null case) - 2+ entries are overloads of each other, disambiguated
+    // by argument types at each `new Foo(...)` call site (see codegen.d's
+    // resolveOverload).
+    FunctionDecl[] constructors;
     FunctionDecl destructor;
     FunctionDecl[] methods;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
@@ -378,13 +382,13 @@ class ClassDecl : ASTNode {
     string[] typeParamBounds; // parallel to typeParams - see FunctionDecl.typeParamBounds
     VarAttribute[] attributes;
 
-    this(string name, VarDecl[] fields, FunctionDecl constructor, FunctionDecl destructor, FunctionDecl[] methods,
+    this(string name, VarDecl[] fields, FunctionDecl[] constructors, FunctionDecl destructor, FunctionDecl[] methods,
          int line = 0, int column = 0, string[] typeParams = [], string[] typeParamBounds = [],
          VarAttribute[] attributes = []) {
         super(NodeType.ClassDecl, line, column);
         this.name = name;
         this.fields = fields;
-        this.constructor = constructor;
+        this.constructors = constructors;
         this.destructor = destructor;
         this.methods = methods;
         this.typeParams = typeParams;

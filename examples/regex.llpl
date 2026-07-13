@@ -5,7 +5,7 @@ func print_int(label: char*, value: int) {
     puts(buf as char*)
 }
 
-func main() -> int {
+func demo_find_all() {
     let re = /[0-9]+/
     let text: char* = "abc 123 def 4567 ghi"
 
@@ -17,11 +17,9 @@ func main() -> int {
         count = count + 1
     }
     print_int("total matches", count)
-
-    return 0
 }
 
-func main() -> int {
+func demo_replace() {
     let digits = /[0-9]+/
     let text: char* = "abc 123 def 4567 ghi"
 
@@ -45,6 +43,10 @@ func main() -> int {
     let empty = /a*/
     let r6: String = empty.replace_all("bbb", "-")
     puts(r6.c_str())
+}
 
+func main() -> int {
+    demo_find_all()
+    demo_replace()
     return 0
 }

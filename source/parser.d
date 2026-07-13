@@ -676,13 +676,13 @@ class Parser {
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
-        FunctionDecl constructor = null;
+        FunctionDecl[] constructors;
         FunctionDecl destructor = null;
         FunctionDecl[] methods;
 
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
             if (check(TokenType.Constructor)) {
-                constructor = constructorDecl(name);
+                constructors ~= constructorDecl(name);
             } else if (check(TokenType.Destructor)) {
                 destructor = destructorDecl(name);
             } else if (check(TokenType.Function)) {
@@ -695,7 +695,7 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new ClassDecl(name, fields, constructor, destructor, methods, startLine, startColumn,
+        return new ClassDecl(name, fields, constructors, destructor, methods, startLine, startColumn,
             typeParams, typeParamBounds, attrs);
     }
 
