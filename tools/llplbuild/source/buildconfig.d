@@ -19,6 +19,14 @@ struct CSource {
     string objOutput;
 }
 
+struct LlplSource {
+    string src;
+    string cOutput;
+    string objOutput;
+    string[] includeDirs;
+    string[] cflags;
+}
+
 struct AsmSource {
     string src;
     string output;
@@ -33,6 +41,7 @@ struct LinkSpec {
 
 struct ExtraLink {
     string name;
+    LlplSource[] llplSources;
     AsmSource[] asmSources;
     LinkSpec link;
 }
@@ -147,6 +156,21 @@ private AsmSource[] parseAsmSources(Node node, string errCtx) {
     return result;
 }
 
+private LlplSource[] parseLlplSources(Node node, string errCtx) {
+    LlplSource[] result;
+    if (auto v = "llpl_sources" in node) {
+        foreach (Node entry; *v) {
+            string src = requireStr(entry, "src", errCtx ~ ".llpl_sources[]");
+            string cOutput = getStr(entry, "c_output", stripExtension(src) ~ ".c");
+            string objOutput = getStr(entry, "output", stripExtension(src) ~ ".o");
+            string[] includeDirs = getStrList(entry, "include_dirs");
+            string[] cflags = getStrList(entry, "cflags");
+            result ~= LlplSource(src, cOutput, objOutput, includeDirs, cflags);
+        }
+    }
+    return result;
+}
+
 private LinkSpec parseLink(Node node, string errCtx) {
     LinkSpec link;
     link.output = requireStr(node, "output", errCtx);
@@ -250,6 +274,7 @@ BuildConfig loadConfig(string path) {
         foreach (Node entry; *v) {
             ExtraLink el;
             el.name = requireStr(entry, "name", absPath ~ ".extra_links[]");
+            el.llplSources = parseLlplSources(entry, absPath ~ ".extra_links." ~ el.name);
             el.asmSources = parseAsmSources(entry, absPath ~ ".extra_links." ~ el.name);
             el.link = parseLink(entry["link"], absPath ~ ".extra_links." ~ el.name ~ ".link");
             cfg.extraLinks ~= el;
@@ -332,6 +357,13 @@ void substituteVariables(ref BuildConfig cfg, const string[string] vars) {
         a.src = substitute(a.src, vars);
         a.output = substitute(a.output, vars);
     }
+    void substLlpl(ref LlplSource src) {
+        src.src = substitute(src.src, vars);
+        src.cOutput = substitute(src.cOutput, vars);
+        src.objOutput = substitute(src.objOutput, vars);
+        src.includeDirs = substituteList(src.includeDirs, vars);
+        src.cflags = substituteList(src.cflags, vars);
+    }
     void substLink(ref LinkSpec link) {
         link.output = substitute(link.output, vars);
         link.script = substitute(link.script, vars);
@@ -340,6 +372,7 @@ void substituteVariables(ref BuildConfig cfg, const string[string] vars) {
     }
     if (cfg.hasLink) substLink(cfg.link);
     foreach (ref el; cfg.extraLinks) {
+        foreach (ref src; el.llplSources) substLlpl(src);
         foreach (ref a; el.asmSources) {
             a.src = substitute(a.src, vars);
             a.output = substitute(a.output, vars);

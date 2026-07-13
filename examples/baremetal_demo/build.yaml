@@ -68,6 +68,18 @@ extra_links:
       script: userapp/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [userapp.o]
+  - name: llpl_userapp
+    llpl_sources:
+      - src: userapp/llpl_userapp.llpl
+        c_output: userapp/llpl_userapp.c
+        output: userapp/llpl_userapp.o
+        include_dirs: [., ../../runtime]
+        cflags: [-mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: llpl_userapp.elf
+      script: userapp/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static, --gc-sections]
+      objects: [userapp/llpl_userapp.o]
 
 # Includes two small files loaded as multiboot2 modules (grub.cfg's
 # `module2` directive) purely to give tmpfs.llpl something real to
@@ -78,6 +90,7 @@ package:
     - mkdir: isodir/boot/grub
     - copy: {from: kernel.bin, to: isodir/boot/kernel.bin}
     - copy: {from: userapp.elf, to: isodir/boot/userapp.elf}
+    - copy: {from: llpl_userapp.elf, to: isodir/boot/llpl_userapp.elf}
     - write:
         to: isodir/boot/hello.txt
         content: "Hello from a GRUB module!"
@@ -94,6 +107,7 @@ package:
               module2 /boot/hello.txt hello.txt
               module2 /boot/readme.txt readme.txt
               module2 /boot/userapp.elf userapp.elf
+              module2 /boot/llpl_userapp.elf llpl_userapp.elf
           }
     - run: "grub-mkrescue -o kernel.iso isodir"
       allow_failure: true

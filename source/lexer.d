@@ -33,6 +33,7 @@ enum TokenType {
     Foreach,
     In,
     Return,
+    Continue,
     Defer,
     Asm,
     New,
@@ -170,6 +171,7 @@ class Lexer {
             "foreach": "Foreach",
             "in": "In",
             "return": "Return",
+            "continue": "Continue",
             "defer": "Defer",
             "asm": "Asm",
             "new": "New",
@@ -521,6 +523,7 @@ class Lexer {
                 case "Foreach": type = TokenType.Foreach; break;
                 case "In": type = TokenType.In; break;
                 case "Return": type = TokenType.Return; break;
+                case "Continue": type = TokenType.Continue; break;
                 case "Defer": type = TokenType.Defer; break;
                 case "Asm": type = TokenType.Asm; break;
                 case "New": type = TokenType.New; break;

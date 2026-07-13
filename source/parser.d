@@ -1259,6 +1259,8 @@ class Parser {
             return foreachStmt();
         } else if (check(TokenType.Return)) {
             return returnStmt();
+        } else if (check(TokenType.Continue)) {
+            return continueStmt();
         } else if (check(TokenType.Defer)) {
             return deferStmt();
         } else if (check(TokenType.Try)) {
@@ -1605,6 +1607,13 @@ class Parser {
             value = expression();
         }
         return new ReturnStmt(value);
+    }
+
+    private ContinueStmt continueStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Continue);
+        return new ContinueStmt(startLine, startColumn);
     }
 
     private ThrowStmt throwStmt() {

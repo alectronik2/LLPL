@@ -20,6 +20,7 @@ enum NodeType {
     ForStmt,
     ForeachStmt,
     ReturnStmt,
+    ContinueStmt,
     DeferStmt,
     AsmStmt,
     MatchStmt,
@@ -773,6 +774,12 @@ class ReturnStmt : ASTNode {
     this(ASTNode value = null) {
         super(NodeType.ReturnStmt);
         this.value = value;
+    }
+}
+
+class ContinueStmt : ASTNode {
+    this(int line = 0, int column = 0) {
+        super(NodeType.ContinueStmt, line, column);
     }
 }
 

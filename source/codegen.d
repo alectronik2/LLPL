@@ -2769,6 +2769,8 @@ class CodeGenerator {
                 }
                 code ~= indent() ~ "return;\n";
             }
+        } else if (cast(ContinueStmt)node) {
+            code ~= indent() ~ "continue;\n";
         } else if (auto deferStmt = cast(DeferStmt)node) {
             code ~= generateDeferStmt(deferStmt);
         } else if (auto throwStmt = cast(ThrowStmt)node) {
@@ -2965,6 +2967,8 @@ class CodeGenerator {
                 rangeExpr.line, rangeExpr.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs));
+        } else if (auto continueStmt = cast(ContinueStmt)node) {
+            return new ContinueStmt(continueStmt.line, continueStmt.column);
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(cloneNode(deferStmt.statement, subs, typeSubs));
         } else if (auto throwStmt = cast(ThrowStmt)node) {
@@ -3158,6 +3162,8 @@ class CodeGenerator {
                 rangeExpr.line, rangeExpr.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
+        } else if (auto continueStmt = cast(ContinueStmt)node) {
+            return new ContinueStmt(continueStmt.line, continueStmt.column);
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(expandQuotedNode(deferStmt.statement, subs));
         } else if (auto throwStmt = cast(ThrowStmt)node) {

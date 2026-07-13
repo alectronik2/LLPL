@@ -143,6 +143,24 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 
     foreach (i, el; cfg.extraLinks) {
         int group = 100 + cast(int)i; // its own asm sources run together, independent of everything else in this group id
+        foreach (src; el.llplSources) {
+            plan ~= PlanStep(StepKind.compileLlpl,
+                format("Compiling %s (%s)", src.src, el.name),
+                allLlplSources(".", cfg.llplCompiler),
+                [src.cOutput],
+                [cfg.llplCompiler, src.src, "-o", src.cOutput],
+                PackageAction.init, "", "", false, 0);
+
+            string[] cmd = [cfg.cc] ~ cflags ~ src.cflags;
+            foreach (dir; src.includeDirs) cmd ~= ["-I", dir];
+            cmd ~= ["-c", src.cOutput, "-o", src.objOutput];
+            plan ~= PlanStep(StepKind.compileC,
+                format("Compiling %s (%s)", src.cOutput, el.name),
+                [src.cOutput, configStampPath],
+                [src.objOutput],
+                cmd,
+                PackageAction.init, "", "", false, group);
+        }
         foreach (a; el.asmSources) {
             plan ~= PlanStep(StepKind.assemble,
                 format("Assembling %s (%s)", a.src, el.name),
@@ -406,6 +424,10 @@ void clean(BuildConfig cfg) {
     foreach (a; cfg.asmSources) files ~= a.output;
     if (cfg.hasLink) files ~= cfg.link.output;
     foreach (el; cfg.extraLinks) {
+        foreach (src; el.llplSources) {
+            files ~= src.cOutput;
+            files ~= src.objOutput;
+        }
         foreach (a; el.asmSources) files ~= a.output;
         files ~= el.link.output;
     }

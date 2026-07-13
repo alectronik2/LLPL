@@ -373,6 +373,11 @@ func load_elf64_user(file: char*, size: uint, aspace: VMM.AddressSpace*) -> uint
     while i < hdr.phnum as int {
         let ph: Elf64ProgramHeader* = (file + hdr.phoff + (i as uint) * sizeof(Elf64ProgramHeader)) as Elf64ProgramHeader*
         if ph.ph_type == ELF_PT_LOAD as uint32 {
+            if ph.memsz == 0 {
+                i = i + 1
+                continue
+            }
+
             if ph.memsz < ph.filesz || ph.offset + ph.filesz > size {
                 return 0
             }
@@ -603,11 +608,12 @@ func run_user_executable(path: char*) -> bool {
     return run_user_executable_with_args(path, "")
 }
 
-// Loads the default `userapp.elf` multiboot2 module at boot, if present.
-func spawn_user_task() {
-    let idx: int = TmpFS.find("userapp.elf")
+func spawn_boot_user_module(name: char*) {
+    let idx: int = TmpFS.find(name)
     if idx < 0 {
-        log("<YELLOW>userapp.elf not found, skipping user task\n</>")
+        log("<YELLOW>")
+        emit(name, false, 0, null)
+        log(" not found, skipping user task\n</>")
         return
     }
 
@@ -618,12 +624,20 @@ func spawn_user_task() {
 
     let tmp: char* = KHeap.kmalloc(size) as char*
     if tmp == null {
-        log("<RED>failed to allocate userapp buffer\n</>")
+        log("<RED>failed to allocate user executable buffer\n</>")
         return
     }
     TmpFS.read(idx, tmp, size)
-    spawn_user_elf(tmp, size, "userapp.elf")
+    spawn_user_elf(tmp, size, name)
     KHeap.kfree(tmp as uint)
+}
+
+// Loads the default user-space demos from multiboot2 modules at boot, if
+// present: the original assembly app plus the LLPL-authored app built by the
+// extra_links[].llpl_sources pipeline.
+func spawn_user_task() {
+    spawn_boot_user_module("userapp.elf")
+    spawn_boot_user_module("llpl_userapp.elf")
 }
 
 // `multiboot_ptr` is handed to us by boot64.asm (RDI, System V AMD64's

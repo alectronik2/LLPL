@@ -83,11 +83,17 @@ link:
 
 extra_links:                    # a second, independent link (e.g. a user
   - name: userapp                # program loaded as a boot module)
+    llpl_sources:
+      - src: userapp/userapp.llpl # optional: compile LLPL -> C -> object
+        c_output: userapp/userapp.c
+        output: userapp/userapp.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=large, -ffunction-sections, -fdata-sections]
     asm_sources: [{src: userapp/userapp.asm, output: userapp.o}]
     link:
       output: userapp.elf
       script: userapp/linker.ld
-      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      ldflags: [-m, elf_x86_64, -nostdlib, -static, --gc-sections]
       objects: [userapp.o]
 
 package:                        # ISO/etc. packaging - a small ordered
