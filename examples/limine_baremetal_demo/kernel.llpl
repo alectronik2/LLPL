@@ -6,6 +6,8 @@
 // a simple visualization directly into the framebuffer returned by the
 // bootloader.
 
+import limine
+
 namespace HAL {
     func outb(port: uint, value: char) {
         asm("outb %0, %w1" : : "a"(value), "Nd"(port))
@@ -57,126 +59,32 @@ namespace HAL {
     }
 }
 
-packed struct LimineFramebuffer {
-    let address: uint
-    let width: uint
-    let height: uint
-    let pitch: uint
-    let bpp: uint16
-    let memory_model: char
-    let red_mask_size: char
-    let red_mask_shift: char
-    let green_mask_size: char
-    let green_mask_shift: char
-    let blue_mask_size: char
-    let blue_mask_shift: char
-    let unused: char[7]
-    let edid_size: uint
-    let edid: uint
-    let mode_count: uint
-    let modes: uint
-}
-
-packed struct LimineFramebufferRequest {
-    let id: uint[4]
-    let revision: uint
-    let response: LimineFramebufferResponse*
-}
-
-packed struct LimineFramebufferResponse {
-    let revision: uint
-    let framebuffer_count: uint
-    let framebuffers: uint*
-}
-
-packed struct LimineMemmapEntry {
-    let base: uint
-    let length: uint
-    let entry_type: uint
-}
-
-packed struct LimineMemmapRequest {
-    let id: uint[4]
-    let revision: uint
-    let response: LimineMemmapResponse*
-}
-
-packed struct LimineMemmapResponse {
-    let revision: uint
-    let entry_count: uint
-    let entries: uint
-}
-
-packed struct LimineHhdmRequest {
-    let id: uint[4]
-    let revision: uint
-    let response: LimineHhdmResponse*
-}
-
-packed struct LimineHhdmResponse {
-    let revision: uint
-    let offset: uint
-}
-
-const MEMMAP_USABLE                 = 0
-const MEMMAP_RESERVED               = 1
-const MEMMAP_ACPI_RECLAIMABLE       = 2
-const MEMMAP_ACPI_NVS               = 3
-const MEMMAP_BAD_MEMORY             = 4
-const MEMMAP_BOOTLOADER_RECLAIMABLE = 5
-const MEMMAP_EXECUTABLE_AND_MODULES = 6
-const MEMMAP_FRAMEBUFFER            = 7
-const MEMMAP_RESERVED_MAPPED        = 8
-
 @section(".limine_requests_start") @used
-let limine_requests_start_marker: uint[4] = [
-    0xf6b8f4b39de7d1ae,
-    0xfab91a6940fcb9cf,
-    0x785c6ed015d3e316,
-    0x181e920a7852b9d9
-]
+let limine_requests_start_marker: uint[4] = limine_start_marker_id
 
 @section(".limine_requests") @used
 let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
-    id: [
-        0xc7b1dd30df4c8b88,
-        0x0a82e883a194f07b,
-        0x9d5827dcd881dd75,
-        0xa3148604f6fab11b
-    ],
+    id: limine_framebuffer_request_id,
     revision: 0,
     response: 0
 }
 
 @section(".limine_requests") @used
 let memmap_request: LimineMemmapRequest = LimineMemmapRequest {
-    id: [
-        0xc7b1dd30df4c8b88,
-        0x0a82e883a194f07b,
-        0x67cf3d9d378a806f,
-        0xe304acdfc50c3c62
-    ],
+    id: limine_memmap_request_id,
     revision: 0,
     response: 0
 }
 
 @section(".limine_requests") @used
 let hhdm_request: LimineHhdmRequest = LimineHhdmRequest {
-    id: [
-        0xc7b1dd30df4c8b88,
-        0x0a82e883a194f07b,
-        0x48dcf1cb8ad2b852,
-        0x63984e959a98244b
-    ],
+    id: limine_hhdm_request_id,
     revision: 0,
     response: 0
 }
 
 @section(".limine_requests_end") @used
-let limine_requests_end_marker: uint[2] = [
-    0xadc0e0531bb10d03,
-    0x9572709f31764c62
-]
+let limine_requests_end_marker: uint[2] = limine_end_marker_id
 
 func limine_get_framebuffer() -> LimineFramebuffer* {
     if framebuffer_request.response == 0 {
@@ -195,35 +103,33 @@ func limine_get_hhdm() -> LimineHhdmResponse* {
     return hhdm_request.response
 }
 
-
-
 func memmap_type_name(t: uint) -> string {
     match t {
-        case MEMMAP_USABLE =>                 { return "usable" }
-        case MEMMAP_RESERVED =>               { return "reserved" }
-        case MEMMAP_ACPI_RECLAIMABLE =>       { return "acpi-reclaimable" }
-        case MEMMAP_ACPI_NVS =>               { return "acpi-nvs" }
-        case MEMMAP_BAD_MEMORY =>             { return "bad-memory" }
-        case MEMMAP_BOOTLOADER_RECLAIMABLE => { return "bootloader-reclaimable" }
-        case MEMMAP_EXECUTABLE_AND_MODULES => { return "kernel/modules" }
-        case MEMMAP_FRAMEBUFFER =>            { return "framebuffer" }
-        case MEMMAP_RESERVED_MAPPED =>        { return "reserved-mapped" }
-        case _ =>                             { return "unknown" }
+        case MemMapType.Usable =>                { return "usable" }
+        case MemMapType.Reserved =>              { return "reserved" }
+        case MemMapType.AcpiReclaimable =>       { return "acpi-reclaimable" }
+        case MemMapType.AcpiNvs =>               { return "acpi-nvs" }
+        case MemMapType.BadMemory =>             { return "bad-memory" }
+        case MemMapType.BootloaderReclaimable => { return "bootloader-reclaimable" }
+        case MemMapType.ExecutableAndModules =>  { return "kernel/modules" }
+        case MemMapType.Framebuffer =>           { return "framebuffer" }
+        case MemMapType.ReservedMapped =>        { return "reserved-mapped" }
+        case _ =>                                { return "unknown" }
     }
 }
 
 func memmap_type_color(t: uint) -> uint32 {
     match t {
-        case MEMMAP_USABLE =>                 { return 0x1fbf75 as uint32 }
-        case MEMMAP_RESERVED =>               { return 0x777777 as uint32 }
-        case MEMMAP_ACPI_RECLAIMABLE =>       { return 0x44b5ff as uint32 }
-        case MEMMAP_ACPI_NVS =>               { return 0xffc857 as uint32 }
-        case MEMMAP_BAD_MEMORY =>             { return 0xff2020 as uint32 }
-        case MEMMAP_BOOTLOADER_RECLAIMABLE => { return 0x44b5ff as uint32 }
-        case MEMMAP_EXECUTABLE_AND_MODULES => { return 0xffc857 as uint32 }
-        case MEMMAP_FRAMEBUFFER =>            { return 0xff4f8b as uint32 }
-        case MEMMAP_RESERVED_MAPPED =>        { return 0x777777 as uint32 }\
-        case _ =>                             { return 0x777777 as uint32 }
+        case MemMapType.Usable =>                { return 0x1fbf75 as uint32 }
+        case MemMapType.Reserved =>              { return 0x777777 as uint32 }
+        case MemMapType.AcpiReclaimable =>       { return 0x44b5ff as uint32 }
+        case MemMapType.AcpiNvs =>               { return 0xffc857 as uint32 }
+        case MemMapType.BadMemory =>             { return 0xff2020 as uint32 }
+        case MemMapType.BootloaderReclaimable => { return 0x44b5ff as uint32 }
+        case MemMapType.ExecutableAndModules =>  { return 0xffc857 as uint32 }
+        case MemMapType.Framebuffer =>           { return 0xff4f8b as uint32 }
+        case MemMapType.ReservedMapped =>        { return 0x777777 as uint32 }\
+        case _ =>                               { return 0x777777 as uint32 }
     }
 }
 
@@ -331,11 +237,11 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
     }
 
     let legend_y: uint = plot_y + 24
-    fb |> fill_rect(plot_x, legend_y, 18, 10, memmap_type_color(MEMMAP_USABLE))
-    fb |> fill_rect(plot_x + 26, legend_y, 18, 10, memmap_type_color(MEMMAP_RESERVED))
-    fb |> fill_rect(plot_x + 52, legend_y, 18, 10, memmap_type_color(MEMMAP_BOOTLOADER_RECLAIMABLE))
-    fb |> fill_rect(plot_x + 78, legend_y, 18, 10, memmap_type_color(MEMMAP_EXECUTABLE_AND_MODULES))
-    fb |> fill_rect(plot_x + 104, legend_y, 18, 10, memmap_type_color(MEMMAP_FRAMEBUFFER))
+    fb |> fill_rect(plot_x, legend_y, 18, 10, memmap_type_color(MemMapType.Usable))
+    fb |> fill_rect(plot_x + 26, legend_y, 18, 10, memmap_type_color(MemMapType.Reserved))
+    fb |> fill_rect(plot_x + 52, legend_y, 18, 10, memmap_type_color(MemMapType.BootloaderReclaimable))
+    fb |> fill_rect(plot_x + 78, legend_y, 18, 10, memmap_type_color(MemMapType.ExecutableAndModules))
+    fb |> fill_rect(plot_x + 104, legend_y, 18, 10, memmap_type_color(MemMapType.Framebuffer))
 }
 
 func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
@@ -347,7 +253,7 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
     let i: uint = 0
     while i < memmap.entry_count && !found {
         let entry = entries[i] as LimineMemmapEntry*
-        if entry.entry_type == MEMMAP_USABLE && entry.length > 0 {
+        if entry.entry_type == MemMapType.Usable && entry.length > 0 {
             probe_phys = entry.base
             if probe_phys < 0x1000 && entry.length > 0x1000 {
                 probe_phys = 0x1000

@@ -99,6 +99,11 @@ class CodeGenerator {
     private VarDecl[string] globalVarRegistry; // Global lets/consts (incl. enum members), by mangled name
     private VariantInfo[string] variantRegistry; // Tagged-enum variant constructors, by mangled function name
     private Type[string] typeAliases; // Type aliases (`alias string = char*`), by mangled alias name
+    // Named array literals (`alias NAME = [ ... ]`, see ArrayAliasDecl), by
+    // mangled alias name - never emitted as their own C symbol, only
+    // expanded back into these element expressions at each use site (see
+    // expandArrayAliasesShallow).
+    private ASTNode[][string] arrayLiteralAliases;
 
     // Per-symbol origin module path, so alias-qualified and selective imports
     // can look up which module a given mangled name came from.
@@ -697,6 +702,9 @@ class CodeGenerator {
             } else if (auto aliasDecl = cast(AliasDecl)decl) {
                 aliasDecl.namespaceSegments = segments;
                 result ~= aliasDecl;
+            } else if (auto arrayAliasDecl = cast(ArrayAliasDecl)decl) {
+                arrayAliasDecl.namespaceSegments = segments;
+                result ~= arrayAliasDecl;
             } else if (auto macroDecl = cast(MacroDecl)decl) {
                 macroDecl.namespaceSegments = segments;
                 result ~= macroDecl;
@@ -837,6 +845,9 @@ class CodeGenerator {
                         typeAliasModulePath[mangledName] = prog.modulePath;
                         exportsByModule[prog.modulePath][mangledName] = true;
                     }
+                } else if (auto arrayAliasDecl = cast(ArrayAliasDecl)decl) {
+                    string mangledName = mangled(arrayAliasDecl.namespaceSegments, arrayAliasDecl.name);
+                    arrayLiteralAliases[mangledName] = arrayAliasDecl.elements;
                 }
             }
         }
@@ -1923,6 +1934,20 @@ class CodeGenerator {
         }
         if (funcDecl.isVariadic) params ~= ", ...";
 
+        // An `impl Trait for TheClass { ... }` method is desugared
+        // (processImplBlock) into exactly this kind of ordinary top-level
+        // function, with a `self: TheClass` parameter prepended - not
+        // routed through generateClass/generateMethod at all, so
+        // currentClassName (which checkMemberAccess relies on to allow
+        // access to the class's own `private` members) would otherwise
+        // never get set while generating its body, wrongly treating an
+        // impl block as "outside" the very class it's implementing for.
+        string prevClassNameForSelf = currentClassName;
+        if (funcDecl.params.length > 0 && funcDecl.params[0].name == "self" &&
+                funcDecl.params[0].type.name in classRegistry) {
+            currentClassName = mangledClass(classRegistry[funcDecl.params[0].type.name]);
+        }
+
         code ~= format("%s %s(%s) {\n",
             typeToC(funcDecl.returnType), mangleFreeFunctionName(funcDecl), params);
         indentLevel++;
@@ -1950,6 +1975,7 @@ class CodeGenerator {
 
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
+        currentClassName = prevClassNameForSelf;
 
         // See generateConstructor's matching comment: params are only
         // valid names inside this function's own body.
@@ -3526,13 +3552,60 @@ class CodeGenerator {
         }
     }
 
+    // If `node` is a bare Identifier naming an `alias NAME = [ ... ]`
+    // array literal (see ArrayAliasDecl), returns the equivalent
+    // ArrayLiteral - recursively, so an alias can reference another alias.
+    // Returns null for anything else (the ordinary case), including a
+    // real variable that merely happens to hold an array value.
+    private ArrayLiteral tryExpandArrayAlias(ASTNode node) {
+        auto ident = cast(Identifier)node;
+        if (ident is null) return null;
+        auto elements = ident.name in arrayLiteralAliases;
+        if (elements is null) return null;
+        return new ArrayLiteral(expandArrayAliasElements(*elements), node.line, node.column);
+    }
+
+    // Splices any element that's itself a bare alias reference into the
+    // result in place - `alias common = [a, b]` used inside `[common, c,
+    // d]` yields `[a, b, c, d]`, not a nested array. Elements that aren't
+    // alias references pass through unchanged.
+    private ASTNode[] expandArrayAliasElements(ASTNode[] elements) {
+        ASTNode[] result;
+        foreach (elem; elements) {
+            if (auto spliced = tryExpandArrayAlias(elem)) {
+                result ~= spliced.elements;
+            } else {
+                result ~= elem;
+            }
+        }
+        return result;
+    }
+
+    // Expands `node` if it's directly an alias reference (a whole
+    // array-typed initializer that's just the alias's name), or splices
+    // alias elements into it if it's already an ArrayLiteral containing
+    // one or more as elements - one shallow pass, not a deep tree walk;
+    // sufficient everywhere an alias is actually meant to be used (a
+    // var/field's whole initializer, or one element of a literal array).
+    private ASTNode expandArrayAliasesShallow(ASTNode node) {
+        if (auto expanded = tryExpandArrayAlias(node)) return expanded;
+        if (auto lit = cast(ArrayLiteral)node) {
+            lit.elements = expandArrayAliasElements(lit.elements);
+        }
+        return node;
+    }
+
     // Fills in `varDecl.type.arraySize` from an array-literal initializer
     // when none was given (`let arr: char[] = [1, 2, 3]`), or checks it
     // matches when one was (`let arr: char[8] = [...]` needs exactly 8
     // elements) - called for both local (generateStatement) and global
     // (generateGlobalVar) `let`/`const` declarations. A no-op unless the
-    // initializer is actually an ArrayLiteral.
+    // initializer is actually an ArrayLiteral (including one just
+    // expanded from a whole-array alias reference here).
     private void checkArrayLiteralInit(VarDecl varDecl) {
+        if (varDecl.initializer !is null) {
+            varDecl.initializer = expandArrayAliasesShallow(varDecl.initializer);
+        }
         auto lit = cast(ArrayLiteral)varDecl.initializer;
         if (lit is null) return;
 
@@ -3580,6 +3653,24 @@ class CodeGenerator {
             throw new CompileError(
                 format("Cannot assign to '%s': it was declared 'const'", varName),
                 currentModulePath, target.line, target.column);
+        }
+    }
+
+    // Rejects a `private` field/method access from outside its declaring
+    // class - `currentClassName` (set for the entire span of generateClass,
+    // covering every constructor/destructor/method body belonging to that
+    // class) is compared against the *member's own* declaring class, not
+    // whether the receiver expression is literally `self`: `private`
+    // is scoped to the class as a whole, so one of Foo's own methods
+    // accessing `other.field` on a *different* Foo instance is exactly as
+    // allowed as `self.field` is, matching every mainstream language's
+    // access-control model (class-scoped, not instance-scoped).
+    private void checkMemberAccess(bool isPrivate, string ownerClassName, string memberDescription,
+            int line, int column) {
+        if (isPrivate && currentClassName != ownerClassName) {
+            throw new CompileError(
+                format("%s is private - only accessible from within '%s'", memberDescription, ownerClassName),
+                currentModulePath, line, column);
         }
     }
 
@@ -3698,6 +3789,7 @@ class CodeGenerator {
             }
 
             if (i > 0) result ~= ", ";
+            lit.fieldValues[i] = expandArrayAliasesShallow(lit.fieldValues[i]);
             result ~= format(".%s = %s", fieldName, generateExpression(lit.fieldValues[i]));
         }
         result ~= " }";
@@ -5587,6 +5679,8 @@ class CodeGenerator {
                 } else {
                     FunctionDecl methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
                         calleeDescription, callExpr.line, callExpr.column);
+                    checkMemberAccess(methodDecl.isPrivate, className, calleeDescription,
+                        callExpr.line, callExpr.column);
                     resolvedArgs = resolveCallArguments(methodDecl.params, false, callExpr.args,
                         callExpr.argNames, calleeDescription, callExpr.line, callExpr.column);
                     methodSymbol = mangleMethodName(cd, className, methodDecl);
@@ -5734,6 +5828,60 @@ class CodeGenerator {
             if (auto objIdent = cast(Identifier)memberExpr.object) {
                 if (auto objType = objIdent.name in variableTypes) {
                     recordUsage(objType.name ~ "." ~ memberExpr.member, memberExpr.line, memberExpr.column);
+                }
+            }
+
+            // `f.method` with no call parens (e.g. `f.method as uint`) - a
+            // bare method reference, same idea as the qualified-function
+            // case above, just for an instance method instead of a plain
+            // function. Without this check it falls straight through to
+            // ordinary field access below and generates `f->method`, which
+            // only compiles if the class happens to also have a field with
+            // that exact name (never true for a real method) - see
+            // mangleMethodName/methodCandidatesNamed for why a single
+            // candidate keeps its plain "ClassName_method" C name (a bare
+            // function reference, exactly like a free function decaying to
+            // its address), while 2+ overloads can't be disambiguated
+            // without a call's argument types. An impl-block-provided
+            // method (never added to classDecl.methods - see
+            // findIterMethodOrImpl's comment) is checked as a fallback
+            // under the same "ClassName_method" key processImplBlock
+            // registers it under.
+            Type memberObjType = null;
+            try {
+                memberObjType = inferType(memberExpr.object);
+            } catch (Exception e) {
+                // Not a typed value - fall through to plain field access.
+            }
+            if (memberObjType !is null) {
+                if (auto classDecl = memberObjType.name in classRegistry) {
+                    string ownerClassName = mangledClass(*classDecl);
+                    VarDecl matchedField = null;
+                    foreach (field; classDecl.fields) {
+                        if (field.name == memberExpr.member) { matchedField = field; break; }
+                    }
+                    if (matchedField !is null) {
+                        checkMemberAccess(matchedField.isPrivate, ownerClassName,
+                            format("field '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
+                    } else {
+                        auto candidates = methodCandidatesNamed(*classDecl, memberExpr.member);
+                        if (candidates.length > 1) {
+                            throw new CompileError(
+                                format("'%s' is ambiguous - %s has %d overloads named '%s'; a bare " ~
+                                    "method reference (no call parens) can't disambiguate them",
+                                    memberExpr.member, classDecl.name, candidates.length, memberExpr.member),
+                                currentModulePath, memberExpr.line, memberExpr.column);
+                        }
+                        if (candidates.length == 1) {
+                            checkMemberAccess(candidates[0].isPrivate, ownerClassName,
+                                format("method '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
+                            return mangleMethodName(*classDecl, ownerClassName, candidates[0]);
+                        }
+                        string implKey = ownerClassName ~ "_" ~ memberExpr.member;
+                        if (implKey in functionRegistry) {
+                            return implKey;
+                        }
+                    }
                 }
             }
 

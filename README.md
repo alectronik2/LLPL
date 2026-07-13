@@ -285,29 +285,45 @@ This targets ordinary hosted programs only - a freestanding/kernel target
 like `examples/baremetal_demo` needs its own Makefile-based build instead
 (custom linker script, boot assembly, `-ffreestanding` flags), not `-b`.
 
+### Web Playground
+
+`playground/` has a local web playground - write LLPL in the browser and
+see the generated C plus the compiled program's real output side by side.
+See `playground/README.md` (local use only - it compiles and runs
+whatever source is submitted, with no sandboxing).
+
+```bash
+cd playground && node server.js   # then open http://localhost:8787
+```
+
 ## Example: Bare Metal Kernel
 
-A complete kernel example is provided in `examples/kernel.llpl`.
+Complete kernel examples are provided in `examples/baremetal_demo` (GRUB/
+Multiboot2) and `examples/limine_baremetal_demo` (Limine). Both are built
+and run with `tools/llplbuild` - a YAML-configured build tool (see
+`tools/llplbuild/README.md`) that replaced their old Makefiles, supporting
+`debug`/`final` build configurations, incremental/parallel builds, and a
+`build.yaml` per target instead of hand-written recipes.
 
 ### Building the Kernel
 
 ```bash
-cd examples
-make
+cd examples/baremetal_demo
+../../tools/llplbuild/llplbuild build            # final (optimized) build
+../../tools/llplbuild/llplbuild build -c debug    # unoptimized, with -g
 ```
 
 This will:
-1. Build the LLPL compiler
-2. Compile `kernel.llpl` to C
-3. Compile the C code with the runtime
-4. Assemble the bootloader
-5. Link everything into a kernel binary
+1. Compile `kernel.llpl` to C
+2. Compile the C code with the runtime
+3. Assemble the bootloader
+4. Link everything into a kernel binary and package a bootable ISO
 
 ### Running the Kernel
 
 ```bash
-cd examples
-make run
+cd examples/baremetal_demo
+../../tools/llplbuild/llplbuild run
 ```
 
 This launches QEMU and runs your kernel. You should see output like:

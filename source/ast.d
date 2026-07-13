@@ -9,6 +9,7 @@ enum NodeType {
     ImportStmt,
     NamespaceDecl,
     AliasDecl,
+    ArrayAliasDecl,
     FunctionDecl,
     ClassDecl,
     StructDecl,
@@ -152,6 +153,28 @@ class AliasDecl : ASTNode {
         this.targetPointerDepth = targetPointerDepth;
         this.targetIsArray = targetIsArray;
         this.targetArraySize = targetArraySize;
+    }
+}
+
+// `alias NAME = [ expr, expr, ... ]` - a compile-time-only named array
+// literal, distinct from AliasDecl's symbol/type aliasing above (which
+// always starts with an identifier, never a bracket, right after `=`).
+// `NAME` never becomes its own C symbol; wherever it's referenced it's
+// expanded back into these same element expressions - either as a whole
+// array-typed initializer, or spliced into a *larger* array literal it
+// appears as one element of (see codegen.d's arrayLiteralAliases and
+// expandArrayAliasesShallow). Meant for grouping repeated magic-number
+// sequences (e.g. a bootloader protocol's request IDs) under a name
+// without needing them to live at a real, addressable memory location.
+class ArrayAliasDecl : ASTNode {
+    string name;
+    ASTNode[] elements;
+    string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+
+    this(string name, ASTNode[] elements, int line = 0, int column = 0) {
+        super(NodeType.ArrayAliasDecl, line, column);
+        this.name = name;
+        this.elements = elements;
     }
 }
 
@@ -350,6 +373,12 @@ class FunctionDecl : ASTNode {
     // reader of .typeParams (LSP signatures, cloning, mangling) needed no
     // changes when trait bounds were added.
     string[] typeParamBounds;
+    // `private func` - a method only callable/referenceable from within
+    // the same class's own body (any of its own methods/constructors,
+    // not just via `self`) - see codegen.d's checkMemberAccess. Only
+    // meaningful for a method (set by classDecl() in parser.d); a plain
+    // top-level function is never marked private.
+    bool isPrivate;
 
     this(string name, Parameter[] params, Type returnType, Block body_, bool isExtern = false,
          bool isInterrupt = false, bool isVariadic = false, int line = 0, int column = 0,
@@ -544,6 +573,11 @@ class VarDecl : ASTNode {
     int bitWidth = -1; // -1 means "not a bit-field"; only meaningful for class fields
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     VarAttribute[] attributes;
+    // `private let`/`private const` - a field only readable/writable from
+    // within the same class's own body (see codegen.d's checkMemberAccess).
+    // Only meaningful for a class field (set by classDecl() in parser.d);
+    // a local variable or global is never marked private.
+    bool isPrivate;
 
     this(string name, Type type, ASTNode initializer = null, bool isConst = false, int line = 0, int column = 0,
          int bitWidth = -1, bool isVolatile = false, VarAttribute[] attributes = []) {

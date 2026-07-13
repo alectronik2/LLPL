@@ -1,0 +1,115 @@
+# Build config for the GRUB/Multiboot2 bare-metal demo - replaces the old
+# Makefile. Run with ../../tools/llplbuild/llplbuild (build|run|clean|configs)
+# from within this directory. See tools/llplbuild/README.md for the tool
+# itself, and the "test-persistence.sh" script alongside this file for the
+# multi-boot VFS-persistence integration test (kept as a standalone script,
+# not part of this pipeline - see that script's own header comment).
+
+project: llpl-baremetal-demo
+entry: kernel.llpl
+llpl_compiler: ../../llpl
+
+toolchain:
+  nasm: nasm
+  cc: gcc
+  ld: ld
+  qemu: qemu-system-x86_64
+
+common_cflags:
+  - -m64
+  - -ffreestanding
+  - -nostdlib
+  - -nostdinc
+  - -fno-builtin
+  - -fno-stack-protector
+  - -fno-omit-frame-pointer
+  - -fno-optimize-sibling-calls
+  - -Wall
+  - -Wextra
+  - -I.
+  - -mcmodel=kernel
+  - -fno-pie
+  - -mno-red-zone
+  - -mno-sse
+  - -mno-sse2
+  - -mno-mmx
+  - -mno-80387
+
+default_config: final
+configurations:
+  debug:
+    cflags: [-O0, -g]
+  final:
+    cflags: [-O2]
+
+asm_sources:
+  - src: boot64.asm
+    output: boot.o
+
+c_sources:
+  - path: kernel.c
+    include_dirs: [../../runtime]
+  - path: ../../runtime/runtime.c
+    include_dirs: [../../runtime]
+
+link:
+  output: kernel.bin
+  script: linker64.ld
+  ldflags: [-m, elf_x86_64, -nostdlib]
+  objects: [boot.o, kernel.o, runtime.o]
+
+extra_links:
+  - name: userapp
+    asm_sources:
+      - src: userapp/userapp.asm
+        output: userapp.o
+    link:
+      output: userapp.elf
+      script: userapp/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [userapp.o]
+
+# Includes two small files loaded as multiboot2 modules (grub.cfg's
+# `module2` directive) purely to give tmpfs.llpl something real to
+# expose; their exact content is asserted by TmpFS.selftest().
+package:
+  output: kernel.iso
+  actions:
+    - mkdir: isodir/boot/grub
+    - copy: {from: kernel.bin, to: isodir/boot/kernel.bin}
+    - copy: {from: userapp.elf, to: isodir/boot/userapp.elf}
+    - write:
+        to: isodir/boot/hello.txt
+        content: "Hello from a GRUB module!"
+    - write:
+        to: isodir/boot/readme.txt
+        content: "This file was never written to the VFS disk - TmpFS reads it directly out of the memory GRUB already loaded it into."
+    - write:
+        to: isodir/boot/grub/grub.cfg
+        content: |
+          set timeout=0
+          set default=0
+          menuentry "LLPL Bare-Metal Demo" {
+              multiboot2 /boot/kernel.bin
+              module2 /boot/hello.txt hello.txt
+              module2 /boot/readme.txt readme.txt
+              module2 /boot/userapp.elf userapp.elf
+          }
+    - run: "grub-mkrescue -o kernel.iso isodir"
+      allow_failure: true
+
+# The VFS's (vfs.llpl) backing store - built only if missing, so it
+# persists across ordinary builds the same way real disk state should
+# (only `clean` wipes it). Must match vfs.llpl's DISK_SECTORS constant
+# (16MB / 512-byte sectors).
+persistent_files:
+  - path: disk.img
+    create: "dd if=/dev/zero of=disk.img bs=1M count=16"
+
+# QEMU assigns the extra `-drive ...,if=ide` (with no explicit index) as
+# the primary IDE master alongside `-cdrom` - verified, not merely
+# assumed, but still just "this is what QEMU happens to do today", the
+# same "trust the target" spirit as the rest of this demo's hardware
+# handling (see ata.llpl).
+run:
+  args: ["-cdrom", "kernel.iso", "-drive", "file=disk.img,format=raw,if=ide", "-serial", "stdio", "-m", "256"]

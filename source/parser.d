@@ -64,6 +64,24 @@ class Parser {
         return peek(offset).type == TokenType.Not && peek(offset + 1).type == TokenType.LeftParen;
     }
 
+    // True when `current` starts a new source line relative to the last
+    // consumed token. `*`, `-`, and `&` each double as both a unary prefix
+    // operator (deref, negate, address-of) and a binary infix one
+    // (multiply, subtract, bitwise-and), so a statement that legitimately
+    // starts with one of these right after a preceding statement (e.g.
+    // `foo()` then `*p = 1` on the next line) is grammatically ambiguous -
+    // without this check it's greedily read as one continued expression
+    // (`foo() * p = 1`). Resolved the same way Go/Kotlin's newline-
+    // sensitive parsing does: one of these operators only continues the
+    // previous expression if it stays on the same line as what precedes
+    // it; on a new line, it's instead read as the start of a fresh unary
+    // expression/statement. `+`, `/`, `%` have no unary form in this
+    // grammar, so they're never ambiguous and are unaffected - they keep
+    // continuing across a line break exactly as before.
+    private bool newlineBeforeCurrent() {
+        return pos > 0 && current.line > tokens[pos - 1].line;
+    }
+
     private bool match(TokenType[] types...) {
         foreach (type; types) {
             if (check(type)) {
@@ -267,7 +285,10 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Namespace);
-        string name = expect(TokenType.Identifier).value;
+        string[] segments = [expect(TokenType.Identifier).value];
+        while (match(TokenType.Dot)) {
+            segments ~= expect(TokenType.Identifier).value;
+        }
         expect(TokenType.LeftBrace);
 
         ASTNode[] declarations;
@@ -276,7 +297,17 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new NamespaceDecl(name, declarations, startLine, startColumn);
+
+        // `namespace Foo.Bar { ... }` is sugar for `namespace Foo {
+        // namespace Bar { ... } }` - build the nesting from the innermost
+        // segment outward, so codegen.d's flattenNamespaces (which
+        // already recurses through nested NamespaceDecl nodes to support
+        // that written-out form) handles this with no changes at all.
+        NamespaceDecl result = new NamespaceDecl(segments[$ - 1], declarations, startLine, startColumn);
+        foreach_reverse (i; 0 .. segments.length - 1) {
+            result = new NamespaceDecl(segments[i], [result], startLine, startColumn);
+        }
+        return result;
     }
 
     // Two forms share the `enum` keyword, disambiguated by whether *any*
@@ -422,12 +453,27 @@ class Parser {
         return new MacroDecl(name, params, body_, startLine, startColumn);
     }
 
-    private AliasDecl aliasDecl() {
+    private ASTNode aliasDecl() {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Alias);
         string name = expect(TokenType.Identifier).value;
         expect(TokenType.Assign);
+
+        // `alias NAME = [ ... ]` - a named array literal (see
+        // ArrayAliasDecl's own comment), not the symbol/type alias
+        // grammar below (which always starts with an identifier - a
+        // bracket here is unambiguous). Reuses the ordinary expression
+        // parser rather than hand-rolling bracket/comma parsing again -
+        // primary()'s own array-literal case already does exactly that.
+        if (check(TokenType.LeftBracket)) {
+            ASTNode literal = expression();
+            auto arrayLit = cast(ArrayLiteral)literal;
+            if (arrayLit is null) {
+                errorAt(startLine, startColumn, "Expected an array literal ('[ ... ]') after '='");
+            }
+            return new ArrayAliasDecl(name, arrayLit.elements, startLine, startColumn);
+        }
 
         string[] targetPath = [expect(TokenType.Identifier).value];
         while (match(TokenType.Dot)) {
@@ -681,14 +727,29 @@ class Parser {
         FunctionDecl[] methods;
 
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            // `private func`/`private let`/`private x: T` - only a method
+            // or field can be private (see FunctionDecl/VarDecl.isPrivate);
+            // a constructor/destructor always needs to be reachable via
+            // `new`/automatic cleanup, so `private` isn't offered there.
+            bool isPrivateMember = match(TokenType.Private);
             if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
             } else if (check(TokenType.Destructor)) {
                 destructor = destructorDecl(name);
             } else if (check(TokenType.Function)) {
-                methods ~= functionDecl();
+                auto method = functionDecl();
+                method.isPrivate = isPrivateMember;
+                methods ~= method;
             } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
-                fields ~= varDecl();
+                auto field = varDecl();
+                field.isPrivate = isPrivateMember;
+                fields ~= field;
+            } else if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
+                int declLine = current.line;
+                int declColumn = current.column;
+                auto field = varDeclBody(declLine, declColumn, false, false);
+                field.isPrivate = isPrivateMember;
+                fields ~= field;
             } else {
                 error("Expected field or method declaration");
             }
@@ -868,6 +929,16 @@ class Parser {
             expect(TokenType.Let);
         }
 
+        return varDeclBody(declLine, declColumn, isConst, isVolatile);
+    }
+
+    // Parses `name: Type [: bitWidth] [= initializer]` - shared by
+    // varDecl (after it's consumed a leading `let`/`const`/`volatile`)
+    // and a class field written with no keyword at all (classDecl below):
+    // `x: int` inside a class body means exactly what `let x: int` does.
+    // Unambiguous there - no other class-body construct starts with a
+    // bare identifier immediately followed by `:`.
+    private VarDecl varDeclBody(int declLine, int declColumn, bool isConst, bool isVolatile) {
         Token nameToken = expect(TokenType.Identifier);
         string name = nameToken.value;
 
@@ -1768,7 +1839,8 @@ class Parser {
     private ASTNode bitwiseAnd() {
         ASTNode expr = equality();
 
-        while (match(TokenType.BitwiseAnd)) {
+        while (check(TokenType.BitwiseAnd) && !newlineBeforeCurrent()) {
+            advance();
             string op = "&";
             ASTNode right = equality();
             expr = new BinaryExpr(op, expr, right, expr.line, expr.column);
@@ -1816,7 +1888,8 @@ class Parser {
     private ASTNode additive() {
         ASTNode expr = multiplicative();
 
-        while (match(TokenType.Plus, TokenType.Minus)) {
+        while (check(TokenType.Plus) || (check(TokenType.Minus) && !newlineBeforeCurrent())) {
+            advance();
             string op = tokens[pos - 1].value;
             ASTNode right = multiplicative();
             expr = new BinaryExpr(op, expr, right, expr.line, expr.column);
@@ -1828,7 +1901,9 @@ class Parser {
     private ASTNode multiplicative() {
         ASTNode expr = cast_();
 
-        while (match(TokenType.Star, TokenType.Slash, TokenType.Percent)) {
+        while ((check(TokenType.Star) && !newlineBeforeCurrent()) ||
+                check(TokenType.Slash) || check(TokenType.Percent)) {
+            advance();
             string op = tokens[pos - 1].value;
             ASTNode right = cast_();
             expr = new BinaryExpr(op, expr, right, expr.line, expr.column);

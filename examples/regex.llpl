@@ -10,7 +10,7 @@ func demo_find_all() {
     let text: char* = "abc 123 def 4567 ghi"
 
     let count: int = 0
-    foreach let m in re.find_all(text) {
+    for m in re.find_all(text) {
         puts(m.group(0).c_str())
         print_int("start", m.group_start(0))
         print_int("end", m.group_end(0))

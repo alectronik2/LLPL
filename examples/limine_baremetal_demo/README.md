@@ -17,25 +17,26 @@ It demonstrates:
 The config uses Limine's current `resource(argument):/path` form, for
 example `boot():/boot/kernel.elf`.
 
-Build:
+Build (with `tools/llplbuild`, run from this directory - see
+`tools/llplbuild/README.md`):
 
 ```sh
-make
+../../tools/llplbuild/llplbuild build
 ```
 
 Run:
 
 ```sh
-make run
+../../tools/llplbuild/llplbuild run
 ```
 
-The ISO rule expects Limine tooling/assets to be available locally. It uses
-`limine bios-install`, `limine-bios.sys`, `limine-bios-cd.bin`, and
-`limine-uefi-cd.bin` from `$(LIMINE_DIR)`, defaulting to `/usr/share/limine`.
-Override it when your install layout differs:
+The packaging step expects Limine tooling/assets to be available locally.
+It uses `limine bios-install`, `limine-bios.sys`, `limine-bios-cd.bin`, and
+`limine-uefi-cd.bin` from `LIMINE_DIR` (a `build.yaml` variable), defaulting
+to `/usr/share/limine`. Override it when your install layout differs:
 
 ```sh
-make LIMINE_DIR=/path/to/limine
+../../tools/llplbuild/llplbuild build --var LIMINE_DIR=/path/to/limine
 ```
 
 At boot, serial output prints each Limine memory-map entry as

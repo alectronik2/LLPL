@@ -62,6 +62,13 @@ line info, so two different calls into the same function report the same
 line. See `test/symbol_table_demo.llpl` for the full runnable version
 this is taken from.
 
+A bare instance method reference (`f.method as uint`, no call parens)
+works the same way a plain function name does - `f.bar as uint` decays to
+`Foo_bar`'s address (whether `bar` was written directly in `Foo`'s body
+or via an `impl Trait for Foo { ... }` block). An overloaded method can't
+be referenced this way without a call's arguments to disambiguate which
+one is meant - a clear compile error, not a wrong pick.
+
 ## Basic Examples
 
 ### Hello World (with C FFI)
@@ -137,12 +144,14 @@ func main() -> int {
 }
 ```
 
-A statement starting with `*` (dereference) directly after another
-statement can be misread as that statement's own trailing expression
-continuing via multiplication (`foo() \n *p = 1` parses as `foo() * p =
-1`) - a pre-existing parsing quirk, not specific to double pointers.
-Prefer assigning through a helper function (as above) or make the
-dereferencing statement the first one in its block.
+A statement starting with `*`, `-`, or `&` right after another statement
+is only read as continuing that previous statement's expression (`foo()
+* p`, a multiplication) if it stays on the *same source line* - on a new
+line it's instead parsed as the start of a fresh unary expression/
+statement (dereference, negate, or address-of), the same newline-
+sensitive rule Go and Kotlin use to resolve the identical ambiguity.
+`**pp = v` (a fresh statement, own line, right after another one) parses
+correctly with no workaround needed.
 
 ### Named Arguments and Default Values
 
@@ -214,6 +223,67 @@ func main() -> int {
     let rect: Rectangle = new Rectangle(10, 20)
     let area: int = rect.area()
     let perim: int = rect.perimeter()
+    return 0
+}
+```
+
+A field can also be declared without `let` - `width: int` means exactly
+what `let width: int` does (still mutable, just terser). `const` and
+`volatile` fields still need their keyword written out, since dropping it
+would leave no way to tell them apart from a plain mutable field:
+
+```swift
+class Rectangle2 {
+    width: int
+    height: int
+
+    constructor(w: int, h: int) {
+        self.width = w
+        self.height = h
+    }
+    destructor() {}
+}
+```
+
+### Private Members
+
+`private` on a field or method restricts it to the declaring class's own
+body - any of its methods/constructors, or an `impl Trait for ThisClass {
+... }` block targeting it, not just accesses through `self`. It's class-
+scoped, not instance-scoped: one instance's own method can read *another*
+instance's private field. Only fields and methods can be `private` - a
+constructor always needs to be reachable via `new`, so it isn't offered
+there. See `test/private_members_demo.llpl` for the full runnable version
+this is taken from:
+
+```swift
+class Counter {
+    private let count: int
+
+    constructor() { self.count = 0 }
+    destructor() {}
+
+    private func bump() -> int {
+        self.count = self.count + 1
+        return self.count
+    }
+
+    func increment() -> int {
+        return self.bump()
+    }
+
+    // Class-scoped, not instance-scoped - reading another Counter's own
+    // private field from within Counter's own method is fine.
+    func matches(other: Counter) -> bool {
+        return self.count == other.count
+    }
+}
+
+func main() -> int {
+    let c: Counter = new Counter()
+    c.increment()
+    // c.count       // compile error: private, only accessible from within 'Counter'
+    // c.bump()       // compile error: private, only accessible from within 'Counter'
     return 0
 }
 ```
@@ -813,6 +883,37 @@ let doubler: (int) -> int = func(x: int) -> int {
 }
 ```
 
+## Namespaces
+
+`namespace Name { ... }` groups functions/classes/structs/consts under a
+`Name.member` prefix, and nests - `namespace Foo.Bar { ... }` is sugar for
+`namespace Foo { namespace Bar { ... } }`, and the two spellings mix
+freely. See `test/nested_namespace_demo.llpl` for the full runnable
+version this is taken from:
+
+```swift
+namespace Graphics.Utils {
+    const VERSION = 2
+
+    func describe() {
+        puts("Graphics.Utils")
+    }
+
+    namespace Deep {
+        func hello() {
+            puts("Graphics.Utils.Deep")
+        }
+    }
+}
+
+func main() -> int {
+    Graphics.Utils.describe()
+    Graphics.Utils.Deep.hello()
+    puts("\(Graphics.Utils.VERSION)")
+    return 0
+}
+```
+
 ## Modules and Imports
 
 Files are compiled together by following their `import` statements. A plain
@@ -857,6 +958,47 @@ func main() -> int {
 
 See `test/import_alias.llpl` and `test/import_selective.llpl` for runnable
 examples.
+
+## Named Array Literals
+
+`alias NAME = [ ... ]` names an array literal at compile time only - it
+never becomes its own addressable C symbol. Every reference to `NAME` is
+expanded back into these same element expressions, either as a whole
+array-typed initializer, or spliced into a *larger* array literal it
+appears as one element of. Useful for centralizing repeated magic-number
+sequences without needing them to live at a shared memory location -
+`examples/limine_baremetal_demo/limine.llpl` uses this for the Limine
+boot protocol's request IDs (four `uint64` words, the first two shared by
+every request, the last two naming which request it is), instead of
+repeating all four inline at every request struct in `kernel.llpl`. See
+`test/array_alias_demo.llpl` for the full runnable version this is taken
+from:
+
+```swift
+alias limine_common_magic = [
+    0xc7b1dd30df4c8b88,
+    0x0a82e883a194f07b
+]
+
+// Spliced, not nested: limine_common_magic's 2 elements plus these 2
+// give a 4-element array, matching LimineFramebufferRequest.id's type.
+alias limine_framebuffer_request_id = [
+    limine_common_magic,
+    0x9d5827dcd881dd75,
+    0xa3148604f6fab11b
+]
+
+@section(".limine_requests") @used
+let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
+    id: limine_framebuffer_request_id,
+    revision: 0,
+    response: 0
+}
+```
+
+A bare `alias NAME = value` (no brackets right after `=`) is unaffected -
+that's still the existing symbol/type alias grammar (`alias string =
+char*`).
 
 ## Generics
 

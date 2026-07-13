@@ -6,7 +6,7 @@ struct List<T> {
 }
 
 class Klass {
-    let i: int
+    i: int
 
     constructor() {
         puts("Klass constructor")
@@ -53,6 +53,24 @@ func throw_func() {
 
 func throw_func( l: int ) {
     throw "This is another test exception \(l)"
+}
+
+trait Foo {
+    func foo() -> int 
+}
+
+impl Foo for uint {
+    func foo() -> int {
+        42
+    }
+}
+
+namespace Foo {
+    namespace Bar {
+        func bar() -> int {
+            99
+        }
+    }
 }
 
 func main() -> uint32 {
@@ -112,6 +130,9 @@ func main() -> uint32 {
         case "Hello, world!" => { puts("Matched the string!") }
         case _ => { puts("Did not match the string.")   }
     }
+
+    let sug = 88 as uint
+    //puts( "Sug.foo is \(sug.foo)" )
 
     result
 }

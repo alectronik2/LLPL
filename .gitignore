@@ -1,5 +1,6 @@
 # D build artifacts
 llpl
+tools/llplbuild/llplbuild
 *.o
 *.obj
 .dub/
@@ -15,6 +16,7 @@ dub.selections.json
 examples/*.o
 examples/*.c
 examples/kernel.bin
+.llplbuild-config
 examples/kernel.iso
 examples/isodir/
 examples/baremetal_demo/disk.img

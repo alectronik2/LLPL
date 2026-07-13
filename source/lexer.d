@@ -25,6 +25,7 @@ enum TokenType {
     Let,
     Const,
     Volatile,
+    Private,
     If,
     Else,
     While,
@@ -159,6 +160,7 @@ class Lexer {
             "let": "Let",
             "const": "Const",
             "volatile": "Volatile",
+            "private": "Private",
             "if": "If",
             "else": "Else",
             "while": "While",
@@ -509,6 +511,7 @@ class Lexer {
                 case "Let": type = TokenType.Let; break;
                 case "Const": type = TokenType.Const; break;
                 case "Volatile": type = TokenType.Volatile; break;
+                case "Private": type = TokenType.Private; break;
                 case "If": type = TokenType.If; break;
                 case "Else": type = TokenType.Else; break;
                 case "While": type = TokenType.While; break;
