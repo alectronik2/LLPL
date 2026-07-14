@@ -313,10 +313,56 @@ namespace VMM {
         return base
     }
 
+    func mmap_at(aspace: AddressSpace*, base: uint, pages: uint) -> uint {
+        if pages == 0 || aspace == null || (base & (PAGE_SIZE - 1)) != 0 {
+            return 0
+        }
+        let all_mapped: bool = true
+        let i: uint = 0
+        while i < pages {
+            if virt_to_phys(aspace.pml4, base + i * PAGE_SIZE) == 0 {
+                all_mapped = false
+            }
+            i = i + 1
+        }
+        if all_mapped {
+            return base
+        }
+
+        i = 0
+        while i < pages {
+            let virt: uint = base + i * PAGE_SIZE
+            if virt_to_phys(aspace.pml4, virt) == 0 {
+                let phys: uint = PageAlloc.alloc()
+                if phys == 0 {
+                    return 0
+                }
+                let p: char* = phys as char*
+                let j: int = 0
+                while j < PAGE_SIZE as int {
+                    p[j] = 0
+                    j = j + 1
+                }
+                if !map_in_aspace(aspace, virt, phys,
+                                  PTE_PRESENT | PTE_WRITABLE | PTE_USER) {
+                    PageAlloc.free(phys)
+                    return 0
+                }
+            }
+            i = i + 1
+        }
+        let end: uint = base + pages * PAGE_SIZE
+        if end > aspace.next_virt {
+            aspace.next_virt = end
+        }
+        return base
+    }
+
     func munmap(aspace: AddressSpace*, addr: uint, pages: uint) -> bool {
         if aspace == null || pages == 0 || (addr & (PAGE_SIZE - 1)) != 0 {
             return false
         }
+        let end: uint = addr + pages * PAGE_SIZE
         let i: uint = 0
         while i < pages {
             let virt: uint = addr + i * PAGE_SIZE
@@ -329,6 +375,9 @@ namespace VMM {
             invlpg(virt)
             PageAlloc.free(phys)
             i = i + 1
+        }
+        if end == aspace.next_virt {
+            aspace.next_virt = addr
         }
         return true
     }

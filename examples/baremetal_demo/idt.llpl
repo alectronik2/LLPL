@@ -63,7 +63,7 @@ interrupt func isr_page_fault(error_code: uint) {
     EventLog.add2("fault", "page fault", addr, error_code)
     hsw("FAULT: page fault (#PF) - halting\n")
     HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
-                      "  cr2=%016llx error=%llx task=%lld\n",
+                      "  cr2=0x%016x error=0x%x task=%d\n",
                       addr, error_code, Task.current_id())
     HAL.Log.flush()
     if Task.current_user_guard_hit(addr) {

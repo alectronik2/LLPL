@@ -226,8 +226,9 @@ namespace Syscall {
         if aspace == null {
             return 0
         }
-        // Hint addresses are ignored in this demo; the allocator hands out
-        // consecutive pages starting at USER_MMAP_BASE.
+        if virt_hint != 0 {
+            return VMM.mmap_at(aspace, virt_hint, pages)
+        }
         return VMM.mmap(aspace, pages)
     }
 

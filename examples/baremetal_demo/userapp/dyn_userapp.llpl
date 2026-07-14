@@ -45,6 +45,27 @@ func _start(argc: uint, argv: uint*) {
         sys_putln("large malloc failed")
     }
 
+    sys_puts("small alloc1...\n")
+    let small1: char* = sys_malloc(64)
+    let small2: char* = null
+    if small1 != null {
+        small1[0] = 49 as char
+        sys_puts("small free1=")
+        print_uint(sys_free(small1))
+        sys_puts("\n")
+        sys_puts("small alloc2...\n")
+        small2 = sys_malloc(32)
+    } else {
+        sys_puts("small alloc1 failed\n")
+    }
+    sys_puts("small reuse=")
+    if small1 != null && (small2 as uint) == (small1 as uint) {
+        print_uint(1)
+    } else {
+        print_uint(0)
+    }
+    sys_puts("\n")
+
     sys_exit(0)
     while true {
     }
