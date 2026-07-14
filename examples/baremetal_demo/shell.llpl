@@ -412,6 +412,8 @@ namespace Shell {
         print("  stacks        - check kernel stack canaries and user guards\n")
         print("  sleep TICKS   - put the shell task to sleep briefly\n")
         print("  spawn         - spawn another idle background task\n")
+        print("  wait PID      - reap a completed child task\n")
+        print("  kill PID      - terminate a task\n")
         print("  ls [PATH]     - list a directory (default: current)\n")
         print("  cd PATH       - change the current directory\n")
         print("  pwd           - print the current directory\n")
@@ -898,7 +900,7 @@ namespace Shell {
             len = len + 1
         }
         if !VFS.write(path, text, len) {
-            log("<LIGHT_RED>write failed (bad path, or file too large - max 6KB)\n</>")
+            log("<LIGHT_RED>write failed (bad path, or file too large - max 32KB)\n</>")
         }
     }
 
@@ -908,11 +910,47 @@ namespace Shell {
             return
         }
         let sep: int = find_space(args)
+        let ok: bool = false
         if args[sep] == 0 {
-            run_user_executable_with_args(args, "")
+            ok = run_user_executable_with_args(args, "")
         } else {
             args[sep] = 0
-            run_user_executable_with_args(args, args + sep + 1)
+            ok = run_user_executable_with_args(args, args + sep + 1)
+        }
+        if ok {
+            log("<WHITE>pid \(last_spawned_user_id)\n</>")
+        }
+    }
+
+    func cmd_wait(args: char*) {
+        let pid: int = parse_hex(args) as int
+        let status: uint = 0
+        let child_state: int = Task.child_status(pid, &status)
+        if child_state < 0 {
+            log("<LIGHT_RED>no such child\n</>")
+            return
+        }
+        if child_state == 0 {
+            log("<YELLOW>task \(pid) is still running\n</>")
+            return
+        }
+        if Task.reap_zombie(pid, &status) {
+            log("<WHITE>task \(pid) exited with status \(status)\n</>")
+        } else {
+            log("<LIGHT_RED>wait failed\n</>")
+        }
+    }
+
+    func cmd_kill(args: char*) {
+        let pid: int = parse_hex(args) as int
+        let aspace: VMM.AddressSpace* = Task.aspace_by_id(pid)
+        if aspace != null {
+            LdSo.cleanup_aspace(aspace)
+        }
+        if Task.kill(pid) {
+            log("<WHITE>killed task \(pid)\n</>")
+        } else {
+            log("<LIGHT_RED>no such task\n</>")
         }
     }
 
@@ -994,6 +1032,10 @@ namespace Shell {
                     cmd_fault(line + 6)
                 } else if starts_with(line, "sleep ") {
                     cmd_sleep(line + 6)
+                } else if starts_with(line, "wait ") {
+                    cmd_wait(line + 5)
+                } else if starts_with(line, "kill ") {
+                    cmd_kill(line + 5)
                 } else if starts_with(line, "kmalloc ") {
                     cmd_kmalloc(line + 8)
                 } else if starts_with(line, "kfree ") {

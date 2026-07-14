@@ -106,6 +106,37 @@ namespace VMM {
         return (pte[0] >> 12) << 12
     }
 
+    func pte_for(pml4: uint, virt: uint) -> uint* {
+        let pml4i: int = page_index(virt, 39)
+        let pdpti: int = page_index(virt, 30)
+        let pdi: int = page_index(virt, 21)
+        let pti: int = page_index(virt, 12)
+
+        let pml4e: uint* = get_pte(pml4, pml4i)
+        if (pml4e[0] & PTE_PRESENT) == 0 {
+            return null
+        }
+        let pdpt: uint = (pml4e[0] >> 12) << 12
+
+        let pdpte: uint* = get_pte(pdpt, pdpti)
+        if (pdpte[0] & PTE_PRESENT) == 0 {
+            return null
+        }
+        let pd: uint = (pdpte[0] >> 12) << 12
+
+        let pde: uint* = get_pte(pd, pdi)
+        if (pde[0] & PTE_PRESENT) == 0 {
+            return null
+        }
+        let pt: uint = (pde[0] >> 12) << 12
+
+        let pte: uint* = get_pte(pt, pti)
+        if (pte[0] & PTE_PRESENT) == 0 {
+            return null
+        }
+        return pte
+    }
+
     func map_page(pml4: uint, virt: uint, phys: uint, flags: uint) -> bool {
         let pml4i: int = page_index(virt, 39)
         let pdpti: int = page_index(virt, 30)
@@ -280,6 +311,26 @@ namespace VMM {
         }
         aspace.next_virt = base + pages * PAGE_SIZE
         return base
+    }
+
+    func munmap(aspace: AddressSpace*, addr: uint, pages: uint) -> bool {
+        if aspace == null || pages == 0 || (addr & (PAGE_SIZE - 1)) != 0 {
+            return false
+        }
+        let i: uint = 0
+        while i < pages {
+            let virt: uint = addr + i * PAGE_SIZE
+            let pte: uint* = pte_for(aspace.pml4, virt)
+            if pte == null {
+                return false
+            }
+            let phys: uint = (pte[0] >> 12) << 12
+            pte[0] = 0
+            invlpg(virt)
+            PageAlloc.free(phys)
+            i = i + 1
+        }
+        return true
     }
 
     func free_address_space(aspace: AddressSpace*) {

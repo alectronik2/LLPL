@@ -1,0 +1,10 @@
+LIBSYS_1.0 {
+  global:
+    syscall0;
+    syscall1;
+    syscall2;
+    syscall3;
+    sys_*;
+  local:
+    *;
+};

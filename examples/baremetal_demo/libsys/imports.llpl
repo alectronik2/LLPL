@@ -1,0 +1,39 @@
+// Public LLPL import surface for dynamically linked user programs.
+
+extern func syscall0(number: uint) -> uint
+extern func syscall1(number: uint, a: uint) -> uint
+extern func syscall2(number: uint, a: uint, b: uint) -> uint
+extern func syscall3(number: uint, a: uint, b: uint, c: uint) -> uint
+
+extern func sys_exit(code: uint) -> uint
+extern func sys_print(buf: char*, len: uint) -> uint
+extern func sys_mmap(virt_hint: uint, pages: uint, flags: uint) -> uint
+extern func sys_munmap(addr: uint, pages: uint) -> uint
+extern func sys_getpid() -> uint
+extern func sys_yield() -> uint
+extern func sys_sleep(ticks: uint) -> uint
+extern func sys_open(path: char*, mode: uint) -> uint
+extern func sys_read(fd: uint, buf: char*, len: uint) -> uint
+extern func sys_write(fd: uint, buf: char*, len: uint) -> uint
+extern func sys_close(fd: uint) -> uint
+extern func sys_msg_send(peer: uint, buf: char*, len: uint) -> uint
+extern func sys_msg_recv(buf: char*, len: uint) -> uint
+extern func sys_msg_reply(peer: uint, buf: char*, len: uint) -> uint
+extern func sys_spawn(path: char*, args: char*) -> uint
+extern func sys_exec(path: char*, args: char*) -> uint
+extern func sys_wait(pid: uint) -> uint
+extern func sys_kill(pid: uint) -> uint
+
+extern func sys_strlen(s: char*) -> uint
+extern func sys_puts(s: char*) -> uint
+extern func sys_putln(s: char*) -> uint
+extern func sys_memset(dst: char*, value: char, len: uint) -> char*
+extern func sys_memcpy(dst: char*, src: char*, len: uint) -> char*
+extern func sys_strcmp(a: char*, b: char*) -> int
+extern func sys_streq(a: char*, b: char*) -> bool
+extern func sys_strcpy(dst: char*, src: char*) -> char*
+extern func sys_read_all(path: char*, buf: char*, len: uint) -> uint
+extern func sys_write_all(path: char*, buf: char*, len: uint) -> uint
+extern func sys_alloc_pages(pages: uint) -> char*
+extern func sys_malloc(size: uint) -> char*
+extern func sys_free(ptr: char*) -> uint

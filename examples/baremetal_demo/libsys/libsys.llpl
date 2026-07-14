@@ -1,0 +1,304 @@
+// libsys - small LLPL user-space syscall library for the bare-metal demo.
+//
+// Built as /boot/libsys.so and preloaded by the kernel-side LdSo module.
+// The raw sys_* entry points keep the same exported names as the original
+// assembly version, while the helpers below provide the first convenience
+// layer user programs can link against.
+
+const SYS_EXIT = 0
+const SYS_PRINT = 1
+const SYS_MMAP = 2
+const SYS_GETPID = 3
+const SYS_YIELD = 4
+const SYS_SLEEP = 5
+const SYS_OPEN = 6
+const SYS_READ = 7
+const SYS_WRITE = 8
+const SYS_CLOSE = 9
+const SYS_MSG_SEND = 10
+const SYS_MSG_RECV = 11
+const SYS_MSG_REPLY = 12
+const SYS_SPAWN = 13
+const SYS_EXEC = 14
+const SYS_WAIT = 15
+const SYS_KILL = 16
+const SYS_MUNMAP = 17
+
+const SYS_ERR = 0xFFFFFFFFFFFFFFFF
+const O_RDONLY = 0
+const O_CREATE = 1
+
+func syscall0(number: uint) -> uint {
+    let ret: uint = 0
+    asm("int $0x80" : "=a"(ret) : "a"(number) : "memory")
+    return ret
+}
+
+func syscall1(number: uint, a: uint) -> uint {
+    let ret: uint = 0
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
+    return ret
+}
+
+func syscall2(number: uint, a: uint, b: uint) -> uint {
+    let ret: uint = 0
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
+    return ret
+}
+
+func syscall3(number: uint, a: uint, b: uint, c: uint) -> uint {
+    let ret: uint = 0
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
+    return ret
+}
+
+func sys_exit(code: uint) -> uint {
+    return syscall1(SYS_EXIT, code)
+}
+
+func sys_print(buf: char*, len: uint) -> uint {
+    return syscall2(SYS_PRINT, buf as uint, len)
+}
+
+func sys_mmap(virt_hint: uint, pages: uint, flags: uint) -> uint {
+    return syscall3(SYS_MMAP, virt_hint, pages, flags)
+}
+
+func sys_munmap(addr: uint, pages: uint) -> uint {
+    return syscall2(SYS_MUNMAP, addr, pages)
+}
+
+func sys_getpid() -> uint {
+    return syscall0(SYS_GETPID)
+}
+
+func sys_yield() -> uint {
+    return syscall0(SYS_YIELD)
+}
+
+func sys_sleep(ticks: uint) -> uint {
+    return syscall1(SYS_SLEEP, ticks)
+}
+
+func sys_open(path: char*, mode: uint) -> uint {
+    return syscall2(SYS_OPEN, path as uint, mode)
+}
+
+func sys_read(fd: uint, buf: char*, len: uint) -> uint {
+    return syscall3(SYS_READ, fd, buf as uint, len)
+}
+
+func sys_write(fd: uint, buf: char*, len: uint) -> uint {
+    return syscall3(SYS_WRITE, fd, buf as uint, len)
+}
+
+func sys_close(fd: uint) -> uint {
+    return syscall1(SYS_CLOSE, fd)
+}
+
+func sys_msg_send(peer: uint, buf: char*, len: uint) -> uint {
+    return syscall3(SYS_MSG_SEND, peer, buf as uint, len)
+}
+
+func sys_msg_recv(buf: char*, len: uint) -> uint {
+    return syscall2(SYS_MSG_RECV, buf as uint, len)
+}
+
+func sys_msg_reply(peer: uint, buf: char*, len: uint) -> uint {
+    return syscall3(SYS_MSG_REPLY, peer, buf as uint, len)
+}
+
+func sys_spawn(path: char*, args: char*) -> uint {
+    return syscall2(SYS_SPAWN, path as uint, args as uint)
+}
+
+func sys_exec(path: char*, args: char*) -> uint {
+    return syscall2(SYS_EXEC, path as uint, args as uint)
+}
+
+func sys_wait(pid: uint) -> uint {
+    return syscall1(SYS_WAIT, pid)
+}
+
+func sys_kill(pid: uint) -> uint {
+    return syscall1(SYS_KILL, pid)
+}
+
+func sys_strlen(s: char*) -> uint {
+    let n: uint = 0
+    while s[n] != 0 {
+        n = n + 1
+    }
+    return n
+}
+
+func sys_puts(s: char*) -> uint {
+    return sys_print(s, sys_strlen(s))
+}
+
+func sys_putln(s: char*) -> uint {
+    let n: uint = sys_puts(s)
+    sys_print("\n", 1)
+    return n
+}
+
+func sys_memset(dst: char*, value: char, len: uint) -> char* {
+    let i: uint = 0
+    while i < len {
+        dst[i] = value
+        i = i + 1
+    }
+    return dst
+}
+
+func sys_memcpy(dst: char*, src: char*, len: uint) -> char* {
+    let i: uint = 0
+    while i < len {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    return dst
+}
+
+func sys_strcmp(a: char*, b: char*) -> int {
+    let i: uint = 0
+    while a[i] != 0 && b[i] != 0 {
+        let av: int = (a[i] as int) & 255
+        let bv: int = (b[i] as int) & 255
+        if av != bv {
+            return av - bv
+        }
+        i = i + 1
+    }
+    return ((a[i] as int) & 255) - ((b[i] as int) & 255)
+}
+
+func sys_streq(a: char*, b: char*) -> bool {
+    return sys_strcmp(a, b) == 0
+}
+
+func sys_strcpy(dst: char*, src: char*) -> char* {
+    let i: uint = 0
+    while src[i] != 0 {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
+    return dst
+}
+
+func sys_read_all(path: char*, buf: char*, len: uint) -> uint {
+    let fd: uint = sys_open(path, O_RDONLY)
+    if fd == SYS_ERR {
+        return SYS_ERR
+    }
+    let n: uint = sys_read(fd, buf, len)
+    sys_close(fd)
+    return n
+}
+
+func sys_write_all(path: char*, buf: char*, len: uint) -> uint {
+    let fd: uint = sys_open(path, O_CREATE)
+    if fd == SYS_ERR {
+        return SYS_ERR
+    }
+    let n: uint = sys_write(fd, buf, len)
+    sys_close(fd)
+    return n
+}
+
+func sys_alloc_pages(pages: uint) -> char* {
+    return sys_mmap(0, pages, 0) as char*
+}
+
+packed struct AllocHeader {
+    let magic: uint
+    let size: uint
+    let pages: uint
+    let base: uint
+    let flags: uint
+    let reserved: uint
+}
+
+const ALLOC_MAGIC = 0x4C535953414C4C4F
+const ALLOC_FREED = 0x4C53595346524545
+const ALLOC_FLAG_LARGE = 1
+const PAGE_SIZE = 4096
+const LARGE_ALLOC_MIN = 2048
+
+let heap_cur: uint = 0
+let heap_end: uint = 0
+
+func align16(n: uint) -> uint {
+    return (n + 15) & ~15
+}
+
+func pages_for_bytes(n: uint) -> uint {
+    return (n + PAGE_SIZE - 1) / PAGE_SIZE
+}
+
+func alloc_large(size: uint, total: uint) -> char* {
+    let pages: uint = pages_for_bytes(total)
+    let base: char* = sys_alloc_pages(pages)
+    if base == null {
+        return null
+    }
+    let hdr: AllocHeader* = base as AllocHeader*
+    hdr.magic = ALLOC_MAGIC
+    hdr.size = size
+    hdr.pages = pages
+    hdr.base = base as uint
+    hdr.flags = ALLOC_FLAG_LARGE
+    hdr.reserved = 0
+    return base + sizeof(AllocHeader)
+}
+
+func alloc_small(size: uint, total: uint) -> char* {
+    if heap_cur == 0 || heap_cur + total > heap_end {
+        let pages: uint = pages_for_bytes(total)
+        let block: char* = sys_alloc_pages(pages)
+        if block == null {
+            return null
+        }
+        heap_cur = block as uint
+        heap_end = heap_cur + pages * PAGE_SIZE
+    }
+    let hdr: AllocHeader* = heap_cur as AllocHeader*
+    hdr.magic = ALLOC_MAGIC
+    hdr.size = size
+    hdr.pages = 0
+    hdr.base = 0
+    hdr.flags = 0
+    hdr.reserved = 0
+    heap_cur = heap_cur + total
+    return (hdr as char*) + sizeof(AllocHeader)
+}
+
+func sys_malloc(size: uint) -> char* {
+    if size == 0 {
+        return null
+    }
+    let total: uint = align16(size + sizeof(AllocHeader))
+    if size >= LARGE_ALLOC_MIN || total >= PAGE_SIZE {
+        return alloc_large(size, total)
+    }
+    return alloc_small(size, total)
+}
+
+func sys_free(ptr: char*) -> uint {
+    if ptr == null {
+        return 0
+    }
+    let hdr: AllocHeader* = (ptr - sizeof(AllocHeader)) as AllocHeader*
+    if hdr.magic != ALLOC_MAGIC {
+        return SYS_ERR
+    }
+    hdr.magic = ALLOC_FREED
+    if (hdr.flags & ALLOC_FLAG_LARGE) != 0 {
+        if hdr.base == 0 || hdr.pages == 0 {
+            return SYS_ERR
+        }
+        return sys_munmap(hdr.base, hdr.pages)
+    }
+    return 0
+}

@@ -45,6 +45,7 @@ import eventlog
 import ldso
 
 let screen: Console.Screen = null
+let last_spawned_user_id: int = -1
 
 func print(msg: char*) {
     if screen != null {
@@ -473,6 +474,7 @@ func build_user_stack(stack_phys: uint, label: char*, args: char*) -> UserStackS
     }
 
     let arg_ptrs: uint[8]
+    let env_ptrs: uint[2]
     let sp_off: uint = VMM.PAGE_SIZE
 
     let label_len: uint = str_len(label)
@@ -496,9 +498,16 @@ func build_user_stack(stack_phys: uint, label: char*, args: char*) -> UserStackS
         p = skip_spaces(p)
     }
 
+    sp_off = push_arg_string(stack, sp_off, "LD_LIBRARY_PATH=/lib:/boot:.", str_len("LD_LIBRARY_PATH=/lib:/boot:."))
+    env_ptrs[0] = VMM.USER_STACK_BASE + sp_off
+    sp_off = push_arg_string(stack, sp_off, "PATH=/bin:/boot:.", str_len("PATH=/bin:/boot:."))
+    env_ptrs[1] = VMM.USER_STACK_BASE + sp_off
+
     sp_off = sp_off & ~15
     let argv_bytes: uint = (setup.argc + 1) * 8
-    sp_off = sp_off - argv_bytes
+    let env_bytes: uint = 3 * 8
+    let aux_bytes: uint = 5 * 16
+    sp_off = sp_off - (argv_bytes + env_bytes + aux_bytes)
     let argv_off: uint = sp_off
     let i: uint = 0
     while i < setup.argc {
@@ -507,6 +516,23 @@ func build_user_stack(stack_phys: uint, label: char*, args: char*) -> UserStackS
     }
     write_u64(stack, argv_off + setup.argc * 8, 0)
     setup.argv = VMM.USER_STACK_BASE + argv_off
+
+    let env_off: uint = argv_off + argv_bytes
+    write_u64(stack, env_off, env_ptrs[0])
+    write_u64(stack, env_off + 8, env_ptrs[1])
+    write_u64(stack, env_off + 16, 0)
+
+    let aux_off: uint = env_off + env_bytes
+    write_u64(stack, aux_off, 6) // AT_PAGESZ
+    write_u64(stack, aux_off + 8, VMM.PAGE_SIZE)
+    write_u64(stack, aux_off + 16, 3) // AT_PHDR placeholder
+    write_u64(stack, aux_off + 24, 0)
+    write_u64(stack, aux_off + 32, 4) // AT_PHENT placeholder
+    write_u64(stack, aux_off + 40, 0)
+    write_u64(stack, aux_off + 48, 5) // AT_PHNUM placeholder
+    write_u64(stack, aux_off + 56, 0)
+    write_u64(stack, aux_off + 64, 0) // AT_NULL
+    write_u64(stack, aux_off + 72, 0)
 
     sp_off = sp_off - 8
     write_u64(stack, sp_off, setup.argc)
@@ -523,13 +549,17 @@ func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*
 
     let entry: uint = load_elf64_user(file, size, aspace)
     if entry == 0 {
+        let dyn_image: LdSo.ExecImage = LdSo.load_executable(file, size, aspace, label)
+        entry = dyn_image.entry
+    } else {
+        LdSo.load_default_user_libraries(aspace)
+    }
+    if entry == 0 {
         log("<RED>failed to load ELF executable: </>")
         emit(label, false, 0, null)
         emit("\n", false, 0, null)
         return false
     }
-
-    LdSo.load_default_user_libraries(aspace)
 
     // Allocate and map one user stack page.
     let stack_phys: uint = PageAlloc.alloc()
@@ -548,6 +578,7 @@ func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*
         log("<RED>failed to spawn user task\n</>")
         return false
     } else {
+        last_spawned_user_id = id
         log("<GREEN>spawned user task \(id) from </>")
         emit(label, false, 0, null)
         log("<GREEN> (entry=\(entry:hex))\n</>")
@@ -593,6 +624,9 @@ func run_user_executable_with_args(path: char*, args: char*) -> bool {
             }
             let n: int = VFS.read(path, tmp, size)
             if n < 0 || n as uint != size {
+                log("<LIGHT_RED>failed to read executable from VFS: </>")
+                emit(path, false, 0, null)
+                log("<LIGHT_RED> expected=\(size) got=\(n)\n</>")
                 KHeap.kfree(tmp as uint)
                 return false
             }
@@ -635,12 +669,72 @@ func spawn_boot_user_module(name: char*) {
     KHeap.kfree(tmp as uint)
 }
 
+func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
+    let idx: int = TmpFS.find(module_name)
+    if idx < 0 {
+        return
+    }
+    let size: uint = TmpFS.size_at(idx)
+    if size == 0 {
+        return
+    }
+    let tmp: char* = KHeap.kmalloc(size) as char*
+    if tmp == null {
+        log("<YELLOW>could not stage boot module for VFS install: </>")
+        emit(module_name, false, 0, null)
+        emit("\n", false, 0, null)
+        return
+    }
+    TmpFS.read(idx, tmp, size)
+    if VFS.write(dst_path, tmp, size) {
+        let verify: char* = KHeap.kmalloc(size) as char*
+        let src_sum: uint = 0
+        let dst_sum: uint = 0
+        let si: uint = 0
+        while si < size {
+            src_sum = src_sum + ((tmp[si] as uint) & 255)
+            si = si + 1
+        }
+        let vn: int = -1
+        if verify != null {
+            vn = VFS.read(dst_path, verify, size)
+            let vi: uint = 0
+            while vi < size && vn >= 0 {
+                dst_sum = dst_sum + ((verify[vi] as uint) & 255)
+                vi = vi + 1
+            }
+            KHeap.kfree(verify as uint)
+        }
+        log("<GREEN>installed </>")
+        emit(module_name, false, 0, null)
+        log("<GREEN> to </>")
+        emit(dst_path, false, 0, null)
+        if vn as uint != size || src_sum != dst_sum {
+            log("<LIGHT_RED> checksum mismatch src=\(src_sum:hex) dst=\(dst_sum:hex) n=\(vn)</>")
+        }
+        emit("\n", false, 0, null)
+    } else {
+        log("<YELLOW>failed to install </>")
+        emit(module_name, false, 0, null)
+        log("<YELLOW> to VFS\n</>")
+    }
+    KHeap.kfree(tmp as uint)
+}
+
+func install_userland_to_vfs() {
+    VFS.mkdir("/lib")
+    VFS.mkdir("/bin")
+    install_boot_module_to_vfs("libsys.so", "/lib/libsys.so")
+    install_boot_module_to_vfs("dyn_userapp.elf", "/bin/dyn_userapp.elf")
+}
+
 // Loads the default user-space demos from multiboot2 modules at boot, if
 // present: the original assembly app plus the LLPL-authored app built by the
 // extra_links[].llpl_sources pipeline.
 func spawn_user_task() {
     spawn_boot_user_module("userapp.elf")
     spawn_boot_user_module("llpl_userapp.elf")
+    run_user_executable("/bin/dyn_userapp.elf")
 }
 
 // `multiboot_ptr` is handed to us by boot64.asm (RDI, System V AMD64's
@@ -694,6 +788,7 @@ func kernel_main(multiboot_ptr: uint) {
         EventLog.add0("boot", "vfs mounted")
         log("<GREEN>ATA: primary master detected; VFS mounted (self-formats on first boot)\n</>")
         VFS.selftest()
+        install_userland_to_vfs()
     } else {
         EventLog.add0("boot", "vfs unavailable")
         log("<LIGHT_RED>VFS: unavailable (no primary master disk found)\n</>")

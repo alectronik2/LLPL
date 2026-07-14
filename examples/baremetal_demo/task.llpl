@@ -19,6 +19,8 @@ namespace Task {
     const STATE_SEND_BLOCKED = 3
     const STATE_RECV_BLOCKED = 4
     const STATE_REPLY_BLOCKED = 5
+    const STATE_ZOMBIE = 6
+    const STATE_WAIT_BLOCKED = 7
 
     const MODE_KERNEL = 0
     const MODE_USER = 1
@@ -89,6 +91,9 @@ namespace Task {
         let user_guard_base: uint
         let wake_tick: uint
         let resched_requested: bool
+        let parent_id: int
+        let wait_pid: int
+        let exit_status: uint
         let ipc_peer: int
         let ipc_len: uint
         let ipc_reply_buf: uint
@@ -133,12 +138,40 @@ namespace Task {
         return cur.state == STATE_DEAD
     }
 
-    func exit_current() {
+    func exit_current_with_status(status: uint) {
         if current_task == 0 {
             return
         }
         let cur: TCB* = current_task as TCB*
-        cur.state = STATE_DEAD
+        cur.exit_status = status
+        let woke_waiter: bool = false
+        let addr: uint = first_task
+        let done: bool = first_task == 0
+        while !done {
+            let t: TCB* = addr as TCB*
+            if t.state == STATE_WAIT_BLOCKED && t.id == cur.parent_id {
+                if t.wait_pid < 0 || t.wait_pid == cur.id {
+                    t.state = STATE_ALIVE
+                    t.resched_requested = false
+                    set_saved_return(t, status)
+                    woke_waiter = true
+                }
+            }
+            addr = t.next
+            if addr == first_task {
+                done = true
+            }
+        }
+        if cur.parent_id >= 0 && !woke_waiter {
+            cur.state = STATE_ZOMBIE
+        } else {
+            cur.state = STATE_DEAD
+        }
+        cur.resched_requested = true
+    }
+
+    func exit_current() {
+        exit_current_with_status(0)
     }
 
     func yield_current() {
@@ -361,6 +394,9 @@ namespace Task {
         tcb.user_guard_base = 0
         tcb.wake_tick = 0
         tcb.resched_requested = false
+        tcb.parent_id = current_id()
+        tcb.wait_pid = -1
+        tcb.exit_status = 0
         tcb.ipc_peer = -1
         tcb.ipc_len = 0
         tcb.ipc_reply_buf = 0
@@ -422,6 +458,9 @@ namespace Task {
         tcb.user_guard_base = tcb.user_stack_base - VMM.PAGE_SIZE
         tcb.wake_tick = 0
         tcb.resched_requested = false
+        tcb.parent_id = current_id()
+        tcb.wait_pid = -1
+        tcb.exit_status = 0
         tcb.ipc_peer = -1
         tcb.ipc_len = 0
         tcb.ipc_reply_buf = 0
@@ -543,6 +582,59 @@ namespace Task {
         return null
     }
 
+    func exists(id: int) -> bool {
+        return find_by_id(id) != null
+    }
+
+    func aspace_by_id(id: int) -> VMM.AddressSpace* {
+        let t: TCB* = find_by_id(id)
+        if t == null {
+            return null
+        }
+        return t.aspace
+    }
+
+    func kill(id: int) -> bool {
+        let t: TCB* = find_by_id(id)
+        if t == null {
+            return false
+        }
+        t.exit_status = 0x80
+        if t.id == current_id() {
+            if t.parent_id >= 0 {
+                t.state = STATE_ZOMBIE
+            } else {
+                t.state = STATE_DEAD
+            }
+            t.resched_requested = true
+            return true
+        }
+        if t.parent_id >= 0 {
+            t.state = STATE_ZOMBIE
+        } else {
+            t.state = STATE_DEAD
+        }
+        t.resched_requested = true
+        let addr: uint = first_task
+        let done: bool = first_task == 0
+        while !done {
+            let waiter: TCB* = addr as TCB*
+            if waiter.state == STATE_WAIT_BLOCKED && waiter.id == t.parent_id {
+                if waiter.wait_pid < 0 || waiter.wait_pid == t.id {
+                    waiter.state = STATE_ALIVE
+                    waiter.resched_requested = false
+                    set_saved_return(waiter, t.exit_status)
+                }
+            }
+            addr = waiter.next
+            if addr == first_task {
+                done = true
+            }
+        }
+        EventLog.add1("task", "kill", id as uint)
+        return true
+    }
+
     func block_current_send(peer: int, reply_buf: uint, reply_len: uint, msg: char*, msg_len: uint) {
         let cur: TCB* = current_tcb()
         if cur == null {
@@ -625,7 +717,77 @@ namespace Task {
         if state == STATE_REPLY_BLOCKED {
             return "reply-blocked"
         }
+        if state == STATE_ZOMBIE {
+            return "zombie"
+        }
+        if state == STATE_WAIT_BLOCKED {
+            return "wait-blocked"
+        }
         return "dead"
+    }
+
+    func block_current_wait(pid: int) {
+        let cur: TCB* = current_tcb()
+        if cur == null {
+            return
+        }
+        cur.state = STATE_WAIT_BLOCKED
+        cur.wait_pid = pid
+        cur.resched_requested = true
+        EventLog.add2("task", "wait blocked", cur.id as uint, pid as uint)
+    }
+
+    func reap_zombie(pid: int, status_out: uint*) -> bool {
+        let target: TCB* = find_by_id(pid)
+        if target == null || target.state != STATE_ZOMBIE {
+            return false
+        }
+        if current_task != 0 {
+            let cur: TCB* = current_task as TCB*
+            if target.parent_id != cur.id {
+                return false
+            }
+        }
+        if status_out != null {
+            status_out[0] = target.exit_status
+        }
+        if target as uint == current_task {
+            return false
+        }
+
+        let prev: TCB* = target
+        while (prev.next as TCB*) != target {
+            prev = prev.next as TCB*
+        }
+        prev.next = target.next
+        if first_task == target as uint {
+            first_task = target.next
+        }
+        if last_task == target as uint {
+            last_task = prev as uint
+        }
+        task_count = task_count - 1
+        EventLog.add2("task", "reap zombie", pid as uint, target.exit_status)
+        KHeap.kfree(target.stack_base)
+        return true
+    }
+
+    func child_status(pid: int, status_out: uint*) -> int {
+        let t: TCB* = find_by_id(pid)
+        if t == null {
+            return -1
+        }
+        let cur: TCB* = current_tcb()
+        if cur != null && t.parent_id != cur.id {
+            return -1
+        }
+        if status_out != null {
+            status_out[0] = t.exit_status
+        }
+        if t.state == STATE_ZOMBIE {
+            return 1
+        }
+        return 0
     }
 
     // Switches from plain boot-time execution to the task list - never
@@ -753,6 +915,22 @@ namespace Task {
             return 0
         }
         return t.ipc_len
+    }
+
+    func parent_id_at(index: int) -> int {
+        let t: TCB* = nth(index)
+        if t == null {
+            return -1
+        }
+        return t.parent_id
+    }
+
+    func exit_status_at(index: int) -> uint {
+        let t: TCB* = nth(index)
+        if t == null {
+            return 0
+        }
+        return t.exit_status
     }
 
     func name_at(index: int) -> char* {

@@ -1,0 +1,51 @@
+// Dynamically linked LLPL user program.
+//
+// Linked as ET_DYN with a DT_NEEDED dependency on /boot/libsys.so.
+
+import "../libsys/imports"
+
+func print_digit(n: uint) {
+    let buf: char[2]
+    buf[0] = (48 + n) as char
+    buf[1] = 0
+    sys_puts(buf as char*)
+}
+
+func print_uint(n: uint) {
+    if n >= 10 {
+        print_uint(n / 10)
+    }
+    print_digit(n % 10)
+}
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("Hello from a dynamically linked LLPL executable.")
+    sys_puts("pid=")
+    print_uint(sys_getpid())
+    sys_puts(" argc=")
+    print_uint(argc)
+    sys_puts(" argv:")
+
+    let i: uint = 0
+    while i < argc {
+        sys_puts(" ")
+        sys_puts(argv[i] as char*)
+        i = i + 1
+    }
+    sys_puts("\n")
+
+    let block: char* = sys_malloc(5000)
+    if block != null {
+        block[0] = 65 as char
+        block[4999] = 90 as char
+        sys_puts("large free=")
+        print_uint(sys_free(block))
+        sys_puts("\n")
+    } else {
+        sys_putln("large malloc failed")
+    }
+
+    sys_exit(0)
+    while true {
+    }
+}

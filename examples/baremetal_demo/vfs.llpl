@@ -31,7 +31,7 @@
 //
 // Known v1 limitations (see also each function's own comment):
 //   - Fixed capacity: MAX_INODES inodes total, MAX_DIRECT_BLOCKS direct
-//     data blocks per file (6KB max file size) - no indirect blocks.
+//     data blocks per file (32KB max file size) - no indirect blocks.
 //   - No permissions, timestamps, or symlinks - `kind` is just file-or-dir.
 //   - Single fixed disk (primary ATA master only, see ata.llpl), no
 //     partition table - the whole disk image is the filesystem.
@@ -68,7 +68,7 @@ namespace VFS {
 
     const MAX_NAME = 32
     const MAX_INODES = 64
-    const MAX_DIRECT_BLOCKS = 12
+    const MAX_DIRECT_BLOCKS = 64
     const ROOT_INODE = 0
 
     const KIND_FREE = 0
@@ -79,10 +79,10 @@ namespace VFS {
     // (16MB / 512-byte sectors).
     const DISK_SECTORS = 32768
 
-    // "LLPFS1" in ASCII, as one 64-bit constant - wrong or absent on disk
+    // "LLPFS2" in ASCII, as one 64-bit constant - wrong or absent on disk
     // means "not our filesystem", triggering a fresh format instead of
     // trying to interpret garbage as a superblock.
-    const MAGIC = 0x4C4C50465331
+    const MAGIC = 0x4C4C50465332
 
     packed struct Superblock {
         let magic: uint
@@ -100,7 +100,7 @@ namespace VFS {
         let parent: int         // inode-table index, -1 for root
         let first_child: int    // dir: first child's index, -1 if empty
         let next_sibling: int   // next sibling's index, -1 if last
-        let blocks: uint[12]    // file: direct data-block numbers (0 = hole)
+        let blocks: uint[64]    // file: direct data-block numbers (0 = hole)
     }
 
     let sb_buf: char[512]       // block 0, viewed through superblock() below
@@ -531,7 +531,7 @@ namespace VFS {
     // Always fully replaces the file's content (frees every block it
     // currently owns, then allocates exactly enough fresh ones) - creates
     // the file first if it doesn't exist yet. Fails if `len` needs more
-    // than MAX_DIRECT_BLOCKS blocks (6KB) - no indirect blocks in v1.
+    // than MAX_DIRECT_BLOCKS blocks (32KB) - no indirect blocks in v1.
     func write(path: char*, text: char*, len: uint) -> bool {
         if !ready {
             return false

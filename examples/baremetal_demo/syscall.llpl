@@ -12,6 +12,7 @@ import vmm
 import eventlog
 import vfs
 import tmpfs
+import ldso
 
 namespace Syscall {
     const SYS_EXIT  = 0
@@ -27,6 +28,11 @@ namespace Syscall {
     const SYS_MSG_SEND  = 10
     const SYS_MSG_RECV  = 11
     const SYS_MSG_REPLY = 12
+    const SYS_SPAWN = 13
+    const SYS_EXEC = 14
+    const SYS_WAIT = 15
+    const SYS_KILL = 16
+    const SYS_MUNMAP = 17
 
     const MAX_FDS = 16
     const FD_PATH_MAX = 96
@@ -46,7 +52,8 @@ namespace Syscall {
         EventLog.add2("syscall", "dispatch", number, a)
         if number == SYS_EXIT {
             EventLog.add0("syscall", "exit")
-            Task.exit_current()
+            LdSo.cleanup_aspace(Task.get_current_aspace())
+            Task.exit_current_with_status(a)
             return 0
         }
         if number == SYS_PRINT {
@@ -86,6 +93,21 @@ namespace Syscall {
         }
         if number == SYS_MSG_REPLY {
             return sys_msg_reply(a, b, c)
+        }
+        if number == SYS_SPAWN {
+            return sys_spawn(a, b)
+        }
+        if number == SYS_EXEC {
+            return sys_exec(a, b)
+        }
+        if number == SYS_WAIT {
+            return sys_wait(a)
+        }
+        if number == SYS_KILL {
+            return sys_kill(a)
+        }
+        if number == SYS_MUNMAP {
+            return sys_munmap(a, b)
         }
         EventLog.add1("syscall", "unknown", number)
         return 0
@@ -207,6 +229,17 @@ namespace Syscall {
         // Hint addresses are ignored in this demo; the allocator hands out
         // consecutive pages starting at USER_MMAP_BASE.
         return VMM.mmap(aspace, pages)
+    }
+
+    func sys_munmap(addr: uint, pages: uint) -> uint {
+        let aspace: VMM.AddressSpace* = Task.get_current_aspace()
+        if aspace == null || pages == 0 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if VMM.munmap(aspace, addr, pages) {
+            return 0
+        }
+        return 0xFFFFFFFFFFFFFFFF
     }
 
     func sys_open(path_addr: uint, mode: uint) -> uint {
@@ -402,5 +435,58 @@ namespace Syscall {
         Task.wake_with_return(sender, written)
         EventLog.add2("ipc", "reply", cur.id as uint, sender.id as uint)
         return written
+    }
+
+    func sys_spawn(path_addr: uint, args_addr: uint) -> uint {
+        let path: char[96]
+        let args: char[128]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if args_addr == 0 {
+            args[0] = 0
+        } else if !copy_user_string(args_addr, args as char*, 128) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if !run_user_executable_with_args(path as char*, args as char*) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return last_spawned_user_id as uint
+    }
+
+    func sys_exec(path_addr: uint, args_addr: uint) -> uint {
+        let spawned: uint = sys_spawn(path_addr, args_addr)
+        if spawned == 0xFFFFFFFFFFFFFFFF {
+            return spawned
+        }
+        LdSo.cleanup_aspace(Task.get_current_aspace())
+        Task.exit_current_with_status(0)
+        return 0
+    }
+
+    func sys_wait(pid_u: uint) -> uint {
+        let pid: int = pid_u as int
+        let status: uint = 0
+        let child_state: int = Task.child_status(pid, &status)
+        if child_state < 0 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if child_state == 1 {
+            Task.reap_zombie(pid, &status)
+            return status
+        }
+        Task.block_current_wait(pid)
+        return 0
+    }
+
+    func sys_kill(pid_u: uint) -> uint {
+        let t: Task.TCB* = Task.find_by_id(pid_u as int)
+        if t != null {
+            LdSo.cleanup_aspace(t.aspace)
+        }
+        if Task.kill(pid_u as int) {
+            return 0
+        }
+        return 0xFFFFFFFFFFFFFFFF
     }
 }
