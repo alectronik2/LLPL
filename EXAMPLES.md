@@ -571,6 +571,30 @@ func print_multiplication_table(size: int) {
 }
 ```
 
+### `break` and `continue`
+
+`break` exits the innermost enclosing loop immediately; `continue` skips to
+the next iteration. Both only affect the loop they're lexically inside -
+nesting a `match` (or `if`) between a `break`/`continue` and its target
+loop doesn't change which loop it applies to, since `match` compiles to a
+plain if/else-if chain, not a C `switch`. See `test/break_demo.llpl` for
+the full runnable version this is taken from:
+
+```swift
+func main() -> int {
+    for let i: int = 0, i < 10, i++ {
+        if i == 2 {
+            continue
+        }
+        if i == 5 {
+            break
+        }
+        print_int("i", i)  // 0, 1, 3, 4
+    }
+    return 0
+}
+```
+
 ### Range-Based `for`
 
 `for i in start..end { ... }` counts from `start` up to (not including)

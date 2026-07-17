@@ -1,0 +1,35 @@
+// Persistent named IPC service: registers as "echo" and answers requests
+// forever. Unlike echoserver.llpl (a one-shot child spawned and owned by
+// ipcdemo.llpl), nothing spawns this task's clients and it spawns none of
+// them either - echoclient.llpl finds it purely by name via sys_lookup.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+func upper_char(c: char) -> char {
+    if c >= 97 && c <= 122 {
+        return c - 32
+    }
+    return c
+}
+
+func _start(argc: uint, argv: uint*) {
+    if sys_register("echo") == RT_SYS_ERR {
+        rt_exit(1)
+    }
+
+    while true {
+        let buf: char[64]
+        let sender: uint = sys_msg_recv(buf as char*, 64)
+        if sender == RT_SYS_ERR {
+            continue
+        }
+
+        let i: uint = 0
+        while buf[i] != 0 && i < 63 {
+            buf[i] = upper_char(buf[i])
+            i = i + 1
+        }
+        sys_msg_reply(sender, buf as char*, i + 1)
+    }
+}

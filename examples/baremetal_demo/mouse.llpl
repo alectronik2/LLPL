@@ -1,0 +1,156 @@
+// PS/2 mouse driver (IRQ12).
+//
+// The i8042 controller multiplexes two devices onto the same pair of I/O
+// ports (0x60 data, 0x64 command/status) that kbd.llpl already drives for
+// the keyboard: the keyboard itself, and a second "auxiliary" device -
+// almost always a PS/2 mouse, including QEMU's emulated one. Enabling it
+// takes three controller-level commands (enable the aux port, then flip
+// its IRQ-on-byte bit in the controller's own config byte) plus one
+// mouse-level command (0xF4, start streaming), after which IRQ12 (the
+// slave PIC's IRQ4) delivers one raw byte at a time - three bytes make a
+// complete relative-motion packet.
+
+import hal
+
+namespace Mouse {
+    const CTRL_PORT: uint = 0x64
+    const DATA_PORT: uint = 0x60
+
+    let packet: char[3]
+    let packet_index: int = 0
+
+    let mx: int = 0
+    let my: int = 0
+    let min_x: int = 0
+    let min_y: int = 0
+    let max_x: int = 1023
+    let max_y: int = 767
+
+    let left_down: bool = false
+    let left_was_down: bool = false
+
+    // Bit 1 of the status port (0x64 read): 1 means the controller's
+    // input buffer is still full (a previous command/data byte hasn't
+    // been consumed yet) - every command below must wait for this to
+    // clear before writing another byte, or it can be silently dropped.
+    // Bounded the same way ATA.ensure_ready (ata.llpl) bounds its own
+    // hardware-readiness spin: a missing/broken controller fails cleanly
+    // instead of hanging boot forever.
+    func wait_input_clear() {
+        let tries: int = 0
+        while tries < 100000 {
+            if ((HAL.inb(CTRL_PORT) as int) & 2) == 0 {
+                return
+            }
+            tries = tries + 1
+        }
+    }
+
+    // Bit 0 of the status port: 1 means a byte is waiting to be read from
+    // the data port - set before every reply this driver reads back
+    // (config byte reads, command ACKs).
+    func wait_output_full() {
+        let tries: int = 0
+        while tries < 100000 {
+            if ((HAL.inb(CTRL_PORT) as int) & 1) != 0 {
+                return
+            }
+            tries = tries + 1
+        }
+    }
+
+    func write_command(cmd: char) {
+        wait_input_clear()
+        HAL.outb(CTRL_PORT, cmd)
+    }
+
+    func write_data(data: char) {
+        wait_input_clear()
+        HAL.outb(DATA_PORT, data)
+    }
+
+    // 0xD4 tells the controller "the next data byte is for the mouse,
+    // not the keyboard" - the only way to address the aux device at all,
+    // since both share the same data port.
+    func write_aux(data: char) {
+        write_command(0xD4 as char)
+        write_data(data)
+    }
+
+    func set_bounds(screen_w: int, screen_h: int) {
+        max_x = screen_w - 1
+        max_y = screen_h - 1
+        mx = screen_w / 2
+        my = screen_h / 2
+    }
+
+    func init() {
+        write_command(0xA8 as char) // enable the auxiliary (mouse) port
+
+        write_command(0x20 as char) // "read controller configuration byte"
+        wait_output_full()
+        let config: char = HAL.inb(DATA_PORT)
+        config = (config as int | 2) as char // bit 1: enable IRQ12 on aux data
+        write_command(0x60 as char) // "write controller configuration byte"
+        write_data(config)
+
+        write_aux(0xF6 as char) // set defaults
+        wait_output_full()
+        HAL.inb(DATA_PORT) // discard the ACK byte
+
+        write_aux(0xF4 as char) // enable packet streaming
+        wait_output_full()
+        HAL.inb(DATA_PORT) // discard the ACK byte
+    }
+
+    func clampi(v: int, lo: int, hi: int) -> int {
+        if v < lo {
+            return lo
+        }
+        if v > hi {
+            return hi
+        }
+        return v
+    }
+
+    // Called from the IRQ12 handler (idt.llpl) with each raw byte the
+    // mouse sends. Standard PS/2 3-byte relative-motion packet: byte 0's
+    // bit 3 is hardwired to 1 by every real mouse and QEMU's emulated one
+    // alike, used here purely to resynchronize if a byte ever gets
+    // dropped (without it, a single lost byte would permanently shift
+    // which of every future byte is "byte 0" vs "byte 1/2", scrambling
+    // all motion from then on); bits 0/1 are left/right button state;
+    // bits 4/5 are the sign bits for the 9-bit signed dx/dy that follow
+    // in bytes 1/2.
+    func on_byte(b: char) {
+        if packet_index == 0 && (((b as int) & 255) & 8) == 0 {
+            return
+        }
+        packet[packet_index] = b
+        packet_index = packet_index + 1
+        if packet_index < 3 {
+            return
+        }
+        packet_index = 0
+
+        let b0: int = (packet[0] as int) & 255
+        let dx_raw: int = (packet[1] as int) & 255
+        let dy_raw: int = (packet[2] as int) & 255
+
+        let dx: int = dx_raw
+        if (b0 & 16) != 0 {
+            dx = dx - 256
+        }
+        let dy: int = dy_raw
+        if (b0 & 32) != 0 {
+            dy = dy - 256
+        }
+
+        mx = clampi(mx + dx, min_x, max_x)
+        // PS/2 reports +dy as "moved up", the opposite of screen-space y.
+        my = clampi(my - dy, min_y, max_y)
+
+        left_was_down = left_down
+        left_down = (b0 & 1) != 0
+    }
+}

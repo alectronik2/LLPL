@@ -1,0 +1,39 @@
+// IPC echo-server smoke test: blocks for one message, replies with an
+// uppercased copy of it, then exits. Spawned by ipcdemo.llpl, never
+// installed into spawn_user_task() directly.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+func upper_char(c: char) -> char {
+    if c >= 97 && c <= 122 {
+        return c - 32
+    }
+    return c
+}
+
+func _start(argc: uint, argv: uint*) {
+    // This task was sys_spawn()ed by ipcdemo, an ordinary user program, not
+    // by the kernel's own boot manifest - it must not be able to squat the
+    // name a real system service (echod) registers.
+    if sys_register("echo") == RT_SYS_ERR {
+        sys_putln("hijack-register=rejected")
+    } else {
+        sys_putln("hijack-register=ALLOWED (bug!)")
+    }
+
+    let buf: char[64]
+    let sender: uint = sys_msg_recv(buf as char*, 64)
+    if sender == RT_SYS_ERR {
+        rt_exit(1)
+    }
+
+    let i: uint = 0
+    while buf[i] != 0 && i < 63 {
+        buf[i] = upper_char(buf[i])
+        i = i + 1
+    }
+
+    sys_msg_reply(sender, buf as char*, i + 1)
+    rt_exit(0)
+}

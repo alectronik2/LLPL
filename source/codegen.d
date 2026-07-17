@@ -311,9 +311,10 @@ class CodeGenerator {
 
         bool isPlainInt = !t.isPointer && !t.isArray &&
             (t.name == "int" || t.name == "uint" ||
+             t.name == "int8" || t.name == "uint8" ||
              t.name == "int16" || t.name == "uint16" ||
              t.name == "int32" || t.name == "uint32");
-        bool isUnsigned = t.name == "uint" || t.name == "uint16" || t.name == "uint32";
+        bool isUnsigned = t.name == "uint" || t.name == "uint8" || t.name == "uint16" || t.name == "uint32";
 
         if (spec.radix.length > 0 || spec.width > 0) {
             if (!isPlainInt) {
@@ -340,8 +341,8 @@ class CodeGenerator {
         if (t.isPointer) return "%p";
 
         switch (t.name) {
-            case "int": case "int16": case "int32": return "%d";
-            case "uint": case "uint16": case "uint32": return "%u";
+            case "int": case "int8": case "int16": case "int32": return "%d";
+            case "uint": case "uint8": case "uint16": case "uint32": return "%u";
             default:
                 throw new CompileError(
                     format("Cannot interpolate a value of type '%s' inside a string - only " ~
@@ -2771,6 +2772,8 @@ class CodeGenerator {
             }
         } else if (cast(ContinueStmt)node) {
             code ~= indent() ~ "continue;\n";
+        } else if (cast(BreakStmt)node) {
+            code ~= indent() ~ "break;\n";
         } else if (auto deferStmt = cast(DeferStmt)node) {
             code ~= generateDeferStmt(deferStmt);
         } else if (auto throwStmt = cast(ThrowStmt)node) {
@@ -2969,6 +2972,8 @@ class CodeGenerator {
             return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs));
         } else if (auto continueStmt = cast(ContinueStmt)node) {
             return new ContinueStmt(continueStmt.line, continueStmt.column);
+        } else if (auto breakStmt = cast(BreakStmt)node) {
+            return new BreakStmt(breakStmt.line, breakStmt.column);
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(cloneNode(deferStmt.statement, subs, typeSubs));
         } else if (auto throwStmt = cast(ThrowStmt)node) {
@@ -3164,6 +3169,8 @@ class CodeGenerator {
             return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
         } else if (auto continueStmt = cast(ContinueStmt)node) {
             return new ContinueStmt(continueStmt.line, continueStmt.column);
+        } else if (auto breakStmt = cast(BreakStmt)node) {
+            return new BreakStmt(breakStmt.line, breakStmt.column);
         } else if (auto deferStmt = cast(DeferStmt)node) {
             return new DeferStmt(expandQuotedNode(deferStmt.statement, subs));
         } else if (auto throwStmt = cast(ThrowStmt)node) {
@@ -3577,6 +3584,7 @@ class CodeGenerator {
     private bool isPrimitiveTypeName(string name) {
         switch (name) {
             case "int": case "uint":
+            case "int8": case "uint8":
             case "int16": case "uint16":
             case "int32": case "uint32":
             case "char": case "bool": case "void": case "string":
@@ -3593,6 +3601,7 @@ class CodeGenerator {
             case "int": case "uint": return 64;
             case "int32": case "uint32": return 32;
             case "int16": case "uint16": return 16;
+            case "int8": case "uint8": return 8;
             case "char": return 8;
             case "bool": return 32; // backed by C `int`
             default: return -1;
@@ -6324,6 +6333,8 @@ class CodeGenerator {
         switch (name) {
             case "int": return "int64_t";    // 64-bit integer
             case "uint": return "uint64_t";  // 64-bit unsigned
+            case "int8": return "int8_t";
+            case "uint8": return "uint8_t";
             case "int16": return "int16_t";
             case "uint16": return "uint16_t";
             case "int32": return "int32_t";

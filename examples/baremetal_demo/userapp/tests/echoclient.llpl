@@ -1,0 +1,46 @@
+// Talks to the "echo" service purely by name - this task never spawned it
+// and was never spawned by it, so a parent/child handle (see ipcdemo.llpl)
+// isn't available; sys_lookup is the only way it can get a SEND capability
+// to it at all.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("echoclient")
+
+    // echod may not have registered yet if it hasn't had a scheduler turn -
+    // retry briefly rather than assume boot order.
+    let handle: uint = RT_SYS_ERR
+    let tries: uint = 0
+    while handle == RT_SYS_ERR && tries < 50 {
+        handle = sys_lookup("echo")
+        if handle == RT_SYS_ERR {
+            sys_yield()
+        }
+        tries = tries + 1
+    }
+    if handle == RT_SYS_ERR {
+        sys_putln("echoclient lookup=fail")
+        rt_exit(1)
+    }
+
+    // An unregistered name must fail outright, not resolve to some other
+    // service or a stale handle.
+    let missing: uint = sys_lookup("no-such-service")
+    if missing == RT_SYS_ERR {
+        sys_putln("missing-lookup=rejected")
+    } else {
+        sys_putln("missing-lookup=ALLOWED (bug!)")
+    }
+
+    let msg: char[64]
+    sys_strcpy(msg as char*, "hello from client")
+    let n: uint = sys_msg_send(handle, msg as char*, 18)
+    if n == RT_SYS_ERR {
+        sys_putln("echoclient send=fail")
+        rt_exit(1)
+    }
+    sys_putln(msg as char*)
+    rt_exit(0)
+}

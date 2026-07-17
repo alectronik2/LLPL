@@ -113,3 +113,4 @@ enum MemMapType: uint {
     Framebuffer = 7,
     ReservedMapped = 8,
 }
+

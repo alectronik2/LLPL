@@ -16,13 +16,31 @@ extern func sys_open(path: char*, mode: uint) -> uint
 extern func sys_read(fd: uint, buf: char*, len: uint) -> uint
 extern func sys_write(fd: uint, buf: char*, len: uint) -> uint
 extern func sys_close(fd: uint) -> uint
-extern func sys_msg_send(peer: uint, buf: char*, len: uint) -> uint
+extern func sys_msg_send(handle: uint, buf: char*, len: uint) -> uint
 extern func sys_msg_recv(buf: char*, len: uint) -> uint
+extern func sys_msg_try_recv(buf: char*, len: uint) -> uint
 extern func sys_msg_reply(peer: uint, buf: char*, len: uint) -> uint
 extern func sys_spawn(path: char*, args: char*) -> uint
 extern func sys_exec(path: char*, args: char*) -> uint
-extern func sys_wait(pid: uint) -> uint
-extern func sys_kill(pid: uint) -> uint
+extern func sys_wait(handle: uint) -> uint
+extern func sys_kill(handle: uint) -> uint
+extern func sys_register(name: char*) -> uint
+extern func sys_lookup(name: char*) -> uint
+extern func sys_shm_create(pages: uint) -> char*
+extern func sys_shm_map(handle: uint) -> char*
+extern func sys_inb(port: uint) -> uint
+extern func sys_outb(port: uint, value: uint) -> uint
+extern func sys_inw(port: uint) -> uint
+extern func sys_outw(port: uint, value: uint) -> uint
+extern func sys_fb_info(out: uint*) -> uint
+extern func sys_fb_map() -> char*
+extern func sys_kbd_poll() -> uint
+extern func sys_mouse_poll() -> uint
+
+const KEY_UP = 200
+const KEY_DOWN = 201
+const KEY_LEFT = 202
+const KEY_RIGHT = 203
 
 extern func sys_strlen(s: char*) -> uint
 extern func sys_puts(s: char*) -> uint

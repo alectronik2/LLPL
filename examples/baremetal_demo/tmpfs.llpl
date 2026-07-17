@@ -24,7 +24,14 @@
 import pagealloc
 
 namespace TmpFS {
-    const MAX_MODULES = 8
+    // Every module the boot ISO's grub.cfg lists counts against this,
+    // regardless of whether it's ever installed to the persistent VFS
+    // disk - a fixed-size, boot-time-only array, so the growing demo
+    // roster (now including atad.elf, itself a required tmpfs-only boot
+    // module since it must load before the VFS it backs even mounts - see
+    // ata.llpl) needs real headroom here, not just enough for today's
+    // count.
+    const MAX_MODULES = 32
     const MAX_NAME = 32
 
     packed struct ModuleEntry {
@@ -33,7 +40,14 @@ namespace TmpFS {
         let length: uint
     }
 
-    let modules: ModuleEntry[8]
+    // Must match MAX_MODULES above - this array's own declared size is a
+    // separate literal (this language's array types don't take a named
+    // const as their size), not derived from it. init()'s bounds check
+    // against MAX_MODULES is only actually safe if the two are kept equal;
+    // letting them drift apart (as briefly happened when only MAX_MODULES
+    // was bumped for atad.elf) means writing 16 elements past the end of
+    // this array once module_count exceeds it.
+    let modules: ModuleEntry[32]
     let module_count: int = 0
 
     packed struct InfoHeader {

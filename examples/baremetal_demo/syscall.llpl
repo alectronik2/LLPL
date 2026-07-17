@@ -13,6 +13,9 @@ import eventlog
 import vfs
 import tmpfs
 import ldso
+import fb
+import kbd
+import mouse
 
 namespace Syscall {
     const SYS_EXIT  = 0
@@ -33,6 +36,19 @@ namespace Syscall {
     const SYS_WAIT = 15
     const SYS_KILL = 16
     const SYS_MUNMAP = 17
+    const SYS_REGISTER = 18
+    const SYS_LOOKUP = 19
+    const SYS_SHM_CREATE = 20
+    const SYS_SHM_MAP = 21
+    const SYS_INB = 22
+    const SYS_OUTB = 23
+    const SYS_INW = 24
+    const SYS_OUTW = 25
+    const SYS_FB_INFO = 26
+    const SYS_FB_MAP = 27
+    const SYS_KBD_POLL = 28
+    const SYS_MOUSE_POLL = 29
+    const SYS_MSG_TRY_RECV = 30
 
     const MAX_FDS = 16
     const FD_PATH_MAX = 96
@@ -53,6 +69,8 @@ namespace Syscall {
         if number == SYS_EXIT {
             EventLog.add0("syscall", "exit")
             LdSo.cleanup_aspace(Task.get_current_aspace())
+            close_owner(Task.current_id())
+            Task.shm_release(Task.current_id())
             Task.exit_current_with_status(a)
             return 0
         }
@@ -91,6 +109,9 @@ namespace Syscall {
         if number == SYS_MSG_RECV {
             return sys_msg_recv(a, b)
         }
+        if number == SYS_MSG_TRY_RECV {
+            return sys_msg_try_recv(a, b)
+        }
         if number == SYS_MSG_REPLY {
             return sys_msg_reply(a, b, c)
         }
@@ -108,6 +129,42 @@ namespace Syscall {
         }
         if number == SYS_MUNMAP {
             return sys_munmap(a, b)
+        }
+        if number == SYS_REGISTER {
+            return sys_register(a)
+        }
+        if number == SYS_LOOKUP {
+            return sys_lookup(a)
+        }
+        if number == SYS_SHM_CREATE {
+            return sys_shm_create(a)
+        }
+        if number == SYS_SHM_MAP {
+            return sys_shm_map(a)
+        }
+        if number == SYS_INB {
+            return sys_inb(a)
+        }
+        if number == SYS_OUTB {
+            return sys_outb(a, b)
+        }
+        if number == SYS_INW {
+            return sys_inw(a)
+        }
+        if number == SYS_OUTW {
+            return sys_outw(a, b)
+        }
+        if number == SYS_FB_INFO {
+            return sys_fb_info(a)
+        }
+        if number == SYS_FB_MAP {
+            return sys_fb_map()
+        }
+        if number == SYS_KBD_POLL {
+            return sys_kbd_poll()
+        }
+        if number == SYS_MOUSE_POLL {
+            return sys_mouse_poll()
         }
         EventLog.add1("syscall", "unknown", number)
         return 0
@@ -205,6 +262,18 @@ namespace Syscall {
         return fds[fd].used && fds[fd].owner == Task.current_id()
     }
 
+    func close_owner(owner: int) {
+        let i: int = 0
+        while i < MAX_FDS {
+            if fds[i].used && fds[i].owner == owner {
+                fds[i].used = false
+                fds[i].path[0] = 0
+                fds[i].offset = 0
+            }
+            i = i + 1
+        }
+    }
+
     func sys_print(buf: uint, len: uint) -> uint {
         let pml4: uint = Task.get_current_pml4()
         let i: uint = 0
@@ -246,21 +315,21 @@ namespace Syscall {
     func sys_open(path_addr: uint, mode: uint) -> uint {
         let path: char[96]
         if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
 
         match VFS.resolve(path as char*) {
             case VFS.Node.NotFound() => {
                 if mode == 0 {
-                    return 0xFFFFFFFFFFFFFFFF
+                    return -1
                 }
             }
             case VFS.Node.TmpfsRoot() => {
-                return 0xFFFFFFFFFFFFFFFF
+                return -1
             }
             case VFS.Node.Disk(idx) => {
                 if VFS.inode_kind(idx) != VFS.KIND_FILE {
-                    return 0xFFFFFFFFFFFFFFFF
+                    return -1
                 }
             }
             default => {
@@ -280,13 +349,13 @@ namespace Syscall {
             }
             i = i + 1
         }
-        return 0xFFFFFFFFFFFFFFFF
+        return -1
     }
 
     func sys_close(fd_u: uint) -> uint {
         let fd: int = fd_u as int
         if !valid_fd(fd) {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
         fds[fd].used = false
         fds[fd].path[0] = 0
@@ -318,7 +387,7 @@ namespace Syscall {
             }
         }
         if n < 0 {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
         return copy_to_user(buf, tmp as char*, n as uint)
     }
@@ -326,7 +395,7 @@ namespace Syscall {
     func sys_write(fd_u: uint, buf: uint, len: uint) -> uint {
         let fd: int = fd_u as int
         if !valid_fd(fd) {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
         let max: uint = len
         if max > IO_MAX {
@@ -339,10 +408,10 @@ namespace Syscall {
         }
         match VFS.resolve(fds[fd].path as char*) {
             case VFS.Node.TmpfsFile(idx) => {
-                return 0xFFFFFFFFFFFFFFFF
+                return -1
             }
             case VFS.Node.TmpfsRoot() => {
-                return 0xFFFFFFFFFFFFFFFF
+                return -1
             }
             default => {
                 if VFS.write(fds[fd].path as char*, tmp as char*, copied) {
@@ -350,25 +419,24 @@ namespace Syscall {
                 }
             }
         }
-        return 0xFFFFFFFFFFFFFFFF
+        return -1
     }
 
-    func sys_msg_send(peer_u: uint, buf: uint, len: uint) -> uint {
-        let peer_id: int = peer_u as int
+    func sys_msg_send(handle_u: uint, buf: uint, len: uint) -> uint {
+        let cur: Task.TCB* = Task.current_tcb()
+        let peer_id: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_SEND)
+        if peer_id < 0 {
+            return -1
+        }
         let peer: Task.TCB* = Task.find_by_id(peer_id)
         if peer == null || len > Task.IPC_MAX {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
 
         let tmp: char[128]
         let copied: uint = copy_from_user(buf, tmp as char*, len)
         if copied != len {
-            return 0xFFFFFFFFFFFFFFFF
-        }
-
-        let cur: Task.TCB* = Task.current_tcb()
-        if cur == null {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
 
         if peer.state == Task.STATE_RECV_BLOCKED {
@@ -394,7 +462,7 @@ namespace Syscall {
     func sys_msg_recv(buf: uint, len: uint) -> uint {
         let cur: Task.TCB* = Task.current_tcb()
         if cur == null || len > Task.IPC_MAX {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
 
         let sender: Task.TCB* = Task.first_sender_for(cur.id)
@@ -413,15 +481,43 @@ namespace Syscall {
         return sender.id as uint
     }
 
+    // Non-blocking twin of sys_msg_recv: identical when a sender is
+    // already waiting, but returns RT_SYS_ERR (0xFFFFFFFFFFFFFFFF) instead
+    // of calling Task.block_current_recv when none is. Needed once a
+    // server's own main loop has other periodic work to do besides
+    // waiting for a client (the compositor, wm.llpl, polls the mouse and
+    // redraws every tick) - sys_msg_recv taking the whole calling task off
+    // the run queue until a message arrives would starve that other work
+    // exactly as long as no client happens to be talking to it.
+    func sys_msg_try_recv(buf: uint, len: uint) -> uint {
+        let cur: Task.TCB* = Task.current_tcb()
+        if cur == null || len > Task.IPC_MAX {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        let sender: Task.TCB* = Task.first_sender_for(cur.id)
+        if sender == null {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        let deliver: uint = min_u(sender.ipc_len, len)
+        copy_to_user(buf, sender.ipc_msg as char*, deliver)
+        sender.state = Task.STATE_REPLY_BLOCKED
+        sender.ipc_peer = cur.id
+        cur.ipc_peer = sender.id
+        EventLog.add2("ipc", "recv delivered", sender.id as uint, cur.id as uint)
+        return sender.id as uint
+    }
+
     func sys_msg_reply(peer_u: uint, buf: uint, len: uint) -> uint {
         let sender_id: int = peer_u as int
         let sender: Task.TCB* = Task.find_by_id(sender_id)
         let cur: Task.TCB* = Task.current_tcb()
         if sender == null || cur == null || len > Task.IPC_MAX {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
         if sender.state != Task.STATE_REPLY_BLOCKED || sender.ipc_peer != cur.id {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
 
         let tmp: char[128]
@@ -430,7 +526,12 @@ namespace Syscall {
             return 0xFFFFFFFFFFFFFFFF
         }
         let deliver: uint = min_u(len, sender.ipc_reply_len)
-        let written: uint = copy_to_user_pml4(sender.pml4, sender.ipc_reply_buf, tmp as char*, deliver)
+        // sender.pml4 is 0 (a placeholder, not a real page table - see
+        // Task.pml4_for) when the original sender was kernel-mode code
+        // acting as its own IPC client (see ata.llpl) rather than a ring-3
+        // task - resolve it the same way Task's own internals do, or this
+        // walks page-table structures starting at physical address 0.
+        let written: uint = copy_to_user_pml4(Task.pml4_for(sender), sender.ipc_reply_buf, tmp as char*, deliver)
         sender.ipc_len = written
         sender.ipc_peer = -1
         Task.wake_with_return(sender, written)
@@ -442,35 +543,55 @@ namespace Syscall {
         let path: char[96]
         let args: char[128]
         if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
         if args_addr == 0 {
             args[0] = 0
         } else if !copy_user_string(args_addr, args as char*, 128) {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
-        if !run_user_executable_with_args(path as char*, args as char*) {
-            return 0xFFFFFFFFFFFFFFFF
+        if !run_user_executable_with_args_parent(path as char*, args as char*, Task.current_id()) {
+            return -1
         }
-        return last_spawned_user_id as uint
+
+        let cur: Task.TCB* = Task.current_tcb()
+        let handle: int = Task.alloc_handle(cur, last_spawned_user_id, Task.RIGHT_KILL | Task.RIGHT_WAIT | Task.RIGHT_SEND | Task.RIGHT_SHM)
+        if handle < 0 {
+            // No free handle slot to give the parent control over its own
+            // child - don't leave an unkillable orphan running.
+            Task.kill(last_spawned_user_id)
+            return -1
+        }
+        return handle as uint
     }
 
     func sys_exec(path_addr: uint, args_addr: uint) -> uint {
-        let spawned: uint = sys_spawn(path_addr, args_addr)
-        if spawned == 0xFFFFFFFFFFFFFFFF {
-            return spawned
+        let path: char[96]
+        let args: char[128]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+            return -1
         }
-        LdSo.cleanup_aspace(Task.get_current_aspace())
-        Task.exit_current_with_status(0)
+        if args_addr == 0 {
+            args[0] = 0
+        } else if !copy_user_string(args_addr, args as char*, 128) {
+            return -1
+        }
+        if !exec_user_executable_with_args(path as char*, args as char*) {
+            return -1
+        }
         return 0
     }
 
-    func sys_wait(pid_u: uint) -> uint {
-        let pid: int = pid_u as int
+    func sys_wait(handle_u: uint) -> uint {
+        let cur: Task.TCB* = Task.current_tcb()
+        let pid: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_WAIT)
+        if pid < 0 {
+            return -1
+        }
         let status: uint = 0
         let child_state: int = Task.child_status(pid, &status)
         if child_state < 0 {
-            return 0xFFFFFFFFFFFFFFFF
+            return -1
         }
         if child_state == 1 {
             Task.reap_zombie(pid, &status)
@@ -480,14 +601,236 @@ namespace Syscall {
         return 0
     }
 
-    func sys_kill(pid_u: uint) -> uint {
-        let t: Task.TCB* = Task.find_by_id(pid_u as int)
+    func sys_kill(handle_u: uint) -> uint {
+        let cur: Task.TCB* = Task.current_tcb()
+        let pid: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_KILL)
+        if pid < 0 {
+            return -1
+        }
+        let t: Task.TCB* = Task.find_by_id(pid)
         if t != null {
             LdSo.cleanup_aspace(t.aspace)
+            close_owner(t.id)
+            Task.shm_release(t.id)
         }
-        if Task.kill(pid_u as int) {
+        if Task.kill(pid) {
             return 0
         }
-        return 0xFFFFFFFFFFFFFFFF
+        return -1
+    }
+
+    func sys_register(name_addr: uint) -> uint {
+        let name: char[16]
+        if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
+            return -1
+        }
+        if Task.register_service(Task.current_id(), name as char*) {
+            return 0
+        }
+        return -1
+    }
+
+    // Grants a SEND+SHM handle to whoever holds `name`, if anyone does -
+    // never KILL/WAIT: looking a service up makes the caller its client,
+    // not its owner.
+    func sys_lookup(name_addr: uint) -> uint {
+        let name: char[16]
+        if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
+            return -1
+        }
+        let pid: int = Task.lookup_service(name as char*)
+        if pid < 0 {
+            return -1
+        }
+        let cur: Task.TCB* = Task.current_tcb()
+        let handle: int = Task.alloc_handle(cur, pid, Task.RIGHT_SEND | Task.RIGHT_SHM)
+        if handle < 0 {
+            return -1
+        }
+        return handle as uint
+    }
+
+    // Allocates and maps `pages` fresh, zeroed pages into the caller's own
+    // address space (like sys_mmap - and, like it, 0/null on failure, not
+    // SYS_ERR), and separately records their physical addresses under the
+    // caller's pid so a RIGHT_SHM handle-holder can later map the very same
+    // pages into its own space (sys_shm_map below). v1 limitation: one
+    // region per task - see Task.shm_create.
+    func sys_shm_create(pages: uint) -> uint {
+        if pages == 0 || pages > Task.SHM_MAX_PAGES {
+            return 0
+        }
+        let cur_id: int = Task.current_id()
+        let aspace: VMM.AddressSpace* = Task.get_current_aspace()
+        if aspace == null {
+            return 0
+        }
+        let virt: uint = VMM.mmap(aspace, pages)
+        if virt == 0 {
+            return 0
+        }
+        let phys: uint[16]
+        let i: uint = 0
+        while i < pages {
+            phys[i] = VMM.virt_to_phys(aspace.pml4, virt + i * VMM.PAGE_SIZE)
+            i = i + 1
+        }
+        if !Task.shm_create(cur_id, phys as uint*, pages, virt) {
+            VMM.munmap(aspace, virt, pages)
+            return 0
+        }
+        return virt
+    }
+
+    // Maps whichever shared region `handle`'s target currently owns into
+    // the caller's own address space, and returns the fresh virtual
+    // address it landed at there (never the owner's own address - the two
+    // tasks' address spaces are unrelated, only this physical memory is
+    // shared). Requires RIGHT_SHM, separate from RIGHT_SEND: being able to
+    // message a task doesn't by itself mean sharing its memory is safe or
+    // wanted. Like sys_shm_create, 0/null on failure, not SYS_ERR.
+    func sys_shm_map(handle_u: uint) -> uint {
+        let cur: Task.TCB* = Task.current_tcb()
+        let target_pid: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_SHM)
+        if target_pid < 0 {
+            return 0
+        }
+        let region: int = Task.shm_region_for(target_pid)
+        if region < 0 {
+            return 0
+        }
+        let pages: uint = Task.shm_pages_of(region)
+        let phys: uint[16]
+        let i: uint = 0
+        while i < pages {
+            phys[i] = Task.shm_phys_at(region, i as int)
+            i = i + 1
+        }
+        let aspace: VMM.AddressSpace* = Task.get_current_aspace()
+        if aspace == null {
+            return 0
+        }
+        return VMM.mmap_foreign(aspace, phys as uint*, pages)
+    }
+
+    // The only ports any user-space driver in this demo needs: the
+    // primary-master ATA command block (0x1F0-0x1F7) plus its control
+    // register (0x3F6) - see atad.llpl, which replaces this file's own
+    // former in-kernel ata.llpl PIO driver. A real system would need a
+    // richer, per-device grant instead of one fixed list; this is the
+    // minimum that makes "boot-only" a meaningful restriction rather than
+    // "boot-only, but for literally any hardware register" once a second
+    // driver ever exists.
+    func port_allowed(port: uint) -> bool {
+        return (port >= 0x1F0 && port <= 0x1F7) || port == 0x3F6
+    }
+
+    func io_port_permitted(port: uint) -> bool {
+        return Task.is_boot_spawned(Task.current_id()) && port_allowed(port)
+    }
+
+    func sys_inb(port: uint) -> uint {
+        if !io_port_permitted(port) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return HAL.inb(port) as uint
+    }
+
+    func sys_outb(port: uint, value: uint) -> uint {
+        if !io_port_permitted(port) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        HAL.outb(port, value as char)
+        return 0
+    }
+
+    func sys_inw(port: uint) -> uint {
+        if !io_port_permitted(port) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return HAL.inw(port)
+    }
+
+    func sys_outw(port: uint, value: uint) -> uint {
+        if !io_port_permitted(port) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        HAL.outw(port, value)
+        return 0
+    }
+
+    // Copies {width, height, pitch} (as three uints) into the caller's own
+    // out buffer - not gated to boot-spawned tasks like the raw I/O ports
+    // above: there's only one shared screen and no hardware-safety reason
+    // to restrict who can draw to it, unlike arbitrary port access.
+    func sys_fb_info(out_addr: uint) -> uint {
+        if !Framebuffer.ready {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let info: uint[3]
+        info[0] = Framebuffer.width as uint
+        info[1] = Framebuffer.height as uint
+        info[2] = Framebuffer.pitch as uint
+        let n: uint = copy_to_user(out_addr, info as char*, 24)
+        if n != 24 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return 0
+    }
+
+    // Maps the linear framebuffer directly into the caller's own address
+    // space (like sys_shm_map, but the source is one contiguous MMIO
+    // range, not a task's own shared region - see VMM.mmap_foreign_range)
+    // so a ring-3 program can draw pixels straight into video memory
+    // without a syscall per pixel or per frame. 0/null on failure, not
+    // SYS_ERR, matching sys_mmap/sys_shm_map's own convention for a
+    // pointer-returning call.
+    func sys_fb_map() -> uint {
+        if !Framebuffer.ready {
+            return 0
+        }
+        let aspace: VMM.AddressSpace* = Task.get_current_aspace()
+        if aspace == null {
+            return 0
+        }
+        let bytes: uint = (Framebuffer.height as uint) * (Framebuffer.pitch as uint)
+        let pages: uint = (bytes + VMM.PAGE_SIZE - 1) / VMM.PAGE_SIZE
+        let phys_base: uint = Framebuffer.addr & ~(VMM.PAGE_SIZE - 1)
+        return VMM.mmap_foreign_range(aspace, phys_base, pages)
+    }
+
+    // Non-blocking: 0 if no key is currently buffered, else the key code
+    // (a plain ASCII byte, or one of Keyboard.KEY_UP/DOWN/LEFT/RIGHT,
+    // always > 0 either way). Deliberately not a blocking read like
+    // Keyboard.read_char() itself - this can be called from inside the
+    // int 0x80 interrupt gate (IF already 0 on entry), where a wait that
+    // depends on a future interrupt to make progress would deadlock
+    // exactly like ata.llpl's call() once did before it started forcing
+    // interrupts on for its own wait. A poll has no such wait to protect.
+    func sys_kbd_poll() -> uint {
+        // Deliberately not Keyboard.read_char(): that now blocks whenever
+        // input_focus isn't FOCUS_WM (see kbd.llpl), which would violate
+        // this function's own "never blocks" contract (documented above)
+        // the moment a ring-3 program calls it while the console holds
+        // focus - it must just report "no key" instead, exactly like it
+        // already does when no key is buffered at all.
+        if Keyboard.input_focus != Keyboard.FOCUS_WM || !Keyboard.has_char() {
+            return 0
+        }
+        return Keyboard.pop_char() as uint
+    }
+
+    // Packed absolute mouse state: bits 0-9 = x, bits 10-19 = y, bit 20 =
+    // left button down. Just one consumer exists today (the compositor,
+    // wm.llpl) so - unlike sys_kbd_poll - there's no competing reader to
+    // arbitrate against and this always reports live state, regardless of
+    // Keyboard.input_focus.
+    func sys_mouse_poll() -> uint {
+        let bits: uint = (Mouse.mx as uint) & 0x3FF
+        bits = bits | (((Mouse.my as uint) & 0x3FF) << 10)
+        if Mouse.left_down {
+            bits = bits | (1 << 20)
+        }
+        return bits
     }
 }

@@ -1,0 +1,41 @@
+// Persistent named shared-memory service: registers as "shmsvc", publishes
+// one page of shared memory, and only fills it with real payload after a
+// client pokes it over an ordinary small IPC message - so a client that
+// reads the shared page both before and after the poke can tell it's
+// genuinely the same physical memory the server just wrote into, not two
+// independently-matching buffers.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+const BULK_LEN = 600
+
+func fill_bulk(buf: char*) {
+    let i: uint = 0
+    while i < BULK_LEN {
+        buf[i] = (65 + (i % 26)) as char // 'A'..'Z' repeating
+        i = i + 1
+    }
+    buf[BULK_LEN] = 0
+}
+
+func _start(argc: uint, argv: uint*) {
+    if sys_register("shmsvc") == RT_SYS_ERR {
+        rt_exit(1)
+    }
+
+    let shm: char* = sys_shm_create(1)
+    if shm == null {
+        rt_exit(1)
+    }
+
+    while true {
+        let msg: char[16]
+        let sender: uint = sys_msg_recv(msg as char*, 16)
+        if sender == RT_SYS_ERR {
+            continue
+        }
+        fill_bulk(shm)
+        sys_msg_reply(sender, "ok", 3)
+    }
+}

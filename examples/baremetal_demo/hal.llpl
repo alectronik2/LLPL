@@ -221,11 +221,50 @@ namespace HAL {
             outb(DATA1, mask & 0xFD) // clear bit 1 (keyboard)
         }
 
+        // IRQ12 (mouse) lives on the slave PIC, whose output only reaches
+        // the CPU at all via the master's IRQ2 cascade line - so unlike
+        // unmask_irq0/1 (both on the master), this needs to clear a bit
+        // on both PICs: the cascade (master bit 2) and IRQ12 itself
+        // (slave bit 4, since IRQ8-15 map to slave bits 0-7).
+        func unmask_irq12() {
+            let mask1: char = inb(DATA1)
+            outb(DATA1, mask1 & 0xFB)
+            let mask2: char = inb(DATA2)
+            outb(DATA2, mask2 & 0xEF)
+        }
+
         func send_eoi(irq: int) {
             if irq >= 8 {
                 outb(COMMAND2, 0x20)
             }
             outb(COMMAND1, 0x20)
+        }
+    }
+
+    // 8253/8254 PIT (Programmable Interval Timer) - IRQ0's actual clock
+    // source. Nothing in this codebase ever reprogrammed it before, so it
+    // ran at its power-on default divisor (0, meaning 65536): 1193182 /
+    // 65536 =~ 18.2 Hz. That's fine for a plain preemptive-multitasking
+    // demo where a "slice" just needs to be short enough to look
+    // interactive, but it puts a hard ceiling of ~55ms on every single
+    // scheduler round trip - including a blocking IPC call (see
+    // Task.wake_with_return's preferred_next hint and ata.llpl's call()),
+    // which is what turned a userspace ATA driver's request/reply
+    // round trip from microseconds into a real, user-visible stall once
+    // enough of them stack up back to back (VFS mount, self-test,
+    // installing every demo binary, ...).
+    namespace Pit {
+        const COMMAND = 0x43
+        const CHANNEL0 = 0x40
+        const BASE_HZ = 1193182
+
+        // mode 3 (square wave), channel 0, lobyte/hibyte access, binary -
+        // the standard "just give me a periodic IRQ0" PIT setup.
+        func set_frequency(hz: uint) {
+            let divisor: uint = BASE_HZ / hz
+            outb(COMMAND, 0x36)
+            outb(CHANNEL0, (divisor & 0xFF) as char)
+            outb(CHANNEL0, ((divisor >> 8) & 0xFF) as char)
         }
     }
 

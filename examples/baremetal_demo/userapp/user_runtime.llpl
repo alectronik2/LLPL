@@ -1,0 +1,36 @@
+// Shared helpers for dynamically linked LLPL user programs.
+
+const RT_SYS_ERR = 0xFFFFFFFFFFFFFFFF
+
+func rt_print_digit(n: uint) {
+    let buf: char[2]
+    buf[0] = (48 + n) as char
+    buf[1] = 0
+    sys_puts(buf as char*)
+}
+
+func rt_print_uint(n: uint) {
+    if n >= 10 {
+        rt_print_uint(n / 10)
+    }
+    rt_print_digit(n % 10)
+}
+
+func rt_put_uint_line(label: char*, n: uint) {
+    sys_puts(label)
+    rt_print_uint(n)
+    sys_puts("\n")
+}
+
+func rt_arg(argc: uint, argv: uint*, index: uint, fallback: char*) -> char* {
+    if index < argc {
+        return argv[index] as char*
+    }
+    return fallback
+}
+
+func rt_exit(code: uint) {
+    sys_exit(code)
+    while true {
+    }
+}

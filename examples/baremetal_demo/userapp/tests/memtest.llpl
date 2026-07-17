@@ -1,0 +1,36 @@
+// Dynamic LLPL allocator smoke test.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("memtest")
+    rt_put_uint_line("argc=", argc)
+
+    let large: char* = sys_malloc(5000)
+    if large != null {
+        large[0] = 65 as char
+        large[4999] = 90 as char
+        rt_put_uint_line("large=", sys_free(large))
+    } else {
+        sys_putln("large=fail")
+    }
+
+    let small1: char* = sys_malloc(64)
+    let small2: char* = null
+    if small1 != null {
+        small1[0] = 49 as char
+        rt_put_uint_line("small=", sys_free(small1))
+        small2 = sys_malloc(32)
+    }
+
+    sys_puts("reuse=")
+    if small1 != null && (small2 as uint) == (small1 as uint) {
+        rt_print_uint(1)
+    } else {
+        rt_print_uint(0)
+    }
+    sys_puts("\n")
+
+    rt_exit(0)
+}

@@ -61,7 +61,7 @@ link:
 extra_links:
   - name: userapp
     asm_sources:
-      - src: userapp/userapp.asm
+      - src: userapp/tests/userapp.asm
         output: userapp.o
     link:
       output: userapp.elf
@@ -70,16 +70,16 @@ extra_links:
       objects: [userapp.o]
   - name: llpl_userapp
     llpl_sources:
-      - src: userapp/llpl_userapp.llpl
-        c_output: userapp/llpl_userapp.c
-        output: userapp/llpl_userapp.o
+      - src: userapp/tests/llpl_userapp.llpl
+        c_output: userapp/tests/llpl_userapp.c
+        output: userapp/tests/llpl_userapp.o
         include_dirs: [., ../../runtime]
         cflags: [-mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: llpl_userapp.elf
       script: userapp/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static, --gc-sections]
-      objects: [userapp/llpl_userapp.o]
+      objects: [userapp/tests/llpl_userapp.o]
   - name: libsys
     llpl_sources:
       - src: libsys/libsys.llpl
@@ -87,23 +87,220 @@ extra_links:
         output: libsys/libsys.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=default, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    c_sources:
+      # A handful of runtime.c's helpers reimplemented standalone here
+      # (see runtime_shim.c's own doc comment) rather than linking the
+      # whole of runtime.c in: libsys.llpl's own generated code (via
+      # prelude.llpl's always-compiled-in String/class boilerplate)
+      # already references most of runtime.c's surface internally, which
+      # makes --gc-sections unable to strip any of it once the real
+      # runtime.c is linked in at all - pulling in the whole file to fix
+      # one missing symbol (llpl_strcmp, needed because some consumer's
+      # `char* == null` comparison happens to lower to it - see wm.llpl,
+      # where the optimizer didn't manage to fold that away the way it
+      # apparently does for tetris.elf/atad.elf's own such comparisons)
+      # made libsys.so balloon past the VFS's 32KB max file size (see
+      # vfs.llpl's MAX_DIRECT_BLOCKS).
+      - path: libsys/runtime_shim.c
+        output: libsys/runtime_shim.o
+        cflags: [-fPIC, -mcmodel=large]
     link:
       output: libsys.so
       script: libsys/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -soname, libsys.so, --hash-style=sysv, --gc-sections, --version-script, libsys/exports.map]
-      objects: [libsys/libsys.o]
+      objects: [libsys/libsys.o, libsys/runtime_shim.o]
   - name: dyn_userapp
     llpl_sources:
-      - src: userapp/dyn_userapp.llpl
-        c_output: userapp/dyn_userapp.c
-        output: userapp/dyn_userapp.o
+      - src: userapp/tests/dyn_userapp.llpl
+        c_output: userapp/tests/dyn_userapp.c
+        output: userapp/tests/dyn_userapp.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: dyn_userapp.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/dyn_userapp.o, libsys.so]
+      objects: [userapp/tests/dyn_userapp.o, libsys.so]
+  - name: memtest
+    llpl_sources:
+      - src: userapp/tests/memtest.llpl
+        c_output: userapp/tests/memtest.c
+        output: userapp/tests/memtest.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: memtest.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/memtest.o, libsys.so]
+  - name: cat
+    llpl_sources:
+      - src: userapp/tests/cat.llpl
+        c_output: userapp/tests/cat.c
+        output: userapp/tests/cat.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: cat.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/cat.o, libsys.so]
+  - name: spawnwait
+    llpl_sources:
+      - src: userapp/tests/spawnwait.llpl
+        c_output: userapp/tests/spawnwait.c
+        output: userapp/tests/spawnwait.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: spawnwait.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/spawnwait.o, libsys.so]
+  - name: execchain
+    llpl_sources:
+      - src: userapp/tests/execchain.llpl
+        c_output: userapp/tests/execchain.c
+        output: userapp/tests/execchain.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: execchain.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/execchain.o, libsys.so]
+  - name: echoserver
+    llpl_sources:
+      - src: userapp/tests/echoserver.llpl
+        c_output: userapp/tests/echoserver.c
+        output: userapp/tests/echoserver.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: echoserver.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/echoserver.o, libsys.so]
+  - name: ipcdemo
+    llpl_sources:
+      - src: userapp/tests/ipcdemo.llpl
+        c_output: userapp/tests/ipcdemo.c
+        output: userapp/tests/ipcdemo.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: ipcdemo.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/ipcdemo.o, libsys.so]
+  - name: echod
+    llpl_sources:
+      - src: userapp/tests/echod.llpl
+        c_output: userapp/tests/echod.c
+        output: userapp/tests/echod.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: echod.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/echod.o, libsys.so]
+  - name: echoclient
+    llpl_sources:
+      - src: userapp/tests/echoclient.llpl
+        c_output: userapp/tests/echoclient.c
+        output: userapp/tests/echoclient.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: echoclient.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/echoclient.o, libsys.so]
+  - name: shmserver
+    llpl_sources:
+      - src: userapp/tests/shmserver.llpl
+        c_output: userapp/tests/shmserver.c
+        output: userapp/tests/shmserver.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: shmserver.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/shmserver.o, libsys.so]
+  - name: shmclient
+    llpl_sources:
+      - src: userapp/tests/shmclient.llpl
+        c_output: userapp/tests/shmclient.c
+        output: userapp/tests/shmclient.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: shmclient.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/shmclient.o, libsys.so]
+  - name: atad
+    llpl_sources:
+      - src: userapp/atad.llpl
+        c_output: userapp/atad.c
+        output: userapp/atad.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: atad.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/atad.o, libsys.so]
+  - name: tetris
+    llpl_sources:
+      - src: userapp/tetris.llpl
+        c_output: userapp/tetris.c
+        output: userapp/tetris.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: tetris.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tetris.o, libsys.so]
+  - name: wm
+    llpl_sources:
+      - src: userapp/wm.llpl
+        c_output: userapp/wm.c
+        output: userapp/wm.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: wm.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/wm.o, libsys.so]
+  - name: winball1
+    llpl_sources:
+      - src: userapp/tests/winball1.llpl
+        c_output: userapp/tests/winball1.c
+        output: userapp/tests/winball1.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: winball1.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/winball1.o, libsys.so]
+  - name: winball2
+    llpl_sources:
+      - src: userapp/tests/winball2.llpl
+        c_output: userapp/tests/winball2.c
+        output: userapp/tests/winball2.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: winball2.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [userapp/tests/winball2.o, libsys.so]
 
 # Includes two small files loaded as multiboot2 modules (grub.cfg's
 # `module2` directive) purely to give tmpfs.llpl something real to
@@ -117,6 +314,21 @@ package:
     - copy: {from: llpl_userapp.elf, to: isodir/boot/llpl_userapp.elf}
     - copy: {from: libsys.so, to: isodir/boot/libsys.so}
     - copy: {from: dyn_userapp.elf, to: isodir/boot/dyn_userapp.elf}
+    - copy: {from: memtest.elf, to: isodir/boot/memtest.elf}
+    - copy: {from: cat.elf, to: isodir/boot/cat.elf}
+    - copy: {from: spawnwait.elf, to: isodir/boot/spawnwait.elf}
+    - copy: {from: execchain.elf, to: isodir/boot/execchain.elf}
+    - copy: {from: echoserver.elf, to: isodir/boot/echoserver.elf}
+    - copy: {from: ipcdemo.elf, to: isodir/boot/ipcdemo.elf}
+    - copy: {from: echod.elf, to: isodir/boot/echod.elf}
+    - copy: {from: echoclient.elf, to: isodir/boot/echoclient.elf}
+    - copy: {from: shmserver.elf, to: isodir/boot/shmserver.elf}
+    - copy: {from: shmclient.elf, to: isodir/boot/shmclient.elf}
+    - copy: {from: atad.elf, to: isodir/boot/atad.elf}
+    - copy: {from: tetris.elf, to: isodir/boot/tetris.elf}
+    - copy: {from: wm.elf, to: isodir/boot/wm.elf}
+    - copy: {from: winball1.elf, to: isodir/boot/winball1.elf}
+    - copy: {from: winball2.elf, to: isodir/boot/winball2.elf}
     - write:
         to: isodir/boot/hello.txt
         content: "Hello from a GRUB module!"
@@ -136,6 +348,21 @@ package:
               module2 /boot/llpl_userapp.elf llpl_userapp.elf
               module2 /boot/libsys.so libsys.so
               module2 /boot/dyn_userapp.elf dyn_userapp.elf
+              module2 /boot/memtest.elf memtest.elf
+              module2 /boot/cat.elf cat.elf
+              module2 /boot/spawnwait.elf spawnwait.elf
+              module2 /boot/execchain.elf execchain.elf
+              module2 /boot/echoserver.elf echoserver.elf
+              module2 /boot/ipcdemo.elf ipcdemo.elf
+              module2 /boot/echod.elf echod.elf
+              module2 /boot/echoclient.elf echoclient.elf
+              module2 /boot/shmserver.elf shmserver.elf
+              module2 /boot/shmclient.elf shmclient.elf
+              module2 /boot/atad.elf atad.elf
+              module2 /boot/tetris.elf tetris.elf
+              module2 /boot/wm.elf wm.elf
+              module2 /boot/winball1.elf winball1.elf
+              module2 /boot/winball2.elf winball2.elf
           }
     - run: "grub-mkrescue -o kernel.iso isodir"
       allow_failure: true

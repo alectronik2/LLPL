@@ -1,0 +1,77 @@
+// Windowing compositor demo, window 1 of 2 (see winball2.llpl): a small
+// ball bounces around inside its own window, proving continuous
+// per-window animation. Arrow keys change direction, but only while this
+// window is focused (see wm.llpl) - TAB cycles focus between the two, so
+// running both alongside each other proves both multi-window compositing
+// (two independently animating windows on screen at once) and input
+// routing (only the focused one reacts to arrow keys) at the same time.
+
+import "../../libsys/imports"
+import "../user_runtime"
+import "../wm_protocol"
+import "../wm_client"
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("winball1: starting")
+    if !wm_connect() {
+        sys_putln("winball1: wm_connect failed")
+        rt_exit(1)
+    }
+    if !wm_create_window() {
+        sys_putln("winball1: create_window failed")
+        rt_exit(1)
+    }
+
+    let ball_size: int = 8
+    let bx: int = 4
+    let by: int = 4
+    let dx: int = 2
+    let dy: int = 1
+    let win_w: int = Wm.WIN_W
+    let win_h: int = Wm.WIN_H
+
+    while true {
+        let key: uint = wm_poll_input()
+        if key == (KEY_LEFT as uint) {
+            dx = -2
+        } else if key == (KEY_RIGHT as uint) {
+            dx = 2
+        } else if key == (KEY_UP as uint) {
+            dy = -2
+        } else if key == (KEY_DOWN as uint) {
+            dy = 2
+        }
+
+        bx = bx + dx
+        by = by + dy
+        if bx < 0 {
+            bx = 0
+            dx = -dx
+        }
+        if by < 0 {
+            by = 0
+            dy = -dy
+        }
+        if bx + ball_size > win_w {
+            bx = win_w - ball_size
+            dx = -dx
+        }
+        if by + ball_size > win_h {
+            by = win_h - ball_size
+            dy = -dy
+        }
+
+        wm_fill(0x202060)
+        let yy: int = 0
+        while yy < ball_size {
+            let xx: int = 0
+            while xx < ball_size {
+                wm_put_pixel((bx + xx) as uint, (by + yy) as uint, 0xFFAA00)
+                xx = xx + 1
+            }
+            yy = yy + 1
+        }
+        wm_present()
+        sys_sleep(20)
+    }
+}

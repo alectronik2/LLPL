@@ -59,7 +59,7 @@ trait Foo {
     func foo() -> int 
 }
 
-impl Foo for uint {
+impl Foo for Klass {
     func foo() -> int {
         42
     }
@@ -120,6 +120,8 @@ func main() -> uint32 {
     }
 
     let kl = new Klass("With a string")
+
+    puts("kl.foo = \(kl.foo() as uint)")
 
     for x in kl {
         puts("x = \(x)")

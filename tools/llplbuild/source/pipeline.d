@@ -46,7 +46,7 @@ private bool isUpToDate(const string[] outputs, const string[] inputs, string co
 // One thing to do. Steps sharing the same positive `parallelGroup` are
 // independent of each other and may be launched together (see
 // runPlan) - `0` means "run alone, in plan order".
-private enum StepKind { compileLlpl, assemble, compileC, link, action, persistentCreate, packageUpToDate }
+private enum StepKind { compileLlpl, assemble, compileC, link, action, persistentCreate, packageGate }
 
 private struct PlanStep {
     StepKind kind;
@@ -110,7 +110,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 
     foreach (src; cfg.cSources) {
         string obj = objPathFor(src.path, src.objOutput);
-        string[] cmd = [cfg.cc] ~ cflags;
+        string[] cmd = [cfg.cc] ~ cflags ~ src.cflags;
         foreach (dir; src.includeDirs) cmd ~= ["-I", dir];
         cmd ~= ["-c", src.path, "-o", obj];
         // A c_source whose path is the LLPL-generated file also depends
@@ -169,6 +169,18 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
                 [cfg.nasm, "-f", "elf64", a.src, "-o", a.output],
                 PackageAction.init, "", "", false, group);
         }
+        foreach (src; el.cSources) {
+            string obj = objPathFor(src.path, src.objOutput);
+            string[] ccmd = [cfg.cc] ~ cflags ~ src.cflags;
+            foreach (dir; src.includeDirs) ccmd ~= ["-I", dir];
+            ccmd ~= ["-c", src.path, "-o", obj];
+            plan ~= PlanStep(StepKind.compileC,
+                format("Compiling %s (%s)", src.path, el.name),
+                [src.path, configStampPath],
+                [obj],
+                ccmd,
+                PackageAction.init, "", "", false, group);
+        }
         string[] cmd = [cfg.ld] ~ el.link.ldflags.dup;
         if (el.link.script.length > 0) cmd ~= ["-T", el.link.script];
         cmd ~= el.link.objects;
@@ -187,28 +199,37 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         // The whole package (ISO/etc.) is one incremental unit, same
         // granularity Make gave it - its inputs are every binary this
         // config just linked, not each individual copy/write/run action.
+        //
+        // Whether it's stale can only be judged once every one of those
+        // inputs has actually been (re)built - not here, since buildPlan
+        // runs entirely before runPlan executes a single compile/link step,
+        // so checking mtimes now would compare against each input's
+        // *pre-build* state. A link step earlier in this very plan can
+        // regenerate one of these inputs; deciding staleness this early
+        // would miss that and silently skip re-packaging a binary that
+        // just changed. So this only plants a gate - runPlan re-evaluates
+        // it live, right before the actions below would run, once
+        // everything ahead of it in the plan has already executed.
         string[] pkgInputs;
         if (cfg.hasLink) pkgInputs ~= cfg.link.output;
         foreach (el; cfg.extraLinks) pkgInputs ~= el.link.output;
 
-        if (isUpToDate([cfg.pkg.output], pkgInputs, cfg.configPath)) {
-            plan ~= PlanStep(StepKind.packageUpToDate, format("Packaging %s", cfg.pkg.output),
-                pkgInputs, [cfg.pkg.output], [], PackageAction.init, "", "", false, 0);
-        } else {
-            foreach (action; cfg.pkg.actions) {
-                string desc;
-                final switch (action.kind) {
-                    case ActionKind.mkdir: desc = format("mkdir %s", action.mkdirPath); break;
-                    case ActionKind.copy: desc = format("copy %s -> %s", action.copyFrom, action.copyTo); break;
-                    case ActionKind.write: desc = format("write %s", action.writeTo); break;
-                    case ActionKind.run: desc = format("run: %s", action.runCmd); break;
-                    case ActionKind.requireFile: desc = format("check %s", action.requireFilePath); break;
-                }
-                // No incremental inputs/outputs here (see above) - always
-                // runs once the package as a whole is judged stale.
-                plan ~= PlanStep(StepKind.action, desc, [], [], [],
-                    action, "", "", action.allowFailure, 0);
+        plan ~= PlanStep(StepKind.packageGate, format("Packaging %s", cfg.pkg.output),
+            pkgInputs, [cfg.pkg.output], [], PackageAction.init, "", "", false, 0);
+
+        foreach (action; cfg.pkg.actions) {
+            string desc;
+            final switch (action.kind) {
+                case ActionKind.mkdir: desc = format("mkdir %s", action.mkdirPath); break;
+                case ActionKind.copy: desc = format("copy %s -> %s", action.copyFrom, action.copyTo); break;
+                case ActionKind.write: desc = format("write %s", action.writeTo); break;
+                case ActionKind.run: desc = format("run: %s", action.runCmd); break;
+                case ActionKind.requireFile: desc = format("check %s", action.requireFilePath); break;
             }
+            // No incremental inputs/outputs on the individual action - the
+            // gate above is what decides whether this whole batch runs.
+            plan ~= PlanStep(StepKind.action, desc, [], [], [],
+                action, "", "", action.allowFailure, 0);
         }
     }
 
@@ -291,8 +312,8 @@ private void executeStep(PlanStep step) {
                 runCommand(["/bin/sh", "-c", step.persistentCreateCmd], false, step.description);
             }
             break;
-        case StepKind.packageUpToDate:
-            break; // never actually executed - see runPlan's early "skipped" branch
+        case StepKind.packageGate:
+            break; // never actually executed - runPlan checks and consumes it directly (see below)
     }
 }
 
@@ -302,11 +323,25 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
 
     size_t i = 0;
     while (i < plan.length) {
-        // The whole package (ISO/etc.) was already judged up to date as
-        // one unit in buildPlan - nothing left to actually execute.
-        if (plan[i].kind == StepKind.packageUpToDate) {
-            counter.skipped(plan[i].description);
-            i++;
+        // The whole package (ISO/etc.) is judged up to date or stale here,
+        // live - every step ahead of it in the plan has already executed
+        // (or been skipped) by this point, so its inputs' mtimes now
+        // reflect reality instead of pre-build state (see buildPlan).
+        if (plan[i].kind == StepKind.packageGate) {
+            if (isUpToDate(plan[i].outputs, plan[i].inputs, configPath)) {
+                counter.skipped(plan[i].description);
+                i++;
+                // The actions covered by this gate carry no incremental
+                // inputs/outputs of their own (see buildPlan) - without
+                // this, they'd run unconditionally despite the package
+                // itself being up to date.
+                while (i < plan.length && plan[i].kind == StepKind.action) {
+                    counter.skipped(plan[i].description);
+                    i++;
+                }
+            } else {
+                i++;
+            }
             continue;
         }
 
@@ -429,6 +464,7 @@ void clean(BuildConfig cfg) {
             files ~= src.objOutput;
         }
         foreach (a; el.asmSources) files ~= a.output;
+        foreach (src; el.cSources) files ~= objPathFor(src.path, src.objOutput);
         files ~= el.link.output;
     }
     if (cfg.hasPackage) {

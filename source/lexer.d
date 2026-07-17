@@ -34,6 +34,7 @@ enum TokenType {
     In,
     Return,
     Continue,
+    Break,
     Defer,
     Asm,
     New,
@@ -172,6 +173,7 @@ class Lexer {
             "in": "In",
             "return": "Return",
             "continue": "Continue",
+            "break": "Break",
             "defer": "Defer",
             "asm": "Asm",
             "new": "New",
@@ -524,6 +526,7 @@ class Lexer {
                 case "In": type = TokenType.In; break;
                 case "Return": type = TokenType.Return; break;
                 case "Continue": type = TokenType.Continue; break;
+                case "Break": type = TokenType.Break; break;
                 case "Defer": type = TokenType.Defer; break;
                 case "Asm": type = TokenType.Asm; break;
                 case "New": type = TokenType.New; break;

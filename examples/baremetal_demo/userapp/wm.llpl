@@ -1,0 +1,425 @@
+// Minimal windowing compositor. Owns the real framebuffer exclusively
+// (maps it once via sys_fb_map) and one shared pixel arena (one
+// sys_shm_create call, sliced into Wm.MAX_WINDOWS equal fixed-size
+// windows - see wm_protocol.llpl for why the sizes are what they are).
+// Clients never touch the real framebuffer or each other's memory: each
+// one sys_lookup("wm")s this service, sys_shm_maps the arena (the exact
+// same shared-region pattern shmserver/shmclient already prove works),
+// and only ever writes into its own WIN_BYTES-sized slice of it. This
+// service is the only thing that ever reads the arena and the only thing
+// that ever writes the real framebuffer - a client's dodgy slot index
+// can't corrupt another client's pixels because writes off the end of
+// its own slice just land in ITS OWN, still-shared arena memory (the
+// slot bounds check on every request keeps a bad index from being
+// *blitted* anywhere, but doesn't need to since nothing here trusts a
+// slot argument without checking it against Wm.MAX_WINDOWS first anyway).
+//
+// Protocol (see wm_protocol.llpl): a client sends {op, slot} over the
+// ordinary small-message IPC path (block_current_send/sys_msg_reply -
+// the same primitives ata.llpl and every ring-3 IPC demo already use) and
+// gets a fixed-shape reply back. There is no push channel from this
+// service to a client - input delivery is pull-based (OP_POLL_INPUT),
+// exactly like Syscall.sys_kbd_poll itself, so a client's own main loop
+// just polls once per frame the same way tetris.llpl already does.
+//
+// Focus and input routing: only the currently focused window's
+// OP_POLL_INPUT calls sys_kbd_poll() at all - an unfocused window's poll
+// returns key=0 without ever touching the keyboard driver, so a
+// keystroke can't be silently stolen by whichever window happens to ask
+// first. TAB (ASCII 9) is intercepted here to cycle focus between
+// windows and is never forwarded to a client.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+
+struct Window {
+    let used: bool
+    let owner_pid: int
+    // Top-left of the whole decorated window (titlebar included) in real
+    // screen coordinates - mutable, unlike the old fixed window_x/y
+    // formula, so a titlebar drag (see hit_test_titlebar/main loop below)
+    // can move it. A client never sees or chooses these: it only ever
+    // draws into its own fixed-size WIN_W x WIN_H slice of the arena in
+    // local coordinates (wm_client.llpl's wm_put_pixel/wm_fill) - this
+    // service alone decides where that content lands on the real screen.
+    let win_x: uint
+    let win_y: uint
+}
+
+// Height of the draggable titlebar strip drawn above each window's
+// content - purely a compositor-side decoration, no protocol change
+// needed since clients never see screen coordinates at all (see Window
+// above).
+const TITLEBAR_H: uint = 12
+const TITLEBAR_FOCUSED: uint32 = 0x3060C0
+const TITLEBAR_UNFOCUSED: uint32 = 0x404040
+const BACKDROP_COLOR: uint32 = 0x141428
+const CURSOR_COLOR: uint32 = 0xFFD000
+
+let windows: Window[3] // must match Wm.MAX_WINDOWS literally - see task.llpl's
+                        // own MAX_LIBS/libs[] comment for why this can't just
+                        // reference the const
+let focused: int = -1
+let arena: char* = null
+let fb: char* = null
+let fb_pitch: uint = 0
+let fb_width: uint = 0
+let fb_height: uint = 0
+
+// The compositor stays purely reactive (blocking sys_msg_recv, never
+// touching the real framebuffer beyond a client's own explicit present())
+// until the first window ever exists - no point owning the screen or
+// ticking a redraw loop when there's nothing to draw and the boot
+// console's own text is still the only thing on screen. Once true, it
+// stays true forever (see the main loop below): a real desktop still
+// shows a background + cursor with zero windows open, so there's no
+// reason to revert once every window has been closed again.
+let active: bool = false
+
+func find_free_slot() -> int {
+    let i: int = 0
+    while i < Wm.MAX_WINDOWS {
+        if !windows[i].used {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Next used slot strictly after `cur`, wrapping around - -1 if none are
+// used at all (can't happen mid-dispatch of a request from an existing
+// window, but a defensive return value costs nothing).
+func next_focus_after(cur: int) -> int {
+    let i: int = 0
+    while i < Wm.MAX_WINDOWS {
+        let idx: int = (cur + 1 + i) % Wm.MAX_WINDOWS
+        if windows[idx].used {
+            return idx
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// Initial placement for a newly created window - simple fixed
+// left-to-right tiling, same as the old fixed layout. Just a starting
+// point now, not permanent: the user can drag it anywhere afterward.
+func initial_window_x(slot: int) -> uint {
+    return 20 + (slot as uint) * ((Wm.WIN_W as uint) + 20)
+}
+
+func initial_window_y(slot: int) -> uint {
+    return 20
+}
+
+func clampi(v: int, lo: int, hi: int) -> int {
+    if v < lo {
+        return lo
+    }
+    if v > hi {
+        return hi
+    }
+    return v
+}
+
+// Bounds-checked write straight to the real framebuffer at absolute
+// screen coordinates - used for the titlebar/backdrop/cursor, all of
+// which are compositor-owned pixels with no arena slice behind them
+// (contrast blit_window below, which copies a client's own content).
+func fb_put_pixel(px: int, py: int, color: uint32) {
+    if px < 0 || py < 0 || (px as uint) >= fb_width || (py as uint) >= fb_height {
+        return
+    }
+    let offset: uint = (py as uint) * fb_pitch + (px as uint) * 4
+    let p: uint32* = (fb + offset) as uint32*
+    p[0] = color
+}
+
+func fill_backdrop() {
+    let row: uint = 0
+    while row < fb_height {
+        let col: uint = 0
+        while col < fb_width {
+            let offset: uint = row * fb_pitch + col * 4
+            let p: uint32* = (fb + offset) as uint32*
+            p[0] = BACKDROP_COLOR
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+func draw_titlebar(slot: int) {
+    let color: uint32 = TITLEBAR_UNFOCUSED
+    if slot == focused {
+        color = TITLEBAR_FOCUSED
+    }
+    let ox: int = windows[slot].win_x as int
+    let oy: int = windows[slot].win_y as int
+    let row: uint = 0
+    while row < TITLEBAR_H {
+        let col: uint = 0
+        while col < (Wm.WIN_W as uint) {
+            fb_put_pixel(ox + (col as int), oy + (row as int), color)
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+// A simple filled right-triangle "arrow" pointer - no bitmap font/sprite
+// needed, just a widening-downward loop, but still an immediately
+// recognizable cursor shape.
+func draw_cursor(cx: int, cy: int) {
+    let size: int = 11
+    let row: int = 0
+    while row < size {
+        let width: int = row + 1
+        let col: int = 0
+        while col < width {
+            fb_put_pixel(cx + col, cy + row, CURSOR_COLOR)
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+// Copies one window's slice of the shared arena into the real
+// framebuffer at its current screen position (below its titlebar) - the
+// only place a client's own pixels ever reach real video memory.
+func blit_window(slot: int) {
+    let src: uint32* = (arena + (slot as uint) * Wm.WIN_BYTES) as uint32*
+    let ox: uint = windows[slot].win_x
+    let oy: uint = windows[slot].win_y + TITLEBAR_H
+    let row: uint = 0
+    while row < (Wm.WIN_H as uint) {
+        let col: uint = 0
+        while col < (Wm.WIN_W as uint) {
+            let pixel: uint32 = src[row * (Wm.WIN_W as uint) + col]
+            let offset: uint = (oy + row) * fb_pitch + (ox + col) * 4
+            let p: uint32* = (fb + offset) as uint32*
+            p[0] = pixel
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+// Topmost-first (reverse slot order, matching redraw_all's draw order
+// below, so a click where two windows' titlebars happen to overlap picks
+// whichever one is actually drawn on top) hit-test against each used
+// window's titlebar strip - -1 if the point isn't over any of them.
+func hit_test_titlebar(mx: int, my: int) -> int {
+    let i: int = Wm.MAX_WINDOWS - 1
+    while i >= 0 {
+        if windows[i].used {
+            let ox: int = windows[i].win_x as int
+            let oy: int = windows[i].win_y as int
+            if mx >= ox && mx < ox + Wm.WIN_W && my >= oy && my < oy + (TITLEBAR_H as int) {
+                return i
+            }
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+// Full repaint every active tick (backdrop, then each used window's
+// decoration + content, then the cursor on top of everything) rather
+// than any kind of dirty-rect tracking: once a window can move, the
+// pixels it used to cover need to be restored to *something*, and this
+// compositor keeps no separate backing store of "whatever used to be
+// there" - simplest correct fix is to own the whole screen and redraw
+// all of it every tick once active, same as fill_backdrop's own doc
+// comment on why boot console text behind a window is simply gone once
+// the compositor takes over, not preserved and revealed again later.
+func redraw_all(mouse_x: int, mouse_y: int) {
+    fill_backdrop()
+    let i: int = 0
+    while i < Wm.MAX_WINDOWS {
+        if windows[i].used {
+            draw_titlebar(i)
+            blit_window(i)
+        }
+        i = i + 1
+    }
+    draw_cursor(mouse_x, mouse_y)
+}
+
+// Shared dispatch for both the pre-active (blocking recv) and active
+// (non-blocking try_recv + redraw ticking) phases of the main loop below
+// - the request/reply shape a client sees is identical either way, only
+// how a message gets picked up differs.
+func handle_request(sender: uint, msg: char*) {
+    let req: uint* = (msg as char*) as uint*
+    let op: uint = req[0]
+    let slot_arg: int = req[1] as int
+
+    let reply: char[40]
+    let rep: uint* = (reply as char*) as uint*
+
+    if op == (Wm.OP_CREATE as uint) {
+        let slot: int = find_free_slot()
+        if slot < 0 {
+            rep[0] = Wm.STATUS_FAIL as uint
+            sys_msg_reply(sender, reply as char*, 8)
+        } else {
+            windows[slot].used = true
+            windows[slot].owner_pid = sender as int
+            windows[slot].win_x = initial_window_x(slot)
+            windows[slot].win_y = initial_window_y(slot)
+            if focused < 0 {
+                focused = slot
+            }
+            active = true
+            rep[0] = Wm.STATUS_OK as uint
+            rep[1] = slot as uint
+            rep[2] = (slot as uint) * Wm.WIN_BYTES
+            rep[3] = windows[slot].win_x
+            rep[4] = windows[slot].win_y
+            sys_msg_reply(sender, reply as char*, 40)
+        }
+    } else if op == (Wm.OP_PRESENT as uint) {
+        if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used {
+            blit_window(slot_arg)
+            rep[0] = Wm.STATUS_OK as uint
+        } else {
+            rep[0] = Wm.STATUS_FAIL as uint
+        }
+        sys_msg_reply(sender, reply as char*, 8)
+    } else if op == (Wm.OP_POLL_INPUT as uint) {
+        let key: uint = 0
+        if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used && slot_arg == focused {
+            key = sys_kbd_poll()
+            if key == 9 {
+                let nxt: int = next_focus_after(focused)
+                if nxt >= 0 {
+                    focused = nxt
+                }
+                key = 0
+            }
+        }
+        rep[0] = Wm.STATUS_OK as uint
+        rep[1] = key
+        sys_msg_reply(sender, reply as char*, 16)
+    } else if op == (Wm.OP_CLOSE as uint) {
+        if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS {
+            windows[slot_arg].used = false
+            windows[slot_arg].owner_pid = -1
+            if focused == slot_arg {
+                focused = next_focus_after(slot_arg)
+            }
+        }
+        rep[0] = Wm.STATUS_OK as uint
+        sys_msg_reply(sender, reply as char*, 8)
+    } else {
+        rep[0] = Wm.STATUS_FAIL as uint
+        sys_msg_reply(sender, reply as char*, 8)
+    }
+}
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("wm: starting")
+
+    let i: int = 0
+    while i < Wm.MAX_WINDOWS {
+        windows[i].used = false
+        windows[i].owner_pid = -1
+        i = i + 1
+    }
+
+    if sys_register("wm") == RT_SYS_ERR {
+        sys_putln("wm: register failed")
+        rt_exit(1)
+    }
+
+    let info: uint[3]
+    if sys_fb_info(info as uint*) == RT_SYS_ERR {
+        sys_putln("wm: no framebuffer")
+        rt_exit(1)
+    }
+    fb_width = info[0]
+    fb_height = info[1]
+    fb_pitch = info[2]
+
+    fb = sys_fb_map()
+    if fb == null {
+        sys_putln("wm: fb_map failed")
+        rt_exit(1)
+    }
+
+    // 16 pages = 65536 bytes, comfortably covers Wm.MAX_WINDOWS *
+    // Wm.WIN_BYTES (64896) with a little slack.
+    arena = sys_shm_create(16)
+    if arena == null {
+        sys_putln("wm: shm_create failed")
+        rt_exit(1)
+    }
+
+    sys_putln("wm: ready")
+
+    // Phase 1: purely reactive, exactly like the original design - block
+    // in sys_msg_recv until the very first client shows up. Nothing to
+    // composite or drag yet, so there's no reason to tick a redraw loop
+    // or touch the real framebuffer beyond whatever a client's own
+    // present() does.
+    while !active {
+        let msg: char[16]
+        let sender: uint = sys_msg_recv(msg as char*, 16)
+        if sender != RT_SYS_ERR {
+            handle_request(sender, msg as char*)
+        }
+    }
+
+    // Phase 2: at least one window exists now. Non-blocking try_recv
+    // instead of recv from here on, since this loop also has the mouse
+    // and the periodic full redraw (see redraw_all's own doc comment) to
+    // get to every tick regardless of whether a client happens to be
+    // talking to it this instant - a blocking recv would starve both
+    // exactly as long as no client sends anything.
+    let dragging: bool = false
+    let drag_slot: int = -1
+    let drag_dx: int = 0
+    let drag_dy: int = 0
+    let prev_left: bool = false
+
+    while true {
+        let msg: char[16]
+        let sender: uint = sys_msg_try_recv(msg as char*, 16)
+        if sender != RT_SYS_ERR {
+            handle_request(sender, msg as char*)
+        }
+
+        let mstate: uint = sys_mouse_poll()
+        let mx: int = (mstate & 0x3FF) as int
+        let my: int = ((mstate >> 10) & 0x3FF) as int
+        let mleft: bool = (mstate & (1 << 20)) != 0
+
+        if mleft && !prev_left {
+            let hit: int = hit_test_titlebar(mx, my)
+            if hit >= 0 {
+                dragging = true
+                drag_slot = hit
+                drag_dx = mx - (windows[hit].win_x as int)
+                drag_dy = my - (windows[hit].win_y as int)
+                focused = hit
+            }
+        } else if !mleft && prev_left {
+            dragging = false
+            drag_slot = -1
+        }
+        prev_left = mleft
+
+        if dragging && drag_slot >= 0 {
+            let max_wx: int = (fb_width as int) - Wm.WIN_W
+            let max_wy: int = (fb_height as int) - (Wm.WIN_H as int) - (TITLEBAR_H as int)
+            windows[drag_slot].win_x = clampi(mx - drag_dx, 0, max_wx) as uint
+            windows[drag_slot].win_y = clampi(my - drag_dy, 0, max_wy) as uint
+        }
+
+        redraw_all(mx, my)
+        sys_sleep(15)
+    }
+}

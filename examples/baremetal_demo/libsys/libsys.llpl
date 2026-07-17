@@ -23,6 +23,19 @@ const SYS_EXEC = 14
 const SYS_WAIT = 15
 const SYS_KILL = 16
 const SYS_MUNMAP = 17
+const SYS_REGISTER = 18
+const SYS_LOOKUP = 19
+const SYS_SHM_CREATE = 20
+const SYS_SHM_MAP = 21
+const SYS_INB = 22
+const SYS_OUTB = 23
+const SYS_INW = 24
+const SYS_OUTW = 25
+const SYS_FB_INFO = 26
+const SYS_FB_MAP = 27
+const SYS_KBD_POLL = 28
+const SYS_MOUSE_POLL = 29
+const SYS_MSG_TRY_RECV = 30
 
 const SYS_ERR = 0xFFFFFFFFFFFFFFFF
 const O_RDONLY = 0
@@ -96,18 +109,32 @@ func sys_close(fd: uint) -> uint {
     return syscall1(SYS_CLOSE, fd)
 }
 
-func sys_msg_send(peer: uint, buf: char*, len: uint) -> uint {
-    return syscall3(SYS_MSG_SEND, peer, buf as uint, len)
+// `handle` must be one this task actually holds SEND rights on (currently:
+// only over a task it itself spawned, granted automatically by sys_spawn) -
+// a raw pid guessed out of thin air is rejected, unlike sys_msg_recv/reply
+// below which address by real pid (their safety comes from the in-flight
+// call's own state, not a capability).
+func sys_msg_send(handle: uint, buf: char*, len: uint) -> uint {
+    return syscall3(SYS_MSG_SEND, handle, buf as uint, len)
 }
 
 func sys_msg_recv(buf: char*, len: uint) -> uint {
     return syscall2(SYS_MSG_RECV, buf as uint, len)
 }
 
+// Non-blocking twin of sys_msg_recv: RT_SYS_ERR if no sender is waiting,
+// instead of blocking this task until one is.
+func sys_msg_try_recv(buf: char*, len: uint) -> uint {
+    return syscall2(SYS_MSG_TRY_RECV, buf as uint, len)
+}
+
 func sys_msg_reply(peer: uint, buf: char*, len: uint) -> uint {
     return syscall3(SYS_MSG_REPLY, peer, buf as uint, len)
 }
 
+// Returns a handle over the new child (usable with sys_wait/sys_kill below),
+// not a raw pid - the kernel only lets a task act on another task through a
+// handle it was actually granted.
 func sys_spawn(path: char*, args: char*) -> uint {
     return syscall2(SYS_SPAWN, path as uint, args as uint)
 }
@@ -116,12 +143,99 @@ func sys_exec(path: char*, args: char*) -> uint {
     return syscall2(SYS_EXEC, path as uint, args as uint)
 }
 
-func sys_wait(pid: uint) -> uint {
-    return syscall1(SYS_WAIT, pid)
+func sys_wait(handle: uint) -> uint {
+    return syscall1(SYS_WAIT, handle)
 }
 
-func sys_kill(pid: uint) -> uint {
-    return syscall1(SYS_KILL, pid)
+func sys_kill(handle: uint) -> uint {
+    return syscall1(SYS_KILL, handle)
+}
+
+// Advertises this task under `name` (up to 15 chars) so an unrelated task -
+// one that never spawned it - can later reach it via sys_lookup below.
+// Only a task the kernel spawned directly at boot may do this - anything
+// sys_spawn()ed by an ordinary user program is rejected, so a user program
+// can't hijack a system service's name.
+func sys_register(name: char*) -> uint {
+    return syscall1(SYS_REGISTER, name as uint)
+}
+
+// Resolves `name` to a handle (SEND + SHM rights, never KILL/WAIT) over
+// whichever task is currently registered under it, or SYS_ERR if nobody is.
+// This is the only way two tasks with no spawn (parent/child) relationship
+// can establish a capability to talk to each other.
+func sys_lookup(name: char*) -> uint {
+    return syscall1(SYS_LOOKUP, name as uint)
+}
+
+// Allocates `pages` (4KB each) of fresh, zeroed memory, mapped into the
+// caller's own address space (the returned pointer), and makes it available
+// for a RIGHT_SHM handle-holder to map too via sys_shm_map below - for bulk
+// data well past what a 128-byte IPC message can carry in one call. Only one
+// region per task in this version.
+func sys_shm_create(pages: uint) -> char* {
+    return syscall1(SYS_SHM_CREATE, pages) as char*
+}
+
+// Maps whichever shared region `handle`'s target currently owns into the
+// caller's own address space, returning a fresh local pointer to it (never
+// the owner's own pointer value - only the physical memory is shared, the
+// two virtual address spaces are otherwise unrelated). SYS_ERR if the
+// handle lacks RIGHT_SHM or its target has no active region.
+func sys_shm_map(handle: uint) -> char* {
+    return syscall1(SYS_SHM_MAP, handle) as char*
+}
+
+// Raw I/O port access - SYS_ERR unless the caller is a task the kernel
+// itself spawned at boot (see Task.is_boot_spawned) AND `port` is on the
+// kernel's fixed hardware allow-list (see Syscall.port_allowed). Written
+// for atad.llpl, the user-space ATA driver; not a general-purpose port I/O
+// facility for arbitrary user programs.
+func sys_inb(port: uint) -> uint {
+    return syscall1(SYS_INB, port)
+}
+
+func sys_outb(port: uint, value: uint) -> uint {
+    return syscall2(SYS_OUTB, port, value)
+}
+
+func sys_inw(port: uint) -> uint {
+    return syscall1(SYS_INW, port)
+}
+
+func sys_outw(port: uint, value: uint) -> uint {
+    return syscall2(SYS_OUTW, port, value)
+}
+
+// Fills `out[0..2]` with {width, height, pitch} (pixels/bytes, 32bpp
+// direct-color always assumed - the only mode this kernel's Framebuffer
+// module supports). SYS_ERR if no framebuffer was found at boot.
+func sys_fb_info(out: uint*) -> uint {
+    return syscall1(SYS_FB_INFO, out as uint)
+}
+
+// Maps the linear framebuffer into this task's own address space and
+// returns a pointer to it (0/null on failure, not SYS_ERR - see
+// Syscall.sys_fb_map). Each pixel is 4 bytes at `pitch*y + 4*x`, in
+// 0x00RRGGBB order.
+func sys_fb_map() -> char* {
+    return syscall0(SYS_FB_MAP) as char*
+}
+
+// Non-blocking: 0 if no key is waiting, else the key code (a plain ASCII
+// byte, or one of the KEY_UP/DOWN/LEFT/RIGHT constants below).
+const KEY_UP = 200
+const KEY_DOWN = 201
+const KEY_LEFT = 202
+const KEY_RIGHT = 203
+
+func sys_kbd_poll() -> uint {
+    return syscall0(SYS_KBD_POLL)
+}
+
+// Packed: bits 0-9 = x, bits 10-19 = y, bit 20 = left button down.
+func sys_mouse_poll() -> uint {
+    return syscall0(SYS_MOUSE_POLL)
 }
 
 func sys_strlen(s: char*) -> uint {

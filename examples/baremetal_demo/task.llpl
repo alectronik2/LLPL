@@ -29,6 +29,18 @@ namespace Task {
     const CANARY_VALUE = 0x535441434B43414E
     const IPC_MAX = 128
 
+    // Per-task handle table: the only way a user syscall (sys_kill/sys_wait)
+    // may act on another task. A raw pid is never accepted from ring 3 -
+    // only a handle previously granted to the caller (currently: to a
+    // spawn()ing parent, over its own new child - see Syscall.sys_spawn).
+    // Kernel-trusted code (the shell's own `kill`/`spawn` commands) still
+    // calls Task.kill()/Task.spawn_named() directly and is unaffected.
+    const MAX_HANDLES = 8
+    const RIGHT_KILL = 1
+    const RIGHT_WAIT = 2
+    const RIGHT_SEND = 4
+    const RIGHT_SHM = 8
+
     // Implemented in boot64.asm. timer_isr_entry is IDT gate 32's actual
     // handler (see IDT.init() in idt.llpl); start_first_task is called
     // once, by start() below, to make the very first switch. Both push/pop
@@ -102,24 +114,259 @@ namespace Task {
         let ipc_recv_len: uint
         let ipc_msg: char[128]
         let name: char[16]
+        let handle_valid: bool[8]
+        let handle_target: int[8]
+        let handle_rights: uint[8]
+    }
+
+    // Name registry: the only bootstrap for a SEND capability between two
+    // tasks with no spawn relationship. A service registers a short name
+    // for itself; any task can then look that name up and be granted a
+    // SEND-only handle to it (never KILL/WAIT - discovering a service by
+    // name doesn't make you its owner/supervisor, only its client).
+    const MAX_SERVICES = 8
+    const SERVICE_NAME_MAX = 16
+
+    packed struct ServiceEntry {
+        let used: bool
+        let pid: int
+        let name: char[16]
+    }
+
+    let registry: ServiceEntry[8]
+
+    func name_eq(a: char*, b: char*) -> bool {
+        let i: int = 0
+        while true {
+            if a[i] != b[i] {
+                return false
+            }
+            if a[i] == 0 {
+                return true
+            }
+            i = i + 1
+        }
+        return false
+    }
+
+    func name_copy(dst: char*, src: char*) {
+        let i: int = 0
+        while src[i] != 0 && i < SERVICE_NAME_MAX - 1 {
+            dst[i] = src[i]
+            i = i + 1
+        }
+        dst[i] = 0
+    }
+
+    // True only for a task the kernel itself spawned at boot - explicitly
+    // with parent_id -1 (see spawn_user_task() in kernel.llpl), never
+    // scheduled as anyone's child. Two separate capability gates key off
+    // this: registering a service name (below) and raw I/O port access
+    // (Syscall.sys_inb/sys_outb) - both are ways of saying "I am a trusted
+    // system service", which only the boot manifest gets to say. Otherwise
+    // any ordinary user program could sys_spawn a child that registers as
+    // e.g. "echo" to hijack messages meant for the real service, or that
+    // pokes arbitrary hardware ports.
+    func is_boot_spawned(pid: int) -> bool {
+        let t: TCB* = find_by_id(pid)
+        if t == null {
+            return false
+        }
+        return t.parent_id < 0
+    }
+
+    // One name names at most one owner at a time; a pid can register more
+    // than one name. Fails if the caller isn't boot-spawned, the name is
+    // already taken by a live service, or the registry is full.
+    func register_service(pid: int, name: char*) -> bool {
+        if !is_boot_spawned(pid) {
+            return false
+        }
+        let i: int = 0
+        while i < MAX_SERVICES {
+            if registry[i].used && name_eq(registry[i].name as char*, name) {
+                if exists(registry[i].pid) {
+                    return false
+                }
+                registry[i].used = false
+            }
+            i = i + 1
+        }
+        i = 0
+        while i < MAX_SERVICES {
+            if !registry[i].used {
+                registry[i].used = true
+                registry[i].pid = pid
+                name_copy(registry[i].name as char*, name)
+                return true
+            }
+            i = i + 1
+        }
+        return false
+    }
+
+    // Returns the registered owner's pid, or -1 if no live service holds
+    // that name (also clearing a stale entry left by one that died without
+    // ever unregistering - this demo has no explicit unregister syscall).
+    func lookup_service(name: char*) -> int {
+        let i: int = 0
+        while i < MAX_SERVICES {
+            if registry[i].used && name_eq(registry[i].name as char*, name) {
+                if exists(registry[i].pid) {
+                    return registry[i].pid
+                }
+                registry[i].used = false
+                return -1
+            }
+            i = i + 1
+        }
+        return -1
+    }
+
+    // Shared-memory regions: one per owning task (v1 limitation - a task
+    // that needs to publish more than one shared region has no way to yet).
+    // A holder of a RIGHT_SHM handle over the owner can map the SAME
+    // physical pages into its own address space (Syscall.sys_shm_map) for
+    // bulk transfer well past IPC_MAX's 128-byte cap, using the ordinary
+    // small IPC message only to synchronize ("data's ready"), not to carry
+    // the data itself.
+    const MAX_SHM = 8
+    const SHM_MAX_PAGES = 16
+
+    packed struct ShmRegion {
+        let used: bool
+        let owner_pid: int
+        let pages: uint
+        let owner_virt: uint
+        let phys: uint[16]
+    }
+
+    let shm_regions: ShmRegion[8]
+
+    // The owner's own region index, or -1 - also lazily clearing a stale
+    // entry left by an owner that exited without any explicit teardown
+    // (same pattern lookup_service uses for the name registry).
+    func shm_region_for(pid: int) -> int {
+        let i: int = 0
+        while i < MAX_SHM {
+            if shm_regions[i].used && shm_regions[i].owner_pid == pid {
+                if exists(pid) {
+                    return i
+                }
+                shm_regions[i].used = false
+                return -1
+            }
+            i = i + 1
+        }
+        return -1
+    }
+
+    func shm_create(owner_pid: int, phys_list: uint*, pages: uint, owner_virt: uint) -> bool {
+        if pages == 0 || pages > SHM_MAX_PAGES {
+            return false
+        }
+        if shm_region_for(owner_pid) >= 0 {
+            return false
+        }
+        let i: int = 0
+        while i < MAX_SHM {
+            if !shm_regions[i].used {
+                shm_regions[i].used = true
+                shm_regions[i].owner_pid = owner_pid
+                shm_regions[i].pages = pages
+                shm_regions[i].owner_virt = owner_virt
+                let k: uint = 0
+                while k < pages {
+                    shm_regions[i].phys[k] = phys_list[k]
+                    k = k + 1
+                }
+                return true
+            }
+            i = i + 1
+        }
+        return false
+    }
+
+    func shm_pages_of(region: int) -> uint {
+        if region < 0 || region >= MAX_SHM {
+            return 0
+        }
+        return shm_regions[region].pages
+    }
+
+    func shm_phys_at(region: int, page: int) -> uint {
+        if region < 0 || region >= MAX_SHM || page < 0 || (page as uint) >= shm_regions[region].pages {
+            return 0
+        }
+        return shm_regions[region].phys[page]
+    }
+
+    // Called on the owner's exit/kill. The physical pages themselves are
+    // freed as an ordinary consequence of that task's own address space
+    // being torn down (they were mapped into it with the same tracked
+    // map_in_aspace() any other mmap() page uses) - this only drops the
+    // registry entry. Any client that had mapped this region foreign-style
+    // keeps its now-dangling mapping - a known v1 limitation, not a memory
+    // safety issue: map_foreign() never let that client's own teardown
+    // free pages it doesn't own, so nothing gets double-freed either way.
+    func shm_release(pid: int) {
+        let i: int = 0
+        while i < MAX_SHM {
+            if shm_regions[i].used && shm_regions[i].owner_pid == pid {
+                shm_regions[i].used = false
+            }
+            i = i + 1
+        }
     }
 
     let first_task: uint = 0 // 0 = no tasks spawned yet
     let last_task: uint = 0  // so spawn() can extend the list in O(1)
     let current_task: uint = 0
+    let preferred_next: uint = 0
     let task_count: int = 0
     let next_task_id: int = 0
     let scheduling_enabled: bool = false
+
+    // A kernel-mode task's own `pml4` field is 0 ("use the kernel's boot
+    // page table" - see spawn_named), never a real address - anything that
+    // needs an arbitrary TCB's actual page table (not just the *current*
+    // task's, which get_current_pml4 below already handled) must resolve
+    // that placeholder the same way, or it ends up walking page-table
+    // structures starting at physical address 0 instead. This matters once
+    // a kernel-mode task can be the target of an IPC reply (see
+    // Syscall.sys_msg_reply and ata.llpl) - before that, every sender was
+    // ring-3, so `.pml4` was always already a real value.
+    func pml4_for(tcb: TCB*) -> uint {
+        if tcb == null || tcb.pml4 == 0 {
+            return VMM.kernel_pml4
+        }
+        return tcb.pml4
+    }
 
     func get_current_pml4() -> uint {
         if current_task == 0 {
             return VMM.kernel_pml4
         }
-        let cur: TCB* = current_task as TCB*
-        if cur.pml4 == 0 {
-            return VMM.kernel_pml4
+        return pml4_for(current_task as TCB*)
+    }
+
+    // Writes `len` bytes into `addr` as seen through `pml4` - the kernel-
+    // mode-caller equivalent of Syscall.copy_to_user_pml4, for code that
+    // isn't reachable through the int 0x80 gate (a kernel task acting as
+    // its own IPC client - see ata.llpl) but still needs to deliver a
+    // message into some ring-3 peer's own address space.
+    func write_to_pml4(pml4: uint, addr: uint, src: char*, len: uint) -> uint {
+        let i: uint = 0
+        while i < len {
+            let page: uint = VMM.virt_to_phys(pml4, addr + i)
+            if page == 0 {
+                return i
+            }
+            let ptr: char* = page as char*
+            ptr[(addr + i) & 0xFFF] = src[i]
+            i = i + 1
         }
-        return cur.pml4
+        return i
     }
 
     func get_current_aspace() -> VMM.AddressSpace* {
@@ -144,7 +391,6 @@ namespace Task {
         }
         let cur: TCB* = current_task as TCB*
         cur.exit_status = status
-        let woke_waiter: bool = false
         let addr: uint = first_task
         let done: bool = first_task == 0
         while !done {
@@ -154,7 +400,7 @@ namespace Task {
                     t.state = STATE_ALIVE
                     t.resched_requested = false
                     set_saved_return(t, status)
-                    woke_waiter = true
+                    preferred_next = t as uint
                 }
             }
             addr = t.next
@@ -162,7 +408,7 @@ namespace Task {
                 done = true
             }
         }
-        if cur.parent_id >= 0 && !woke_waiter {
+        if cur.parent_id >= 0 {
             cur.state = STATE_ZOMBIE
         } else {
             cur.state = STATE_DEAD
@@ -246,6 +492,48 @@ namespace Task {
         tcb.name[i] = 0
     }
 
+    func init_handles(tcb: TCB*) {
+        let i: int = 0
+        while i < MAX_HANDLES {
+            tcb.handle_valid[i] = false
+            i = i + 1
+        }
+    }
+
+    // Grants `owner` a fresh handle over `target_id` with the given rights,
+    // returning its index (to be handed back to user code as an opaque
+    // syscall argument) or -1 if the table is full.
+    func alloc_handle(owner: TCB*, target_id: int, rights: uint) -> int {
+        let i: int = 0
+        while i < MAX_HANDLES {
+            if !owner.handle_valid[i] {
+                owner.handle_valid[i] = true
+                owner.handle_target[i] = target_id
+                owner.handle_rights[i] = rights
+                return i
+            }
+            i = i + 1
+        }
+        return -1
+    }
+
+    // Resolves a user-supplied handle to the pid it names, but only if
+    // `owner` actually holds it and it carries `required_right` - otherwise
+    // -1, indistinguishable from a bad handle so a probing task learns
+    // nothing about which case it hit.
+    func handle_target(owner: TCB*, handle: int, required_right: uint) -> int {
+        if owner == null || handle < 0 || handle >= MAX_HANDLES {
+            return -1
+        }
+        if !owner.handle_valid[handle] {
+            return -1
+        }
+        if (owner.handle_rights[handle] & required_right) == 0 {
+            return -1
+        }
+        return owner.handle_target[handle]
+    }
+
     func install_canary(tcb: TCB*) {
         let addr: uint = tcb.stack_base + sizeof(TCB)
         tcb.canary_addr = addr
@@ -310,9 +598,19 @@ namespace Task {
         }
 
         if cur.state == STATE_DEAD {
-            // Find the predecessor of the current task so we can unlink it.
+            // Find the predecessor of the current task so we can unlink it -
+            // the node whose OWN `.next` is current_task, not (as this used
+            // to check) the node whose `.next.next` is current_task. That
+            // extra hop found the predecessor's predecessor instead, and
+            // spliced *it* straight to current_task's successor - silently
+            // dropping both current_task and its real, innocent predecessor
+            // out of the circular list. Harmless with only 1-2 other tasks
+            // around (the miscomputed splice point happens to coincide with
+            // the right one), but with 3+ tasks it drops a live, perfectly
+            // healthy task out of the scheduling rotation for good, with no
+            // error or crash - it just silently stops being scheduled.
             let prev: TCB* = cur
-            while (prev.next as TCB*).next != current_task {
+            while (prev.next as uint) != current_task {
                 prev = prev.next as TCB*
             }
             prev.next = cur.next
@@ -326,6 +624,10 @@ namespace Task {
         }
 
         let nxt: uint = cur.next
+        if preferred_next != 0 && runnable(preferred_next) {
+            nxt = preferred_next
+            preferred_next = 0
+        }
         while !runnable(nxt) && (nxt as TCB*).next != cur.next {
             nxt = (nxt as TCB*).next
         }
@@ -405,8 +707,26 @@ namespace Task {
         tcb.ipc_recv_len = 0
         install_canary(tcb)
         copy_name(tcb, name)
+        init_handles(tcb)
         next_task_id = next_task_id + 1
 
+        // Splicing a new TCB into the shared circular list is several
+        // separate writes (the new node's own `.next`, the previous
+        // tail's `.next`, first_task/last_task) with no single atomic
+        // step tying them together. Every OTHER piece of code that walks
+        // or mutates this same list (schedule_next/pick_next, and
+        // anything reached only through Syscall.dispatch) runs inside a
+        // 0x8E interrupt gate, which the CPU already keeps un-preemptible
+        // by clearing IF on entry - but this function runs as plain task
+        // code with interrupts on, so a timer tick landing mid-splice
+        // would hand the scheduler a list with a new node linked in on
+        // one side but not the other, walking it into a dangling `.next`
+        // instead of back around to a real task. Harmless at the
+        // original ~18.2Hz PIT rate (vanishingly small odds of a tick
+        // landing in this exact multi-instruction window); reliably hit
+        // once boot starts spawning many more tasks in quick succession
+        // at 1000Hz (see HAL.Pit).
+        HAL.disable_interrupts()
         if first_task == 0 {
             tcb.next = block
             first_task = block
@@ -416,8 +736,9 @@ namespace Task {
             tcb.next = first_task
         }
         last_task = block
-
         task_count = task_count + 1
+        HAL.enable_interrupts()
+
         EventLog.add2("task", "spawn kernel", tcb.id as uint, entry)
         return tcb.id
     }
@@ -428,7 +749,7 @@ namespace Task {
 
     // Creates a new ring-3 user task starting at `entry` with its own
     // address space. `stack_top` is the initial user-mode RSP.
-    func spawn_user_with_args(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*, argc: uint, argv: uint) -> int {
+    func spawn_user_with_args_parent(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*, argc: uint, argv: uint, parent_id: int) -> int {
         let block: uint = KHeap.kmalloc(STACK_SIZE)
         if block == 0 {
             return -1
@@ -458,7 +779,7 @@ namespace Task {
         tcb.user_guard_base = tcb.user_stack_base - VMM.PAGE_SIZE
         tcb.wake_tick = 0
         tcb.resched_requested = false
-        tcb.parent_id = current_id()
+        tcb.parent_id = parent_id
         tcb.wait_pid = -1
         tcb.exit_status = 0
         tcb.ipc_peer = -1
@@ -469,8 +790,36 @@ namespace Task {
         tcb.ipc_recv_len = 0
         install_canary(tcb)
         copy_name(tcb, name)
+        init_handles(tcb)
         next_task_id = next_task_id + 1
 
+        // Same splice-safety need as spawn_named above, but this function
+        // has a second calling context spawn_named never sees: it's also
+        // reached through Syscall.sys_spawn/sys_exec, i.e. from inside the
+        // int 0x80 interrupt gate, which the CPU has *already* made
+        // non-preemptible by clearing IF on entry. A blind
+        // HAL.enable_interrupts() there would turn interrupts back on
+        // before that syscall handler is done - a nested timer interrupt
+        // could then run schedule_next and stomp on the very saved_rsp
+        // this same in-flight syscall's task is mid-update on. Saving and
+        // restoring the actual prior flag instead of unconditionally
+        // setting it handles both callers correctly: it leaves ordinary
+        // task code's interrupts-enabled state as it was, and leaves an
+        // already-disabled interrupt-gate context exactly as disabled as
+        // it found it.
+        //
+        // Saved through a register-backed local, not bare pushfq/popfq
+        // straight to the stack: GCC has no idea inline asm touches RSP
+        // unless told, so a raw push left sitting across the statement
+        // boundary between two separate asm() blocks shifts every
+        // stack-relative local this function's -O2 codegen still expects
+        // at its original offset (a real #GP this exact pattern caused in
+        // ata.llpl's call() - see its own, longer version of this
+        // comment). Each asm block here is internally balanced (net zero
+        // RSP effect once it completes).
+        let flags: uint = 0
+        asm("pushfq; popq %0" : "=r"(flags) : : "memory")
+        asm("cli")
         if first_task == 0 {
             tcb.next = block
             first_task = block
@@ -480,10 +829,15 @@ namespace Task {
             tcb.next = first_task
         }
         last_task = block
-
         task_count = task_count + 1
+        asm("pushq %0; popfq" : : "r"(flags) : "cc", "memory")
+
         EventLog.add2("task", "spawn user", tcb.id as uint, entry)
         return tcb.id
+    }
+
+    func spawn_user_with_args(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*, argc: uint, argv: uint) -> int {
+        return spawn_user_with_args_parent(entry, stack_top, aspace, name, argc, argv, current_id())
     }
 
     func spawn_user_named(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*) -> int {
@@ -492,6 +846,43 @@ namespace Task {
 
     func spawn_user(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*) -> int {
         return spawn_user_with_args(entry, stack_top, aspace, "user", 0, 0)
+    }
+
+    func replace_current_user(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*, argc: uint, argv: uint) -> bool {
+        let cur: TCB* = current_tcb()
+        if cur == null || aspace == null || cur.saved_rsp == 0 {
+            return false
+        }
+        cur.pml4 = aspace.pml4
+        cur.aspace = aspace
+        cur.mode = MODE_USER
+        cur.user_stack_base = stack_top - VMM.PAGE_SIZE
+        cur.user_guard_base = cur.user_stack_base - VMM.PAGE_SIZE
+        cur.resched_requested = false
+        cur.state = STATE_ALIVE
+        copy_name(cur, name)
+        // The *original* syscall-entry trapframe, not cur.saved_rsp: this
+        // runs synchronously, still deep inside the very int 0x80 call
+        // it's replacing, not after a context switch back into this task.
+        // exec's own file read (VFS.read -> ATA.call) forces interrupts on
+        // for its wait, so a timer preemption during that read is routine -
+        // and every such preemption updates cur.saved_rsp to wherever this
+        // task's stack happened to be nested at that instant (see
+        // Task_schedule_next in boot64.asm). By the time control unwinds
+        // back here, cur.saved_rsp reflects that last nested preemption
+        // point, not the outer syscall entry - writing a TrapFrame there
+        // would clobber live locals on this task's own call stack instead
+        // of the frame iretq will actually consume. The entry trapframe's
+        // address is always this fixed offset from kernel_stack_top
+        // (ring-3 entry resets RSP to TSS.RSP0 = kernel_stack_top before
+        // pushing it - see spawn_user_with_args_parent's identical
+        // frame_addr computation), regardless of any nesting in between.
+        let frame: TrapFrame* = (cur.kernel_stack_top - TRAP_FRAME_SIZE) as TrapFrame*
+        init_frame(frame, entry, stack_top, (0x18 as uint) | 3, (0x20 as uint) | 3, argc, argv)
+        switch_cr3_to_task(cur)
+        switch_tss_rsp0(cur)
+        EventLog.add2("task", "exec replace", cur.id as uint, entry)
+        return true
     }
 
     // Called from timer_isr_entry (boot64.asm) with the just-preempted
@@ -512,6 +903,10 @@ namespace Task {
 
         // Advance to the next runnable task, skipping dead or sleeping ones.
         let nxt: uint = cur.next
+        if preferred_next != 0 && runnable(preferred_next) {
+            nxt = preferred_next
+            preferred_next = 0
+        }
         while !runnable(nxt) && (nxt as TCB*).next != current_task {
             nxt = (nxt as TCB*).next
         }
@@ -674,6 +1069,20 @@ namespace Task {
         tcb.state = STATE_ALIVE
         tcb.resched_requested = false
         set_saved_return(tcb, value)
+        // Hints the scheduler to switch straight to this task on the very
+        // next tick instead of round-robin-scanning every other task
+        // first (pick_next/schedule_next both already consult this, same
+        // as block_current_wait's use of it) - just a hint, so it degrades
+        // gracefully if something else's wake overwrites it before the
+        // next tick consumes it. Matters far more than it used to: any
+        // blocking IPC round trip (sys_msg_send/reply, and now a kernel
+        // task acting as its own IPC client - see ata.llpl) now has to
+        // wait out a full lap of every OTHER spawned task before reaching
+        // the one it's actually waiting on, and that lap only gets longer
+        // as more tasks are spawned - directly why VFS.init() and every
+        // sector operation after it currently take so much longer than a
+        // direct in-kernel PIO call ever did.
+        preferred_next = tcb as uint
     }
 
     func wake_now(tcb: TCB*) {
@@ -734,6 +1143,10 @@ namespace Task {
         cur.state = STATE_WAIT_BLOCKED
         cur.wait_pid = pid
         cur.resched_requested = true
+        let child: TCB* = find_by_id(pid)
+        if child != null {
+            preferred_next = child as uint
+        }
         EventLog.add2("task", "wait blocked", cur.id as uint, pid as uint)
     }
 
@@ -768,6 +1181,10 @@ namespace Task {
         }
         task_count = task_count - 1
         EventLog.add2("task", "reap zombie", pid as uint, target.exit_status)
+        if target.aspace != null {
+            VMM.free_address_space(target.aspace)
+            target.aspace = null
+        }
         KHeap.kfree(target.stack_base)
         return true
     }

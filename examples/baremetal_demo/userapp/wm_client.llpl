@@ -1,0 +1,122 @@
+// Client-side helper for talking to the "wm" windowing compositor
+// (wm.llpl) - import this alongside wm_protocol.llpl from any program
+// that wants a window. Not a shared library: like user_runtime.llpl,
+// this gets compiled directly into whatever program imports it, so the
+// module-level state below is that program's own, never shared with any
+// other client.
+//
+// sys_msg_send overwrites its own buffer in place with the reply once it
+// arrives (see shmclient.llpl's own doc comment on this), and
+// sys_msg_reply only ever delivers min(reply_len, the caller's own
+// buffer length) bytes (see Syscall.sys_msg_reply) - so every buffer
+// below is sized for the *largest* reply its op can produce (40 bytes
+// for OP_CREATE's {status, slot, offset, x, y}, not the 16-byte request
+// those same bytes started as), not just the request being sent.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+
+let wm_handle: uint = 0xFFFFFFFFFFFFFFFF
+let wm_slot: int = -1
+let wm_arena: char* = null
+let wm_win_x: uint = 0
+let wm_win_y: uint = 0
+
+// Looks up "wm" (retrying briefly - wm.elf may not have registered yet
+// if this client happens to start first) and maps the shared arena.
+// Must succeed before any other wm_* call.
+func wm_connect() -> bool {
+    let tries: uint = 0
+    while wm_handle == RT_SYS_ERR && tries < 200000 {
+        wm_handle = sys_lookup("wm")
+        if wm_handle == RT_SYS_ERR {
+            sys_yield()
+        }
+        tries = tries + 1
+    }
+    if wm_handle == RT_SYS_ERR {
+        return false
+    }
+    wm_arena = sys_shm_map(wm_handle)
+    return wm_arena != null
+}
+
+func wm_create_window() -> bool {
+    let req: char[40]
+    let r: uint* = (req as char*) as uint*
+    r[0] = Wm.OP_CREATE as uint
+    r[1] = 0
+    let n: uint = sys_msg_send(wm_handle, req as char*, 40)
+    if n == RT_SYS_ERR {
+        return false
+    }
+    if r[0] != (Wm.STATUS_OK as uint) {
+        return false
+    }
+    wm_slot = r[1] as int
+    wm_win_x = r[3]
+    wm_win_y = r[4]
+    return true
+}
+
+// A pointer to this window's own slice of the shared arena - draw into
+// it with wm_put_pixel/wm_fill below, then call wm_present() to make it
+// visible.
+func wm_buffer() -> uint32* {
+    return (wm_arena + (wm_slot as uint) * Wm.WIN_BYTES) as uint32*
+}
+
+func wm_put_pixel(x: uint, y: uint, color: uint32) {
+    if x >= (Wm.WIN_W as uint) || y >= (Wm.WIN_H as uint) {
+        return
+    }
+    let buf: uint32* = wm_buffer()
+    buf[y * (Wm.WIN_W as uint) + x] = color
+}
+
+func wm_fill(color: uint32) {
+    let buf: uint32* = wm_buffer()
+    let total: uint = (Wm.WIN_W as uint) * (Wm.WIN_H as uint)
+    let i: uint = 0
+    while i < total {
+        buf[i] = color
+        i = i + 1
+    }
+}
+
+func wm_present() -> bool {
+    let req: char[16]
+    let r: uint* = (req as char*) as uint*
+    r[0] = Wm.OP_PRESENT as uint
+    r[1] = wm_slot as uint
+    let n: uint = sys_msg_send(wm_handle, req as char*, 16)
+    if n == RT_SYS_ERR {
+        return false
+    }
+    return r[0] == (Wm.STATUS_OK as uint)
+}
+
+// Non-blocking, same convention as sys_kbd_poll: 0 if nothing is pending
+// for this window right now (also 0 if it isn't the focused window - see
+// wm.llpl's own doc comment on why an unfocused poll can't steal a
+// keystroke meant for someone else).
+func wm_poll_input() -> uint {
+    let req: char[16]
+    let r: uint* = (req as char*) as uint*
+    r[0] = Wm.OP_POLL_INPUT as uint
+    r[1] = wm_slot as uint
+    let n: uint = sys_msg_send(wm_handle, req as char*, 16)
+    if n == RT_SYS_ERR {
+        return 0
+    }
+    return r[1]
+}
+
+func wm_close() {
+    let req: char[16]
+    let r: uint* = (req as char*) as uint*
+    r[0] = Wm.OP_CLOSE as uint
+    r[1] = wm_slot as uint
+    sys_msg_send(wm_handle, req as char*, 16)
+}

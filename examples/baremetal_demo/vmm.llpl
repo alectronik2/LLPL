@@ -22,6 +22,7 @@ namespace VMM {
     const USER_STACK_BASE = USER_STACK_TOP - PAGE_SIZE
     const USER_STACK_GUARD_BASE = USER_STACK_BASE - PAGE_SIZE
     const USER_MMAP_BASE  = 0x100020000
+    const MAX_MAPPED_PAGES = 256
 
     // Physical address of the kernel's boot PML4. Filled in by init().
     let kernel_pml4: uint = 0
@@ -31,6 +32,9 @@ namespace VMM {
         let next_virt: uint
         let pt_count: int
         let pt_pages: uint[32]
+        let map_count: int
+        let map_virt: uint[256]
+        let map_phys: uint[256]
     }
 
     func get_cr3() -> uint {
@@ -75,7 +79,33 @@ namespace VMM {
 
     // Walks the page tables rooted at `pml4` and returns the physical page
     // base mapped at `virt`, or 0 if not present.
+    //
+    // Any address below USER_CODE_BASE is never walked this way, no matter
+    // whose pml4 is passed: boot64.asm fills the kernel's PDPT directly
+    // with 1GB huge pages (flags 0x83 - PRESENT | WRITABLE | PS) for that
+    // whole low region, and create_address_space() below copies those same
+    // PDPT entries - huge-page bits included - into every user address
+    // space's own low region too (so kernel code/data stay reachable
+    // during interrupts and syscalls regardless of which task's page
+    // tables are loaded). That means there is no PD/PT hierarchy under
+    // *any* pml4's low region for this function's 4-level walk to find -
+    // each PDPT entry's "physical address" bits are already a 1GB-aligned
+    // physical frame, not a pointer to a PD table, so walking through it
+    // as one reads garbage and (since the raw PS-tagged entry's low bits
+    // don't mask down to a real table address) can produce a non-canonical
+    // address, faulting with #GP rather than a clean "not present" -
+    // reachable through *any* task whose own syscall handling ends up
+    // translating a plain kernel address (e.g. ata.llpl's call(), when
+    // invoked as part of an ordinary ring-3 task's sys_spawn/sys_read/...,
+    // not just when the caller happens to be kernel-mode). Kernel memory
+    // is identity-mapped by this whole codebase's own convention (see
+    // alloc_zero_page and everywhere else a physical address doubles as a
+    // dereferencable pointer), so for it virt == phys directly - no walk
+    // needed, or possible, no matter which pml4 was asked to resolve it.
     func virt_to_phys(pml4: uint, virt: uint) -> uint {
+        if virt < USER_CODE_BASE {
+            return virt & ~(PAGE_SIZE - 1)
+        }
         let pml4i: int = page_index(virt, 39)
         let pdpti: int = page_index(virt, 30)
         let pdi: int = page_index(virt, 21)
@@ -197,7 +227,13 @@ namespace VMM {
         return p
     }
 
-    func map_in_aspace(aspace: AddressSpace*, virt: uint, phys: uint, flags: uint) -> bool {
+    // Shared by map_in_aspace (track=true: this aspace owns `phys`, and
+    // free_address_space() below will PageAlloc.free() it) and map_foreign
+    // (track=false: `phys` belongs to some other address space's own
+    // shared-memory region - see Task.shm_* - so it must never be recorded
+    // here, or a client's ordinary process teardown would free physical
+    // memory its owner still has mapped and considers live).
+    func map_in_aspace_ex(aspace: AddressSpace*, virt: uint, phys: uint, flags: uint, track: bool) -> bool {
         let pml4i: int = page_index(virt, 39)
         let pdpti: int = page_index(virt, 30)
         let pdi: int = page_index(virt, 21)
@@ -242,7 +278,24 @@ namespace VMM {
         let pte: uint* = get_pte(pt, pti)
         pte[0] = ((phys >> 12) << 12) | (flags & 0xFFF) | PTE_PRESENT
         invlpg(virt)
+        if track && aspace.map_count < MAX_MAPPED_PAGES {
+            aspace.map_virt[aspace.map_count] = virt & ~(PAGE_SIZE - 1)
+            aspace.map_phys[aspace.map_count] = (phys >> 12) << 12
+            aspace.map_count = aspace.map_count + 1
+        }
         return true
+    }
+
+    func map_in_aspace(aspace: AddressSpace*, virt: uint, phys: uint, flags: uint) -> bool {
+        return map_in_aspace_ex(aspace, virt, phys, flags, true)
+    }
+
+    // Maps a physical page this address space does NOT own into it anyway -
+    // for sharing another task's memory (see Task.shm_create/shm_map).
+    // Deliberately untracked: free_address_space() must never free a page
+    // some other, still-alive address space owns and still has mapped.
+    func map_foreign(aspace: AddressSpace*, virt: uint, phys: uint, flags: uint) -> bool {
+        return map_in_aspace_ex(aspace, virt, phys, flags, false)
     }
 
     func create_address_space() -> AddressSpace* {
@@ -282,7 +335,23 @@ namespace VMM {
         aspace.pt_pages[0] = pml4
         aspace.pt_pages[1] = user_pdpt
         aspace.pt_count = 2
+        aspace.map_count = 0
         return aspace
+    }
+
+    func forget_mapping(aspace: AddressSpace*, virt: uint) {
+        let page: uint = virt & ~(PAGE_SIZE - 1)
+        let i: int = 0
+        while i < aspace.map_count {
+            if aspace.map_virt[i] == page {
+                let last: int = aspace.map_count - 1
+                aspace.map_virt[i] = aspace.map_virt[last]
+                aspace.map_phys[i] = aspace.map_phys[last]
+                aspace.map_count = last
+                return
+            }
+            i = i + 1
+        }
     }
 
     func mmap(aspace: AddressSpace*, pages: uint) -> uint {
@@ -358,6 +427,52 @@ namespace VMM {
         return base
     }
 
+    // Maps `pages` physical pages that already exist and belong to some
+    // other address space's shared-memory region (see Task.shm_create) into
+    // `aspace` at its next_virt cursor - not fresh allocations, unlike
+    // mmap() above. Like mmap()/mmap_at(), a failure partway through isn't
+    // unwound - the pages mapped so far stay mapped, matching this
+    // codebase's existing v1 stance on partial-mapping cleanup.
+    func mmap_foreign(aspace: AddressSpace*, phys_pages: uint*, pages: uint) -> uint {
+        if aspace == null || pages == 0 {
+            return 0
+        }
+        let base: uint = aspace.next_virt
+        let i: uint = 0
+        while i < pages {
+            if !map_foreign(aspace, base + i * PAGE_SIZE, phys_pages[i],
+                            PTE_PRESENT | PTE_WRITABLE | PTE_USER) {
+                return 0
+            }
+            i = i + 1
+        }
+        aspace.next_virt = base + pages * PAGE_SIZE
+        return base
+    }
+
+    // Same untracked, no-ownership contract as mmap_foreign above, but for
+    // one contiguous physical range (an MMIO region, not a scattered list
+    // of individually-allocated pages) - used to map the linear
+    // framebuffer into a user task's own address space (see
+    // Syscall.sys_fb_map), so a ring-3 program can draw directly into it
+    // without a syscall per pixel.
+    func mmap_foreign_range(aspace: AddressSpace*, phys_base: uint, pages: uint) -> uint {
+        if aspace == null || pages == 0 {
+            return 0
+        }
+        let base: uint = aspace.next_virt
+        let i: uint = 0
+        while i < pages {
+            if !map_foreign(aspace, base + i * PAGE_SIZE, phys_base + i * PAGE_SIZE,
+                            PTE_PRESENT | PTE_WRITABLE | PTE_USER) {
+                return 0
+            }
+            i = i + 1
+        }
+        aspace.next_virt = base + pages * PAGE_SIZE
+        return base
+    }
+
     func munmap(aspace: AddressSpace*, addr: uint, pages: uint) -> bool {
         if aspace == null || pages == 0 || (addr & (PAGE_SIZE - 1)) != 0 {
             return false
@@ -373,6 +488,7 @@ namespace VMM {
             let phys: uint = (pte[0] >> 12) << 12
             pte[0] = 0
             invlpg(virt)
+            forget_mapping(aspace, virt)
             PageAlloc.free(phys)
             i = i + 1
         }
@@ -386,6 +502,14 @@ namespace VMM {
         if aspace == null {
             return
         }
+        let m: int = 0
+        while m < aspace.map_count {
+            if aspace.map_phys[m] != 0 {
+                PageAlloc.free(aspace.map_phys[m])
+            }
+            m = m + 1
+        }
+        aspace.map_count = 0
         let i: int = 0
         while i < aspace.pt_count {
             PageAlloc.free(aspace.pt_pages[i])

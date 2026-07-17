@@ -1159,11 +1159,32 @@ class Parser {
         return t;
     }
 
+    // Short Rust-style spellings for the fixed-width integer types, resolved
+    // to their existing canonical internal names right here so every other
+    // type-name check in the parser and code generator (isPrimitiveTypeName,
+    // primitiveToC, interpFormatSpecifier, ...) only ever has to know about
+    // one spelling per width. u64/i64 alias the pre-existing "uint"/"int"
+    // (already 64-bit); u8/i8 are the one genuinely new width, added
+    // alongside them in the code generator as "uint8"/"int8".
+    private static string canonicalIntTypeName(string name) {
+        switch (name) {
+            case "u8": return "uint8";
+            case "u16": return "uint16";
+            case "u32": return "uint32";
+            case "u64": return "uint";
+            case "i8": return "int8";
+            case "i16": return "int16";
+            case "i32": return "int32";
+            case "i64": return "int";
+            default: return name;
+        }
+    }
+
     private Type parseType() {
         if (check(TokenType.LeftParen)) {
             return parseParenType();
         }
-        string name = expect(TokenType.Identifier).value;
+        string name = canonicalIntTypeName(expect(TokenType.Identifier).value);
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
         // Graphics_Point, matching how the code generator mangles namespaced
         // class declarations.
@@ -1261,6 +1282,8 @@ class Parser {
             return returnStmt();
         } else if (check(TokenType.Continue)) {
             return continueStmt();
+        } else if (check(TokenType.Break)) {
+            return breakStmt();
         } else if (check(TokenType.Defer)) {
             return deferStmt();
         } else if (check(TokenType.Try)) {
@@ -1614,6 +1637,13 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.Continue);
         return new ContinueStmt(startLine, startColumn);
+    }
+
+    private BreakStmt breakStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Break);
+        return new BreakStmt(startLine, startColumn);
     }
 
     private ThrowStmt throwStmt() {

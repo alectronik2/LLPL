@@ -93,7 +93,7 @@ const EMPTY_RESULT: AnalysisResult = { diagnostics: [], symbols: [], usages: [] 
 const KEYWORDS = [
     'import', 'from', 'namespace', 'class', 'struct', 'packed', 'enum', 'macro',
     'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'private', 'if',
-    'else', 'while', 'for', 'foreach', 'in', 'return', 'defer', 'unless',
+    'else', 'while', 'for', 'foreach', 'in', 'return', 'continue', 'break', 'defer', 'unless',
     'try', 'catch', 'finally', 'throw', 'delete', 'asm', 'new', 'true', 'false', 'null',
     'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait',
     'impl', 'quote', 'unquote', 'interrupt',

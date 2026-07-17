@@ -17,6 +17,7 @@ struct CSource {
     string path;
     string[] includeDirs;
     string objOutput;
+    string[] cflags;
 }
 
 struct LlplSource {
@@ -43,6 +44,7 @@ struct ExtraLink {
     string name;
     LlplSource[] llplSources;
     AsmSource[] asmSources;
+    CSource[] cSources;
     LinkSpec link;
 }
 
@@ -156,6 +158,21 @@ private AsmSource[] parseAsmSources(Node node, string errCtx) {
     return result;
 }
 
+private CSource[] parseCSources(Node node, string errCtx) {
+    CSource[] result;
+    if (auto v = "c_sources" in node) {
+        foreach (Node entry; *v) {
+            CSource src;
+            src.path = requireStr(entry, "path", errCtx ~ ".c_sources[]");
+            src.includeDirs = getStrList(entry, "include_dirs");
+            src.objOutput = getStr(entry, "output", stripExtension(baseName(src.path)) ~ ".o");
+            src.cflags = getStrList(entry, "cflags");
+            result ~= src;
+        }
+    }
+    return result;
+}
+
 private LlplSource[] parseLlplSources(Node node, string errCtx) {
     LlplSource[] result;
     if (auto v = "llpl_sources" in node) {
@@ -254,14 +271,7 @@ BuildConfig loadConfig(string path) {
             absPath, cfg.defaultConfig));
     }
 
-    if (auto v = "c_sources" in root) {
-        foreach (Node entry; *v) {
-            CSource src;
-            src.path = requireStr(entry, "path", absPath ~ ".c_sources[]");
-            src.includeDirs = getStrList(entry, "include_dirs");
-            cfg.cSources ~= src;
-        }
-    }
+    cfg.cSources = parseCSources(root, absPath);
 
     cfg.asmSources = parseAsmSources(root, absPath);
 
@@ -276,6 +286,7 @@ BuildConfig loadConfig(string path) {
             el.name = requireStr(entry, "name", absPath ~ ".extra_links[]");
             el.llplSources = parseLlplSources(entry, absPath ~ ".extra_links." ~ el.name);
             el.asmSources = parseAsmSources(entry, absPath ~ ".extra_links." ~ el.name);
+            el.cSources = parseCSources(entry, absPath ~ ".extra_links." ~ el.name);
             el.link = parseLink(entry["link"], absPath ~ ".extra_links." ~ el.name ~ ".link");
             cfg.extraLinks ~= el;
         }

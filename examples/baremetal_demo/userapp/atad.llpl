@@ -1,0 +1,165 @@
+// User-space ATA PIO driver: registers as "atad" and answers small
+// {op, lba} requests from the kernel's own ATA client (ata.llpl, which
+// replaces what used to be an in-kernel PIO driver of the same name) by
+// reading/writing one 512-byte sector into a shared page published via
+// sys_shm_create. The actual hardware access happens here, in ring 3,
+// gated by sys_inb/sys_outb/sys_inw/sys_outw's boot-only I/O-port
+// capability - not by running in ring 0. Register layout, polling
+// protocol, and 28-bit LBA addressing are ported unchanged from that
+// original driver.
+
+import "../libsys/imports"
+import "user_runtime"
+
+const DATA = 0x1F0
+const SECCOUNT = 0x1F2
+const LBA_LOW = 0x1F3
+const LBA_MID = 0x1F4
+const LBA_HIGH = 0x1F5
+const DRIVE_HEAD = 0x1F6
+const STATUS_CMD = 0x1F7
+
+const CMD_READ_SECTORS = 0x20
+const CMD_WRITE_SECTORS = 0x30
+const CMD_CACHE_FLUSH = 0xE7
+const CMD_IDENTIFY = 0xEC
+
+const STATUS_ERR = 0x01
+const STATUS_DRQ = 0x08
+const STATUS_DF = 0x20
+const STATUS_BSY = 0x80
+
+const OP_PRESENT = 0
+const OP_READ = 1
+const OP_WRITE = 2
+
+func poll_bsy_clear() {
+    while (sys_inb(STATUS_CMD) & STATUS_BSY) != 0 {
+        // spin
+    }
+}
+
+func wait_drq() -> bool {
+    while true {
+        let status: uint = sys_inb(STATUS_CMD)
+        if (status & STATUS_ERR) != 0 || (status & STATUS_DF) != 0 {
+            return false
+        }
+        if (status & STATUS_DRQ) != 0 {
+            return true
+        }
+    }
+}
+
+func ata_init() -> bool {
+    sys_outb(DRIVE_HEAD, 0xA0)
+    sys_outb(SECCOUNT, 0)
+    sys_outb(LBA_LOW, 0)
+    sys_outb(LBA_MID, 0)
+    sys_outb(LBA_HIGH, 0)
+    sys_outb(STATUS_CMD, CMD_IDENTIFY)
+
+    let status: uint = sys_inb(STATUS_CMD)
+    if status == 0 {
+        return false // no device on this channel at all
+    }
+
+    poll_bsy_clear()
+
+    if sys_inb(LBA_MID) != 0 || sys_inb(LBA_HIGH) != 0 {
+        return false // not a plain ATA device
+    }
+
+    if !wait_drq() {
+        return false
+    }
+
+    let i: int = 0
+    while i < 256 {
+        sys_inw(DATA) // drain the IDENTIFY payload; contents unused
+        i = i + 1
+    }
+    return true
+}
+
+func select_lba(lba: uint) {
+    sys_outb(DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F))
+    sys_outb(SECCOUNT, 1)
+    sys_outb(LBA_LOW, lba & 0xFF)
+    sys_outb(LBA_MID, (lba >> 8) & 0xFF)
+    sys_outb(LBA_HIGH, (lba >> 16) & 0xFF)
+}
+
+func read_sector(lba: uint, buf: char*) -> bool {
+    select_lba(lba)
+    sys_outb(STATUS_CMD, CMD_READ_SECTORS)
+    poll_bsy_clear()
+    if !wait_drq() {
+        return false
+    }
+    let i: int = 0
+    while i < 256 {
+        let word: uint = sys_inw(DATA)
+        buf[i * 2] = (word & 0xFF) as char
+        buf[i * 2 + 1] = ((word >> 8) & 0xFF) as char
+        i = i + 1
+    }
+    return true
+}
+
+func write_sector(lba: uint, buf: char*) -> bool {
+    select_lba(lba)
+    sys_outb(STATUS_CMD, CMD_WRITE_SECTORS)
+    poll_bsy_clear()
+    if !wait_drq() {
+        return false
+    }
+    let i: int = 0
+    while i < 256 {
+        let lo: uint = (buf[i * 2] as uint) & 0xFF
+        let hi: uint = (buf[i * 2 + 1] as uint) & 0xFF
+        sys_outw(DATA, lo | (hi << 8))
+        i = i + 1
+    }
+    sys_outb(STATUS_CMD, CMD_CACHE_FLUSH)
+    poll_bsy_clear()
+    return true
+}
+
+func _start(argc: uint, argv: uint*) {
+    let present: bool = ata_init()
+
+    if sys_register("atad") == RT_SYS_ERR {
+        rt_exit(1)
+    }
+
+    let shm: char* = sys_shm_create(1)
+    if shm == null {
+        rt_exit(1)
+    }
+
+    while true {
+        let raw: char[16]
+        let sender: uint = sys_msg_recv(raw as char*, 16)
+        if sender == RT_SYS_ERR {
+            continue
+        }
+        let req: uint* = (raw as char*) as uint*
+        let op: uint = req[0]
+        let lba: uint = req[1]
+
+        let status: uint = 1
+        if op == OP_PRESENT {
+            status = if present { 0 } else { 1 }
+        } else if op == OP_READ {
+            status = if present && read_sector(lba, shm) { 0 } else { 1 }
+        } else if op == OP_WRITE {
+            status = if present && write_sector(lba, shm) { 0 } else { 1 }
+        }
+
+        let reply: char[8]
+        let reply_word: uint* = (reply as char*) as uint*
+        reply_word[0] = status
+        sys_msg_reply(sender, reply as char*, 8)
+    }
+}

@@ -1,0 +1,22 @@
+// Dynamic LLPL spawn/wait smoke test.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("spawnwait")
+    let pid: uint = sys_spawn("/bin/memtest.elf", "from-spawnwait")
+    if pid == RT_SYS_ERR {
+        sys_putln("spawnwait pid=fail")
+        rt_exit(1)
+    }
+
+    let status: uint = sys_wait(pid)
+    if status == RT_SYS_ERR {
+        sys_putln("wait=fail")
+        rt_exit(1)
+    }
+    rt_put_uint_line("pid=", pid)
+    rt_put_uint_line("wait=", status)
+    rt_exit(0)
+}

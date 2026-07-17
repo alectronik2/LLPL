@@ -21,6 +21,20 @@ namespace Keyboard {
     const KEY_LEFT = 202
     const KEY_RIGHT = 203
 
+    // The shell's own Keyboard.read_char() and every ring-3 program's
+    // sys_kbd_poll() (Syscall.sys_kbd_poll, syscall.llpl) used to drain
+    // this exact same buffer with no arbitration at all - whichever one
+    // happened to poll first won each keystroke, so once any windowed
+    // client (or tetris.elf, which also polls directly) started polling
+    // every tick, the shell silently went deaf. input_focus is a single
+    // system-wide switch, toggled only by F12 (see on_scancode below):
+    // whichever side doesn't currently hold it sees "no key available"
+    // rather than racing for real keys, so exactly one consumer can ever
+    // drain a given keystroke.
+    const FOCUS_CONSOLE = 0
+    const FOCUS_WM = 1
+    let input_focus: int = FOCUS_CONSOLE
+
     let buffer: char[64]
     let head: int = 0
     let tail: int = 0
@@ -104,6 +118,23 @@ namespace Keyboard {
             return
         }
 
+        // F12 (make code 0x58, well above the 58-entry translation table
+        // below, so it was already silently ignored before this): global
+        // input-focus toggle, acted on key-down only so the matching
+        // key-up doesn't immediately toggle it right back.
+        if key == 0x58 {
+            if !released {
+                if input_focus == FOCUS_CONSOLE {
+                    input_focus = FOCUS_WM
+                    HAL.Serial.write("\ninput: -> windowing (F12 for console)\n")
+                } else {
+                    input_focus = FOCUS_CONSOLE
+                    HAL.Serial.write("\ninput: -> console (F12 for windowing)\n")
+                }
+            }
+            return
+        }
+
         if released {
             return
         }
@@ -129,14 +160,37 @@ namespace Keyboard {
         return head != tail
     }
 
-    // Blocks (via HAL.halt(), so the CPU idles between interrupts rather
-    // than spinning) until a key is available, then returns it.
-    func read_char() -> char {
-        while !has_char() {
-            HAL.halt()
-        }
+    // Raw pop, no focus/blocking logic - shared by read_char() (console
+    // side) and Syscall.sys_kbd_poll() (ring-3 side) once each has already
+    // decided, via input_focus, that it's the one entitled to this key.
+    func pop_char() -> char {
         let c: char = buffer[tail]
         tail = (tail + 1) % BUFFER_SIZE
         return c
+    }
+
+    // Blocks (via HAL.halt(), so the CPU idles between interrupts rather
+    // than spinning) until a key is available *and* input_focus is
+    // FOCUS_CONSOLE, then returns it. Console-only: Syscall.sys_kbd_poll()
+    // is the ring-3-side equivalent and must never block (see its own doc
+    // comment), so it does its own input_focus/has_char check and calls
+    // pop_char() directly instead of going through here.
+    func read_char() -> char {
+        // Only a hardware interrupt (the keyboard IRQ itself, which is
+        // also what flips input_focus back via F12) can ever make this
+        // loop's condition change, so - exactly like ATA.call()'s own
+        // wait loop (ata.llpl) and vfs_boot_task_entry's tail halt loop
+        // (kernel.llpl) - this can't assume ambient IF is still 1:
+        // whichever task calls this may have just come back from a chain
+        // of ATA.call() IPC round trips (e.g. the shell loading a
+        // program's ELF off disk via `run`) with IF=0, and a HLT with IF=0
+        // is permanent on this single-core kernel - not just for this
+        // task, for the whole machine, since nothing is left that can
+        // ever fire an interrupt to un-halt it.
+        asm("sti")
+        while input_focus != FOCUS_CONSOLE || !has_char() {
+            HAL.halt()
+        }
+        return pop_char()
     }
 }

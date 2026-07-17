@@ -1,0 +1,74 @@
+// Windowing compositor demo, window 2 of 2 - see winball1.llpl's own doc
+// comment for what this pair is proving. Different starting position,
+// velocity and colors purely so a screenshot can tell the two windows
+// apart at a glance.
+
+import "../../libsys/imports"
+import "../user_runtime"
+import "../wm_protocol"
+import "../wm_client"
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("winball2: starting")
+    if !wm_connect() {
+        sys_putln("winball2: wm_connect failed")
+        rt_exit(1)
+    }
+    if !wm_create_window() {
+        sys_putln("winball2: create_window failed")
+        rt_exit(1)
+    }
+
+    let ball_size: int = 10
+    let win_w: int = Wm.WIN_W
+    let win_h: int = Wm.WIN_H
+    let bx: int = win_w - ball_size - 4
+    let by: int = win_h - ball_size - 4
+    let dx: int = -1
+    let dy: int = -2
+
+    while true {
+        let key: uint = wm_poll_input()
+        if key == (KEY_LEFT as uint) {
+            dx = -1
+        } else if key == (KEY_RIGHT as uint) {
+            dx = 1
+        } else if key == (KEY_UP as uint) {
+            dy = -1
+        } else if key == (KEY_DOWN as uint) {
+            dy = 1
+        }
+
+        bx = bx + dx
+        by = by + dy
+        if bx < 0 {
+            bx = 0
+            dx = -dx
+        }
+        if by < 0 {
+            by = 0
+            dy = -dy
+        }
+        if bx + ball_size > win_w {
+            bx = win_w - ball_size
+            dx = -dx
+        }
+        if by + ball_size > win_h {
+            by = win_h - ball_size
+            dy = -dy
+        }
+
+        wm_fill(0x400000)
+        let yy: int = 0
+        while yy < ball_size {
+            let xx: int = 0
+            while xx < ball_size {
+                wm_put_pixel((bx + xx) as uint, (by + yy) as uint, 0x30D030)
+                xx = xx + 1
+            }
+            yy = yy + 1
+        }
+        wm_present()
+        sys_sleep(20)
+    }
+}

@@ -2,7 +2,7 @@
 //
 // Linked as ET_DYN with a DT_NEEDED dependency on /boot/libsys.so.
 
-import "../libsys/imports"
+import "../../libsys/imports"
 
 func print_digit(n: uint) {
     let buf: char[2]

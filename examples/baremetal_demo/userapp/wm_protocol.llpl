@@ -1,0 +1,32 @@
+// Shared wire format for the "wm" windowing compositor (wm.llpl) and its
+// clients (wm_client.llpl) - kept in its own file so both sides always
+// agree on op codes and window geometry without duplicating either.
+//
+// Every request is {op, slot} (or just {op} for OP_CREATE, where `slot`
+// is unused) packed as two uint fields (16 bytes) into the same
+// char[16]-style buffer ata.llpl/ipcdemo.llpl already use for small,
+// fixed-shape IPC messages - well under IPC_MAX (128 bytes). Replies are
+// {status, a, b, c, d}: OP_CREATE fills all five (slot, offset, x, y);
+// OP_POLL_INPUT reuses the second field for the polled key; everything
+// else only cares about `status`.
+
+namespace Wm {
+    const OP_CREATE = 1
+    const OP_PRESENT = 2
+    const OP_POLL_INPUT = 3
+    const OP_CLOSE = 4
+
+    const STATUS_OK = 0
+    const STATUS_FAIL = 1
+
+    // Fixed window geometry - simplest possible allocator (one shared arena
+    // sliced into MAX_WINDOWS equal, fixed-size pieces, see wm.llpl) at the
+    // cost of every window being the same size. WIN_W * WIN_H * 4 bytes/
+    // pixel * MAX_WINDOWS must not exceed Task.SHM_MAX_PAGES * 4096 (the
+    // whole-region cap on a single sys_shm_create call) - 104*52*4*3 =
+    // 64896 bytes, just under the 65536-byte (16-page) ceiling.
+    const MAX_WINDOWS = 3
+    const WIN_W = 104
+    const WIN_H = 52
+    const WIN_BYTES = 21632 // WIN_W(104) * WIN_H(52) * 4
+}

@@ -196,7 +196,7 @@
             }
         },
         "control-keywords": {
-            "match": "\\b(if|else|while|for|foreach|in|return|defer|match|case|default|unless|try|catch|finally|throw)\\b",
+            "match": "\\b(if|else|while|for|foreach|in|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {

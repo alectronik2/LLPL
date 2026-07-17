@@ -46,7 +46,17 @@ namespace LdSo {
     const R_X86_64_JUMP_SLOT = 7
     const R_X86_64_RELATIVE = 8
 
-    const MAX_LIBS = 16
+    // Every dynamically-linked boot task needs ~2 slots (its own image plus
+    // its libsys.so dependency), and all of them load back-to-back before
+    // the scheduler ever starts - so slot reuse from an exited task (see
+    // alloc_lib_slot below) can't help here yet; there's real headroom
+    // needed for the demo roster's boot-time pile-up, not just its steady-
+    // state churn. Bumped again post-atad: now that scheduling is fast
+    // (see HAL.Pit/Task.wake_with_return), many more of these demos are
+    // genuinely alive and dynamically linked at once instead of mostly
+    // finishing before the next one starts, raising real peak concurrent
+    // usage, not just boot-time pile-up.
+    const MAX_LIBS = 96
     const MAX_NEEDED = 8
     const NAME_MAX = 48
 
@@ -150,7 +160,15 @@ namespace LdSo {
         let end: uint
     }
 
-    let libs: Library[16]
+    // Must match MAX_LIBS above - this array's own declared size is a
+    // separate literal (this language's array types don't take a named
+    // const as their size), not derived from it. Letting the two drift
+    // apart (as briefly happened when only MAX_LIBS was bumped for the
+    // growing demo roster) means alloc_lib_slot() writes past the end of
+    // this array once lib_count exceeds its real capacity - the bounds
+    // check against MAX_LIBS only actually bounds anything if this array
+    // is truly that size.
+    let libs: Library[96]
     let lib_count: int = 0
 
     func align_down_page(addr: uint) -> uint {
@@ -313,6 +331,69 @@ namespace LdSo {
         return true
     }
 
+    // cleanup_aspace() below only clears used=false on exit - it doesn't
+    // shift later entries down, so a freed slot in the middle of the table
+    // stays free (not just unused) until something asks for it again here.
+    // Without this, the table's real capacity is "processes ever loaded",
+    // not "processes alive at once", and quietly exhausts under any process
+    // churn.
+    func lib_slot_available() -> bool {
+        let i: int = 0
+        while i < lib_count {
+            if !libs[i].used {
+                return true
+            }
+            i = i + 1
+        }
+        return lib_count < MAX_LIBS
+    }
+
+    // This global table is shared by every task's own dynamic loading -
+    // map_dyn_object (below) runs as part of an ordinary sys_spawn/
+    // sys_exec/initial-ELF-load syscall, on whichever task happens to be
+    // making it, with no lock of any kind. Two tasks loading a library at
+    // close enough moments (interleaved via preemption, not truly
+    // parallel - single core) could otherwise both scan, both see the
+    // same free index (or the same lib_count to extend), and both write
+    // their own Library struct into the identical slot - the loser's
+    // relocations silently vanish under the winner's, or vice versa,
+    // producing a program whose external calls jump through an
+    // unresolved/zeroed GOT entry. That's indistinguishable from a
+    // genuine capacity exhaustion by symptom (some unlucky dynamically-
+    // linked task crashes, seemingly at random) but isn't fixed by
+    // raising MAX_LIBS - the reservation itself has to be atomic. Marking
+    // the slot used before interrupts come back on (not left to the
+    // caller, after this returns) is what actually closes the window;
+    // everything else map_dyn_object fills in afterward is fine to
+    // happen non-atomically; since it starts read-only in the sense that
+    // it's the SAME task, uninterrupted, until this function's own
+    // caller moves on.
+    func alloc_lib_slot() -> int {
+        let flags: uint = 0
+        asm("pushfq; popq %0" : "=r"(flags) : : "memory")
+        asm("cli")
+
+        let idx: int = -1
+        let i: int = 0
+        while i < lib_count {
+            if !libs[i].used {
+                idx = i
+                i = lib_count // stop scanning
+            }
+            i = i + 1
+        }
+        if idx < 0 && lib_count < MAX_LIBS {
+            idx = lib_count
+            lib_count = lib_count + 1
+        }
+        if idx >= 0 {
+            libs[idx].used = true
+        }
+
+        asm("pushq %0; popfq" : : "r"(flags) : "cc", "memory")
+        return idx
+    }
+
     func find_loaded(aspace: VMM.AddressSpace*, name: char*) -> int {
         let i: int = 0
         while i < lib_count {
@@ -397,9 +478,21 @@ namespace LdSo {
                         }
                     }
                 }
-                if target == 0 && kind == R_X86_64_JUMP_SLOT {
-                    EventLog.add1("ldso", "unresolved lazy plt", sym_index)
-                } else if target == 0 {
+                // This used to silently tolerate an unresolved JUMP_SLOT
+                // (logging to EventLog only, which nothing ever prints)
+                // on the theory that it was "lazy" and would resolve
+                // later - but this loader does all relocation once, up
+                // front, at load time; there is no runtime PLT resolver
+                // stub to lazily fix it afterward. Left unresolved, the
+                // GOT slot keeps whatever value was there before (target
+                // stays 0 here, written in below), so the very first call
+                // through it jumps to address 0 - silently, with no
+                // fault and no output, since it happens deep inside the
+                // loader rather than the caller's own code. Failing the
+                // load here instead is strictly more honest.
+                if target == 0 {
+                    log("<LIGHT_RED>ld.so: unresolved symbol, index \(sym_index)\n</>")
+                    EventLog.add1("ldso", "unresolved plt symbol", sym_index)
                     return false
                 }
                 if !user_write_u64(lib.aspace, where, target) {
@@ -414,7 +507,7 @@ namespace LdSo {
     }
 
     func map_dyn_object(file: char*, size: uint, aspace: VMM.AddressSpace*, name: char*, load_base: uint) -> int {
-        if !valid_dyn_elf(file, size) || aspace == null || lib_count >= MAX_LIBS {
+        if !valid_dyn_elf(file, size) || aspace == null || !lib_slot_available() {
             return -1
         }
         if load_base == 0 {
@@ -492,8 +585,12 @@ namespace LdSo {
             aspace.next_virt = mapped_end
         }
 
-        let idx: int = lib_count
-        libs[idx].used = true
+        let idx: int = alloc_lib_slot()
+        if idx < 0 {
+            return -1
+        }
+        // .used is already set - see alloc_lib_slot's own doc comment for
+        // why that has to happen atomically, inside it, not here.
         libs[idx].aspace = aspace
         copy_name(libs[idx].name as char*, name)
         libs[idx].base = bias
@@ -505,7 +602,6 @@ namespace LdSo {
         libs[idx].symcount = 0
         libs[idx].verdef = 0
         libs[idx].verdefnum = 0
-        lib_count = lib_count + 1
 
         let rela: uint = 0
         let relasz: uint = 0

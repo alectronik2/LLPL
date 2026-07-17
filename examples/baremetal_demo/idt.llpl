@@ -8,6 +8,7 @@
 
 import hal
 import kbd
+import mouse
 import backtrace
 import task
 import eventlog
@@ -97,6 +98,12 @@ interrupt func isr_keyboard() {
     HAL.Pic.send_eoi(1)
 }
 
+interrupt func isr_mouse() {
+    let data: char = HAL.inb(0x60)
+    Mouse.on_byte(data)
+    HAL.Pic.send_eoi(12)
+}
+
 namespace IDT {
     // One 16-byte interrupt gate descriptor (long mode).
     packed struct Entry {
@@ -148,6 +155,7 @@ namespace IDT {
         // use the per-task RSP0 kernel stack set by the scheduler.
         set_gate(32, Task.timer_isr_entry as uint, 0x08, 0x8E)
         set_gate(33, isr_keyboard as uint, 0x08, 0x8E) // IRQ1 after PIC remap
+        set_gate(44, isr_mouse as uint, 0x08, 0x8E) // IRQ12 after PIC remap
 
         // System call vector: DPL=3 so user `int 0x80` can use it. It runs on
         // the current task's RSP0 kernel stack.

@@ -5,6 +5,9 @@ LIBSYS_1.0 {
     syscall2;
     syscall3;
     sys_*;
+    llpl_strcmp;
+    llpl_strlen;
+    llpl_memcpy;
   local:
     *;
 };

@@ -1,0 +1,15 @@
+// Dynamic LLPL exec smoke test.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("execchain")
+    let rc: uint = sys_exec("/bin/cat.elf", "/boot/hello.txt")
+    if rc == RT_SYS_ERR {
+        sys_putln("exec=fail")
+        rt_exit(1)
+    }
+    sys_putln("exec=returned")
+    rt_exit(1)
+}

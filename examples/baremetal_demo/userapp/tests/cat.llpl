@@ -1,0 +1,27 @@
+// Dynamic LLPL file reader.
+
+import "../../libsys/imports"
+import "../user_runtime"
+
+func _start(argc: uint, argv: uint*) {
+    let path: char* = rt_arg(argc, argv, 1, "/boot/hello.txt")
+    let fd: uint = sys_open(path, 0)
+    if fd == RT_SYS_ERR {
+        sys_puts("cat: open failed: ")
+        sys_putln(path)
+        rt_exit(1)
+    }
+
+    let buf: char[256]
+    let n: uint = sys_read(fd, buf as char*, 255)
+    sys_close(fd)
+    if n == RT_SYS_ERR {
+        sys_puts("cat: read failed: ")
+        sys_putln(path)
+        rt_exit(1)
+    }
+
+    sys_print(buf as char*, n)
+    sys_puts("\n")
+    rt_exit(0)
+}

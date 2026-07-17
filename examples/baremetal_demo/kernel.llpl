@@ -32,6 +32,7 @@ import idt
 import backtrace
 import fb
 import kbd
+import mouse
 import pagealloc
 import kheap
 import ata
@@ -245,6 +246,14 @@ func bg_task_entry() {
 // there's nothing for it to actually do, so it should cost real CPU time
 // only when the timer wakes it up to immediately hand control elsewhere.
 func idle_task_entry() {
+    // Forced defensively, same reasoning as Keyboard.read_char (kbd.llpl)
+    // and vfs_boot_task_entry's tail loop above: this is spawned with
+    // IF=1 baked into its initial frame today and never itself touches
+    // interrupts, so it's currently safe without this - but it's the same
+    // "only a hardware interrupt can end this halt loop" shape as those,
+    // and costs nothing to make just as robust against ambient state it
+    // didn't itself set up.
+    asm("sti")
     while true {
         HAL.halt()
     }
@@ -289,6 +298,13 @@ struct UserStackSetup {
     let rsp: uint
     let argc: uint
     let argv: uint
+}
+
+struct LoadedUserImage {
+    let ok: bool
+    let entry: uint
+    let aspace: VMM.AddressSpace*
+    let stack: UserStackSetup
 }
 
 func align_down_page(addr: uint) -> uint {
@@ -540,11 +556,19 @@ func build_user_stack(stack_phys: uint, label: char*, args: char*) -> UserStackS
     return setup
 }
 
-func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*) -> bool {
+func load_user_image_with_args(file: char*, size: uint, label: char*, args: char*) -> LoadedUserImage {
+    let image: LoadedUserImage
+    image.ok = false
+    image.entry = 0
+    image.aspace = null
+    image.stack.rsp = VMM.USER_STACK_TOP
+    image.stack.argc = 0
+    image.stack.argv = 0
+
     let aspace: VMM.AddressSpace* = VMM.create_address_space()
     if aspace == null {
         log("<RED>failed to create user address space\n</>")
-        return false
+        return image
     }
 
     let entry: uint = load_elf64_user(file, size, aspace)
@@ -558,7 +582,8 @@ func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*
         log("<RED>failed to load ELF executable: </>")
         emit(label, false, 0, null)
         emit("\n", false, 0, null)
-        return false
+        VMM.free_address_space(aspace)
+        return image
     }
 
     // Allocate and map one user stack page.
@@ -573,25 +598,43 @@ func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*
                           VMM.PTE_PRESENT | VMM.PTE_WRITABLE | VMM.PTE_USER)
     }
 
-    let id: int = Task.spawn_user_with_args(entry, stack_setup.rsp, aspace, label, stack_setup.argc, stack_setup.argv)
+    image.ok = true
+    image.entry = entry
+    image.aspace = aspace
+    image.stack = stack_setup
+    return image
+}
+
+func spawn_user_elf_with_args_parent(file: char*, size: uint, label: char*, args: char*, parent_id: int) -> bool {
+    let image: LoadedUserImage = load_user_image_with_args(file, size, label, args)
+    if !image.ok {
+        return false
+    }
+
+    let id: int = Task.spawn_user_with_args_parent(image.entry, image.stack.rsp, image.aspace, label, image.stack.argc, image.stack.argv, parent_id)
     if id < 0 {
         log("<RED>failed to spawn user task\n</>")
+        VMM.free_address_space(image.aspace)
         return false
     } else {
         last_spawned_user_id = id
         log("<GREEN>spawned user task \(id) from </>")
         emit(label, false, 0, null)
-        log("<GREEN> (entry=\(entry:hex))\n</>")
-        EventLog.add2("elf", "spawn user elf", id as uint, entry)
+        log("<GREEN> (entry=\(image.entry:hex))\n</>")
+        EventLog.add2("elf", "spawn user elf", id as uint, image.entry)
     }
     return true
+}
+
+func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*) -> bool {
+    return spawn_user_elf_with_args_parent(file, size, label, args, Task.current_id())
 }
 
 func spawn_user_elf(file: char*, size: uint, label: char*) -> bool {
     return spawn_user_elf_with_args(file, size, label, "")
 }
 
-func run_user_executable_with_args(path: char*, args: char*) -> bool {
+func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: int) -> bool {
     match VFS.resolve(path) {
         case VFS.Node.TmpfsFile(idx) => {
             let size: uint = TmpFS.size_at(idx)
@@ -604,7 +647,7 @@ func run_user_executable_with_args(path: char*, args: char*) -> bool {
                 return false
             }
             TmpFS.read(idx, tmp, size)
-            let ok: bool = spawn_user_elf_with_args(tmp, size, path, args)
+            let ok: bool = spawn_user_elf_with_args_parent(tmp, size, path, args, parent_id)
             KHeap.kfree(tmp as uint)
             return ok
         }
@@ -630,7 +673,7 @@ func run_user_executable_with_args(path: char*, args: char*) -> bool {
                 KHeap.kfree(tmp as uint)
                 return false
             }
-            let ok: bool = spawn_user_elf_with_args(tmp, size, path, args)
+            let ok: bool = spawn_user_elf_with_args_parent(tmp, size, path, args, parent_id)
             KHeap.kfree(tmp as uint)
             return ok
         }
@@ -641,10 +684,83 @@ func run_user_executable_with_args(path: char*, args: char*) -> bool {
     return false
 }
 
+func run_user_executable_with_args(path: char*, args: char*) -> bool {
+    return run_user_executable_with_args_parent(path, args, Task.current_id())
+}
+
 func run_user_executable(path: char*) -> bool {
     return run_user_executable_with_args(path, "")
 }
 
+func exec_user_buffer_with_args(file: char*, size: uint, label: char*, args: char*) -> bool {
+    let old_aspace: VMM.AddressSpace* = Task.get_current_aspace()
+    let image: LoadedUserImage = load_user_image_with_args(file, size, label, args)
+    if !image.ok {
+        return false
+    }
+    LdSo.cleanup_aspace(old_aspace)
+    if !Task.replace_current_user(image.entry, image.stack.rsp, image.aspace, label, image.stack.argc, image.stack.argv) {
+        VMM.free_address_space(image.aspace)
+        return false
+    }
+    if old_aspace != null {
+        VMM.free_address_space(old_aspace)
+    }
+    return true
+}
+
+func exec_user_executable_with_args(path: char*, args: char*) -> bool {
+    match VFS.resolve(path) {
+        case VFS.Node.TmpfsFile(idx) => {
+            let size: uint = TmpFS.size_at(idx)
+            if size == 0 {
+                return false
+            }
+            let tmp: char* = KHeap.kmalloc(size) as char*
+            if tmp == null {
+                return false
+            }
+            TmpFS.read(idx, tmp, size)
+            let ok: bool = exec_user_buffer_with_args(tmp, size, path, args)
+            KHeap.kfree(tmp as uint)
+            return ok
+        }
+        case VFS.Node.Disk(idx) => {
+            if VFS.inode_kind(idx) != VFS.KIND_FILE {
+                return false
+            }
+            let size: uint = VFS.inode_size(idx)
+            if size == 0 {
+                return false
+            }
+            let tmp: char* = KHeap.kmalloc(size) as char*
+            if tmp == null {
+                return false
+            }
+            let n: int = VFS.read(path, tmp, size)
+            if n < 0 || n as uint != size {
+                KHeap.kfree(tmp as uint)
+                return false
+            }
+            let ok: bool = exec_user_buffer_with_args(tmp, size, path, args)
+            KHeap.kfree(tmp as uint)
+            return ok
+        }
+        default => {
+            return false
+        }
+    }
+}
+
+// Always spawned with parent_id -1 (a top-level boot-manifest process),
+// regardless of which task happens to be the one actually calling this -
+// callers (kernel_main for atad.elf) run from within a scheduled task
+// context, not from before scheduling exists, so Task.current_id() would
+// otherwise be that task's own id, not -1. That distinction matters now:
+// Task.is_boot_spawned() (parent_id < 0) gates both service-name
+// registration and I/O port access, so a boot module spawned this way
+// needs to read as boot-spawned no matter which kernel task technically
+// issues the spawn.
 func spawn_boot_user_module(name: char*) {
     let idx: int = TmpFS.find(name)
     if idx < 0 {
@@ -665,7 +781,7 @@ func spawn_boot_user_module(name: char*) {
         return
     }
     TmpFS.read(idx, tmp, size)
-    spawn_user_elf(tmp, size, name)
+    spawn_user_elf_with_args_parent(tmp, size, name, "", -1)
     KHeap.kfree(tmp as uint)
 }
 
@@ -726,15 +842,62 @@ func install_userland_to_vfs() {
     VFS.mkdir("/bin")
     install_boot_module_to_vfs("libsys.so", "/lib/libsys.so")
     install_boot_module_to_vfs("dyn_userapp.elf", "/bin/dyn_userapp.elf")
+    install_boot_module_to_vfs("memtest.elf", "/bin/memtest.elf")
+    install_boot_module_to_vfs("cat.elf", "/bin/cat.elf")
+    install_boot_module_to_vfs("spawnwait.elf", "/bin/spawnwait.elf")
+    install_boot_module_to_vfs("execchain.elf", "/bin/execchain.elf")
+    install_boot_module_to_vfs("echoserver.elf", "/bin/echoserver.elf")
+    install_boot_module_to_vfs("ipcdemo.elf", "/bin/ipcdemo.elf")
+    install_boot_module_to_vfs("echod.elf", "/bin/echod.elf")
+    install_boot_module_to_vfs("echoclient.elf", "/bin/echoclient.elf")
+    install_boot_module_to_vfs("shmserver.elf", "/bin/shmserver.elf")
+    install_boot_module_to_vfs("shmclient.elf", "/bin/shmclient.elf")
+    install_boot_module_to_vfs("tetris.elf", "/bin/tetris.elf")
+    install_boot_module_to_vfs("winball1.elf", "/bin/winball1.elf")
+    install_boot_module_to_vfs("winball2.elf", "/bin/winball2.elf")
 }
 
-// Loads the default user-space demos from multiboot2 modules at boot, if
-// present: the original assembly app plus the LLPL-authored app built by the
-// extra_links[].llpl_sources pipeline.
-func spawn_user_task() {
-    spawn_boot_user_module("userapp.elf")
-    spawn_boot_user_module("llpl_userapp.elf")
-    run_user_executable("/bin/dyn_userapp.elf")
+// Runs as its own scheduled kernel task (spawned from kernel_main, after
+// interrupts/the scheduler are up), not inline during early boot like the
+// rest of kernel_main - VFS.init() now needs atad already running to
+// answer its ATA.init() call (see ata.llpl), which means an actual
+// scheduler, which doesn't exist yet at kernel_main's old call site
+// (before GDT/IDT are even installed).
+//
+// None of the sample/test programs under userapp/tests/ are auto-spawned -
+// install_userland_to_vfs() below only installs them to /bin so the shell's
+// `run /bin/<name>.elf` command can launch them on demand (userapp.elf and
+// llpl_userapp.elf are launched the same way, straight from their tmpfs
+// boot module: `run /boot/userapp.elf`). Booting straight to an idle,
+// interactive shell - rather than a wall of demo output - is the point.
+func vfs_boot_task_entry() {
+    if VFS.init() {
+        EventLog.add0("boot", "vfs mounted")
+        log("<GREEN>ATA: primary master detected (via atad); VFS mounted (self-formats on first boot)\n</>")
+        VFS.selftest()
+        install_userland_to_vfs()
+    } else {
+        EventLog.add0("boot", "vfs unavailable")
+        log("<LIGHT_RED>VFS: unavailable (no primary master disk found)\n</>")
+    }
+    Task.exit_current()
+    // Task.exit_current() only marks this task DEAD - it doesn't stop this
+    // function from continuing to execute, so fall into the same
+    // never-runs-again halt loop idle_task_entry uses rather than
+    // returning into whatever undefined memory follows. Unlike
+    // idle_task_entry (which is born with IF=1 and never touches it),
+    // this task got here after ATA.call()'s cli-protected IPC handoff
+    // (see ata.llpl) ran an unbounded number of times, once per VFS
+    // read/write during install_userland_to_vfs() above - so this can't
+    // assume ambient IF is still 1. On a single-core machine a HLT with
+    // IF=0 is permanent: no timer tick can ever arrive to reap this task,
+    // freezing the whole system (every other task, including the shell)
+    // forever, not just this one - so force interrupts on before waiting,
+    // exactly like ATA.call()'s own wait loop does for the same reason.
+    asm("sti")
+    while true {
+        HAL.halt()
+    }
 }
 
 // `multiboot_ptr` is handed to us by boot64.asm (RDI, System V AMD64's
@@ -778,21 +941,11 @@ func kernel_main(multiboot_ptr: uint) {
     screen = new Console.Screen(color)
     screen.clear()
 
-    // After the screen exists (not before) - VFS.selftest() calls plain
-    // print(), which (unlike log()) only ever reaches the framebuffer
-    // console, never serial; calling this any earlier would make its
-    // output vanish entirely; see print()'s own definition just above.
-    // VFS.init() itself calls ATA.init() (checks for a disk, self-formats
-    // a fresh one on first boot) - see vfs.llpl.
-    if VFS.init() {
-        EventLog.add0("boot", "vfs mounted")
-        log("<GREEN>ATA: primary master detected; VFS mounted (self-formats on first boot)\n</>")
-        VFS.selftest()
-        install_userland_to_vfs()
-    } else {
-        EventLog.add0("boot", "vfs unavailable")
-        log("<LIGHT_RED>VFS: unavailable (no primary master disk found)\n</>")
-    }
+    // VFS.init() (and everything depending on it) no longer runs here -
+    // see vfs_boot_task_entry() below. It now needs atad, a real ring-3
+    // process, already scheduled and answering ATA.init()'s request
+    // (ata.llpl), which requires a working scheduler - not yet true this
+    // early, before GDT/IDT/interrupts even exist.
 
     log("<CYAN>LLPL Bare-Metal Demo\n</>")
     log("<CYAN>=====================\n</>")
@@ -808,7 +961,7 @@ func kernel_main(multiboot_ptr: uint) {
     print("namespace Keyboard   -> PS/2 scancode driver (IRQ1)\n")
     print("namespace PageAlloc  -> bitmap physical page-frame allocator\n")
     print("namespace KHeap      -> free-list kernel heap (kmalloc/kfree)\n")
-    print("namespace ATA        -> primary-master ATA PIO disk driver\n")
+    print("namespace ATA        -> kernel-side IPC client to atad, a ring-3 driver\n")
     print("namespace VFS        -> persistent filesystem on top of ATA\n")
     print("namespace TmpFS      -> read-only tmpfs over multiboot2 modules\n")
     print("namespace Task       -> preemptive round-robin task switching\n")
@@ -837,8 +990,19 @@ func kernel_main(multiboot_ptr: uint) {
 
     print("\n")
     log("<WHITE>Enabling interrupts...\n</>")
+    // 1000Hz (1ms ticks), not the PIT's power-on default of ~18.2Hz - see
+    // HAL.Pit's own doc comment for why this now matters far more than it
+    // used to: every scheduler round trip (blocking IPC very much
+    // included - ata.llpl's user-space driver call is one) is capped at
+    // one tick's worth of latency.
+    HAL.Pit.set_frequency(1000)
     HAL.Pic.unmask_irq0()
     HAL.Pic.unmask_irq1()
+
+    Mouse.set_bounds(Framebuffer.width as int, Framebuffer.height as int)
+    Mouse.init()
+    HAL.Pic.unmask_irq12()
+
     HAL.enable_interrupts()
     EventLog.add0("boot", "interrupts enabled")
     log("<GREEN>Interrupts enabled.\n</>")
@@ -847,7 +1011,20 @@ func kernel_main(multiboot_ptr: uint) {
     log("<WHITE>Spawning tasks (shell + a background counter) and starting the scheduler...\n</>")
     Task.spawn_named(shell_task_entry as uint, "shell")
     Task.spawn_named(bg_task_entry as uint, "bg-counter")
-    spawn_user_task()
+    // atad must be running before vfs_boot_task_entry's VFS.init() can
+    // complete (see ata.llpl) - loaded straight from its tmpfs boot
+    // module, same as userapp.elf/llpl_userapp.elf below, since the VFS
+    // disk it will end up backing isn't mounted yet.
+    spawn_boot_user_module("atad.elf")
+    // wm (the windowing compositor) doesn't depend on VFS/disk at all, but
+    // it does need to already be registered under "wm" before any window
+    // client's sys_lookup("wm") can succeed - spawned here, straight from
+    // its own tmpfs boot module, for the same reason atad is: a persistent
+    // ring-3 service other tasks look up by name has to be running before
+    // anything can find it, not launched on demand like the window demos
+    // that connect to it (winball1.elf/winball2.elf, via the shell's `run`).
+    spawn_boot_user_module("wm.elf")
+    Task.spawn_named(vfs_boot_task_entry as uint, "vfsboot")
     Task.start() // never returns - see task.llpl
 
     // Only reached if Task.start() found nothing to run (spawn() failed for
