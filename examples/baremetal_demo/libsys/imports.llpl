@@ -19,6 +19,8 @@ extern func sys_close(fd: uint) -> uint
 extern func sys_msg_send(handle: uint, buf: char*, len: uint) -> uint
 extern func sys_msg_recv(buf: char*, len: uint) -> uint
 extern func sys_msg_try_recv(buf: char*, len: uint) -> uint
+extern func sys_readdir(path: char*, index: uint, out_buf: char*) -> uint
+extern func sys_focus_state() -> uint
 extern func sys_msg_reply(peer: uint, buf: char*, len: uint) -> uint
 extern func sys_spawn(path: char*, args: char*) -> uint
 extern func sys_exec(path: char*, args: char*) -> uint
@@ -36,11 +38,31 @@ extern func sys_fb_info(out: uint*) -> uint
 extern func sys_fb_map() -> char*
 extern func sys_kbd_poll() -> uint
 extern func sys_mouse_poll() -> uint
+extern func sys_inl(port: uint) -> uint
+extern func sys_outl(port: uint, value: uint) -> uint
+extern func sys_bmide_base() -> uint
+extern func sys_virt_to_phys(virt: uint) -> uint
+extern func sys_nic_mmap() -> char*
 
 const KEY_UP = 200
 const KEY_DOWN = 201
 const KEY_LEFT = 202
 const KEY_RIGHT = 203
+const KEY_ESC = 204
+const KEY_F2 = 205
+// Not a real scancode - synthesized entirely by wm.llpl's OP_POLL_INPUT
+// reply when the titlebar close button (or any future close request)
+// has been clicked for this specific window. Delivered regardless of
+// which window currently has keyboard focus (see wm.llpl's own comment),
+// since the request applies to a specific window, not to "whichever one
+// is listening for keys right now". A client decides for itself what to
+// do with it - immediately wm_close()+rt_exit() if it has nothing to
+// lose, or prompt first if it has unsaved state (see editor.llpl).
+const KEY_CLOSE_REQ = 206
+
+// Mirrors Keyboard.FOCUS_WM (kbd.llpl) - see sys_focus_state's own doc
+// comment (syscall.llpl) for why a ring-3 program would need this.
+const FOCUS_WM = 1
 
 extern func sys_strlen(s: char*) -> uint
 extern func sys_puts(s: char*) -> uint

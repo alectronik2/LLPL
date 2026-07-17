@@ -32,7 +32,13 @@ func _start(argc: uint, argv: uint*) {
 
     while true {
         let key: uint = wm_poll_input()
-        if key == (KEY_LEFT as uint) {
+        if key == (KEY_CLOSE_REQ as uint) {
+            // Nothing here worth keeping around to ask about - close
+            // immediately, unlike editor.llpl's own handling of this
+            // same key.
+            wm_close()
+            rt_exit(0)
+        } else if key == (KEY_LEFT as uint) {
             dx = -2
         } else if key == (KEY_RIGHT as uint) {
             dx = 2

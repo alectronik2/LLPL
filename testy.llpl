@@ -44,7 +44,7 @@ func pointer_to_pointer() {
     let x: int = 5
     let p: int* = &x
     let pp: int** = &p
-    puts("Before: *p = \( *p ), **pp = \( **pp )")
+    "Before: *p = \( *p ), **pp = \( **pp )" |> puts()
 }
 
 func throw_func() {

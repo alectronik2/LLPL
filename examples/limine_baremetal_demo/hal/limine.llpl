@@ -102,7 +102,7 @@ alias limine_hhdm_request_id = [
     0x63984e959a98244b
 ]
 
-enum MemMapType: uint {
+enum MemMapType: u64 {
     Usable = 0,
     Reserved = 1,
     AcpiReclaimable = 2,

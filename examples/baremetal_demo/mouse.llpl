@@ -16,8 +16,13 @@ namespace Mouse {
     const CTRL_PORT: uint = 0x64
     const DATA_PORT: uint = 0x60
 
-    let packet: char[3]
+    let packet: char[4]
     let packet_index: int = 0
+    // 3 unless enable_wheel (called from init, below) gets a real "yes,
+    // I understand the Intellimouse extension" reply from the device -
+    // real hardware and QEMU's emulated mouse alike default to plain
+    // 3-byte packets (no wheel byte) until asked otherwise.
+    let packet_size: int = 3
 
     let mx: int = 0
     let my: int = 0
@@ -28,6 +33,12 @@ namespace Mouse {
 
     let left_down: bool = false
     let left_was_down: bool = false
+
+    // Accumulated notches since the last take_wheel_delta() call (below) -
+    // accumulated, not overwritten, because wm.llpl only calls that once
+    // per ~15ms tick while the mouse can send many packets in that
+    // window; overwriting would silently drop all but the last one.
+    let wheel_delta: int = 0
 
     // Bit 1 of the status port (0x64 read): 1 means the controller's
     // input buffer is still full (a previous command/data byte hasn't
@@ -84,6 +95,42 @@ namespace Mouse {
         my = screen_h / 2
     }
 
+    func read_ack() {
+        wait_output_full()
+        HAL.inb(DATA_PORT) // discard - every mouse command below replies
+                           // with a single 0xFA ack byte we don't need
+    }
+
+    func set_sample_rate(rate: char) {
+        write_aux(0xF3 as char)
+        read_ack()
+        write_aux(rate)
+        read_ack()
+    }
+
+    // The de facto standard "Microsoft Intellimouse" wheel extension:
+    // setting the sample rate to 200, then 100, then 80 in a row (with no
+    // other command between them) is a magic handshake plain PS/2 mice
+    // just silently accept as three ordinary rate changes, but a
+    // wheel-capable mouse recognizes as "the driver wants wheel reports"
+    // and switches its own device-ID reply from 0 to 3 to confirm. Only
+    // *after* that switch do packets actually grow a 4th byte - trying to
+    // read one before this would just desync packet framing against a
+    // mouse still sending 3-byte packets.
+    func enable_wheel() {
+        set_sample_rate(200 as char)
+        set_sample_rate(100 as char)
+        set_sample_rate(80 as char)
+
+        write_aux(0xF2 as char) // "get device ID"
+        read_ack()
+        wait_output_full()
+        let id: int = (HAL.inb(DATA_PORT) as int) & 255
+        if id == 3 {
+            packet_size = 4
+        }
+    }
+
     func init() {
         write_command(0xA8 as char) // enable the auxiliary (mouse) port
 
@@ -95,12 +142,12 @@ namespace Mouse {
         write_data(config)
 
         write_aux(0xF6 as char) // set defaults
-        wait_output_full()
-        HAL.inb(DATA_PORT) // discard the ACK byte
+        read_ack()
+
+        enable_wheel()
 
         write_aux(0xF4 as char) // enable packet streaming
-        wait_output_full()
-        HAL.inb(DATA_PORT) // discard the ACK byte
+        read_ack()
     }
 
     func clampi(v: int, lo: int, hi: int) -> int {
@@ -128,7 +175,7 @@ namespace Mouse {
         }
         packet[packet_index] = b
         packet_index = packet_index + 1
-        if packet_index < 3 {
+        if packet_index < packet_size {
             return
         }
         packet_index = 0
@@ -163,5 +210,27 @@ namespace Mouse {
         mx = clampi(mx + dx, min_x, max_x)
         // PS/2 reports +dy as "moved up", the opposite of screen-space y.
         my = clampi(my - dy, min_y, max_y)
+
+        // 4th byte (only present once enable_wheel switched packet_size
+        // to 4) is a plain signed 8-bit wheel count, already a proper
+        // two's-complement value - unlike dx/dy above, no separate sign
+        // bit lives elsewhere in b0 to combine it with.
+        if packet_size == 4 {
+            let wheel_raw: int = (packet[3] as int) & 255
+            if wheel_raw >= 128 {
+                wheel_raw = wheel_raw - 256
+            }
+            wheel_delta = wheel_delta + wheel_raw
+        }
+    }
+
+    // Reads and clears the accumulated wheel count in one step - "poll
+    // and consume", the same convention Keyboard.pop_char (kbd.llpl)
+    // uses for the same reason: whoever reads it is the one accounting
+    // for it, so it can't be double-counted by a second, later reader.
+    func take_wheel_delta() -> int {
+        let d: int = wheel_delta
+        wheel_delta = 0
+        return d
     }
 }

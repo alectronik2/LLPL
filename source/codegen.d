@@ -5798,7 +5798,23 @@ class CodeGenerator {
                     recordUsage(className ~ "." ~ methodName, memberExpr.line, memberExpr.column);
                     return format("%s(%s)", methodSymbol, args);
                 } else {
-                    return format("CLASS_%s(%s)", methodName, args);
+                    // Every real path above (qualified namespace call, extern
+                    // member, resolved method) already returned. Reaching
+                    // here means `objectExpr.methodName(...)` isn't a
+                    // recognized namespace function, extern binding, or
+                    // method of any inferrable type - almost always a typo'd
+                    // or renamed callee. This used to silently emit an
+                    // undefined `CLASS_methodName(...)` call instead, which
+                    // only ever failed later at the C-compile stage with a
+                    // confusing "implicit declaration" error far from the
+                    // actual mistake (see eventlog.llpl's old
+                    // `HAL.disable_i64errupts()` and console.llpl's old
+                    // `Framebuffer.draw_char` - both real, silently-accepted
+                    // typos this exact fallback was masking).
+                    throw new CompileError(
+                        format("Cannot resolve call '%s' - no matching namespace function, " ~
+                            "extern binding, or method was found", methodName),
+                        currentModulePath, memberExpr.line, memberExpr.column);
                 }
             } else {
                 // A plain identifier resolving to a *known* function (by

@@ -41,6 +41,22 @@ namespace HAL {
         return result
     }
 
+    // 32-bit forms - needed for PCI config-space access (CONFIG_ADDRESS/
+    // CONFIG_DATA, both full 32-bit ports - see pci.llpl) and for
+    // programming a Bus Master IDE controller's 32-bit PRDT pointer
+    // register (see ata.llpl's DMA path). `%k0`/`%k1` print a register as
+    // its 32-bit sub-register, the same "pick a narrower width" trick
+    // `%w` already does for 16-bit above.
+    func outl(port: uint, value: uint) {
+        asm("outl %k0, %w1" : : "a"(value), "Nd"(port))
+    }
+
+    func inl(port: uint) -> uint {
+        let result: uint = 0
+        asm("inl %w1, %k0" : "=a"(result) : "Nd"(port))
+        return result
+    }
+
     func disable_interrupts() {
         asm("cli")
     }

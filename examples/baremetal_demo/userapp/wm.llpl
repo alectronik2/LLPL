@@ -1,11 +1,11 @@
 // Minimal windowing compositor. Owns the real framebuffer exclusively
 // (maps it once via sys_fb_map) and one shared pixel arena (one
-// sys_shm_create call, sliced into Wm.MAX_WINDOWS equal fixed-size
+// sys_shm_create call, sliced i64o Wm.MAX_WINDOWS equal fixed-size
 // windows - see wm_protocol.llpl for why the sizes are what they are).
 // Clients never touch the real framebuffer or each other's memory: each
 // one sys_lookup("wm")s this service, sys_shm_maps the arena (the exact
 // same shared-region pattern shmserver/shmclient already prove works),
-// and only ever writes into its own WIN_BYTES-sized slice of it. This
+// and only ever writes i64o its own WIN_BYTES-sized slice of it. This
 // service is the only thing that ever reads the arena and the only thing
 // that ever writes the real framebuffer - a client's dodgy slot index
 // can't corrupt another client's pixels because writes off the end of
@@ -26,50 +26,95 @@
 // OP_POLL_INPUT calls sys_kbd_poll() at all - an unfocused window's poll
 // returns key=0 without ever touching the keyboard driver, so a
 // keystroke can't be silently stolen by whichever window happens to ask
-// first. TAB (ASCII 9) is intercepted here to cycle focus between
+// first. TAB (ASCII 9) is i64ercepted here to cycle focus between
 // windows and is never forwarded to a client.
 
 import "../libsys/imports"
 import "user_runtime"
 import "wm_protocol"
+import "font"
 
 struct Window {
     let used: bool
-    let owner_pid: int
+    let owner_pid: i64
     // Top-left of the whole decorated window (titlebar included) in real
     // screen coordinates - mutable, unlike the old fixed window_x/y
     // formula, so a titlebar drag (see hit_test_titlebar/main loop below)
     // can move it. A client never sees or chooses these: it only ever
-    // draws into its own fixed-size WIN_W x WIN_H slice of the arena in
+    // draws i64o its own fixed-size WIN_W x WIN_H slice of the arena in
     // local coordinates (wm_client.llpl's wm_put_pixel/wm_fill) - this
     // service alone decides where that content lands on the real screen.
-    let win_x: uint
-    let win_y: uint
+    let win_x: u64
+    let win_y: u64
+    // How much of the client's fixed WIN_W x WIN_H arena slice is
+    // actually visible/blitted on screen - a viewport crop, not true
+    // per-window resizing: the client's own drawing canvas never changes
+    // size (that would need a variable-size SHM region per client, which
+    // this kernel's handle model can't grant wm without wm being the one
+    // that sys_spawn'd the client - see sys_shm_map's own doc comment).
+    // Shrinking via the resize grip (see hit_test_resize_grip) just shows
+    // less of what the client already drew; growing back can only ever
+    // reveal up to the original WIN_W x WIN_H, never more.
+    let vis_w: u64
+    let vis_h: u64
+    // Set by the close button (see hit_test_close_button in the main
+    // loop), cleared the moment OP_POLL_INPUT next delivers KEY_CLOSE_REQ
+    // for this slot - a *request*, not an immediate close: the window
+    // stays fully open and rendering until the owning client itself
+    // calls OP_CLOSE (wm_close), which lets a client with state to lose
+    // (the text editor's unsaved-changes prompt) decide whether/when
+    // that actually happens instead of being force-removed out from
+    // under it with no chance to object.
+    let close_requested: bool
 }
+
+const MIN_VIS_W: u64 = 80
+const MIN_VIS_H: u64 = 60
+const RESIZE_GRIP: u64 = 10
+const CLOSE_BTN: u64 = 10
 
 // Height of the draggable titlebar strip drawn above each window's
 // content - purely a compositor-side decoration, no protocol change
 // needed since clients never see screen coordinates at all (see Window
 // above).
-const TITLEBAR_H: uint = 12
-const TITLEBAR_FOCUSED: uint32 = 0x3060C0
-const TITLEBAR_UNFOCUSED: uint32 = 0x404040
-const BACKDROP_COLOR: uint32 = 0x141428
-const CURSOR_COLOR: uint32 = 0xFFD000
+const TITLEBAR_H: u64 = 12
+const TITLEBAR_FOCUSED: u32 = 0x3060C0
+const TITLEBAR_UNFOCUSED: u32 = 0x404040
+const BACKDROP_COLOR: u32 = 0x141428
+const CURSOR_COLOR: u32 = 0xFFD000
 
-let windows: Window[3] // must match Wm.MAX_WINDOWS literally - see task.llpl's
+let windows: Window[4] // must match Wm.MAX_WINDOWS literally - see task.llpl's
                         // own MAX_LIBS/libs[] comment for why this can't just
                         // reference the const
-let focused: int = -1
-let arena: char* = null
-let fb: char* = null
-let fb_pitch: uint = 0
-let fb_width: uint = 0
-let fb_height: uint = 0
+let focused: i64 = -1
+// Wheel notches accumulated since the last time OP_POLL_INPUT handed
+// them off to the focused window (handle_request, below) - a module
+// global, not a main-loop local, since handle_request (a separate
+// top-level function) needs to read and reset it too, the same way it
+// already reads/writes `focused` itself.
+let wheel_accum: i64 = 0
+let arena: u8* = null
+let fb: u8* = null
+let fb_pitch: u64 = 0
+let fb_width: u64 = 0
+let fb_height: u64 = 0
+// Everything gets drawn i64o this off-screen buffer (same size as the
+// real framebuffer) instead of straight to `fb` - present_frame (below)
+// is then the only thing that ever writes to the real framebuffer, in
+// one single pass at the very end of a tick. Without this, each of
+// fill_backdrop/draw_titlebar/blit_window/draw_cursor was its own
+// separate burst of real-framebuffer writes, so anything glancing at
+// the screen between those bursts (including real hardware's own
+// display refresh, not just a debugging screendump) could catch a
+// partially-composited frame - backdrop cleared but a window not yet
+// redrawn on top of it, one window's new position but not another's,
+// etc. Visually that reads as flicker, worse the more windows/redraw
+// work there is per tick.
+let backbuf: u8* = null
 
 // The compositor stays purely reactive (blocking sys_msg_recv, never
 // touching the real framebuffer beyond a client's own explicit present())
-// until the first window ever exists - no point owning the screen or
+// until the first window ever exists - no poi64 owning the screen or
 // ticking a redraw loop when there's nothing to draw and the boot
 // console's own text is still the only thing on screen. Once true, it
 // stays true forever (see the main loop below): a real desktop still
@@ -77,8 +122,8 @@ let fb_height: uint = 0
 // reason to revert once every window has been closed again.
 let active: bool = false
 
-func find_free_slot() -> int {
-    let i: int = 0
+func find_free_slot() -> i64 {
+    let i: i64 = 0
     while i < Wm.MAX_WINDOWS {
         if !windows[i].used {
             return i
@@ -91,7 +136,7 @@ func find_free_slot() -> int {
 // Next used slot strictly after `cur`, wrapping around - -1 if none are
 // used at all (can't happen mid-dispatch of a request from an existing
 // window, but a defensive return value costs nothing).
-func next_focus_after(cur: int) -> int {
+func next_focus_after(cur: i64) -> int {
     let i: int = 0
     while i < Wm.MAX_WINDOWS {
         let idx: int = (cur + 1 + i) % Wm.MAX_WINDOWS
@@ -103,15 +148,18 @@ func next_focus_after(cur: int) -> int {
     return -1
 }
 
-// Initial placement for a newly created window - simple fixed
-// left-to-right tiling, same as the old fixed layout. Just a starting
-// point now, not permanent: the user can drag it anywhere afterward.
-func initial_window_x(slot: int) -> uint {
-    return 20 + (slot as uint) * ((Wm.WIN_W as uint) + 20)
+// Initial placement for a newly created window - a small cascade rather
+// than the old left-to-right tiling: windows grew from 104x52 demo size
+// to 320x200 app size (see wm_protocol.llpl), so tiling MAX_WINDOWS of
+// them side by side would run off the right edge of a typical screen.
+// Just a starting point either way, not permanent: the user can drag it
+// anywhere afterward.
+func initial_window_x(slot: int) -> u64 {
+    return 40 + (slot as u64) * 40
 }
 
-func initial_window_y(slot: int) -> uint {
-    return 20
+func initial_window_y(slot: int) -> u64 {
+    return 40 + (slot as u64) * 30
 }
 
 func clampi(v: int, lo: int, hi: int) -> int {
@@ -124,26 +172,40 @@ func clampi(v: int, lo: int, hi: int) -> int {
     return v
 }
 
-// Bounds-checked write straight to the real framebuffer at absolute
-// screen coordinates - used for the titlebar/backdrop/cursor, all of
-// which are compositor-owned pixels with no arena slice behind them
-// (contrast blit_window below, which copies a client's own content).
-func fb_put_pixel(px: int, py: int, color: uint32) {
-    if px < 0 || py < 0 || (px as uint) >= fb_width || (py as uint) >= fb_height {
+// Bounds-checked write into the back buffer at absolute screen
+// coordinates - used for the titlebar/backdrop/cursor, all of which are
+// compositor-owned pixels with no arena slice behind them (contrast
+// blit_window below, which copies a client's own content).
+func fb_put_pixel(px: int, py: int, color: u32) {
+    if px < 0 || py < 0 || (px as u64) >= fb_width || (py as u64) >= fb_height {
         return
     }
-    let offset: uint = (py as uint) * fb_pitch + (px as uint) * 4
-    let p: uint32* = (fb + offset) as uint32*
+    let offset: u64 = (py as u64) * fb_pitch + (px as u64) * 4
+    let p: u32* = (backbuf + offset) as u32*
     p[0] = color
 }
 
+// A full-screen pixel fill (potentially hundreds of thousands of writes
+// at real resolutions) - deliberately NOT called every tick from the
+// main loop below, only when something might actually have exposed bare
+// screen a window no longer covers (a drag in progress, or a window
+// just created/closed). Once real app windows replaced the original
+// tiny 104x52 ball-bouncer demos, doing this unconditionally every ~15ms
+// tick meant this one call could dominate the whole tick's time budget -
+// which doesn't just waste CPU, it means the framebuffer sits in its
+// bare "just cleared, nothing composited back on top yet" state for a
+// large fraction of every cycle, so a random external glance at the
+// screen (e.g. a `screendump`, or a real monitor's refresh) lands on
+// exactly that half-drawn moment far more often than the actual
+// composited result - looking indistinguishable from a genuine hang
+// even though every task involved is alive and ticking normally.
 func fill_backdrop() {
-    let row: uint = 0
+    let row: u64 = 0
     while row < fb_height {
-        let col: uint = 0
+        let col: u64 = 0
         while col < fb_width {
-            let offset: uint = row * fb_pitch + col * 4
-            let p: uint32* = (fb + offset) as uint32*
+            let offset: u64 = row * fb_pitch + col * 4
+            let p: u32* = (backbuf + offset) as u32*
             p[0] = BACKDROP_COLOR
             col = col + 1
         }
@@ -151,18 +213,65 @@ func fill_backdrop() {
     }
 }
 
+const CLOSE_BTN_COLOR: u32 = 0xD04040
+const CLOSE_X_COLOR: u32 = 0xFFFFFF
+const RESIZE_GRIP_COLOR: u32 = 0x606880
+
 func draw_titlebar(slot: int) {
-    let color: uint32 = TITLEBAR_UNFOCUSED
+    let color: u32 = TITLEBAR_UNFOCUSED
     if slot == focused {
         color = TITLEBAR_FOCUSED
     }
     let ox: int = windows[slot].win_x as int
     let oy: int = windows[slot].win_y as int
-    let row: uint = 0
+    let vis_w: u64 = windows[slot].vis_w
+    let row: u64 = 0
     while row < TITLEBAR_H {
-        let col: uint = 0
-        while col < (Wm.WIN_W as uint) {
+        let col: u64 = 0
+        while col < vis_w {
             fb_put_pixel(ox + (col as int), oy + (row as int), color)
+            col = col + 1
+        }
+        row = row + 1
+    }
+
+    // Close button: a small solid square in the titlebar's top-right
+    // corner, with a white "X" drawn on top via its two diagonals.
+    let btn_x: int = ox + (vis_w as int) - (CLOSE_BTN as int) - 1
+    let btn_y: int = oy + 1
+    let by: int = 0
+    while (by as u64) < CLOSE_BTN {
+        let bx: int = 0
+        while (bx as u64) < CLOSE_BTN {
+            let color2: u32 = CLOSE_BTN_COLOR
+            if bx == by || bx == (CLOSE_BTN as int) - 1 - by {
+                color2 = CLOSE_X_COLOR
+            }
+            fb_put_pixel(btn_x + bx, btn_y + by, color2)
+            bx = bx + 1
+        }
+        by = by + 1
+    }
+}
+
+// Small diagonal-hatched grip in the bottom-right corner of a window's
+// *visible* (possibly shrunk) content area - the same idea as a real
+// window manager's resize handle, just drawn instead of relying on a
+// cursor shape change.
+func draw_resize_grip(slot: int) {
+    let ox: int = windows[slot].win_x as int
+    let oy: int = windows[slot].win_y as int + (TITLEBAR_H as int)
+    let vis_w: int = windows[slot].vis_w as int
+    let vis_h: int = windows[slot].vis_h as int
+    let gx: int = ox + vis_w - (RESIZE_GRIP as int)
+    let gy: int = oy + vis_h - (RESIZE_GRIP as int)
+    let row: int = 0
+    while (row as u64) < RESIZE_GRIP {
+        let col: int = 0
+        while (col as u64) < RESIZE_GRIP {
+            if col >= row {
+                fb_put_pixel(gx + col, gy + row, RESIZE_GRIP_COLOR)
+            }
             col = col + 1
         }
         row = row + 1
@@ -186,20 +295,50 @@ func draw_cursor(cx: int, cy: int) {
     }
 }
 
+// Restores a square slightly bigger than draw_cursor's own 11x11 triangle
+// to plain backdrop color at the cursor's *previous* position, called
+// once per tick before anything else redraws (see the main loop below).
+// Needed because fill_backdrop is deliberately not run every tick
+// (performance - see its own doc comment) - windows redraw their own
+// full region unconditionally every tick regardless (so an old cursor
+// position under a window gets covered back over for free), but bare
+// backdrop the cursor moved across on its own, with no window ever
+// touching it again, would otherwise keep every past cursor position
+// baked into the back buffer forever, one leftover triangle per tick -
+// a trail, not a single moving cursor.
+func erase_cursor(cx: int, cy: int) {
+    let size: int = 12
+    let row: int = 0
+    while row < size {
+        let col: int = 0
+        while col < size {
+            fb_put_pixel(cx + col, cy + row, BACKDROP_COLOR)
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
 // Copies one window's slice of the shared arena into the real
 // framebuffer at its current screen position (below its titlebar) - the
 // only place a client's own pixels ever reach real video memory.
 func blit_window(slot: int) {
-    let src: uint32* = (arena + (slot as uint) * Wm.WIN_BYTES) as uint32*
-    let ox: uint = windows[slot].win_x
-    let oy: uint = windows[slot].win_y + TITLEBAR_H
-    let row: uint = 0
-    while row < (Wm.WIN_H as uint) {
-        let col: uint = 0
-        while col < (Wm.WIN_W as uint) {
-            let pixel: uint32 = src[row * (Wm.WIN_W as uint) + col]
-            let offset: uint = (oy + row) * fb_pitch + (ox + col) * 4
-            let p: uint32* = (fb + offset) as uint32*
+    let src: u32* = (arena + (slot as u64) * Wm.WIN_BYTES) as u32*
+    let ox: u64 = windows[slot].win_x
+    let oy: u64 = windows[slot].win_y + TITLEBAR_H
+    let vis_w: u64 = windows[slot].vis_w
+    let vis_h: u64 = windows[slot].vis_h
+    let row: u64 = 0
+    while row < vis_h {
+        let col: u64 = 0
+        while col < vis_w {
+            // Indexed by the client's *actual* WIN_W stride regardless of
+            // how much is currently visible - only the loop bounds above
+            // shrink for a cropped window, never this addressing math,
+            // since the client's own arena layout never changes size.
+            let pixel: u32 = src[row * (Wm.WIN_W as u64) + col]
+            let offset: u64 = (oy + row) * fb_pitch + (ox + col) * 4
+            let p: u32* = (backbuf + offset) as u32*
             p[0] = pixel
             col = col + 1
         }
@@ -217,7 +356,8 @@ func hit_test_titlebar(mx: int, my: int) -> int {
         if windows[i].used {
             let ox: int = windows[i].win_x as int
             let oy: int = windows[i].win_y as int
-            if mx >= ox && mx < ox + Wm.WIN_W && my >= oy && my < oy + (TITLEBAR_H as int) {
+            let vw: int = windows[i].vis_w as int
+            if mx >= ox && mx < ox + vw && my >= oy && my < oy + (TITLEBAR_H as int) {
                 return i
             }
         }
@@ -226,85 +366,395 @@ func hit_test_titlebar(mx: int, my: int) -> int {
     return -1
 }
 
-// Full repaint every active tick (backdrop, then each used window's
-// decoration + content, then the cursor on top of everything) rather
-// than any kind of dirty-rect tracking: once a window can move, the
-// pixels it used to cover need to be restored to *something*, and this
-// compositor keeps no separate backing store of "whatever used to be
-// there" - simplest correct fix is to own the whole screen and redraw
-// all of it every tick once active, same as fill_backdrop's own doc
-// comment on why boot console text behind a window is simply gone once
-// the compositor takes over, not preserved and revealed again later.
-func redraw_all(mouse_x: int, mouse_y: int) {
-    fill_backdrop()
+// Same topmost-first search, but against just the close button's small
+// square in each used window's titlebar - checked before
+// hit_test_titlebar in the main loop so a click there closes the window
+// instead of starting a drag.
+func hit_test_close_button(mx: int, my: int) -> int {
+    let i: int = Wm.MAX_WINDOWS - 1
+    while i >= 0 {
+        if windows[i].used {
+            let vw: int = windows[i].vis_w as int
+            let btn_x: int = (windows[i].win_x as int) + vw - (CLOSE_BTN as int) - 1
+            let btn_y: int = (windows[i].win_y as int) + 1
+            if mx >= btn_x && mx < btn_x + (CLOSE_BTN as int) && my >= btn_y && my < btn_y + (CLOSE_BTN as int) {
+                return i
+            }
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+// Same again, against the resize grip in each used window's bottom-right
+// corner (of its *visible*, possibly-shrunk area).
+// Deliberately checked against a *larger* zone than RESIZE_GRIP's own
+// drawn 10x10 triangle (see draw_resize_grip) - a fixed-size corner
+// target gets harder to re-acquire the smaller a window has already
+// been shrunk to (it moves closer to the content with every shrink),
+// and grabbing it again is the *only* way to grow a window back. A
+// purely pixel-exact hit-test against the visual triangle alone was a
+// real, reproduced bug this fixed: growing looked broken because the
+// second click (to re-grab an already-shrunk grip) missed by just a few
+// pixels almost every time, even though the actual resize/grow logic
+// underneath was always correct. The two constants are kept equal and
+// generous on purpose: a user re-grabbing a shrunk corner to grow it
+// naturally clicks slightly *past* the corner (that's the direction
+// they're about to drag), so the outward margin needs the same
+// tolerance as the inward one, not a token few pixels - an earlier,
+// asymmetric version (20 in / 4 out) still missed real clicks for
+// exactly this reason.
+const RESIZE_GRIP_HIT: int = 16
+const RESIZE_GRIP_MARGIN: int = 16
+
+func hit_test_resize_grip(mx: int, my: int) -> int {
+    let i: int = Wm.MAX_WINDOWS - 1
+    while i >= 0 {
+        if windows[i].used {
+            let vw: int = windows[i].vis_w as int
+            let vh: int = windows[i].vis_h as int
+            let ox: int = windows[i].win_x as int
+            let oy: int = (windows[i].win_y as int) + (TITLEBAR_H as int)
+            let gx: int = ox + vw - RESIZE_GRIP_HIT
+            let gy: int = oy + vh - RESIZE_GRIP_HIT
+            if mx >= gx && mx < ox + vw + RESIZE_GRIP_MARGIN && my >= gy && my < oy + vh + RESIZE_GRIP_MARGIN {
+                return i
+            }
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+// Compositor-side text rendering, built on Font's glyph table (font.llpl)
+// but going through fb_put_pixel one pixel at a time instead of Font's
+// own draw_u8/draw_string - those assume a tightly-packed u32
+// buffer addressed by pixel width, which is exactly what a client's own
+// arena slice is, but NOT necessarily what backbuf is: fb_pitch (used by
+// every other compositor-side draw in this file) can be wider than
+// fb_width*4 if the real framebuffer has row padding, and reusing
+// fb_put_pixel keeps this correct - and bounds-checked - regardless.
+func wm_draw_u8(x: int, y: int, c: u8, fg: u32, bg: u32) {
+    let code: int = c as int
+    if code < 32 || code > 126 {
+        code = 32
+    }
+    let glyph_offset: int = (code - 32) * Font.GLYPH_HEIGHT
+    let row: int = 0
+    while row < Font.GLYPH_HEIGHT {
+        let bits: int = (Font.font_data[glyph_offset + row] as int) & 255
+        let col: int = 0
+        while col < Font.GLYPH_WIDTH {
+            let mask: int = 128 >> col
+            let color: u32 = bg
+            if (bits & mask) != 0 {
+                color = fg
+            }
+            fb_put_pixel(x + col, y + row, color)
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+func wm_draw_string(x: int, y: int, str: u8*, fg: u32, bg: u32) {
+    let i: int = 0
+    let cur_x: int = x
+    while str[i] != 0 {
+        wm_draw_u8(cur_x, y, str[i], fg, bg)
+        cur_x = cur_x + Font.GLYPH_WIDTH
+        i = i + 1
+    }
+}
+
+// Permanent launcher strip along the bottom of the screen, always drawn
+// once wm is active (see draw_taskbar below) regardless of whether any
+// window is currently open - the whole point is to be able to start the
+// *first* app without ever touching the console. Lists /bin's contents
+// once (load_taskbar), the same sys_readdir walk filebrowser.llpl uses
+// to browse it interactively; click a button to sys_spawn it.
+const TASKBAR_H: u64 = 22
+const TASKBAR_BG: u32 = 0x1C2340
+const TASKBAR_BTN: u32 = 0x2C3A68
+const TASKBAR_TEXT: u32 = 0xE8E8E8
+const TASKBAR_BTN_W: u64 = 92
+const MAX_TASKBAR_ENTRIES = 20
+const TASKBAR_NAME_LEN = 32
+
+let taskbar_names: u8[640] // MAX_TASKBAR_ENTRIES(20) * TASKBAR_NAME_LEN(32)
+let taskbar_count: int = 0
+let taskbar_loaded: bool = false
+
+func taskbar_name_at(i: int) -> u8* {
+    return (taskbar_names as u8*) + i * TASKBAR_NAME_LEN
+}
+
+func load_taskbar() {
+    taskbar_count = 0
+    let i: u64 = 0
+    let done: bool = false
+    while (i as int) < MAX_TASKBAR_ENTRIES && !done {
+        let buf: u8[48]
+        let ok: u64 = sys_readdir("/bin", i, buf as u8*)
+        if ok == RT_SYS_ERR {
+            done = true
+        } else {
+            let fields: u64* = ((buf as u8*) + 32) as u64*
+            let kind: u64 = fields[0]
+            if kind == 1 { // VFS.KIND_FILE - not imported here to avoid
+                           // pulling in all of vfs.llpl for one constant
+                let dst: u8* = taskbar_name_at(taskbar_count)
+                let j: int = 0
+                while j < TASKBAR_NAME_LEN {
+                    dst[j] = buf[j]
+                    j = j + 1
+                }
+                taskbar_count = taskbar_count + 1
+            }
+            i = i + 1
+        }
+    }
+    taskbar_loaded = true
+}
+
+func draw_taskbar() {
+    if !taskbar_loaded {
+        load_taskbar()
+    }
+    let y0: int = (fb_height as int) - (TASKBAR_H as int)
+    let row: int = 0
+    while row < (TASKBAR_H as int) {
+        let col: int = 0
+        while col < (fb_width as int) {
+            fb_put_pixel(col, y0 + row, TASKBAR_BG)
+            col = col + 1
+        }
+        row = row + 1
+    }
+
+    let i: int = 0
+    while i < taskbar_count {
+        let bx: int = 4 + i * ((TASKBAR_BTN_W as int) + 4)
+        if bx + (TASKBAR_BTN_W as int) <= (fb_width as int) {
+            let row2: int = 2
+            while row2 < (TASKBAR_H as int) - 2 {
+                let col2: int = 0
+                while col2 < (TASKBAR_BTN_W as int) {
+                    fb_put_pixel(bx + col2, y0 + row2, TASKBAR_BTN)
+                    col2 = col2 + 1
+                }
+                row2 = row2 + 1
+            }
+            let label: u8[12]
+            let k: int = 0
+            let name: u8* = taskbar_name_at(i)
+            while k < 11 && name[k] != 0 {
+                label[k] = name[k]
+                k = k + 1
+            }
+            label[k] = 0
+            wm_draw_string(bx + 4, y0 + 3, label as u8*, TASKBAR_TEXT, TASKBAR_BTN)
+        }
+        i = i + 1
+    }
+}
+
+// -1 once past the last button that actually fit on screen (matches
+// draw_taskbar's own "stop if it wouldn't fit" check) rather than
+// wrapping or overlapping.
+func hit_test_taskbar(mx: int, my: int) -> int {
+    let y0: int = (fb_height as int) - (TASKBAR_H as int)
+    if my < y0 {
+        return -1
+    }
+    let i: int = 0
+    while i < taskbar_count {
+        let bx: int = 4 + i * ((TASKBAR_BTN_W as int) + 4)
+        if bx + (TASKBAR_BTN_W as int) > (fb_width as int) {
+            return -1
+        }
+        if mx >= bx && mx < bx + (TASKBAR_BTN_W as int) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+func taskbar_launch(i: int) {
+    let path: u8[48]
+    path[0] = 47 // '/'
+    path[1] = 98 // 'b'
+    path[2] = 105 // 'i'
+    path[3] = 110 // 'n'
+    path[4] = 47 // '/'
+    let name: u8* = taskbar_name_at(i)
+    let j: int = 0
+    while name[j] != 0 && j < 42 {
+        path[5 + j] = name[j]
+        j = j + 1
+    }
+    path[5 + j] = 0
+    sys_spawn(path as u8*, "")
+}
+
+// Full repaint of windows + cursor (decoration, then content, then the
+// cursor on top of everything) rather than any kind of dirty-rect
+// tracking - cheap enough (a handful of 320x200-ish window blits) to
+// just do unconditionally every active tick, unlike fill_backdrop
+// (below), which is NOT folded in here on purpose.
+func redraw_windows(mouse_x: int, mouse_y: int) {
     let i: int = 0
     while i < Wm.MAX_WINDOWS {
         if windows[i].used {
             draw_titlebar(i)
             blit_window(i)
+            draw_resize_grip(i)
         }
         i = i + 1
     }
+    draw_taskbar()
     draw_cursor(mouse_x, mouse_y)
+}
+
+// The only thing that ever touches the real framebuffer: one bulk copy
+// of the fully-composited back buffer, once per tick, after everything
+// above has already finished drawing into it. 8 bytes (a whole u64) at
+// a time rather than byte-by-byte - there's no faster bulk-copy
+// primitive exposed to ring-3 code in this kernel (sys_memcpy/
+// llpl_memcpy are both plain byte loops), and a ~3MB frame at a
+// real resolution adds up fast: this alone is an 8x reduction in loop
+// iterations over the naive version.
+func present_frame() {
+    let total_bytes: u64 = fb_pitch * fb_height
+    let total_words: u64 = total_bytes / 8
+    let src: u64* = backbuf as u64*
+    let dst: u64* = fb as u64*
+    let i: u64 = 0
+    while i < total_words {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    // Any trailing bytes that don't make a whole word (shouldn't happen
+    // for a real pitch/height, but costs nothing to handle correctly).
+    let done: u64 = total_words * 8
+    let rem: u64 = total_bytes - done
+    let src_tail: u8* = backbuf + done
+    let dst_tail: u8* = fb + done
+    let j: u64 = 0
+    while j < rem {
+        dst_tail[j] = src_tail[j]
+        j = j + 1
+    }
 }
 
 // Shared dispatch for both the pre-active (blocking recv) and active
 // (non-blocking try_recv + redraw ticking) phases of the main loop below
 // - the request/reply shape a client sees is identical either way, only
 // how a message gets picked up differs.
-func handle_request(sender: uint, msg: char*) {
-    let req: uint* = (msg as char*) as uint*
-    let op: uint = req[0]
+func handle_request(sender: u64, msg: u8*) {
+    let req: u64* = (msg as u8*) as u64*
+    let op: u64 = req[0]
     let slot_arg: int = req[1] as int
 
-    let reply: char[40]
-    let rep: uint* = (reply as char*) as uint*
+    let reply: u8[40]
+    let rep: u64* = (reply as u8*) as u64*
 
-    if op == (Wm.OP_CREATE as uint) {
+    if op == (Wm.OP_CREATE as u64) {
         let slot: int = find_free_slot()
         if slot < 0 {
-            rep[0] = Wm.STATUS_FAIL as uint
-            sys_msg_reply(sender, reply as char*, 8)
+            rep[0] = Wm.STATUS_FAIL as u64
+            sys_msg_reply(sender, reply as u8*, 8)
         } else {
             windows[slot].used = true
             windows[slot].owner_pid = sender as int
             windows[slot].win_x = initial_window_x(slot)
             windows[slot].win_y = initial_window_y(slot)
-            if focused < 0 {
-                focused = slot
-            }
+            windows[slot].vis_w = Wm.WIN_W as u64
+            windows[slot].vis_h = Wm.WIN_H as u64
+            windows[slot].close_requested = false
+            // Unconditional, not just "if nothing else is focused yet" -
+            // a newly created window should always grab focus the same
+            // way opening a file in any real desktop both opens *and*
+            // focuses it. The old "only if focused < 0" version left
+            // every window opened after the first one sitting there
+            // unfocused (silently discarding all keyboard input - see
+            // OP_POLL_INPUT below) until the user noticed and pressed
+            // TAB or clicked its titlebar - easy to miss, and looks
+            // exactly like "this program doesn't respond to the
+            // keyboard" rather than "this program just isn't focused".
+            focused = slot
             active = true
-            rep[0] = Wm.STATUS_OK as uint
-            rep[1] = slot as uint
-            rep[2] = (slot as uint) * Wm.WIN_BYTES
+            rep[0] = Wm.STATUS_OK as u64
+            rep[1] = slot as u64
+            rep[2] = (slot as u64) * Wm.WIN_BYTES
             rep[3] = windows[slot].win_x
             rep[4] = windows[slot].win_y
-            sys_msg_reply(sender, reply as char*, 40)
+            sys_msg_reply(sender, reply as u8*, 40)
         }
-    } else if op == (Wm.OP_PRESENT as uint) {
+    } else if op == (Wm.OP_PRESENT as u64) {
         if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used {
             blit_window(slot_arg)
-            rep[0] = Wm.STATUS_OK as uint
+            rep[0] = Wm.STATUS_OK as u64
         } else {
-            rep[0] = Wm.STATUS_FAIL as uint
+            rep[0] = Wm.STATUS_FAIL as u64
         }
-        sys_msg_reply(sender, reply as char*, 8)
-    } else if op == (Wm.OP_POLL_INPUT as uint) {
-        let key: uint = 0
-        if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used && slot_arg == focused {
-            key = sys_kbd_poll()
-            if key == 9 {
-                let nxt: int = next_focus_after(focused)
-                if nxt >= 0 {
-                    focused = nxt
+        sys_msg_reply(sender, reply as u8*, 8)
+    } else if op == (Wm.OP_POLL_INPUT as u64) {
+        // STATUS_FAIL whenever this slot isn't a live window of the
+        // caller's own - a client only ever ends up here by calling
+        // OP_CLOSE itself (the close button no longer force-removes a
+        // window out from under its client - see close_requested's own
+        // doc comment on Window), so in practice this now means "you
+        // already closed yourself and polled again anyway", not "you've
+        // been closed without warning". Kept as a defensive backstop
+        // regardless (wm_client.llpl's wm_poll_input still treats it as
+        // exit-worthy): better to stop cleanly than spin forever polling
+        // a slot nothing will ever composite again.
+        if slot_arg < 0 || slot_arg >= Wm.MAX_WINDOWS || !windows[slot_arg].used {
+            rep[0] = Wm.STATUS_FAIL as u64
+            rep[1] = 0
+            rep[2] = 0
+            sys_msg_reply(sender, reply as u8*, 24)
+        } else if windows[slot_arg].close_requested {
+            // Checked before the focus-gated keyboard poll below, and
+            // regardless of focus - the close button applies to a
+            // specific window, not to whichever one is currently
+            // listening for keys, so an unfocused window still needs to
+            // learn about its own close request on its very next poll.
+            windows[slot_arg].close_requested = false
+            rep[0] = Wm.STATUS_OK as u64
+            rep[1] = KEY_CLOSE_REQ as u64
+            rep[2] = 0
+            sys_msg_reply(sender, reply as u8*, 24)
+        } else {
+            let key: u64 = 0
+            let wheel: int = 0
+            if slot_arg == focused {
+                key = sys_kbd_poll()
+                if key == 9 {
+                    let nxt: int = next_focus_after(focused)
+                    if nxt >= 0 {
+                        focused = nxt
+                    }
+                    key = 0
                 }
-                key = 0
+                // Only the focused window ever receives wheel motion too
+                // (same reasoning as keyboard focus - see this file's
+                // header comment - a background window scrolling out
+                // from under whatever's on top would be just as
+                // confusing as it stealing keystrokes would be), and
+                // it's handed off (reset to 0) here rather than left for
+                // some other slot to see stale leftovers from.
+                wheel = wheel_accum
+                wheel_accum = 0
             }
+            rep[0] = Wm.STATUS_OK as u64
+            rep[1] = key
+            rep[2] = wheel as u64
+            sys_msg_reply(sender, reply as u8*, 24)
         }
-        rep[0] = Wm.STATUS_OK as uint
-        rep[1] = key
-        sys_msg_reply(sender, reply as char*, 16)
-    } else if op == (Wm.OP_CLOSE as uint) {
+    } else if op == (Wm.OP_CLOSE as u64) {
         if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS {
             windows[slot_arg].used = false
             windows[slot_arg].owner_pid = -1
@@ -312,21 +762,22 @@ func handle_request(sender: uint, msg: char*) {
                 focused = next_focus_after(slot_arg)
             }
         }
-        rep[0] = Wm.STATUS_OK as uint
-        sys_msg_reply(sender, reply as char*, 8)
+        rep[0] = Wm.STATUS_OK as u64
+        sys_msg_reply(sender, reply as u8*, 8)
     } else {
-        rep[0] = Wm.STATUS_FAIL as uint
-        sys_msg_reply(sender, reply as char*, 8)
+        rep[0] = Wm.STATUS_FAIL as u64
+        sys_msg_reply(sender, reply as u8*, 8)
     }
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("wm: starting")
 
     let i: int = 0
     while i < Wm.MAX_WINDOWS {
         windows[i].used = false
         windows[i].owner_pid = -1
+        windows[i].close_requested = false
         i = i + 1
     }
 
@@ -335,8 +786,8 @@ func _start(argc: uint, argv: uint*) {
         rt_exit(1)
     }
 
-    let info: uint[3]
-    if sys_fb_info(info as uint*) == RT_SYS_ERR {
+    let info: u64[3]
+    if sys_fb_info(info as u64*) == RT_SYS_ERR {
         sys_putln("wm: no framebuffer")
         rt_exit(1)
     }
@@ -350,9 +801,22 @@ func _start(argc: uint, argv: uint*) {
         rt_exit(1)
     }
 
-    // 16 pages = 65536 bytes, comfortably covers Wm.MAX_WINDOWS *
-    // Wm.WIN_BYTES (64896) with a little slack.
-    arena = sys_shm_create(16)
+    // Back buffer, exactly the real framebuffer's own size (fb_pitch *
+    // fb_height, not width * height - pitch can include padding past
+    // the visible width) - see present_frame's own doc comment for why
+    // everything renders here instead of straight to `fb`.
+    let backbuf_bytes: u64 = fb_pitch * fb_height
+    let backbuf_pages: u64 = (backbuf_bytes + 4095) / 4096
+    backbuf = sys_alloc_pages(backbuf_pages)
+    if backbuf == null {
+        sys_putln("wm: backbuf alloc failed")
+        rt_exit(1)
+    }
+
+    // 250 pages = 1024000 bytes, exactly Wm.MAX_WINDOWS * Wm.WIN_BYTES
+    // (4 * 256000) - see wm_protocol.llpl's own comment on why both grew
+    // from the original 104x52 demo-sized windows.
+    arena = sys_shm_create(250)
     if arena == null {
         sys_putln("wm: shm_create failed")
         rt_exit(1)
@@ -360,66 +824,158 @@ func _start(argc: uint, argv: uint*) {
 
     sys_putln("wm: ready")
 
-    // Phase 1: purely reactive, exactly like the original design - block
-    // in sys_msg_recv until the very first client shows up. Nothing to
-    // composite or drag yet, so there's no reason to tick a redraw loop
-    // or touch the real framebuffer beyond whatever a client's own
-    // present() does.
+    // Phase 1: reactive, but now watching for *either* of two triggers
+    // to start owning the screen - a client creating the first window
+    // (as before), or the user explicitly switching keyboard focus to
+    // windowing (F12) even with zero windows open. The second trigger is
+    // what lets the always-on taskbar (see draw_taskbar) actually
+    // deliver on its whole reason for existing: launching the very
+    // *first* app without the console. Without it, the taskbar would
+    // only ever appear after a window already existed, which means it
+    // could only help with the second app onward. A short sys_sleep
+    // instead of blocking in sys_msg_recv, since there are now two
+    // separate things to poll instead of one thing to block on.
     while !active {
-        let msg: char[16]
-        let sender: uint = sys_msg_recv(msg as char*, 16)
+        let msg: u8[16]
+        let sender: u64 = sys_msg_try_recv(msg as u8*, 16)
         if sender != RT_SYS_ERR {
-            handle_request(sender, msg as char*)
+            handle_request(sender, msg as u8*)
+        }
+        if sys_focus_state() == (FOCUS_WM as u64) {
+            active = true
+        }
+        if !active {
+            sys_sleep(50)
         }
     }
 
     // Phase 2: at least one window exists now. Non-blocking try_recv
     // instead of recv from here on, since this loop also has the mouse
-    // and the periodic full redraw (see redraw_all's own doc comment) to
-    // get to every tick regardless of whether a client happens to be
-    // talking to it this instant - a blocking recv would starve both
-    // exactly as long as no client sends anything.
+    // and the periodic redraw to get to every tick regardless of whether
+    // a client happens to be talking to it this instant - a blocking
+    // recv would starve both exactly as long as no client sends
+    // anything.
     let dragging: bool = false
     let drag_slot: int = -1
     let drag_dx: int = 0
     let drag_dy: int = 0
+    let resizing: bool = false
+    let resize_slot: int = -1
     let prev_left: bool = false
+    // Only true the very first tick (establishes the initial backdrop)
+    // and whenever a drag/resize is in progress (the only things that
+    // can expose bare screen a window no longer covers) - see
+    // fill_backdrop's own doc comment for why this can't just run
+    // unconditionally every tick like redraw_windows does.
+    let needs_backdrop: bool = true
+    // Off-screen at startup so the very first tick's erase_cursor call
+    // (below) has nothing real to erase yet.
+    let prev_cursor_x: int = -100
+    let prev_cursor_y: int = -100
 
     while true {
-        let msg: char[16]
-        let sender: uint = sys_msg_try_recv(msg as char*, 16)
+        let msg: u8[16]
+        let sender: u64 = sys_msg_try_recv(msg as u8*, 16)
         if sender != RT_SYS_ERR {
-            handle_request(sender, msg as char*)
+            let req: u64* = (msg as u8*) as u64*
+            let op: u64 = req[0]
+            if op == (Wm.OP_CREATE as u64) || op == (Wm.OP_CLOSE as u64) {
+                needs_backdrop = true
+            }
+            handle_request(sender, msg as u8*)
         }
 
-        let mstate: uint = sys_mouse_poll()
+        let mstate: u64 = sys_mouse_poll()
         let mx: int = (mstate & 0x3FF) as int
         let my: int = ((mstate >> 10) & 0x3FF) as int
         let mleft: bool = (mstate & (1 << 20)) != 0
+        // Raw 8-bit two's-complement byte in bits 21-28 (see
+        // sys_mouse_poll's own doc comment) - recovered the same way
+        // KEY_UP/DOWN/etc's own u8-sign hazard is, elsewhere in this
+        // codebase. Accumulated into wheel_accum (declared with the
+        // other per-tick state below) rather than used directly, since
+        // wm ticks every ~15ms but a client's own OP_POLL_INPUT calls
+        // may come less often - dropping notches between polls would
+        // make scrolling feel unreliable.
+        let wheel_raw: int = ((mstate >> 21) & 0xFF) as int
+        if wheel_raw >= 128 {
+            wheel_raw = wheel_raw - 256
+        }
+        wheel_accum = wheel_accum + wheel_raw
 
+        // Priority order on a fresh press: close button, then resize
+        // grip, then the taskbar, then an ordinary titlebar drag - close/
+        // resize/taskbar are all small, specific targets that would
+        // otherwise be swallowed by a broader titlebar-drag hit test if
+        // they overlapped it.
         if mleft && !prev_left {
-            let hit: int = hit_test_titlebar(mx, my)
-            if hit >= 0 {
-                dragging = true
-                drag_slot = hit
-                drag_dx = mx - (windows[hit].win_x as int)
-                drag_dy = my - (windows[hit].win_y as int)
-                focused = hit
+            let close_hit: int = hit_test_close_button(mx, my)
+            if close_hit >= 0 {
+                // Just a request now, not an immediate close - the
+                // window stays exactly as it is until its own client
+                // acts on KEY_CLOSE_REQ (OP_POLL_INPUT, delivered on
+                // this window's very next poll regardless of focus) by
+                // calling OP_CLOSE itself. See close_requested's own
+                // doc comment (Window struct) for why.
+                windows[close_hit].close_requested = true
+            } else {
+                let resize_hit: int = hit_test_resize_grip(mx, my)
+                if resize_hit >= 0 {
+                    resizing = true
+                    resize_slot = resize_hit
+                    focused = resize_hit
+                } else {
+                    let taskbar_hit: int = hit_test_taskbar(mx, my)
+                    if taskbar_hit >= 0 {
+                        taskbar_launch(taskbar_hit)
+                    } else {
+                        let hit: int = hit_test_titlebar(mx, my)
+                        if hit >= 0 {
+                            dragging = true
+                            drag_slot = hit
+                            drag_dx = mx - (windows[hit].win_x as int)
+                            drag_dy = my - (windows[hit].win_y as int)
+                            focused = hit
+                        }
+                    }
+                }
             }
         } else if !mleft && prev_left {
             dragging = false
             drag_slot = -1
+            resizing = false
+            resize_slot = -1
         }
         prev_left = mleft
 
         if dragging && drag_slot >= 0 {
             let max_wx: int = (fb_width as int) - Wm.WIN_W
             let max_wy: int = (fb_height as int) - (Wm.WIN_H as int) - (TITLEBAR_H as int)
-            windows[drag_slot].win_x = clampi(mx - drag_dx, 0, max_wx) as uint
-            windows[drag_slot].win_y = clampi(my - drag_dy, 0, max_wy) as uint
+            windows[drag_slot].win_x = clampi(mx - drag_dx, 0, max_wx) as u64
+            windows[drag_slot].win_y = clampi(my - drag_dy, 0, max_wy) as u64
+            needs_backdrop = true
         }
 
-        redraw_all(mx, my)
+        if resizing && resize_slot >= 0 {
+            let ox: int = windows[resize_slot].win_x as int
+            let oy: int = (windows[resize_slot].win_y as int) + (TITLEBAR_H as int)
+            let new_w: int = clampi(mx - ox, MIN_VIS_W as int, Wm.WIN_W)
+            let new_h: int = clampi(my - oy, MIN_VIS_H as int, Wm.WIN_H)
+            windows[resize_slot].vis_w = new_w as u64
+            windows[resize_slot].vis_h = new_h as u64
+            needs_backdrop = true
+        }
+
+        if needs_backdrop {
+            fill_backdrop()
+            needs_backdrop = dragging || resizing
+        } else {
+            erase_cursor(prev_cursor_x, prev_cursor_y)
+        }
+        redraw_windows(mx, my)
+        prev_cursor_x = mx
+        prev_cursor_y = my
+        present_frame()
         sys_sleep(15)
     }
 }

@@ -231,14 +231,30 @@ namespace Task {
     // small IPC message only to synchronize ("data's ready"), not to carry
     // the data itself.
     const MAX_SHM = 8
-    const SHM_MAX_PAGES = 16
+    // Raised from 16 (65536 bytes) to fit wm.llpl's compositor arena once
+    // its windows grew from 104x52 ball-bouncer demos to 320x200 app
+    // windows (editor/filebrowser) - see wm_protocol.llpl's own WIN_BYTES/
+    // MAX_WINDOWS comment for the exact math. Physical memory is nowhere
+    // near a constraint (PageAlloc reports tens of thousands of free
+    // pages at boot); this cap exists only to keep one careless
+    // sys_shm_create call from grabbing an unreasonable fraction of it.
+    const SHM_MAX_PAGES = 256
 
     packed struct ShmRegion {
         let used: bool
         let owner_pid: int
         let pages: uint
         let owner_virt: uint
-        let phys: uint[16]
+        // Must match SHM_MAX_PAGES exactly - shm_create (below) writes one
+        // physical address per page requested, up to that cap, and a
+        // smaller array here than the cap it's supposedly bounded by is
+        // exactly the kind of overflow that corrupted memory well past
+        // this struct the one time these two were allowed to drift apart
+        // (phys[16] left over from when SHM_MAX_PAGES was still 16,
+        // silently overrun by a 250-page sys_shm_create call once it was
+        // raised to 256 for wm.llpl's bigger arena - see SHM_MAX_PAGES's
+        // own comment).
+        let phys: uint[256]
     }
 
     let shm_regions: ShmRegion[8]
@@ -292,6 +308,13 @@ namespace Task {
             return 0
         }
         return shm_regions[region].pages
+    }
+
+    func shm_owner_virt(region: int) -> uint {
+        if region < 0 || region >= MAX_SHM {
+            return 0
+        }
+        return shm_regions[region].owner_virt
     }
 
     func shm_phys_at(region: int, page: int) -> uint {
@@ -1090,19 +1113,63 @@ namespace Task {
         tcb.resched_requested = false
     }
 
+    // Remembers the *id* (not a raw TCB pointer/address) of whichever task
+    // first_sender_for last returned - an id survives that task later
+    // exiting and being reaped in a way a stale pointer wouldn't, and
+    // first_sender_for below already has to walk the list to relocate it
+    // regardless, so nothing is lost by storing the cheaper, safer form.
+    let ipc_scan_cursor_id: int = -1
+
+    // Finds the next SEND_BLOCKED task waiting to reach `receiver_id`,
+    // resuming each call from just after whichever task the *previous*
+    // call for this receiver returned, rather than always restarting the
+    // scan at first_task.
+    //
+    // Always restarting at first_task was a real, reproduced starvation
+    // bug: a client that polls a service every tick (present a frame,
+    // sleep, poll input, repeat - e.g. any wm.llpl-hosted window) spends
+    // most of its life freshly SEND_BLOCKED on that service again by the
+    // time the service's next receive happens. If such a client sits
+    // earlier in the task list than some other, less chatty blocked
+    // sender (e.g. a second window just launched, still waiting on its
+    // very first request), a first-task-first scan finds the chatty
+    // client on *every single call, forever* - the later sender is never
+    // even reached, even though the service happily processes one
+    // message per tick and would eventually work through everyone under
+    // a fair rotation. Symptom: the second sender's request appears to
+    // hang forever with no error, crash, or unusual CPU use anywhere,
+    // since the receiver truly is servicing messages the entire time -
+    // just always the same one.
     func first_sender_for(receiver_id: int) -> TCB* {
         if first_task == 0 {
             return null
         }
-        let addr: uint = first_task
+        let start: uint = first_task
+        if ipc_scan_cursor_id >= 0 {
+            let addr: uint = first_task
+            let done: bool = false
+            while !done {
+                let t: TCB* = addr as TCB*
+                if t.id == ipc_scan_cursor_id {
+                    start = t.next
+                    done = true
+                }
+                addr = t.next
+                if addr == first_task {
+                    done = true
+                }
+            }
+        }
+        let addr: uint = start
         let done: bool = false
         while !done {
             let t: TCB* = addr as TCB*
             if t.state == STATE_SEND_BLOCKED && t.ipc_peer == receiver_id {
+                ipc_scan_cursor_id = t.id
                 return t
             }
             addr = t.next
-            if addr == first_task {
+            if addr == start {
                 done = true
             }
         }

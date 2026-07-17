@@ -263,6 +263,60 @@ namespace LdSo {
         return page + (virt & 4095)
     }
 
+    // Copies `len` bytes starting at user-space `virt` into a kernel-side
+    // buffer, one byte at a time - each through its own user_phys
+    // translation, the same reasoning user_str_eq's own doc comment
+    // gives for why a single translation up front isn't safe once the
+    // read might cross a page boundary. Used to pull a whole ELF64_Sym
+    // entry (see symbol_value below) into contiguous kernel memory
+    // *before* interpreting it as a struct - reading struct fields
+    // straight out of a user_ptr result has the exact same
+    // non-contiguous-physical-pages hazard a multi-byte string does,
+    // just per-field instead of per-character.
+    func user_read_bytes(aspace: VMM.AddressSpace*, virt: uint, dst: char*, len: uint) -> bool {
+        let i: uint = 0
+        while i < len {
+            let p: char* = user_ptr(aspace, virt + i)
+            if p == null {
+                return false
+            }
+            dst[i] = p[0]
+            i = i + 1
+        }
+        return true
+    }
+
+    // Copies a NUL-terminated string out of user-space `virt` into a
+    // kernel-side buffer, one byte at a time - same reasoning as
+    // user_read_bytes/user_str_eq above, but for callers (apply_relocations,
+    // below) that need an actual owned copy of the name rather than just
+    // comparing it against one: a raw user_ptr result handed around and
+    // read later via plain pointer arithmetic (as this used to do) has
+    // the exact same non-contiguous-physical-pages hazard, just deferred
+    // to wherever that pointer eventually gets dereferenced instead of
+    // right here. Truncates (still NUL-terminated) rather than failing
+    // outright if `max_len` is reached - every real symbol name in this
+    // demo's own binaries is well under any reasonable buffer size, so
+    // truncation here only ever means "definitely won't match anything,"
+    // not a silent wrong match.
+    func user_read_cstring(aspace: VMM.AddressSpace*, virt: uint, dst: char*, max_len: uint) -> bool {
+        let i: uint = 0
+        while i < max_len - 1 {
+            let p: char* = user_ptr(aspace, virt + i)
+            if p == null {
+                dst[i] = 0
+                return false
+            }
+            dst[i] = p[0]
+            if p[0] == 0 {
+                return true
+            }
+            i = i + 1
+        }
+        dst[max_len - 1] = 0
+        return true
+    }
+
     func user_ptr(aspace: VMM.AddressSpace*, virt: uint) -> char* {
         let phys: uint = user_phys(aspace, virt)
         if phys == 0 {
@@ -288,12 +342,41 @@ namespace LdSo {
         return true
     }
 
+    // Byte-at-a-time, each through its own user_ptr translation - not a
+    // single translation of `virt` followed by plain pointer arithmetic
+    // across the rest of the string (that used to be exactly what this
+    // did). A dynamic symbol's name lives in the library's .dynstr,
+    // which is just as page-backed as everything else in a loaded ELF
+    // image; nothing guarantees the *next* physical page after wherever
+    // a given string happens to start is the physically-contiguous
+    // continuation of it, only that both are *virtually* contiguous. A
+    // string starting near a page's end and continuing past it read
+    // instead from whatever unrelated physical page happens to sit
+    // right after the first in the kernel's own flat physical-address
+    // space - silently comparing against garbage instead of the rest of
+    // the real name. This was a real, reproduced bug, not a
+    // hypothetical one: adding four new exported functions to libsys.so
+    // shifted .dynstr's layout just enough to push an *existing*,
+    // previously-fine symbol's name (sys_inb) across such a boundary,
+    // and ld.so started failing to resolve it - in a program that
+    // doesn't even reference any of the four new symbols - with no
+    // indication beyond "unresolved symbol, index N".
     func user_str_eq(aspace: VMM.AddressSpace*, virt: uint, name: char*) -> bool {
-        let s: char* = user_ptr(aspace, virt)
-        if s == null {
-            return false
+        let i: uint = 0
+        while true {
+            let c: char* = user_ptr(aspace, virt + i)
+            if c == null {
+                return false
+            }
+            let ch: char = c[0]
+            if ch != name[i] {
+                return false
+            }
+            if ch == 0 {
+                return true
+            }
+            i = i + 1
         }
-        return str_eq(s, name)
     }
 
     func copy_library_page(file: char*, file_size: uint, ph: LdElf64ProgramHeader*, obj_page: uint, phys: uint) -> bool {
@@ -413,8 +496,18 @@ namespace LdSo {
         let i: uint = 0
         while i < lib.symcount {
             let sym_addr: uint = lib.symtab + i * lib.syment
-            let sym: LdElf64Sym* = user_ptr(lib.aspace, sym_addr) as LdElf64Sym*
-            if sym != null && sym.name != 0 as uint32 && sym.shndx != 0 as uint16 {
+            // Copied into contiguous kernel memory first, not read
+            // straight through a single user_ptr translation of
+            // sym_addr - see user_read_bytes's own doc comment. A
+            // symbol table entry that happens to straddle a page
+            // boundary would otherwise have its later fields (value,
+            // even shndx) read from an unrelated physical page.
+            let sym_buf: char[24]
+            if !user_read_bytes(lib.aspace, sym_addr, sym_buf as char*, sizeof(LdElf64Sym)) {
+                return 0
+            }
+            let sym: LdElf64Sym* = (sym_buf as char*) as LdElf64Sym*
+            if sym.name != 0 as uint32 && sym.shndx != 0 as uint16 {
                 let name_addr: uint = lib.strtab + (sym.name as uint)
                 if user_str_eq(lib.aspace, name_addr, name) {
                     return lib.base + sym.value
@@ -449,10 +542,17 @@ namespace LdSo {
         let lib: Library* = &libs[lib_idx]
         let off: uint = 0
         while off < relasz {
-            let r: LdElf64Rela* = user_ptr(lib.aspace, rela + off) as LdElf64Rela*
-            if r == null {
+            // Copied into contiguous kernel memory first, not read
+            // straight through a single user_ptr translation of
+            // rela+off - same reasoning as symbol_value's own sym_buf
+            // above: a Rela entry straddling a page boundary would
+            // otherwise have its later fields (info, addend) read from
+            // an unrelated physical page.
+            let rela_buf: char[24]
+            if !user_read_bytes(lib.aspace, rela + off, rela_buf as char*, sizeof(LdElf64Rela)) {
                 return false
             }
+            let r: LdElf64Rela* = (rela_buf as char*) as LdElf64Rela*
             let kind: uint = r.info & 0xFFFFFFFF
             let sym_index: uint = r.info >> 32
             let where: uint = lib.base + r.offset
@@ -463,14 +563,27 @@ namespace LdSo {
             } else if kind == R_X86_64_64 || kind == R_X86_64_GLOB_DAT || kind == R_X86_64_JUMP_SLOT {
                 let target: uint = 0
                 if sym_index != 0 && lib.symtab != 0 && lib.strtab != 0 {
-                    let sym: LdElf64Sym* = user_ptr(lib.aspace, lib.symtab + sym_index * lib.syment) as LdElf64Sym*
-                    if sym != null {
+                    let sym_buf: char[24]
+                    if user_read_bytes(lib.aspace, lib.symtab + sym_index * lib.syment, sym_buf as char*, sizeof(LdElf64Sym)) {
+                        let sym: LdElf64Sym* = (sym_buf as char*) as LdElf64Sym*
                         if sym.shndx != 0 as uint16 {
                             target = lib.base + sym.value + r.addend
                         } else {
-                            let nm: char* = user_ptr(lib.aspace, lib.strtab + (sym.name as uint))
-                            if nm != null {
-                                let resolved: uint = resolve_symbol(lib.aspace, nm)
+                            // Copied into a real owned buffer, not just a
+                            // raw user_ptr result handed to resolve_symbol
+                            // and read later - see user_read_cstring's own
+                            // doc comment for why: this exact spot handing
+                            // out an unsafe pointer was the actual bug
+                            // behind a real, reproduced failure ("ld.so:
+                            // unresolved symbol, index 13" - atad.elf
+                            // failing to resolve its own already-working
+                            // sys_inb import, only once unrelated new
+                            // exports elsewhere shifted string-table
+                            // layouts enough to push this *particular*
+                            // name across a page boundary).
+                            let nm_buf: char[64]
+                            if user_read_cstring(lib.aspace, lib.strtab + (sym.name as uint), nm_buf as char*, 64) {
+                                let resolved: uint = resolve_symbol(lib.aspace, nm_buf as char*)
                                 if resolved != 0 {
                                     target = resolved + r.addend
                                 }

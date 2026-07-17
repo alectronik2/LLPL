@@ -1,0 +1,125 @@
+// ping - sends a handful of ICMP echo requests to an IPv4 address and
+// reports whether/how each one came back, exactly like a normal OS's
+// `ping` command. All the actual protocol work (ARP, IP, ICMP, the
+// e1000 TX/RX rings) lives in netd.llpl; this is a thin client that
+// looks netd up by name and drives its one OP_PING operation in a loop
+// with a fixed TTL and an incrementing sequence number - see netd.llpl's
+// own header comment on why that one operation serves both this file
+// and traceroute.llpl.
+//
+// Usage: ping <ip> [count]  (defaults: 10.0.2.2 - QEMU SLIRP's own
+// virtual gateway, always present under the default network setup this
+// demo assumes - and count 4, matching most real ping implementations'
+// own default).
+
+import "../libsys/imports"
+import "user_runtime"
+
+const OP_PING = 1
+const PING_STATUS_ECHO_REPLY = 0
+const PING_STATUS_TIME_EXCEEDED = 1
+const PING_STATUS_TIMEOUT = 2
+const PING_STATUS_ERROR = 3
+
+const DEFAULT_TTL = 64
+const TIMEOUT_ITERS = 500000 // see netd.llpl's own header comment on
+                               // why this is an iteration bound, not a
+                               // wall-clock timeout
+
+func _start(argc: uint, argv: uint*) {
+    let ip_str: char* = rt_arg(argc, argv, 1, "10.0.2.2")
+    let dest_ip: uint = rt_parse_ip(ip_str)
+    if dest_ip == RT_IP_INVALID {
+        sys_puts("ping: bad address: ")
+        sys_putln(ip_str)
+        rt_exit(1)
+    }
+
+    let count_str: char* = rt_arg(argc, argv, 2, "4")
+    let count: uint = 0
+    let i: int = 0
+    while count_str[i] != 0 {
+        count = count * 10 + ((count_str[i] as uint) - 48)
+        i = i + 1
+    }
+    if count == 0 {
+        count = 4
+    }
+
+    let handle: uint = sys_lookup("netd")
+    if handle == RT_SYS_ERR {
+        sys_putln("ping: netd not running")
+        rt_exit(1)
+    }
+
+    sys_puts("PING ")
+    rt_print_ip(dest_ip)
+    sys_puts("\n")
+
+    let sent: uint = 0
+    let received: uint = 0
+    let seq: uint = 1
+    while seq <= count {
+        let req: char[48]
+        let req_word: uint* = (req as char*) as uint*
+        req_word[0] = OP_PING
+        req_word[1] = dest_ip
+        req_word[2] = DEFAULT_TTL
+        req_word[3] = 1 // id - fixed for this one run, like a real ping's pid-derived id
+        req_word[4] = seq
+        req_word[5] = TIMEOUT_ITERS
+
+        sent = sent + 1
+        // The reply lands back in this same buffer (see sys_msg_reply's
+        // own kernel-side semantics, syscall.llpl) - sys_msg_send blocks
+        // until netd calls sys_msg_reply, then returns the reply's own
+        // length, not the request's. There is no separate sys_msg_recv
+        // on the client side of a request/reply exchange like this one -
+        // confirmed against echoclient.llpl, the existing precedent for
+        // exactly this call shape.
+        if sys_msg_send(handle, req as char*, 48) == RT_SYS_ERR {
+            sys_putln("ping: send failed")
+        } else {
+            let reply_word: uint* = (req as char*) as uint*
+            let status: uint = reply_word[0]
+            let from_ip: uint = reply_word[1]
+            let rtt: uint = reply_word[2]
+
+            if status == PING_STATUS_ECHO_REPLY {
+                received = received + 1
+                sys_puts("reply from ")
+                rt_print_ip(from_ip)
+                sys_puts(": seq=")
+                rt_print_uint(seq)
+                sys_puts(" time~=")
+                rt_print_uint(rtt)
+                sys_puts(" iters\n")
+            } else if status == PING_STATUS_TIMEOUT {
+                sys_puts("seq=")
+                rt_print_uint(seq)
+                sys_putln(" timed out")
+            } else if status == PING_STATUS_TIME_EXCEEDED {
+                sys_puts("seq=")
+                rt_print_uint(seq)
+                sys_puts(" time exceeded from ")
+                rt_print_ip(from_ip)
+                sys_puts("\n")
+            } else {
+                sys_puts("seq=")
+                rt_print_uint(seq)
+                sys_putln(" error (no route / ARP failed)")
+            }
+        }
+        seq = seq + 1
+    }
+
+    sys_puts("--- ")
+    rt_print_ip(dest_ip)
+    sys_puts(" ping statistics: ")
+    rt_print_uint(sent)
+    sys_puts(" sent, ")
+    rt_print_uint(received)
+    sys_putln(" received")
+
+    rt_exit(0)
+}

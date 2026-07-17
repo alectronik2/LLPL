@@ -1,9 +1,9 @@
 namespace HAL { 
-    func outb(port: uint, value: char) {
+    func outb(port: uint, value: u8) {
         asm("outb %0, %w1" : : "a"(value), "Nd"(port))
     }
 
-    func inb(port: uint) -> char {
+    func inb(port: uint) -> u8 {
         let value: char = 0
         asm("inb %w1, %0" : "=a"(value) : "Nd"(port))
         value

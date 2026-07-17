@@ -29,7 +29,10 @@ func _start(argc: uint, argv: uint*) {
 
     while true {
         let key: uint = wm_poll_input()
-        if key == (KEY_LEFT as uint) {
+        if key == (KEY_CLOSE_REQ as uint) {
+            wm_close()
+            rt_exit(0)
+        } else if key == (KEY_LEFT as uint) {
             dx = -1
         } else if key == (KEY_RIGHT as uint) {
             dx = 1

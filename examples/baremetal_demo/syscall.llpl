@@ -16,6 +16,7 @@ import ldso
 import fb
 import kbd
 import mouse
+import pci
 
 namespace Syscall {
     const SYS_EXIT  = 0
@@ -49,6 +50,13 @@ namespace Syscall {
     const SYS_KBD_POLL = 28
     const SYS_MOUSE_POLL = 29
     const SYS_MSG_TRY_RECV = 30
+    const SYS_READDIR = 31
+    const SYS_FOCUS_STATE = 32
+    const SYS_INL = 33
+    const SYS_OUTL = 34
+    const SYS_BMIDE_BASE = 35
+    const SYS_VIRT_TO_PHYS = 36
+    const SYS_NIC_MMAP = 37
 
     const MAX_FDS = 16
     const FD_PATH_MAX = 96
@@ -112,6 +120,12 @@ namespace Syscall {
         if number == SYS_MSG_TRY_RECV {
             return sys_msg_try_recv(a, b)
         }
+        if number == SYS_READDIR {
+            return sys_readdir(a, b, c)
+        }
+        if number == SYS_FOCUS_STATE {
+            return sys_focus_state()
+        }
         if number == SYS_MSG_REPLY {
             return sys_msg_reply(a, b, c)
         }
@@ -165,6 +179,21 @@ namespace Syscall {
         }
         if number == SYS_MOUSE_POLL {
             return sys_mouse_poll()
+        }
+        if number == SYS_INL {
+            return sys_inl(a)
+        }
+        if number == SYS_OUTL {
+            return sys_outl(a, b)
+        }
+        if number == SYS_BMIDE_BASE {
+            return sys_bmide_base()
+        }
+        if number == SYS_VIRT_TO_PHYS {
+            return sys_virt_to_phys(a)
+        }
+        if number == SYS_NIC_MMAP {
+            return sys_nic_mmap()
         }
         EventLog.add1("syscall", "unknown", number)
         return 0
@@ -360,6 +389,56 @@ namespace Syscall {
         fds[fd].used = false
         fds[fd].path[0] = 0
         return 0
+    }
+
+    // Ring-3 directory listing: one entry per call, `index`-selected (0,
+    // 1, 2, ... until RT_SYS_ERR signals "past the last entry"), mirroring
+    // exactly what Shell.cmd_ls (shell.llpl) already walks kernel-side via
+    // VFS.first_child/next_sibling - this just exposes that same walk
+    // through the syscall boundary instead of duplicating it. Only the
+    // real on-disk VFS is supported (VFS.Node.Disk) - the tmpfs /boot
+    // mount is deliberately left out for now (cmd_ls_boot's flat
+    // TmpFS.count()/name_at() walk is a separate shape with no `kind`
+    // field of its own), so a ring-3 file browser only browses the
+    // persistent filesystem, not the read-only boot modules.
+    //
+    // out_buf receives a fixed 48-byte record: name[32] (NUL-padded),
+    // then kind and size as two back-to-back 8-byte uints at offset 32
+    // and 40 - copied out with copy_to_user exactly like sys_read does
+    // for its own buffer, rather than needing a new IPC-style shape.
+    func sys_readdir(path_addr: uint, index: uint, out_buf: uint) -> uint {
+        let path: char[96]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        match VFS.resolve(path as char*) {
+            case VFS.Node.Disk(idx) => {
+                if VFS.inode_kind(idx) != VFS.KIND_DIR {
+                    return 0xFFFFFFFFFFFFFFFF
+                }
+                let child: int = VFS.first_child(idx)
+                let n: uint = 0
+                while child != -1 && n < index {
+                    child = VFS.next_sibling(child)
+                    n = n + 1
+                }
+                if child == -1 {
+                    return 0xFFFFFFFFFFFFFFFF
+                }
+
+                let entry: char[48]
+                VFS.inode_name(child, entry as char*)
+                let fields: uint* = ((entry as char*) + 32) as uint*
+                fields[0] = VFS.inode_kind(child)
+                fields[1] = VFS.inode_size(child)
+                copy_to_user(out_buf, entry as char*, 48)
+                return 0
+            }
+            default => {
+                return 0xFFFFFFFFFFFFFFFF
+            }
+        }
     }
 
     func sys_read(fd_u: uint, buf: uint, len: uint) -> uint {
@@ -669,7 +748,15 @@ namespace Syscall {
         if virt == 0 {
             return 0
         }
-        let phys: uint[16]
+        // Must match Task.SHM_MAX_PAGES (see its own comment) - this is a
+        // stack-local buffer, so undersizing it isn't just a data
+        // overflow like ShmRegion.phys almost was, it's a stack smash:
+        // `pages` up to SHM_MAX_PAGES entries get written here regardless
+        // of this array's own declared size, corrupting whatever the
+        // compiler placed above it on the stack - including, once pages
+        // was raised to (and this array wasn't), this function's own
+        // saved return address.
+        let phys: uint[256]
         let i: uint = 0
         while i < pages {
             phys[i] = VMM.virt_to_phys(aspace.pml4, virt + i * VMM.PAGE_SIZE)
@@ -700,7 +787,11 @@ namespace Syscall {
             return 0
         }
         let pages: uint = Task.shm_pages_of(region)
-        let phys: uint[16]
+        // Same fix, same reasoning as sys_shm_create's own phys buffer
+        // just above - must match Task.SHM_MAX_PAGES, not the mapped
+        // region's own page count, since `pages` here can be anything up
+        // to that cap.
+        let phys: uint[256]
         let i: uint = 0
         while i < pages {
             phys[i] = Task.shm_phys_at(region, i as int)
@@ -714,15 +805,29 @@ namespace Syscall {
     }
 
     // The only ports any user-space driver in this demo needs: the
-    // primary-master ATA command block (0x1F0-0x1F7) plus its control
-    // register (0x3F6) - see atad.llpl, which replaces this file's own
-    // former in-kernel ata.llpl PIO driver. A real system would need a
-    // richer, per-device grant instead of one fixed list; this is the
-    // minimum that makes "boot-only" a meaningful restriction rather than
-    // "boot-only, but for literally any hardware register" once a second
-    // driver ever exists.
+    // primary-master ATA command block (0x1F0-0x1F7), its control
+    // register (0x3F6), and (once PCI.bmide_base() has found one) the
+    // primary channel's 8-byte Bus Master IDE register block - see
+    // atad.llpl, which replaces this file's own former in-kernel ata.llpl
+    // PIO driver, and now optionally drives that block for DMA. A real
+    // system would need a richer, per-device grant instead of one fixed
+    // list; this is the minimum that makes "boot-only" a meaningful
+    // restriction rather than "boot-only, but for literally any hardware
+    // register" once a second driver ever exists.
+    //
+    // The Bus Master base isn't a fixed port like the others - it's
+    // whatever address PCI enumeration found the controller's BAR4 at -
+    // so unlike the ATA command block, this range only opens up once
+    // PCI.bmide_base() has actually run and found something (0 = "not
+    // found/not yet asked", never a real base address, so the range
+    // check is simply skipped in that case rather than needing its own
+    // separate on/off flag).
     func port_allowed(port: uint) -> bool {
-        return (port >= 0x1F0 && port <= 0x1F7) || port == 0x3F6
+        if (port >= 0x1F0 && port <= 0x1F7) || port == 0x3F6 {
+            return true
+        }
+        let base: uint = PCI.bmide_base()
+        return base != 0 && port >= base && port < base + 8
     }
 
     func io_port_permitted(port: uint) -> bool {
@@ -757,6 +862,83 @@ namespace Syscall {
         }
         HAL.outw(port, value)
         return 0
+    }
+
+    // 32-bit forms of the above, gated the same way - atad.llpl's DMA
+    // path needs these for the Bus Master IDE controller's PRDT pointer
+    // register, the one register in that block wider than a byte.
+    func sys_inl(port: uint) -> uint {
+        if !io_port_permitted(port) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return HAL.inl(port)
+    }
+
+    func sys_outl(port: uint, value: uint) -> uint {
+        if !io_port_permitted(port) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        HAL.outl(port, value)
+        return 0
+    }
+
+    // Tells a boot-spawned driver task where PCI enumeration found the
+    // IDE controller's Bus Master register block, so it knows what
+    // address to actually drive sys_inl/sys_outl/sys_inb/sys_outb at -
+    // 0 if none was found (DMA unavailable; the caller falls back to
+    // plain PIO). Gated the same way raw port access itself is: this is
+    // only useful information for a task that could also use the ports
+    // it describes, and there's no reason to hand it to anyone else.
+    func sys_bmide_base() -> uint {
+        if !Task.is_boot_spawned(Task.current_id()) {
+            return 0
+        }
+        return PCI.bmide_base()
+    }
+
+    // Translates a virtual address the caller got back from its own
+    // sys_shm_create into the physical address Task.shm_phys_at recorded
+    // for it (0 if it doesn't land in the caller's own SHM region) -
+    // exists for atad.llpl's still-unused Bus Master DMA path (see that
+    // file's own header comment): a PRDT entry can only point hardware
+    // at a physical address, never a virtual one.
+    //
+    // Reuses Task.shm_phys_at's cached value (recorded once, at
+    // sys_shm_create time) rather than re-deriving it here with a fresh
+    // VMM.virt_to_phys call. Note for whoever picks the DMA work back up:
+    // this was NOT sufficient to fix the data-integrity bug that made
+    // DMA unreliable - a fresh walk and this cached value were measured,
+    // side by side, to agree exactly (down to the same PTE flags) with
+    // each other and with an immediate post-mmap re-walk, yet the real
+    // memory contents at that address still didn't match what the
+    // owning task itself observed through its own pointer. Whatever the
+    // actual bug is, it's not a disagreement between these two ways of
+    // getting a physical address - both were correct here as far as any
+    // check I could devise could tell.
+    //
+    // Not gated beyond ordinary reachability: a task learning the
+    // physical backing of memory it already owns isn't a new
+    // capability, just information about one it already has.
+    func sys_virt_to_phys(virt: uint) -> uint {
+        let cur_id: int = Task.current_id()
+        let region: int = Task.shm_region_for(cur_id)
+        if region < 0 {
+            return 0
+        }
+        let base: uint = Task.shm_owner_virt(region)
+        let pages: uint = Task.shm_pages_of(region)
+        if virt < base {
+            return 0
+        }
+        let page: uint = (virt - base) / VMM.PAGE_SIZE
+        if page >= pages {
+            return 0
+        }
+        let page_phys: uint = Task.shm_phys_at(region, page as int)
+        if page_phys == 0 {
+            return 0
+        }
+        return page_phys + (virt - base) % VMM.PAGE_SIZE
     }
 
     // Copies {width, height, pitch} (as three uints) into the caller's own
@@ -799,6 +981,42 @@ namespace Syscall {
         return VMM.mmap_foreign_range(aspace, phys_base, pages)
     }
 
+    // The e1000's BAR0 register window - 128KB, matching QEMU's own
+    // e1000 device model (hw/net/e1000.c sizes its MMIO BAR at exactly
+    // this, PNPMMIO_SIZE = 0x20000) - a real card's BAR could report its
+    // own size via the standard "write all-1s, read back" BAR-sizing
+    // technique, but that means twiddling the command register on a live
+    // bus during boot for a value this specific emulated device never
+    // actually varies, so it's hardcoded instead.
+    const NIC_MMIO_PAGES = 32 // 32 * 4096 = 0x20000
+
+    // Maps the e1000's BAR0 register window into the caller's own
+    // address space - like sys_fb_map, but for the NIC's MMIO space
+    // instead of the linear framebuffer, and gated to boot-spawned tasks
+    // only (see sys_bmide_base's identical reasoning: this is raw
+    // hardware access, not a shared resource like the screen). 0 on
+    // failure (no e1000 found, caller not boot-spawned, or the mapping
+    // itself failed), matching sys_fb_map/sys_shm_create/sys_shm_map's
+    // own "0, not SYS_ERR" convention for a pointer-returning call.
+    func sys_nic_mmap() -> uint {
+        if !Task.is_boot_spawned(Task.current_id()) {
+            return 0
+        }
+        let bar0: uint = PCI.e1000_bar0()
+        if bar0 == 0 {
+            return 0
+        }
+        // Without this, the device silently refuses to perform any DMA
+        // (descriptor fetches, packet TX/RX) at all - see
+        // PCI.enable_e1000_bus_master's own doc comment.
+        PCI.enable_e1000_bus_master()
+        let aspace: VMM.AddressSpace* = Task.get_current_aspace()
+        if aspace == null {
+            return 0
+        }
+        return VMM.mmap_foreign_range(aspace, bar0, NIC_MMIO_PAGES)
+    }
+
     // Non-blocking: 0 if no key is currently buffered, else the key code
     // (a plain ASCII byte, or one of Keyboard.KEY_UP/DOWN/LEFT/RIGHT,
     // always > 0 either way). Deliberately not a blocking read like
@@ -817,7 +1035,15 @@ namespace Syscall {
         if Keyboard.input_focus != Keyboard.FOCUS_WM || !Keyboard.has_char() {
             return 0
         }
-        return Keyboard.pop_char() as uint
+        // `& 255` undoes char's signedness, exactly like on_scancode's own
+        // comment (kbd.llpl) describes for the identical hazard: the
+        // KEY_UP/DOWN/LEFT/RIGHT/ESC/F2 sentinels (200-205) don't fit in
+        // a signed 8-bit char, so a bare `as uint` sign-extends them into
+        // huge 64-bit garbage (201 becomes 0xFFFFFFFFFFFFFFC9, not 201) -
+        // silently breaking every ring-3 comparison against
+        // `KEY_UP as uint` etc., which are plain positive int constants
+        // that never pass through a signed char at all.
+        return ((Keyboard.pop_char() as int) & 255) as uint
     }
 
     // Packed absolute mouse state: bits 0-9 = x, bits 10-19 = y, bit 20 =
@@ -825,12 +1051,38 @@ namespace Syscall {
     // wm.llpl) so - unlike sys_kbd_poll - there's no competing reader to
     // arbitrate against and this always reports live state, regardless of
     // Keyboard.input_focus.
+    // Packed: bits 0-9 = x, bits 10-19 = y, bit 20 = left button down,
+    // bits 21-28 = wheel notches since the last call, as a *raw* 8-bit
+    // two's-complement byte (not sign-extended into the surrounding
+    // 64-bit uint) - callers recover the real signed value the same way
+    // sys_kbd_poll's own doc comment describes for the keyboard
+    // sentinels: mask out those 8 bits, then subtract 256 if the result
+    // is >= 128. Consumed (not just read) here, same as
+    // Mouse.take_wheel_delta's own doc comment explains, since this is
+    // the one and only place anything ever reads Mouse's accumulated
+    // wheel count.
     func sys_mouse_poll() -> uint {
         let bits: uint = (Mouse.mx as uint) & 0x3FF
         bits = bits | (((Mouse.my as uint) & 0x3FF) << 10)
         if Mouse.left_down {
             bits = bits | (1 << 20)
         }
+        let wheel: uint = (Mouse.take_wheel_delta() as uint) & 0xFF
+        bits = bits | (wheel << 21)
         return bits
+    }
+
+    // Exposes Keyboard.input_focus (kbd.llpl) to ring-3 - specifically so
+    // wm.llpl can tell "the user just switched focus to windowing for
+    // the first time" apart from "no key is currently buffered", which
+    // sys_kbd_poll's own 0-on-either return can't distinguish (it returns
+    // 0 both when input_focus isn't FOCUS_WM and when it is but nothing's
+    // pending). wm uses that distinction to start owning the screen (and
+    // showing its always-on taskbar) the first time the user actually
+    // wants the GUI, without needing a window to already exist -
+    // otherwise there'd be no way to launch the very first app without
+    // the console.
+    func sys_focus_state() -> uint {
+        return Keyboard.input_focus as uint
     }
 }

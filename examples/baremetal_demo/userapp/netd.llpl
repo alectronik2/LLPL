@@ -1,0 +1,810 @@
+// User-space NIC driver for QEMU's emulated Intel e1000 (vendor:device
+// 8086:100e - the NIC model QEMU adds by default whenever the run command
+// doesn't pass "-nic none", confirmed present via `info pci` during an
+// earlier PCI-enumeration investigation in this codebase's own history).
+// Registers as "netd", the same boot-spawned-service pattern atad.llpl
+// already uses for the ATA controller: PCI enumeration and the MMIO BAR0
+// mapping are gated to boot-spawned tasks only (see pci.llpl's
+// scan_for_e1000_bar0 and syscall.llpl's sys_nic_mmap), so this driver
+// must be spawned straight from its own boot module (kernel.llpl), not
+// launched on demand like ping.elf/traceroute.elf.
+//
+// Owns the whole network stack end to end - Ethernet TX/RX descriptor
+// rings, ARP request/reply, a minimal IPv4 header, and ICMP echo - and
+// exposes one blocking request/reply operation to its clients (OP_PING:
+// "send an ICMP echo with this TTL/id/seq to this IP, then wait for
+// either an echo reply or a time-exceeded and tell me who it came from").
+// That single operation is *both* what ping.elf loops on (fixed TTL,
+// incrementing seq) and what traceroute.elf loops on (fixed id/seq,
+// incrementing TTL) - see those two files' own header comments.
+//
+// A note on risk, for whoever reads this after finding a bug here: the
+// e1000's TX/RX descriptor rings are conceptually the same kind of
+// hardware DMA (the NIC reading/writing guest RAM on its own, off
+// physical addresses this driver hands it) that atad.llpl's Bus Master
+// IDE path hit an unresolved data-integrity bug on (see that file's own
+// header comment) - a bug never root-caused despite extensive tracing.
+// If TX/RX here ever shows the same symptom (a transfer "completes"
+// per the descriptor's own DD bit, but the bytes that moved don't match
+// what was written/expected), don't assume it's a new, unrelated bug -
+// go read atad.llpl's history first.
+
+import "../libsys/imports"
+import "user_runtime"
+
+// ---- e1000 register offsets (byte offset from the mapped BAR0 base) ----
+const REG_CTRL   = 0x0000
+const REG_STATUS = 0x0008
+const REG_EECD   = 0x0010
+const REG_EERD   = 0x0014
+const REG_ICR    = 0x00C0
+const REG_IMS    = 0x00D0
+const REG_IMC    = 0x00D8
+const REG_RCTL   = 0x0100
+const REG_TCTL   = 0x0400
+const REG_TIPG   = 0x0410
+const REG_RDBAL  = 0x2800
+const REG_RDBAH  = 0x2804
+const REG_RDLEN  = 0x2808
+const REG_RDH    = 0x2810
+const REG_RDT    = 0x2818
+const REG_TDBAL  = 0x3800
+const REG_TDBAH  = 0x3804
+const REG_TDLEN  = 0x3808
+const REG_TDH    = 0x3810
+const REG_TDT    = 0x3818
+const REG_MTA    = 0x5200 // 128 x 4-byte entries
+const REG_RAL0   = 0x5400
+const REG_RAH0   = 0x5404
+
+const CTRL_RST = 0x04000000
+const CTRL_ASDE = 0x00000020
+const CTRL_SLU  = 0x00000040
+
+const RCTL_EN    = 0x00000002
+const RCTL_BAM   = 0x00008000 // accept broadcast
+const RCTL_SECRC = 0x04000000 // strip Ethernet CRC from RX buffers
+// BSIZE=00 with BSEX=0 (both left at their reset/zero value here) means
+// 2048-byte RX buffers - matches RX_BUF_SIZE below.
+
+const TCTL_EN  = 0x00000002
+const TCTL_PSP = 0x00000008
+const TCTL_CT_SHIFT   = 4
+const TCTL_COLD_SHIFT = 12
+
+// The one widely-used "known good" TIPG value for a non-fiber e1000 in
+// full duplex - IPGT=10, IPGR1=8, IPGR2=6 packed into the register's own
+// bitfields (bits 0-9/10-19/20-29). Ubiquitous in bare-metal e1000 driver
+// writeups for exactly this reason: it's what real hardware/QEMU expects
+// and there's no reason to derive it differently for a demo driver.
+const TIPG_DEFAULT = 0x0060200A
+
+const RING_ENTRIES = 8 // 8 * 16 bytes = 128 bytes - RDLEN/TDLEN's own
+                        // required granularity (a multiple of 128), so
+                        // this is also the smallest legal ring size.
+const RX_BUF_SIZE = 2048
+const TX_BUF_SIZE = 2048
+const RING_PAGES_PER_RING = 1 // 128 bytes comfortably fits in one page
+const RX_BUF_PAGES = RING_ENTRIES // one page per buffer, kept simple
+const TX_BUF_PAGES = RING_ENTRIES
+const TOTAL_SHM_PAGES = RING_PAGES_PER_RING + RX_BUF_PAGES + RING_PAGES_PER_RING + TX_BUF_PAGES
+
+// Page layout within the one sys_shm_create(TOTAL_SHM_PAGES) region -
+// everything the ring itself needs (RDBAL/TDBAL) lives entirely inside
+// one page each, so no cross-page physical contiguity is ever required
+// (unlike a hypothetical multi-page ring) - see this file's own header
+// comment on why that matters here.
+const PAGE_RX_RING  = 0
+const PAGE_RX_BUF0  = 1 // .. PAGE_RX_BUF0 + RING_ENTRIES - 1
+const PAGE_TX_RING  = PAGE_RX_BUF0 + RX_BUF_PAGES
+const PAGE_TX_BUF0  = PAGE_TX_RING + 1 // .. + RING_ENTRIES - 1
+
+const PAGE_SIZE = 4096
+
+// ---- descriptor layouts (little-endian, native to both x86 and the
+// e1000 itself - no byte-order conversion needed here, unlike the
+// Ethernet/ARP/IP/ICMP header structs further down) ----
+packed struct RxDesc {
+    let addr: u64
+    let length: u16
+    let checksum: u16
+    let status: u8
+    let errors: u8
+    let special: u16
+}
+
+packed struct TxDesc {
+    let addr: u64
+    let length: u16
+    let cso: u8
+    let cmd: u8
+    let status: u8
+    let css: u8
+    let special: u16
+}
+
+const RXD_STAT_DD = 0x01 // descriptor done - hardware has written a frame here
+const TXD_STAT_DD = 0x01 // descriptor done - hardware has transmitted this one
+const TXD_CMD_EOP  = 0x01
+const TXD_CMD_IFCS = 0x02
+const TXD_CMD_RS   = 0x08
+
+// ---- wire-format headers (all multi-byte fields are big-endian /
+// network order - always read/written through htons/htonl below, never
+// assigned directly, since x86 itself is little-endian) ----
+packed struct EthHeader {
+    let dest: u8[6]
+    let src: u8[6]
+    let ethertype: u16
+}
+const ETH_HLEN = 14
+const ETHERTYPE_ARP = 0x0806
+const ETHERTYPE_IPV4 = 0x0800
+
+packed struct ArpPacket {
+    let htype: u16
+    let ptype: u16
+    let hlen: u8
+    let plen: u8
+    let oper: u16
+    let sha: u8[6]
+    let spa: u32
+    let tha: u8[6]
+    let tpa: u32
+}
+const ARP_LEN = 28
+const ARP_FRAME_LEN = ETH_HLEN + ARP_LEN
+const ARP_HTYPE_ETH = 1
+const ARP_OPER_REQUEST = 1
+const ARP_OPER_REPLY = 2
+
+packed struct IpHeader {
+    let ver_ihl: u8
+    let tos: u8
+    let total_len: u16
+    let ident: u16
+    let flags_frag: u16
+    let ttl: u8
+    let proto: u8
+    let checksum: u16
+    let src: u32
+    let dst: u32
+}
+const IP_HLEN = 20
+const IP_PROTO_ICMP = 1
+
+packed struct IcmpHeader {
+    let type_: u8
+    let code: u8
+    let checksum: u16
+    let id: u16
+    let seq: u16
+}
+const ICMP_HLEN = 8
+const ICMP_ECHO_REQUEST = 8
+const ICMP_ECHO_REPLY = 0
+const ICMP_TIME_EXCEEDED = 11
+const ICMP_DEST_UNREACHABLE = 3
+
+const ICMP_PAYLOAD_LEN = 32
+const FRAME_MAX = ETH_HLEN + IP_HLEN + ICMP_HLEN + ICMP_PAYLOAD_LEN
+
+// ---- static network configuration - this demo has no DHCP client, so
+// it self-assigns the address QEMU's SLIRP (user-mode networking, the
+// default whenever the run command doesn't say "-nic none") already
+// reserves for exactly this purpose: 10.0.2.15 is SLIRP's own default
+// first-guest address, 10.0.2.2 its virtual gateway - using them
+// statically avoids needing to implement DHCP just for a demo NIC
+// driver. A real deployment (or a non-default SLIRP subnet) would need
+// these to be configurable, not hardcoded. ----
+func make_ip(a: u64, b: u64, c: u64, d: u64) -> u64 {
+    return (a << 24) | (b << 16) | (c << 8) | d
+}
+let our_ip: u64 = 0    // set in main() via make_ip(10,0,2,15)
+let gateway_ip: u64 = 0 // set in main() via make_ip(10,0,2,2)
+let subnet_prefix: u64 = 0 // set in main() via make_ip(10,0,2,0)
+const SUBNET_MASK = 0xFFFFFF00 // /24
+
+let our_mac: u8[6]
+
+// ---- byte-order helpers - x86 is little-endian, the wire is big-endian ----
+func htons(v: u64) -> u16 {
+    return (((v & 0xFF) << 8) | ((v >> 8) & 0xFF)) as u16
+}
+func htonl(v: u64) -> u32 {
+    return (((v & 0xFF) << 24) | ((v & 0xFF00) << 8) | ((v >> 8) & 0xFF00) | ((v >> 24) & 0xFF)) as u32
+}
+// Both operations are self-inverse (swapping twice restores the
+// original value), so the host->network and network->host directions
+// share the same implementation - named separately only so call sites
+// stay self-documenting about which direction is meant.
+func ntohs(v: u64) -> u16 {
+    return htons(v)
+}
+func ntohl(v: u64) -> u32 {
+    return htonl(v)
+}
+
+func checksum16(data: u8*, len: u64) -> u16 {
+    let sum: u64 = 0
+    let i: u64 = 0
+    while i + 1 < len {
+        let word: u64 = ((data[i] as u64) << 8) | (data[i + 1] as u64)
+        sum = sum + word
+        i = i + 2
+    }
+    if i < len {
+        sum = sum + ((data[i] as u64) << 8)
+    }
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16)
+    }
+    return (~sum) as u16
+}
+
+// ---- MMIO register access - volatile-qualified so the compiler never
+// hoists/caches a read or write across loop iterations (see this
+// language's `volatile` qualifier, already used elsewhere in this
+// codebase for a cross-task-visible counter - kernel.llpl's bg_counter -
+// for the same underlying reason: without it, a register poll loop with
+// no visible write in its body is exactly the shape an optimizer would
+// turn into "read once, then spin forever on the cached value"). ----
+let nic_base: u64 = 0
+
+func reg_write32(offset: u64, value: u32) {
+    volatile let p: u32* = (nic_base + offset) as u32*
+    p[0] = value
+}
+
+func reg_read32(offset: u64) -> u32 {
+    volatile let p: u32* = (nic_base + offset) as u32*
+    return p[0]
+}
+
+// ---- shared descriptor-ring/buffer region (see PAGE_* layout above) ----
+let shm_virt: u64 = 0
+
+func page_virt(page: u64) -> u64 {
+    return shm_virt + page * PAGE_SIZE
+}
+func page_phys(page: u64) -> u64 {
+    return sys_virt_to_phys(page_virt(page))
+}
+
+func rx_desc_at(i: u64) -> RxDesc* {
+    return (page_virt(PAGE_RX_RING) + i * 16) as RxDesc*
+}
+func tx_desc_at(i: u64) -> TxDesc* {
+    return (page_virt(PAGE_TX_RING) + i * 16) as TxDesc*
+}
+func rx_buf_virt(i: u64) -> u8* {
+    return page_virt(PAGE_RX_BUF0 + i) as u8*
+}
+func tx_buf_virt(i: u64) -> u8* {
+    return page_virt(PAGE_TX_BUF0 + i) as u8*
+}
+
+let tx_next: u64 = 0
+
+func init_chip() -> bool {
+    // Full device reset, then a bounded wait for it to clear (QEMU's
+    // e1000 model completes this essentially instantly - the bound is
+    // just the same defensive habit atad.llpl's dma_wait already
+    // established: never spin on hardware state with no way out).
+    reg_write32(REG_CTRL, reg_read32(REG_CTRL) | CTRL_RST)
+    let tries: u64 = 0
+    while (reg_read32(REG_CTRL) & CTRL_RST) != 0 && tries < 1000000 {
+        tries = tries + 1
+    }
+
+    // Mask every interrupt cause and drain any pending one - this driver
+    // polls throughout (again, matching atad.llpl's own PIO/DMA-wait
+    // style) rather than taking a real IRQ.
+    reg_write32(REG_IMC, 0xFFFFFFFF)
+    reg_read32(REG_ICR)
+
+    reg_write32(REG_CTRL, reg_read32(REG_CTRL) | CTRL_ASDE | CTRL_SLU)
+
+    // QEMU's e1000 preloads RAL0/RAH0 from the device's own configured
+    // MAC at reset time (the same thing real hardware's EEPROM-loaded
+    // receive-address registers give you after a reset) - reading them
+    // back is simpler and more direct than round-tripping through the
+    // EERD software EEPROM-read protocol for the same six bytes.
+    let ral: u64 = reg_read32(REG_RAL0) as u64
+    let rah: u64 = reg_read32(REG_RAH0) as u64
+    our_mac[0] = (ral & 0xFF) as u8
+    our_mac[1] = ((ral >> 8) & 0xFF) as u8
+    our_mac[2] = ((ral >> 16) & 0xFF) as u8
+    our_mac[3] = ((ral >> 24) & 0xFF) as u8
+    our_mac[4] = (rah & 0xFF) as u8
+    our_mac[5] = ((rah >> 8) & 0xFF) as u8
+
+    // Multicast Table Array: 128 x 4-byte entries, must start zeroed.
+    let m: u64 = 0
+    while m < 128 {
+        reg_write32(REG_MTA + m * 4, 0)
+        m = m + 1
+    }
+
+    return true
+}
+
+func init_rx() {
+    let i: u64 = 0
+    while i < RING_ENTRIES {
+        let d: RxDesc* = rx_desc_at(i)
+        d.addr = page_phys(PAGE_RX_BUF0 + i)
+        d.length = 0
+        d.checksum = 0
+        d.status = 0
+        d.errors = 0
+        d.special = 0
+        i = i + 1
+    }
+
+    reg_write32(REG_RDBAL, page_phys(PAGE_RX_RING) as u32)
+    reg_write32(REG_RDBAH, 0)
+    reg_write32(REG_RDLEN, (RING_ENTRIES * 16) as u32)
+    reg_write32(REG_RDH, 0)
+    // All RING_ENTRIES-1 non-head descriptors are given to hardware,
+    // leaving exactly one (index RING_ENTRIES-1) not yet handed over -
+    // the standard way to keep RDH==RDT unambiguous (empty vs full),
+    // same convention TX uses (see init_tx).
+    reg_write32(REG_RDT, (RING_ENTRIES - 1) as u32)
+
+    reg_write32(REG_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC)
+}
+
+func init_tx() {
+    let i: u64 = 0
+    while i < RING_ENTRIES {
+        let d: TxDesc* = tx_desc_at(i)
+        d.addr = page_phys(PAGE_TX_BUF0 + i)
+        d.length = 0
+        d.cso = 0
+        d.cmd = 0
+        d.status = TXD_STAT_DD // idle slots read as "already done"
+        d.css = 0
+        d.special = 0
+        i = i + 1
+    }
+
+    reg_write32(REG_TDBAL, page_phys(PAGE_TX_RING) as u32)
+    reg_write32(REG_TDBAH, 0)
+    reg_write32(REG_TDLEN, (RING_ENTRIES * 16) as u32)
+    reg_write32(REG_TDH, 0)
+    reg_write32(REG_TDT, 0)
+
+    reg_write32(REG_TIPG, TIPG_DEFAULT)
+    reg_write32(REG_TCTL, TCTL_EN | TCTL_PSP | (0xF << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT))
+    tx_next = 0
+}
+
+// Copies `len` bytes from `buf` into the next TX slot's own buffer and
+// hands it to hardware, then polls (bounded) for the descriptor's own
+// Descriptor Done bit - mirrors atad.llpl's dma_wait in spirit (poll,
+// don't take an interrupt; bound the wait so a misbehaving controller
+// can't hang this whole driver task forever).
+func send_frame(buf: u8*, len: u64) -> bool {
+    let i: u64 = tx_next
+    // volatile: hardware (the e1000's own TX DMA engine) writes `status`
+    // asynchronously to the CPU, exactly like an MMIO register - without
+    // this, a poll loop with no visible write to `status` in its own
+    // body is precisely the shape an optimizer turns into "read once,
+    // spin on a stale cached value forever" (see this file's own comment
+    // on reg_read32/reg_write32, and kernel.llpl's bg_counter for the
+    // same underlying hazard against a different kind of concurrent
+    // writer).
+    volatile let d: TxDesc* = tx_desc_at(i)
+
+    let tries: u64 = 0
+    while (d.status & TXD_STAT_DD) == 0 && tries < 1000000 {
+        tries = tries + 1
+    }
+    if (d.status & TXD_STAT_DD) == 0 {
+        sys_puts("netd: TX ring stuck, slot never came free\n")
+        return false
+    }
+
+    sys_memcpy(tx_buf_virt(i), buf, len)
+    d.length = len as u16
+    d.cso = 0
+    d.status = 0
+    d.css = 0
+    d.special = 0
+    d.cmd = TXD_CMD_EOP | TXD_CMD_IFCS | TXD_CMD_RS
+
+    tx_next = (i + 1) % RING_ENTRIES
+    reg_write32(REG_TDT, tx_next as u32)
+
+    tries = 0
+    while (d.status & TXD_STAT_DD) == 0 && tries < 1000000 {
+        tries = tries + 1
+    }
+    return (d.status & TXD_STAT_DD) != 0
+}
+
+// Non-blocking: copies out the next completed RX frame's bytes (up to
+// `max`) into `out` and gives the descriptor back to hardware, or
+// returns 0 if nothing has arrived. Callers that need to wait for a
+// specific reply (see wait_for_reply below) poll this in their own
+// bounded loop, same pattern as everywhere else in this file.
+let rx_next: u64 = 0
+
+func poll_rx(out: u8*, max: u64) -> u64 {
+    // volatile: hardware writes `status`/`length` here asynchronously,
+    // same reasoning as send_frame's own `d` above.
+    volatile let d: RxDesc* = rx_desc_at(rx_next)
+    if (d.status & RXD_STAT_DD) == 0 {
+        return 0
+    }
+    let n: u64 = d.length as u64
+    if n > max {
+        n = max
+    }
+    sys_memcpy(out, rx_buf_virt(rx_next), n)
+
+    d.status = 0
+    d.length = 0
+    reg_write32(REG_RDT, rx_next as u32)
+    rx_next = (rx_next + 1) % RING_ENTRIES
+
+    return n
+}
+
+// ---- ARP ----
+// One entry is all this driver ever needs at once: every IP this demo
+// talks to is resolved through either the gateway or the target itself
+// directly (see resolve_mac below), and requests are already serialized
+// one at a time by netd's own blocking main loop (see main()).
+let arp_ip: u64 = 0
+let arp_mac: u8[6]
+let arp_valid: bool = false
+
+func send_arp_request(target_ip: u64) -> bool {
+    let frame: u8[42]
+    let eth: EthHeader* = (frame as u8*) as EthHeader*
+    let i: int = 0
+    while i < 6 {
+        eth.dest[i] = 0xFF // broadcast
+        eth.src[i] = our_mac[i]
+        i = i + 1
+    }
+    eth.ethertype = htons(ETHERTYPE_ARP)
+
+    let arp: ArpPacket* = ((frame as u8*) + ETH_HLEN) as ArpPacket*
+    arp.htype = htons(ARP_HTYPE_ETH)
+    arp.ptype = htons(ETHERTYPE_IPV4)
+    arp.hlen = 6
+    arp.plen = 4
+    arp.oper = htons(ARP_OPER_REQUEST)
+    i = 0
+    while i < 6 {
+        arp.sha[i] = our_mac[i]
+        arp.tha[i] = 0
+        i = i + 1
+    }
+    arp.spa = htonl(our_ip)
+    arp.tpa = htonl(target_ip)
+
+    return send_frame(frame as u8*, ETH_HLEN + ARP_LEN)
+}
+
+// Called from the main RX-dispatch path (see handle_frame) whenever an
+// ARP packet arrives - records a reply matching whatever's currently
+// outstanding, and answers any request asking for our own address.
+func handle_arp(buf: u8*, len: u64) {
+    if len < ETH_HLEN + ARP_LEN {
+        return
+    }
+    let arp: ArpPacket* = (buf + ETH_HLEN) as ArpPacket*
+    let oper: u64 = ntohs(arp.oper) as u64
+    let tpa: u64 = ntohl(arp.tpa) as u64
+    let spa: u64 = ntohl(arp.spa) as u64
+
+    if oper == ARP_OPER_REQUEST && tpa == our_ip {
+        let reply: u8[42]
+        let eth: EthHeader* = (reply as u8*) as EthHeader*
+        let i: int = 0
+        while i < 6 {
+            eth.dest[i] = arp.sha[i]
+            eth.src[i] = our_mac[i]
+            i = i + 1
+        }
+        eth.ethertype = htons(ETHERTYPE_ARP)
+
+        let rarp: ArpPacket* = ((reply as u8*) + ETH_HLEN) as ArpPacket*
+        rarp.htype = htons(ARP_HTYPE_ETH)
+        rarp.ptype = htons(ETHERTYPE_IPV4)
+        rarp.hlen = 6
+        rarp.plen = 4
+        rarp.oper = htons(ARP_OPER_REPLY)
+        i = 0
+        while i < 6 {
+            rarp.sha[i] = our_mac[i]
+            rarp.tha[i] = arp.sha[i]
+            i = i + 1
+        }
+        rarp.spa = htonl(our_ip)
+        rarp.tpa = htonl(spa)
+        send_frame(reply as u8*, ETH_HLEN + ARP_LEN)
+    } else if oper == ARP_OPER_REPLY && spa == arp_ip {
+        let i: int = 0
+        while i < 6 {
+            arp_mac[i] = arp.sha[i]
+            i = i + 1
+        }
+        arp_valid = true
+    }
+}
+
+// Resolves `ip` to a MAC address, sending (and bounded-retrying) an ARP
+// request if it isn't already cached. Polls poll_rx itself while
+// waiting - handle_frame (called from there) is what actually fills in
+// arp_mac/arp_valid via handle_arp above.
+func resolve_mac(ip: u64, out_mac: u8*) -> bool {
+    if arp_valid && arp_ip == ip {
+        sys_memcpy(out_mac, arp_mac as u8*, 6)
+        return true
+    }
+
+    arp_ip = ip
+    arp_valid = false
+
+    let attempt: u64 = 0
+    while attempt < 3 {
+        send_arp_request(ip)
+        let tries: u64 = 0
+        while tries < 500000 {
+            let buf: u8[74]
+            let n: u64 = poll_rx(buf as u8*, FRAME_MAX)
+            if n > 0 {
+                handle_frame(buf as u8*, n)
+                if arp_valid && arp_ip == ip {
+                    sys_memcpy(out_mac, arp_mac as u8*, 6)
+                    return true
+                }
+            }
+            tries = tries + 1
+        }
+        attempt = attempt + 1
+    }
+    return false
+}
+
+func next_hop_ip(dest_ip: u64) -> u64 {
+    if (dest_ip & SUBNET_MASK) == subnet_prefix {
+        return dest_ip
+    }
+    return gateway_ip
+}
+
+// ---- ICMP/IP ----
+// The one outstanding echo request this driver is currently waiting a
+// reply for (again: single in-flight request, serialized by the main
+// loop - see this file's own header comment on the OP_PING protocol).
+let wait_id: u64 = 0
+let wait_seq: u64 = 0
+let wait_dest_ip: u64 = 0
+let got_reply: bool = false
+let reply_status: u64 = 0
+let reply_from_ip: u64 = 0
+
+const PING_STATUS_ECHO_REPLY = 0
+const PING_STATUS_TIME_EXCEEDED = 1
+const PING_STATUS_TIMEOUT = 2
+const PING_STATUS_ERROR = 3
+
+func handle_icmp(ip: IpHeader*, buf: u8*, len: u64) {
+    let ihl: u64 = ((ip.ver_ihl as u64) & 0xF) * 4
+    if len < ETH_HLEN + ihl + ICMP_HLEN {
+        return
+    }
+    let icmp: IcmpHeader* = (buf + ETH_HLEN + ihl) as IcmpHeader*
+    let src_ip: u64 = ntohl(ip.src) as u64
+
+    if icmp.type_ == ICMP_ECHO_REPLY {
+        let id: u64 = ntohs(icmp.id) as u64
+        let seq: u64 = ntohs(icmp.seq) as u64
+        if id == wait_id && seq == wait_seq && src_ip == wait_dest_ip {
+            got_reply = true
+            reply_status = PING_STATUS_ECHO_REPLY
+            reply_from_ip = src_ip
+        }
+    } else if icmp.type_ == ICMP_TIME_EXCEEDED {
+        // The original (too-many-hops) datagram is embedded 8 bytes into
+        // this ICMP message's own payload: IP header + first 8 bytes of
+        // its payload (here, our own ICMP echo's id/seq) - enough to
+        // confirm this time-exceeded really is a reply to *our* request,
+        // not some unrelated traffic sharing the wire.
+        let inner_off: u64 = ETH_HLEN + ihl + ICMP_HLEN
+        if len >= inner_off + IP_HLEN + 8 {
+            let inner_ip: IpHeader* = (buf + inner_off) as IpHeader*
+            let inner_ihl: u64 = ((inner_ip.ver_ihl as u64) & 0xF) * 4
+            let inner_icmp: IcmpHeader* = (buf + inner_off + inner_ihl) as IcmpHeader*
+            let id: u64 = ntohs(inner_icmp.id) as u64
+            let seq: u64 = ntohs(inner_icmp.seq) as u64
+            if id == wait_id && seq == wait_seq {
+                got_reply = true
+                reply_status = PING_STATUS_TIME_EXCEEDED
+                reply_from_ip = src_ip
+            }
+        }
+    }
+}
+
+func handle_frame(buf: u8*, len: u64) {
+    if len < ETH_HLEN {
+        return
+    }
+    let eth: EthHeader* = buf as EthHeader*
+    let ethertype: u64 = ntohs(eth.ethertype) as u64
+
+    if ethertype == ETHERTYPE_ARP {
+        handle_arp(buf, len)
+    } else if ethertype == ETHERTYPE_IPV4 {
+        if len < ETH_HLEN + IP_HLEN {
+            return
+        }
+        let ip: IpHeader* = (buf + ETH_HLEN) as IpHeader*
+        if ip.proto == IP_PROTO_ICMP {
+            handle_icmp(ip, buf, len)
+        }
+    }
+}
+
+func send_icmp_echo(dest_ip: u64, ttl: u64, id: u64, seq: u64) -> bool {
+    let hop_ip: u64 = next_hop_ip(dest_ip)
+    let dest_mac: u8[6]
+    if !resolve_mac(hop_ip, dest_mac as u8*) {
+        return false
+    }
+
+    let frame: u8[74]
+    let eth: EthHeader* = (frame as u8*) as EthHeader*
+    let i: int = 0
+    while i < 6 {
+        eth.dest[i] = dest_mac[i]
+        eth.src[i] = our_mac[i]
+        i = i + 1
+    }
+    eth.ethertype = htons(ETHERTYPE_IPV4)
+
+    let ip: IpHeader* = ((frame as u8*) + ETH_HLEN) as IpHeader*
+    ip.ver_ihl = 0x45
+    ip.tos = 0
+    ip.total_len = htons(IP_HLEN + ICMP_HLEN + ICMP_PAYLOAD_LEN)
+    ip.ident = htons(seq)
+    ip.flags_frag = 0
+    ip.ttl = ttl as u8
+    ip.proto = IP_PROTO_ICMP
+    ip.checksum = 0
+    ip.src = htonl(our_ip)
+    ip.dst = htonl(dest_ip)
+    ip.checksum = htons(checksum16(((frame as u8*) + ETH_HLEN) as u8*, IP_HLEN) as u64)
+
+    let icmp: IcmpHeader* = ((frame as u8*) + ETH_HLEN + IP_HLEN) as IcmpHeader*
+    icmp.type_ = ICMP_ECHO_REQUEST
+    icmp.code = 0
+    icmp.checksum = 0
+    icmp.id = htons(id)
+    icmp.seq = htons(seq)
+    let payload: u8* = (frame as u8*) + ETH_HLEN + IP_HLEN + ICMP_HLEN
+    let p: u64 = 0
+    while p < ICMP_PAYLOAD_LEN {
+        payload[p] = (p & 0xFF) as u8
+        p = p + 1
+    }
+    icmp.checksum = htons(checksum16(((frame as u8*) + ETH_HLEN + IP_HLEN) as u8*, ICMP_HLEN + ICMP_PAYLOAD_LEN) as u64)
+
+    return send_frame(frame as u8*, FRAME_MAX)
+}
+
+// One full OP_PING cycle: send, then poll RX (bounded by `timeout_iters`
+// iterations, not a wall clock - see this file's own header comment on
+// why everything here polls with an iteration bound rather than a real
+// timer) until handle_icmp records a matching reply, a matching
+// time-exceeded, or the bound runs out.
+func do_ping(dest_ip: u64, ttl: u64, id: u64, seq: u64, timeout_iters: u64, out_status: u64*, out_from_ip: u64*, out_rtt: u64*) {
+    wait_id = id
+    wait_seq = seq
+    wait_dest_ip = dest_ip
+    got_reply = false
+    reply_status = PING_STATUS_TIMEOUT
+    reply_from_ip = 0
+
+    if !send_icmp_echo(dest_ip, ttl, id, seq) {
+        out_status[0] = PING_STATUS_ERROR
+        out_from_ip[0] = 0
+        out_rtt[0] = 0
+        return
+    }
+
+    let tries: u64 = 0
+    while !got_reply && tries < timeout_iters {
+        let buf: u8[74]
+        let n: u64 = poll_rx(buf as u8*, FRAME_MAX)
+        if n > 0 {
+            handle_frame(buf as u8*, n)
+        }
+        tries = tries + 1
+    }
+
+    out_status[0] = reply_status
+    out_from_ip[0] = reply_from_ip
+    out_rtt[0] = tries
+}
+
+// ---- client protocol ----
+const OP_PING = 1
+
+func _start(argc: u64, argv: u64*) {
+    our_ip = make_ip(10, 0, 2, 15)
+    gateway_ip = make_ip(10, 0, 2, 2)
+    subnet_prefix = make_ip(10, 0, 2, 0)
+
+    nic_base = sys_nic_mmap() as u64
+    if nic_base == 0 {
+        sys_putln("netd: no e1000 NIC found (or MMIO map failed) - network unavailable")
+        rt_exit(1)
+    }
+
+    shm_virt = sys_shm_create(TOTAL_SHM_PAGES) as u64
+    if shm_virt == 0 {
+        sys_putln("netd: sys_shm_create failed")
+        rt_exit(1)
+    }
+
+    init_chip()
+    init_rx()
+    init_tx()
+
+    sys_puts("netd: e1000 up, mac=")
+    let i: int = 0
+    while i < 6 {
+        rt_print_hex_byte(our_mac[i] as u64)
+        if i < 5 {
+            sys_puts(":")
+        }
+        i = i + 1
+    }
+    sys_puts(", ip=10.0.2.15\n")
+
+    if sys_register("netd") == RT_SYS_ERR {
+        rt_exit(1)
+    }
+
+    while true {
+        let raw: u8[48]
+        let sender: u64 = sys_msg_recv(raw as u8*, 48)
+        if sender == RT_SYS_ERR {
+            continue
+        }
+        let req: u64* = (raw as u8*) as u64*
+        let op: u64 = req[0]
+
+        let reply: u8[24]
+        let reply_word: u64* = (reply as u8*) as u64*
+
+        if op == OP_PING {
+            let dest_ip: u64 = req[1]
+            let ttl: u64 = req[2]
+            let id: u64 = req[3]
+            let seq: u64 = req[4]
+            let timeout_iters: u64 = req[5]
+            let status: u64 = 0
+            let from_ip: u64 = 0
+            let rtt: u64 = 0
+            do_ping(dest_ip, ttl, id, seq, timeout_iters, &status, &from_ip, &rtt)
+            reply_word[0] = status
+            reply_word[1] = from_ip
+            reply_word[2] = rtt
+        } else {
+            reply_word[0] = PING_STATUS_ERROR
+            reply_word[1] = 0
+            reply_word[2] = 0
+        }
+
+        sys_msg_reply(sender, reply as u8*, 24)
+    }
+}

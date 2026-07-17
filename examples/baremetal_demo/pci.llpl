@@ -1,0 +1,207 @@
+// Minimal PCI config-space access - just enough to find the Bus Master
+// IDE controller's I/O base (BAR4), which is the only thing ata.llpl's
+// DMA path (see its own header comment) actually needs PCI for. Not a
+// general enumerator: only scans bus 0 (where QEMU/Bochs/every common
+// PC chipset places the IDE controller - a real multi-bridge machine
+// would need to recurse into secondary buses, which nothing here does).
+//
+// Config space is accessed the classic two-port way: write a "which
+// bus/slot/function/register" address to CONFIG_ADDRESS (0xCF8), then
+// read/write the corresponding 32-bit dword through CONFIG_DATA
+// (0xCFC). This module runs entirely in kernel code, so it hits these
+// ports directly via HAL - unlike atad.llpl's own ATA port access, none
+// of this needs (or goes through) the ring-3 sys_inb/outb capability
+// gate.
+
+import hal
+
+namespace PCI {
+    const CONFIG_ADDRESS: uint = 0xCF8
+    const CONFIG_DATA: uint = 0xCFC
+
+    const CLASS_MASS_STORAGE: uint = 0x01
+    const SUBCLASS_IDE: uint = 0x01
+
+    // BAR4 - the 5th base address register (BAR0 is offset 0x10, one
+    // dword each) - is where the IDE class spec puts a controller's Bus
+    // Master register block.
+    const OFFSET_BAR4: uint = 0x20
+    const OFFSET_BAR0: uint = 0x10
+    const OFFSET_CLASS: uint = 0x08 // revision/prog_if/subclass/class, one dword
+    const OFFSET_VENDOR_DEVICE: uint = 0x00 // vendor(low16)/device(high16), one dword
+
+    // QEMU's default NIC model (added automatically whenever the run
+    // command doesn't say "-nic none" - confirmed present via `info pci`
+    // during the DMA investigation session: "Ethernet controller: PCI
+    // device 8086:100e"). Matched by exact vendor:device rather than by
+    // class/subclass (0x02/0x00, Ethernet) - simpler, and precise enough
+    // for a demo that only ever targets this one emulated chip.
+    const VENDOR_INTEL: uint = 0x8086
+    const DEVICE_E1000: uint = 0x100E
+
+    func config_address(bus: uint, slot: uint, func_: uint, offset: uint) -> uint {
+        return 0x80000000 | (bus << 16) | (slot << 11) | (func_ << 8) | (offset & 0xFC)
+    }
+
+    func config_read32(bus: uint, slot: uint, func_: uint, offset: uint) -> uint {
+        HAL.outl(CONFIG_ADDRESS, config_address(bus, slot, func_, offset))
+        return HAL.inl(CONFIG_DATA)
+    }
+
+    func config_write32(bus: uint, slot: uint, func_: uint, offset: uint, value: uint) {
+        HAL.outl(CONFIG_ADDRESS, config_address(bus, slot, func_, offset))
+        HAL.outl(CONFIG_DATA, value)
+    }
+
+    // The PCI Command register (offset 0x04) - bit 1 (Memory Space
+    // Enable) and bit 2 (Bus Master Enable). Bus Master in particular is
+    // not on by default: a PCI device may not read or write system
+    // memory on its own (descriptor fetches, packet DMA, ...) until its
+    // driver explicitly sets this bit - the classic real-driver
+    // `pci_set_master()` step, easy to forget when everything else
+    // (register reads/writes through the mapped MMIO BAR, which don't
+    // need it) already appears to work.
+    const OFFSET_COMMAND: uint = 0x04
+    const CMD_MEMORY_SPACE = 0x02
+    const CMD_BUS_MASTER   = 0x04
+
+    // 0 (an invalid/reserved value no real device ever reports) if
+    // nothing answers at this bus/slot/function - the standard "probe"
+    // convention every PCI scanner uses, since a floating/empty slot's
+    // config space reads back all-ones instead of erroring.
+    func vendor_id_at(bus: uint, slot: uint, func_: uint) -> uint {
+        return config_read32(bus, slot, func_, 0) & 0xFFFF
+    }
+
+    // -1 if no IDE controller was found on bus 0 in any slot/function -
+    // callers treat that as "DMA unavailable", falling back to PIO
+    // (see atad.llpl).
+    let bmide_base_cache: uint = 0
+    let bmide_scanned: bool = false
+
+    func scan_for_bmide_base() -> uint {
+        let slot: uint = 0
+        while slot < 32 {
+            let func_: uint = 0
+            while func_ < 8 {
+                if vendor_id_at(0, slot, func_) != 0xFFFF {
+                    // Dword at offset 0x08 packs, little-endian low-to-high
+                    // byte: Revision ID, Prog IF, Subclass, Class Code -
+                    // bits[16:24] and bits[24:32] respectively for the
+                    // latter two, not [8:16]/[16:24] (that's Prog IF and
+                    // Subclass - an easy off-by-one-byte mistake that
+                    // silently matched nothing during testing, since a
+                    // real Prog IF/Subclass pair for an IDE controller
+                    // never happens to equal Mass-Storage/IDE's own
+                    // class/subclass values).
+                    let class_dword: uint = config_read32(0, slot, func_, OFFSET_CLASS)
+                    let subclass: uint = (class_dword >> 16) & 0xFF
+                    let class_code: uint = (class_dword >> 24) & 0xFF
+                    if class_code == CLASS_MASS_STORAGE && subclass == SUBCLASS_IDE {
+                        let bar4: uint = config_read32(0, slot, func_, OFFSET_BAR4)
+                        // Bit 0 set marks an I/O-space BAR (always true for
+                        // a Bus Master IDE BAR4 per spec) - bits 0-1 are
+                        // flags, not part of the address, and must be
+                        // masked off to get the real port base.
+                        if (bar4 & 1) != 0 {
+                            return bar4 & 0xFFFFFFFC
+                        }
+                    }
+                }
+                func_ = func_ + 1
+            }
+            slot = slot + 1
+        }
+        return 0
+    }
+
+    // Scans once, on first call, and caches the result - repeated port
+    // I/O for something that can't change at runtime would just be
+    // wasted boot time on every later caller (atad.llpl asks once at
+    // startup, but there's no reason a second caller should re-scan).
+    func bmide_base() -> uint {
+        if !bmide_scanned {
+            bmide_base_cache = scan_for_bmide_base()
+            bmide_scanned = true
+        }
+        return bmide_base_cache
+    }
+
+    // Same bus-0-only scan as scan_for_bmide_base, but matching the
+    // e1000's own vendor:device ID and reading BAR0 - a *memory*-space
+    // BAR (bit 0 clear), unlike the IDE controller's I/O-space BAR4.
+    // Returns the masked 32-bit physical MMIO base, or 0 if no e1000 is
+    // present on bus 0.
+    let e1000_bar0_cache: uint = 0
+    let e1000_slot_cache: uint = 0
+    let e1000_func_cache: uint = 0
+    let e1000_scanned: bool = false
+    let e1000_found: bool = false
+
+    func scan_for_e1000_bar0() -> uint {
+        let slot: uint = 0
+        while slot < 32 {
+            let func_: uint = 0
+            while func_ < 8 {
+                if vendor_id_at(0, slot, func_) != 0xFFFF {
+                    let vd: uint = config_read32(0, slot, func_, OFFSET_VENDOR_DEVICE)
+                    let vendor: uint = vd & 0xFFFF
+                    let device: uint = (vd >> 16) & 0xFFFF
+                    if vendor == VENDOR_INTEL && device == DEVICE_E1000 {
+                        let bar0: uint = config_read32(0, slot, func_, OFFSET_BAR0)
+                        // Bit 0 clear = memory-space BAR (always true for
+                        // e1000 BAR0); bits 1-2 encode the address width
+                        // (0 = 32-bit here), bit 3 is prefetchable - none
+                        // of those are part of the address, so mask down
+                        // to the 4KB-aligned base like any memory BAR.
+                        if (bar0 & 1) == 0 {
+                            e1000_slot_cache = slot
+                            e1000_func_cache = func_
+                            e1000_found = true
+                            return bar0 & 0xFFFFFFF0
+                        }
+                    }
+                }
+                func_ = func_ + 1
+            }
+            slot = slot + 1
+        }
+        return 0
+    }
+
+    func e1000_bar0() -> uint {
+        if !e1000_scanned {
+            e1000_bar0_cache = scan_for_e1000_bar0()
+            e1000_scanned = true
+        }
+        return e1000_bar0_cache
+    }
+
+    // Sets the PCI Command register's Bus Master Enable bit (and Memory
+    // Space Enable, defensively - QEMU's default setup already has BAR0
+    // decoding memory-space accesses since ordinary MMIO register reads/
+    // writes already work without this, but there's no reason not to be
+    // explicit) for the e1000 found by e1000_bar0() above. Without this,
+    // the device silently refuses to perform any DMA at all - QEMU's own
+    // e1000 model logs exactly that ("pci_master 0") whenever a TX/RX
+    // ring is armed before this runs, which is what first exposed this
+    // as the reason no frame this driver "sent" ever left the guest even
+    // though every register write leading up to it looked correct.
+    func enable_e1000_bus_master() -> bool {
+        if !e1000_found {
+            e1000_bar0() // populates e1000_found as a side effect, if present
+        }
+        if !e1000_found {
+            return false
+        }
+        // Offset 0x04 is a single dword holding both Command (low 16
+        // bits) and Status (high 16 bits, several bits of which are
+        // write-1-to-clear) - masking to the low 16 before OR-ing in the
+        // enable bits and writing back avoids accidentally clearing any
+        // pending status bit this same read just happened to observe.
+        let cmd: uint = config_read32(0, e1000_slot_cache, e1000_func_cache, OFFSET_COMMAND) & 0xFFFF
+        config_write32(0, e1000_slot_cache, e1000_func_cache, OFFSET_COMMAND,
+                       cmd | CMD_BUS_MASTER | CMD_MEMORY_SPACE)
+        return true
+    }
+}

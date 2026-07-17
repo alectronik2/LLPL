@@ -25,7 +25,7 @@ namespace ATA {
     const OP_WRITE = 2
 
     const SECTOR_SIZE = 512
-    const REQ_SIZE = 16 // two uint fields (op, lba), 8 bytes each
+    const REQ_SIZE = 16 // two u64 fields (op, lba), 8 bytes each
 
     let present: bool = false
     let atad_pid: int = -1
@@ -46,7 +46,7 @@ namespace ATA {
     // reason it forces them on for its own wait) - so this uses bare
     // atomic_exchange (a real, lock-free atomic on x86 regardless of
     // interrupt state) and spins with interrupts left alone.
-    let ata_lock: uint = 0
+    let ata_lock: u64 = 0
 
     // Must force interrupts on while spinning, exactly like call()'s own
     // wait below (see its longer doc comment) - a waiter entered from
@@ -56,7 +56,7 @@ namespace ATA {
     // bare busy-loop here would mask that timer from itself as long as
     // this waiter runs, deadlocking against its own lock holder.
     func acquire_ata() {
-        let flags: uint = 0
+        let flags: u64 = 0
         asm("pushfq; popq %0" : "=r"(flags) : : "memory")
         asm("sti")
         while HAL.atomic_exchange(&ata_lock, 1) != 0 {
@@ -109,7 +109,7 @@ namespace ATA {
     // this - see kernel_main's vfs_boot_task_entry) is what actually
     // switches this task out while blocked and back in once atad's reply
     // arrives, resuming this exact spin.
-    func call(op: uint, lba: uint) -> uint {
+    func call(op: u64, lba: u64) -> u64 {
         if !ensure_ready() {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -120,11 +120,11 @@ namespace ATA {
         }
 
         let raw: char[16]
-        let req: uint* = (raw as char*) as uint*
+        let req: u64* = (raw as char*) as u64*
         req[0] = op
         req[1] = lba
         let bytes: char* = raw as char*
-        let len: uint = REQ_SIZE
+        let len: u64 = REQ_SIZE
 
         // Waking atad directly when it's already receive-blocked isn't
         // just an optimization - it's required for correctness. If atad is
@@ -160,25 +160,25 @@ namespace ATA {
         // over the ALIVE state atad's reply already set, waiting forever
         // on a reply that already arrived. This was a real, previously-hit
         // bug too, not a hypothetical one.
-        let handoff_flags: uint = 0
+        let handoff_flags: u64 = 0
         asm("pushfq; popq %0" : "=r"(handoff_flags) : : "memory")
         asm("cli")
         if peer.state == Task.STATE_RECV_BLOCKED {
-            let deliver: uint = len
+            let deliver: u64 = len
             if peer.ipc_recv_len < deliver {
                 deliver = peer.ipc_recv_len
             }
             Task.write_to_pml4(peer.pml4, peer.ipc_recv_buf, bytes, deliver)
             peer.ipc_len = deliver
             peer.ipc_peer = cur.id
-            Task.wake_with_return(peer, cur.id as uint)
+            Task.wake_with_return(peer, cur.id as u64)
 
             cur.state = Task.STATE_REPLY_BLOCKED
             cur.ipc_peer = peer.id
-            cur.ipc_reply_buf = bytes as uint
+            cur.ipc_reply_buf = bytes as u64
             cur.ipc_reply_len = len
         } else {
-            Task.block_current_send(atad_pid, bytes as uint, len, bytes, len)
+            Task.block_current_send(atad_pid, bytes as u64, len, bytes, len)
         }
         asm("pushq %0; popfq" : : "r"(handoff_flags) : "cc", "memory")
 
@@ -209,7 +209,7 @@ namespace ATA {
         // hypothetical one. Each asm block below is internally balanced
         // (net zero RSP effect once it completes), so nothing is left
         // sitting on the stack between them.
-        let flags: uint = 0
+        let flags: u64 = 0
         asm("pushfq; popq %0" : "=r"(flags) : : "memory")
         asm("sti")
         while cur.state != Task.STATE_ALIVE {
@@ -227,7 +227,7 @@ namespace ATA {
         }
         asm("pushq %0; popfq" : : "r"(flags) : "cc", "memory")
 
-        let result: uint* = (raw as char*) as uint*
+        let result: u64* = (raw as char*) as u64*
         return result[0]
     }
 
@@ -242,7 +242,7 @@ namespace ATA {
         return present
     }
 
-    func read_sector(lba: uint, buf: char*) -> bool {
+    func read_sector(lba: u64, buf: char*) -> bool {
         acquire_ata()
         let ok: bool = call(OP_READ, lba) == 0
         if ok {
@@ -257,7 +257,7 @@ namespace ATA {
         return ok
     }
 
-    func write_sector(lba: uint, buf: char*) -> bool {
+    func write_sector(lba: u64, buf: char*) -> bool {
         acquire_ata()
         let dst: char* = shm_ptr()
         let i: int = 0
@@ -274,8 +274,8 @@ namespace ATA {
     // `count * SECTOR_SIZE`-byte buffer - unchanged from the original
     // driver: still just a loop over the single-sector primitives above,
     // which is all vfs.llpl ever needed from this API.
-    func read_sectors(lba: uint, count: uint, buf: char*) -> bool {
-        let i: uint = 0
+    func read_sectors(lba: u64, count: u64, buf: char*) -> bool {
+        let i: u64 = 0
         while i < count {
             if !read_sector(lba + i, buf + (i * SECTOR_SIZE) as int) {
                 return false
@@ -285,8 +285,8 @@ namespace ATA {
         return true
     }
 
-    func write_sectors(lba: uint, count: uint, buf: char*) -> bool {
-        let i: uint = 0
+    func write_sectors(lba: u64, count: u64, buf: char*) -> bool {
+        let i: u64 = 0
         while i < count {
             if !write_sector(lba + i, buf + (i * SECTOR_SIZE) as int) {
                 return false

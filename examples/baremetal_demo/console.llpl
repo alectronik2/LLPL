@@ -97,7 +97,7 @@ namespace Console {
 
             let x: uint32 = (self.col * Framebuffer.GLYPH_WIDTH) as uint32
             let y: uint32 = (self.row * Framebuffer.GLYPH_HEIGHT) as uint32
-            Framebuffer.draw_char(x, y, c, color_to_rgb(self.color), 0x000000)
+            Framebuffer.draw_u8(x, y, c, color_to_rgb(self.color), 0x000000)
 
             self.col = self.col + 1
         }
@@ -112,7 +112,7 @@ namespace Console {
                 self.col = self.col - 1
                 let x: uint32 = (self.col * Framebuffer.GLYPH_WIDTH) as uint32
                 let y: uint32 = (self.row * Framebuffer.GLYPH_HEIGHT) as uint32
-                Framebuffer.draw_char(x, y, 32, color_to_rgb(self.color), 0x000000)
+                Framebuffer.draw_u8(x, y, 32, color_to_rgb(self.color), 0x000000)
             }
         }
 

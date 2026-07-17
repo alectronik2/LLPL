@@ -1,12 +1,12 @@
 // libsys - small LLPL user-space syscall library for the bare-metal demo.
 //
 // Built as /boot/libsys.so and preloaded by the kernel-side LdSo module.
-// The raw sys_* entry points keep the same exported names as the original
+// The raw sys_* entry poi64s keep the same exported names as the original
 // assembly version, while the helpers below provide the first convenience
 // layer user programs can link against.
 
 const SYS_EXIT = 0
-const SYS_PRINT = 1
+const SYS_PRi64 = 1
 const SYS_MMAP = 2
 const SYS_GETPID = 3
 const SYS_YIELD = 4
@@ -36,76 +36,83 @@ const SYS_FB_MAP = 27
 const SYS_KBD_POLL = 28
 const SYS_MOUSE_POLL = 29
 const SYS_MSG_TRY_RECV = 30
+const SYS_READDIR = 31
+const SYS_FOCUS_STATE = 32
+const SYS_INL = 33
+const SYS_OUTL = 34
+const SYS_BMIDE_BASE = 35
+const SYS_VIRT_TO_PHYS = 36
+const SYS_NIC_MMAP = 37
 
 const SYS_ERR = 0xFFFFFFFFFFFFFFFF
 const O_RDONLY = 0
 const O_CREATE = 1
 
-func syscall0(number: uint) -> uint {
-    let ret: uint = 0
+func syscall0(number: u64) -> u64 {
+    let ret: u64 = 0
     asm("int $0x80" : "=a"(ret) : "a"(number) : "memory")
     return ret
 }
 
-func syscall1(number: uint, a: uint) -> uint {
-    let ret: uint = 0
+func syscall1(number: u64, a: u64) -> u64 {
+    let ret: u64 = 0
     asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
     return ret
 }
 
-func syscall2(number: uint, a: uint, b: uint) -> uint {
-    let ret: uint = 0
+func syscall2(number: u64, a: u64, b: u64) -> u64 {
+    let ret: u64 = 0
     asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
     return ret
 }
 
-func syscall3(number: uint, a: uint, b: uint, c: uint) -> uint {
-    let ret: uint = 0
+func syscall3(number: u64, a: u64, b: u64, c: u64) -> u64 {
+    let ret: u64 = 0
     asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
     return ret
 }
 
-func sys_exit(code: uint) -> uint {
+func sys_exit(code: u64) -> u64 {
     return syscall1(SYS_EXIT, code)
 }
 
-func sys_print(buf: char*, len: uint) -> uint {
-    return syscall2(SYS_PRINT, buf as uint, len)
+func sys_pri64(buf: u8*, len: u64) -> u64 {
+    return syscall2(SYS_PRi64, buf as u64, len)
 }
 
-func sys_mmap(virt_hint: uint, pages: uint, flags: uint) -> uint {
-    return syscall3(SYS_MMAP, virt_hint, pages, flags)
+func sys_mmap(virt_hi64: u64, pages: u64, flags: u64) -> u64 {
+    return syscall3(SYS_MMAP, virt_hi64, pages, flags)
 }
 
-func sys_munmap(addr: uint, pages: uint) -> uint {
+func sys_munmap(addr: u64, pages: u64) -> u64 {
     return syscall2(SYS_MUNMAP, addr, pages)
 }
 
-func sys_getpid() -> uint {
+func sys_getpid() -> u64 {
     return syscall0(SYS_GETPID)
 }
 
-func sys_yield() -> uint {
+func sys_yield() -> u64 {
     return syscall0(SYS_YIELD)
 }
 
-func sys_sleep(ticks: uint) -> uint {
+func sys_sleep(ticks: u64) -> u64 {
     return syscall1(SYS_SLEEP, ticks)
 }
 
-func sys_open(path: char*, mode: uint) -> uint {
-    return syscall2(SYS_OPEN, path as uint, mode)
+func sys_open(path: u8*, mode: u64) -> u64 {
+    return syscall2(SYS_OPEN, path as u64, mode)
 }
 
-func sys_read(fd: uint, buf: char*, len: uint) -> uint {
-    return syscall3(SYS_READ, fd, buf as uint, len)
+func sys_read(fd: u64, buf: u8*, len: u64) -> u64 {
+    return syscall3(SYS_READ, fd, buf as u64, len)
 }
 
-func sys_write(fd: uint, buf: char*, len: uint) -> uint {
-    return syscall3(SYS_WRITE, fd, buf as uint, len)
+func sys_write(fd: u64, buf: u8*, len: u64) -> u64 {
+    return syscall3(SYS_WRITE, fd, buf as u64, len)
 }
 
-func sys_close(fd: uint) -> uint {
+func sys_close(fd: u64) -> u64 {
     return syscall1(SYS_CLOSE, fd)
 }
 
@@ -114,76 +121,93 @@ func sys_close(fd: uint) -> uint {
 // a raw pid guessed out of thin air is rejected, unlike sys_msg_recv/reply
 // below which address by real pid (their safety comes from the in-flight
 // call's own state, not a capability).
-func sys_msg_send(handle: uint, buf: char*, len: uint) -> uint {
-    return syscall3(SYS_MSG_SEND, handle, buf as uint, len)
+func sys_msg_send(handle: u64, buf: u8*, len: u64) -> u64 {
+    return syscall3(SYS_MSG_SEND, handle, buf as u64, len)
 }
 
-func sys_msg_recv(buf: char*, len: uint) -> uint {
-    return syscall2(SYS_MSG_RECV, buf as uint, len)
+func sys_msg_recv(buf: u8*, len: u64) -> u64 {
+    return syscall2(SYS_MSG_RECV, buf as u64, len)
 }
 
 // Non-blocking twin of sys_msg_recv: RT_SYS_ERR if no sender is waiting,
 // instead of blocking this task until one is.
-func sys_msg_try_recv(buf: char*, len: uint) -> uint {
-    return syscall2(SYS_MSG_TRY_RECV, buf as uint, len)
+func sys_msg_try_recv(buf: u8*, len: u64) -> u64 {
+    return syscall2(SYS_MSG_TRY_RECV, buf as u64, len)
 }
 
-func sys_msg_reply(peer: uint, buf: char*, len: uint) -> uint {
-    return syscall3(SYS_MSG_REPLY, peer, buf as uint, len)
+// Fetches directory entry `index` of `path` i64o `out_buf` (must be at
+// least 48 bytes: name[32], then kind and size as two 8-byte u64s at
+// offset 32/40) - 0 on success, RT_SYS_ERR once `index` is past the last
+// entry (or `path` isn't a directory). Callers loop index = 0, 1, 2, ...
+// until RT_SYS_ERR, exactly like Shell.cmd_ls's kernel-side
+// first_child/next_sibling walk (see syscall.llpl's own doc comment).
+func sys_readdir(path: u8*, index: u64, out_buf: u8*) -> u64 {
+    return syscall3(SYS_READDIR, path as u64, index, out_buf as u64)
+}
+
+// 0 = console has keyboard focus, 1 = windowing does (Keyboard.FOCUS_WM,
+// kbd.llpl) - see syscall.llpl's own doc comment on why this exists
+// alongside sys_kbd_poll rather than being inferable from it.
+func sys_focus_state() -> u64 {
+    return syscall0(SYS_FOCUS_STATE)
+}
+
+func sys_msg_reply(peer: u64, buf: u8*, len: u64) -> u64 {
+    return syscall3(SYS_MSG_REPLY, peer, buf as u64, len)
 }
 
 // Returns a handle over the new child (usable with sys_wait/sys_kill below),
 // not a raw pid - the kernel only lets a task act on another task through a
 // handle it was actually granted.
-func sys_spawn(path: char*, args: char*) -> uint {
-    return syscall2(SYS_SPAWN, path as uint, args as uint)
+func sys_spawn(path: u8*, args: u8*) -> u64 {
+    return syscall2(SYS_SPAWN, path as u64, args as u64)
 }
 
-func sys_exec(path: char*, args: char*) -> uint {
-    return syscall2(SYS_EXEC, path as uint, args as uint)
+func sys_exec(path: u8*, args: u8*) -> u64 {
+    return syscall2(SYS_EXEC, path as u64, args as u64)
 }
 
-func sys_wait(handle: uint) -> uint {
+func sys_wait(handle: u64) -> u64 {
     return syscall1(SYS_WAIT, handle)
 }
 
-func sys_kill(handle: uint) -> uint {
+func sys_kill(handle: u64) -> u64 {
     return syscall1(SYS_KILL, handle)
 }
 
-// Advertises this task under `name` (up to 15 chars) so an unrelated task -
+// Advertises this task under `name` (up to 15 u8s) so an unrelated task -
 // one that never spawned it - can later reach it via sys_lookup below.
 // Only a task the kernel spawned directly at boot may do this - anything
 // sys_spawn()ed by an ordinary user program is rejected, so a user program
 // can't hijack a system service's name.
-func sys_register(name: char*) -> uint {
-    return syscall1(SYS_REGISTER, name as uint)
+func sys_register(name: u8*) -> u64 {
+    return syscall1(SYS_REGISTER, name as u64)
 }
 
 // Resolves `name` to a handle (SEND + SHM rights, never KILL/WAIT) over
 // whichever task is currently registered under it, or SYS_ERR if nobody is.
 // This is the only way two tasks with no spawn (parent/child) relationship
 // can establish a capability to talk to each other.
-func sys_lookup(name: char*) -> uint {
-    return syscall1(SYS_LOOKUP, name as uint)
+func sys_lookup(name: u8*) -> u64 {
+    return syscall1(SYS_LOOKUP, name as u64)
 }
 
-// Allocates `pages` (4KB each) of fresh, zeroed memory, mapped into the
-// caller's own address space (the returned pointer), and makes it available
+// Allocates `pages` (4KB each) of fresh, zeroed memory, mapped i64o the
+// caller's own address space (the returned poi64er), and makes it available
 // for a RIGHT_SHM handle-holder to map too via sys_shm_map below - for bulk
 // data well past what a 128-byte IPC message can carry in one call. Only one
 // region per task in this version.
-func sys_shm_create(pages: uint) -> char* {
-    return syscall1(SYS_SHM_CREATE, pages) as char*
+func sys_shm_create(pages: u64) -> u8* {
+    return syscall1(SYS_SHM_CREATE, pages) as u8*
 }
 
-// Maps whichever shared region `handle`'s target currently owns into the
-// caller's own address space, returning a fresh local pointer to it (never
-// the owner's own pointer value - only the physical memory is shared, the
+// Maps whichever shared region `handle`'s target currently owns i64o the
+// caller's own address space, returning a fresh local poi64er to it (never
+// the owner's own poi64er value - only the physical memory is shared, the
 // two virtual address spaces are otherwise unrelated). SYS_ERR if the
 // handle lacks RIGHT_SHM or its target has no active region.
-func sys_shm_map(handle: uint) -> char* {
-    return syscall1(SYS_SHM_MAP, handle) as char*
+func sys_shm_map(handle: u64) -> u8* {
+    return syscall1(SYS_SHM_MAP, handle) as u8*
 }
 
 // Raw I/O port access - SYS_ERR unless the caller is a task the kernel
@@ -191,35 +215,66 @@ func sys_shm_map(handle: uint) -> char* {
 // kernel's fixed hardware allow-list (see Syscall.port_allowed). Written
 // for atad.llpl, the user-space ATA driver; not a general-purpose port I/O
 // facility for arbitrary user programs.
-func sys_inb(port: uint) -> uint {
+func sys_inb(port: u64) -> u64 {
     return syscall1(SYS_INB, port)
 }
 
-func sys_outb(port: uint, value: uint) -> uint {
+func sys_outb(port: u64, value: u64) -> u64 {
     return syscall2(SYS_OUTB, port, value)
 }
 
-func sys_inw(port: uint) -> uint {
+func sys_inw(port: u64) -> u64 {
     return syscall1(SYS_INW, port)
 }
 
-func sys_outw(port: uint, value: uint) -> uint {
+func sys_outw(port: u64, value: u64) -> u64 {
     return syscall2(SYS_OUTW, port, value)
+}
+
+func sys_inl(port: u64) -> u64 {
+    return syscall1(SYS_INL, port)
+}
+
+func sys_outl(port: u64, value: u64) -> u64 {
+    return syscall2(SYS_OUTL, port, value)
+}
+
+// 0 if PCI enumeration never found an IDE controller's Bus Master
+// register block (or this caller isn't boot-spawned) - see
+// Syscall.sys_bmide_base. atad.llpl asks this once at startup to decide
+// whether its DMA path is even usable.
+func sys_bmide_base() -> u64 {
+    return syscall0(SYS_BMIDE_BASE)
+}
+
+// Physical address backing `virt` in this task's own address space, 0
+// if unmapped - see Syscall.sys_virt_to_phys.
+func sys_virt_to_phys(virt: u64) -> u64 {
+    return syscall1(SYS_VIRT_TO_PHYS, virt)
+}
+
+// Maps the e1000 NIC's BAR0 MMIO register window i64o this task's own
+// address space, returning a poi64er to it (0/null on failure - no
+// e1000 found, or this caller isn't boot-spawned - see
+// Syscall.sys_nic_mmap). Same boot-only gate as sys_bmide_base/raw port
+// I/O: this is direct hardware access, not a general facility.
+func sys_nic_mmap() -> u8* {
+    return syscall0(SYS_NIC_MMAP) as u8*
 }
 
 // Fills `out[0..2]` with {width, height, pitch} (pixels/bytes, 32bpp
 // direct-color always assumed - the only mode this kernel's Framebuffer
 // module supports). SYS_ERR if no framebuffer was found at boot.
-func sys_fb_info(out: uint*) -> uint {
-    return syscall1(SYS_FB_INFO, out as uint)
+func sys_fb_info(out: u64*) -> u64 {
+    return syscall1(SYS_FB_INFO, out as u64)
 }
 
-// Maps the linear framebuffer into this task's own address space and
-// returns a pointer to it (0/null on failure, not SYS_ERR - see
+// Maps the linear framebuffer i64o this task's own address space and
+// returns a poi64er to it (0/null on failure, not SYS_ERR - see
 // Syscall.sys_fb_map). Each pixel is 4 bytes at `pitch*y + 4*x`, in
 // 0x00RRGGBB order.
-func sys_fb_map() -> char* {
-    return syscall0(SYS_FB_MAP) as char*
+func sys_fb_map() -> u8* {
+    return syscall0(SYS_FB_MAP) as u8*
 }
 
 // Non-blocking: 0 if no key is waiting, else the key code (a plain ASCII
@@ -229,35 +284,35 @@ const KEY_DOWN = 201
 const KEY_LEFT = 202
 const KEY_RIGHT = 203
 
-func sys_kbd_poll() -> uint {
+func sys_kbd_poll() -> u64 {
     return syscall0(SYS_KBD_POLL)
 }
 
 // Packed: bits 0-9 = x, bits 10-19 = y, bit 20 = left button down.
-func sys_mouse_poll() -> uint {
+func sys_mouse_poll() -> u64 {
     return syscall0(SYS_MOUSE_POLL)
 }
 
-func sys_strlen(s: char*) -> uint {
-    let n: uint = 0
+func sys_strlen(s: u8*) -> u64 {
+    let n: u64 = 0
     while s[n] != 0 {
         n = n + 1
     }
     return n
 }
 
-func sys_puts(s: char*) -> uint {
-    return sys_print(s, sys_strlen(s))
+func sys_puts(s: u8*) -> u64 {
+    return sys_pri64(s, sys_strlen(s))
 }
 
-func sys_putln(s: char*) -> uint {
-    let n: uint = sys_puts(s)
-    sys_print("\n", 1)
+func sys_putln(s: u8*) -> u64 {
+    let n: u64 = sys_puts(s)
+    sys_pri64("\n", 1)
     return n
 }
 
-func sys_memset(dst: char*, value: char, len: uint) -> char* {
-    let i: uint = 0
+func sys_memset(dst: u8*, value: u8, len: u64) -> u8* {
+    let i: u64 = 0
     while i < len {
         dst[i] = value
         i = i + 1
@@ -265,8 +320,8 @@ func sys_memset(dst: char*, value: char, len: uint) -> char* {
     return dst
 }
 
-func sys_memcpy(dst: char*, src: char*, len: uint) -> char* {
-    let i: uint = 0
+func sys_memcpy(dst: u8*, src: u8*, len: u64) -> u8* {
+    let i: u64 = 0
     while i < len {
         dst[i] = src[i]
         i = i + 1
@@ -274,25 +329,25 @@ func sys_memcpy(dst: char*, src: char*, len: uint) -> char* {
     return dst
 }
 
-func sys_strcmp(a: char*, b: char*) -> int {
-    let i: uint = 0
+func sys_strcmp(a: u8*, b: u8*) -> i64 {
+    let i: u64 = 0
     while a[i] != 0 && b[i] != 0 {
-        let av: int = (a[i] as int) & 255
-        let bv: int = (b[i] as int) & 255
+        let av: i64 = (a[i] as i64) & 255
+        let bv: i64 = (b[i] as i64) & 255
         if av != bv {
             return av - bv
         }
         i = i + 1
     }
-    return ((a[i] as int) & 255) - ((b[i] as int) & 255)
+    return ((a[i] as i64) & 255) - ((b[i] as i64) & 255)
 }
 
-func sys_streq(a: char*, b: char*) -> bool {
+func sys_streq(a: u8*, b: u8*) -> bool {
     return sys_strcmp(a, b) == 0
 }
 
-func sys_strcpy(dst: char*, src: char*) -> char* {
-    let i: uint = 0
+func sys_strcpy(dst: u8*, src: u8*) -> u8* {
+    let i: u64 = 0
     while src[i] != 0 {
         dst[i] = src[i]
         i = i + 1
@@ -301,44 +356,44 @@ func sys_strcpy(dst: char*, src: char*) -> char* {
     return dst
 }
 
-func sys_read_all(path: char*, buf: char*, len: uint) -> uint {
-    let fd: uint = sys_open(path, O_RDONLY)
+func sys_read_all(path: u8*, buf: u8*, len: u64) -> u64 {
+    let fd: u64 = sys_open(path, O_RDONLY)
     if fd == SYS_ERR {
         return SYS_ERR
     }
-    let n: uint = sys_read(fd, buf, len)
+    let n: u64 = sys_read(fd, buf, len)
     sys_close(fd)
     return n
 }
 
-func sys_write_all(path: char*, buf: char*, len: uint) -> uint {
-    let fd: uint = sys_open(path, O_CREATE)
+func sys_write_all(path: u8*, buf: u8*, len: u64) -> u64 {
+    let fd: u64 = sys_open(path, O_CREATE)
     if fd == SYS_ERR {
         return SYS_ERR
     }
-    let n: uint = sys_write(fd, buf, len)
+    let n: u64 = sys_write(fd, buf, len)
     sys_close(fd)
     return n
 }
 
-func sys_alloc_pages(pages: uint) -> char* {
-    return sys_mmap(0, pages, 0) as char*
+func sys_alloc_pages(pages: u64) -> u8* {
+    return sys_mmap(0, pages, 0) as u8*
 }
 
 packed struct AllocHeader {
-    let magic: uint
-    let size: uint
-    let pages: uint
-    let base: uint
-    let flags: uint
-    let reserved: uint
+    let magic: u64
+    let size: u64
+    let pages: u64
+    let base: u64
+    let flags: u64
+    let reserved: u64
 }
 
 packed struct AllocState {
-    let heap_cur: uint
-    let heap_end: uint
-    let free_small: uint
-    let initialized: uint
+    let heap_cur: u64
+    let heap_end: u64
+    let free_small: u64
+    let initialized: u64
 }
 
 const ALLOC_MAGIC = 0x4C535953414C4C4F
@@ -350,16 +405,16 @@ const USER_PTR_MIN = 0x100000000
 const ALLOC_STATE_ADDR = 0x100100000
 const ALLOC_STATE_MAGIC = 0x4C53595353544154
 
-func align16(n: uint) -> uint {
+func align16(n: u64) -> u64 {
     return (n + 15) & ~15
 }
 
-func pages_for_bytes(n: uint) -> uint {
+func pages_for_bytes(n: u64) -> u64 {
     return (n + PAGE_SIZE - 1) / PAGE_SIZE
 }
 
 func alloc_state() -> AllocState* {
-    let p: char* = sys_mmap(ALLOC_STATE_ADDR, 1, 0) as char*
+    let p: u8* = sys_mmap(ALLOC_STATE_ADDR, 1, 0) as u8*
     if p == null {
         return null
     }
@@ -373,9 +428,9 @@ func alloc_state() -> AllocState* {
     return st
 }
 
-func alloc_large(size: uint, total: uint) -> char* {
-    let pages: uint = pages_for_bytes(total)
-    let base: char* = sys_alloc_pages(pages)
+func alloc_large(size: u64, total: u64) -> u8* {
+    let pages: u64 = pages_for_bytes(total)
+    let base: u8* = sys_alloc_pages(pages)
     if base == null {
         return null
     }
@@ -383,13 +438,13 @@ func alloc_large(size: uint, total: uint) -> char* {
     hdr.magic = ALLOC_MAGIC
     hdr.size = size
     hdr.pages = pages
-    hdr.base = base as uint
+    hdr.base = base as u64
     hdr.flags = ALLOC_FLAG_LARGE
     hdr.reserved = 0
     return base + sizeof(AllocHeader)
 }
 
-func alloc_small(size: uint, total: uint) -> char* {
+func alloc_small(size: u64, total: u64) -> u8* {
     let st: AllocState* = alloc_state()
     if st == null {
         return null
@@ -400,7 +455,7 @@ func alloc_small(size: uint, total: uint) -> char* {
     }
     let cur: AllocHeader* = st.free_small as AllocHeader*
     while cur != null {
-        if (cur as uint) < USER_PTR_MIN {
+        if (cur as u64) < USER_PTR_MIN {
             st.free_small = 0
             cur = null
         } else if cur.magic == ALLOC_FREED && cur.pages >= total {
@@ -414,7 +469,7 @@ func alloc_small(size: uint, total: uint) -> char* {
             cur.base = 0
             cur.flags = 0
             cur.reserved = 0
-            return (cur as char*) + sizeof(AllocHeader)
+            return (cur as u8*) + sizeof(AllocHeader)
         } else {
             prev = cur
             cur = cur.reserved as AllocHeader*
@@ -422,12 +477,12 @@ func alloc_small(size: uint, total: uint) -> char* {
     }
 
     if st.heap_cur == 0 || st.heap_cur + total > st.heap_end {
-        let pages: uint = pages_for_bytes(total)
-        let block: char* = sys_alloc_pages(pages)
+        let pages: u64 = pages_for_bytes(total)
+        let block: u8* = sys_alloc_pages(pages)
         if block == null {
             return null
         }
-        st.heap_cur = block as uint
+        st.heap_cur = block as u64
         st.heap_end = st.heap_cur + pages * PAGE_SIZE
     }
     let hdr: AllocHeader* = st.heap_cur as AllocHeader*
@@ -438,21 +493,21 @@ func alloc_small(size: uint, total: uint) -> char* {
     hdr.flags = 0
     hdr.reserved = 0
     st.heap_cur = st.heap_cur + total
-    return (hdr as char*) + sizeof(AllocHeader)
+    return (hdr as u8*) + sizeof(AllocHeader)
 }
 
-func sys_malloc(size: uint) -> char* {
+func sys_malloc(size: u64) -> u8* {
     if size == 0 {
         return null
     }
-    let total: uint = align16(size + sizeof(AllocHeader))
+    let total: u64 = align16(size + sizeof(AllocHeader))
     if size >= LARGE_ALLOC_MIN || total >= PAGE_SIZE {
         return alloc_large(size, total)
     }
     return alloc_small(size, total)
 }
 
-func sys_free(ptr: char*) -> uint {
+func sys_free(ptr: u8*) -> u64 {
     if ptr == null {
         return 0
     }
@@ -472,6 +527,6 @@ func sys_free(ptr: char*) -> uint {
         return SYS_ERR
     }
     hdr.reserved = st.free_small
-    st.free_small = hdr as uint
+    st.free_small = hdr as u64
     return 0
 }

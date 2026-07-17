@@ -1,12 +1,33 @@
-// User-space ATA PIO driver: registers as "atad" and answers small
-// {op, lba} requests from the kernel's own ATA client (ata.llpl, which
-// replaces what used to be an in-kernel PIO driver of the same name) by
+// User-space ATA driver: registers as "atad" and answers small {op, lba}
+// requests from the kernel's own ATA client (ata.llpl, which replaces
+// what used to be an in-kernel PIO driver of the same name) by
 // reading/writing one 512-byte sector into a shared page published via
 // sys_shm_create. The actual hardware access happens here, in ring 3,
-// gated by sys_inb/sys_outb/sys_inw/sys_outw's boot-only I/O-port
-// capability - not by running in ring 0. Register layout, polling
-// protocol, and 28-bit LBA addressing are ported unchanged from that
-// original driver.
+// gated by sys_inb/sys_outb/sys_inw/sys_outw/sys_inl/sys_outl's
+// boot-only I/O-port capability - not by running in ring 0. PIO register
+// layout, polling protocol, and 28-bit LBA addressing are ported
+// unchanged from the original in-kernel driver.
+//
+// Bus Master IDE DMA support (setup_dma/dma_read_sector and friends,
+// below) is implemented but deliberately never enabled - do_read_sector
+// always calls plain PIO, ignoring dma_available. Both directions were
+// tried and both showed the same real, reproduced data-integrity bug: a
+// sector written (or, for reads, one the VFS then read back) came back
+// as zero instead of its real content, even though every piece of the
+// implementation was individually verified correct against a live trace
+// of QEMU's own bmdma/ide events and direct physical-memory dumps
+// (`pmemsave`) - the PRDT's physical address, its on-disk byte
+// encoding, the source buffer's own contents at the moment of the
+// transfer, and even a fresh page-table walk immediately after the
+// mapping was created (matching byte-for-byte what the mapping itself
+// recorded) all checked out. Something about the actual DMA data
+// transfer between guest RAM and the emulated controller doesn't
+// reliably move the real bytes, and the root cause wasn't found despite
+// extensive investigation. The PCI enumeration (pci.llpl) and Bus
+// Master register plumbing are kept here, correct and unused, as a
+// starting point for whoever picks this back up rather than working
+// from scratch - but nothing calls them by default, and it should stay
+// that way until the actual transfer bug is understood.
 
 import "../libsys/imports"
 import "user_runtime"
@@ -21,6 +42,7 @@ const STATUS_CMD = 0x1F7
 
 const CMD_READ_SECTORS = 0x20
 const CMD_WRITE_SECTORS = 0x30
+const CMD_READ_DMA = 0xC8
 const CMD_CACHE_FLUSH = 0xE7
 const CMD_IDENTIFY = 0xEC
 
@@ -33,6 +55,30 @@ const OP_PRESENT = 0
 const OP_READ = 1
 const OP_WRITE = 2
 
+// Bus Master IDE register offsets, relative to sys_bmide_base() - the
+// primary channel's own 8-byte block (a controller with a secondary
+// channel repeats this same layout 8 bytes higher, unused here since
+// this driver only ever talks to the primary master).
+const BM_COMMAND = 0
+const BM_STATUS = 2
+const BM_PRDT = 4
+
+const BM_CMD_START = 0x01
+const BM_CMD_READ = 0x08 // direction bit: set = device-to-memory (a disk *read*)
+
+const BM_STATUS_ERROR = 0x02
+const BM_STATUS_INTERRUPT = 0x04
+const BM_STATUS_ACTIVE = 0x01
+
+// Where, within the driver's one shared page (sys_shm_create(1) =
+// 4096 bytes), the single PRDT entry lives - just past the 512-byte
+// sector buffer at offset 0, with plenty of room to spare either side.
+const PRDT_OFFSET = 512
+
+let bmide_base: u64 = 0
+let dma_available: bool = false
+let prdt_phys: u64 = 0
+
 func poll_bsy_clear() {
     while (sys_inb(STATUS_CMD) & STATUS_BSY) != 0 {
         // spin
@@ -41,7 +87,7 @@ func poll_bsy_clear() {
 
 func wait_drq() -> bool {
     while true {
-        let status: uint = sys_inb(STATUS_CMD)
+        let status: u64 = sys_inb(STATUS_CMD)
         if (status & STATUS_ERR) != 0 || (status & STATUS_DF) != 0 {
             return false
         }
@@ -59,7 +105,7 @@ func ata_init() -> bool {
     sys_outb(LBA_HIGH, 0)
     sys_outb(STATUS_CMD, CMD_IDENTIFY)
 
-    let status: uint = sys_inb(STATUS_CMD)
+    let status: u64 = sys_inb(STATUS_CMD)
     if status == 0 {
         return false // no device on this channel at all
     }
@@ -82,7 +128,7 @@ func ata_init() -> bool {
     return true
 }
 
-func select_lba(lba: uint) {
+func select_lba(lba: u64) {
     sys_outb(DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F))
     sys_outb(SECCOUNT, 1)
     sys_outb(LBA_LOW, lba & 0xFF)
@@ -90,7 +136,7 @@ func select_lba(lba: uint) {
     sys_outb(LBA_HIGH, (lba >> 16) & 0xFF)
 }
 
-func read_sector(lba: uint, buf: char*) -> bool {
+func read_sector(lba: u64, buf: u8*) -> bool {
     select_lba(lba)
     sys_outb(STATUS_CMD, CMD_READ_SECTORS)
     poll_bsy_clear()
@@ -99,15 +145,15 @@ func read_sector(lba: uint, buf: char*) -> bool {
     }
     let i: int = 0
     while i < 256 {
-        let word: uint = sys_inw(DATA)
-        buf[i * 2] = (word & 0xFF) as char
-        buf[i * 2 + 1] = ((word >> 8) & 0xFF) as char
+        let word: u64 = sys_inw(DATA)
+        buf[i * 2] = (word & 0xFF) as u8
+        buf[i * 2 + 1] = ((word >> 8) & 0xFF) as u8
         i = i + 1
     }
     return true
 }
 
-func write_sector(lba: uint, buf: char*) -> bool {
+func write_sector(lba: u64, buf: u8*) -> bool {
     select_lba(lba)
     sys_outb(STATUS_CMD, CMD_WRITE_SECTORS)
     poll_bsy_clear()
@@ -116,8 +162,8 @@ func write_sector(lba: uint, buf: char*) -> bool {
     }
     let i: int = 0
     while i < 256 {
-        let lo: uint = (buf[i * 2] as uint) & 0xFF
-        let hi: uint = (buf[i * 2 + 1] as uint) & 0xFF
+        let lo: u64 = (buf[i * 2] as u64) & 0xFF
+        let hi: u64 = (buf[i * 2 + 1] as u64) & 0xFF
         sys_outw(DATA, lo | (hi << 8))
         i = i + 1
     }
@@ -126,40 +172,214 @@ func write_sector(lba: uint, buf: char*) -> bool {
     return true
 }
 
-func _start(argc: uint, argv: uint*) {
+// Packs one 8-byte PRDT entry at `base` - a physical address (32-bit,
+// little-endian), a byte count (16-bit, little-endian - 0 means 65536,
+// never reached here since every transfer is exactly one 512-byte
+// sector), and a flags word whose top bit (EOT) marks this as the last
+// (here, only) entry in the table. Written byte-by-byte rather than
+// through a wider integer pointer, matching read_sector/write_sector's
+// own byte-at-a-time word packing above - LLPL's `u64` is 64 bits, and
+// a raw wide store through a mismatched pointer type would write well
+// past this 8-byte entry into whatever follows it.
+func write_prdt_entry(base: u8*, phys_addr: u64, byte_count: u64, eot: bool) {
+    base[0] = (phys_addr & 0xFF) as u8
+    base[1] = ((phys_addr >> 8) & 0xFF) as u8
+    base[2] = ((phys_addr >> 16) & 0xFF) as u8
+    base[3] = ((phys_addr >> 24) & 0xFF) as u8
+    base[4] = (byte_count & 0xFF) as u8
+    base[5] = ((byte_count >> 8) & 0xFF) as u8
+    let flags: u64 = 0
+    if eot {
+        flags = 0x8000
+    }
+    base[6] = (flags & 0xFF) as u8
+    base[7] = ((flags >> 8) & 0xFF) as u8
+}
+
+// One-time DMA setup: asks the kernel whether PCI enumeration found a
+// Bus Master IDE controller at all, and if so, builds the one PRDT
+// entry this driver will ever need (see this file's own header comment
+// on why one entry can just be built once and reused forever) pointing
+// straight at `shm`'s own physical page. `shm` is always both the DMA
+// data buffer *and* where the PRDT entry itself lives (at PRDT_OFFSET) -
+// two different regions of the same already-shared, already-physically-
+// contiguous page, not two separate allocations.
+func setup_dma(shm: u8*) -> bool {
+    bmide_base = sys_bmide_base()
+    if bmide_base == 0 {
+        return false
+    }
+    let buf_phys: u64 = sys_virt_to_phys(shm as u64)
+    if buf_phys == 0 {
+        return false
+    }
+    prdt_phys = buf_phys + PRDT_OFFSET
+    write_prdt_entry(shm + PRDT_OFFSET, buf_phys, 512, true)
+    return true
+}
+
+func bm_read8(offset: u64) -> u64 {
+    return sys_inb(bmide_base + offset)
+}
+
+func bm_write8(offset: u64, value: u64) {
+    sys_outb(bmide_base + offset, value)
+}
+
+func bm_write32(offset: u64, value: u64) {
+    sys_outl(bmide_base + offset, value)
+}
+
+// Programs the PRDT pointer, clears any leftover error/interrupt bits
+// from a previous transfer (write-1-to-clear, same convention the real
+// ATA status register itself doesn't use but the Bus Master one does),
+// and sets the transfer direction - deliberately *not* the Start bit
+// yet, matching the standard Bus Master sequence (direction+PRDT armed
+// first, the actual ATA command sent next by the caller, only then
+// Start) - see dma_go below.
+// Read-only (see this file's own header comment on why writes never
+// reach this path) - the direction bit is always BM_CMD_READ, not a
+// parameter.
+func dma_arm() {
+    bm_write32(BM_PRDT, prdt_phys)
+    bm_write8(BM_STATUS, bm_read8(BM_STATUS) | BM_STATUS_ERROR | BM_STATUS_INTERRUPT)
+    bm_write8(BM_COMMAND, BM_CMD_READ)
+}
+
+func dma_go() {
+    bm_write8(BM_COMMAND, BM_CMD_READ | BM_CMD_START)
+}
+
+// Polls the Bus Master status register instead of waiting for a real
+// IRQ14 - simpler, and consistent with poll_bsy_clear/wait_drq above
+// already polling rather than using interrupts for PIO completion. The
+// Active bit clears the instant the controller's own transfer finishes;
+// there's nothing to gain from a hardware interrupt here that a few
+// extra port reads don't already give just as fast on real hardware,
+// and QEMU's emulated controller completes far quicker than that either
+// way.
+//
+// Waits for the Interrupt bit, not for Active to clear - the spec-sheet
+// description of Active ("cleared when the last transfer for a region
+// is performed") reads like it alone should mean "done," but QEMU's own
+// emulated controller doesn't actually drop it until the interrupt this
+// same transfer raised gets acknowledged (write 1 to clear, done below
+// once this returns success) - confirmed by tracing QEMU's own
+// bmdma/ide events: Active(1)+Interrupt(4)=5 shows up within
+// microseconds of the Start bit and then holds at exactly 5 forever,
+// with no further hardware activity at all. Checking Interrupt instead
+// matches the real IRQ14-driven design this polling loop is standing in
+// for anyway (see this function's other doc comment) - a real interrupt
+// handler would wake up on exactly this bit's hardware signal, never on
+// Active clearing.
+//
+// Bounded, not a bare spin: an unresponsive or misprogrammed controller
+// (wrong PRDT physical address, a QEMU/hardware quirk this driver
+// doesn't know about, ...) would otherwise hang this task - and with it
+// every VFS operation in the whole system - forever, with no way even
+// to fall back to PIO. do_read_sector already treats any false return
+// as "retry via PIO", so timing out here just means one slower request
+// instead of a permanent hang.
+func dma_wait() -> bool {
+    let tries: u64 = 0
+    while tries < 5000000 {
+        let status: u64 = bm_read8(BM_STATUS)
+        if (status & BM_STATUS_ERROR) != 0 {
+            return false
+        }
+        if (status & BM_STATUS_INTERRUPT) != 0 {
+            // Acknowledge it (write-1-to-clear) - this is what actually
+            // makes Active drop too, at least on QEMU's own controller;
+            // leaving it set would also make the *next* transfer's
+            // dma_arm see a stale, already-set Interrupt bit left over
+            // from this one.
+            bm_write8(BM_STATUS, status | BM_STATUS_INTERRUPT)
+            return true
+        }
+        tries = tries + 1
+    }
+    sys_puts("atad: DMA wait timed out, bm_status=")
+    rt_print_uint(bm_read8(BM_STATUS))
+    sys_puts(" ata_status=")
+    rt_print_uint(sys_inb(STATUS_CMD))
+    sys_puts("\n")
+    return false
+}
+
+func dma_stop() {
+    bm_write8(BM_COMMAND, 0)
+}
+
+func dma_read_sector(lba: u64, buf: u8*) -> bool {
+    poll_bsy_clear()
+    select_lba(lba)
+    dma_arm()
+    sys_outb(STATUS_CMD, CMD_READ_DMA)
+    dma_go()
+    let ok: bool = dma_wait()
+    dma_stop()
+    if (sys_inb(STATUS_CMD) & STATUS_ERR) != 0 {
+        ok = false
+    }
+    return ok
+}
+
+// Always PIO - see this file's own header comment for why DMA is
+// implemented (setup_dma/dma_read_sector above) but deliberately never
+// called: `dma_available` is intentionally ignored here, not read.
+func do_read_sector(lba: u64, buf: u8*) -> bool {
+    return read_sector(lba, buf)
+}
+
+// Always PIO - see this file's own header comment for why a DMA write
+// path was tried and deliberately isn't used.
+func do_write_sector(lba: u64, buf: u8*) -> bool {
+    return write_sector(lba, buf)
+}
+
+func _start(argc: u64, argv: u64*) {
     let present: bool = ata_init()
 
     if sys_register("atad") == RT_SYS_ERR {
         rt_exit(1)
     }
 
-    let shm: char* = sys_shm_create(1)
+    let shm: u8* = sys_shm_create(1)
     if shm == null {
         rt_exit(1)
     }
 
+    if present {
+        dma_available = setup_dma(shm)
+        if dma_available {
+            sys_putln("atad: Bus Master DMA enabled")
+        } else {
+            sys_putln("atad: no Bus Master IDE controller found, using PIO")
+        }
+    }
+
     while true {
-        let raw: char[16]
-        let sender: uint = sys_msg_recv(raw as char*, 16)
+        let raw: u8[16]
+        let sender: u64 = sys_msg_recv(raw as u8*, 16)
         if sender == RT_SYS_ERR {
             continue
         }
-        let req: uint* = (raw as char*) as uint*
-        let op: uint = req[0]
-        let lba: uint = req[1]
+        let req: u64* = (raw as u8*) as u64*
+        let op: u64 = req[0]
+        let lba: u64 = req[1]
 
-        let status: uint = 1
+        let status: u64 = 1
         if op == OP_PRESENT {
             status = if present { 0 } else { 1 }
         } else if op == OP_READ {
-            status = if present && read_sector(lba, shm) { 0 } else { 1 }
+            status = if present && do_read_sector(lba, shm) { 0 } else { 1 }
         } else if op == OP_WRITE {
-            status = if present && write_sector(lba, shm) { 0 } else { 1 }
+            status = if present && do_write_sector(lba, shm) { 0 } else { 1 }
         }
 
-        let reply: char[8]
-        let reply_word: uint* = (reply as char*) as uint*
+        let reply: u8[8]
+        let reply_word: u64* = (reply as u8*) as u64*
         reply_word[0] = status
-        sys_msg_reply(sender, reply as char*, 8)
+        sys_msg_reply(sender, reply as u8*, 8)
     }
 }

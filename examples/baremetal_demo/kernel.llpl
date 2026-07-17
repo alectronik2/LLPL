@@ -35,6 +35,7 @@ import kbd
 import mouse
 import pagealloc
 import kheap
+import pci
 import ata
 import vfs
 import tmpfs
@@ -855,6 +856,9 @@ func install_userland_to_vfs() {
     install_boot_module_to_vfs("tetris.elf", "/bin/tetris.elf")
     install_boot_module_to_vfs("winball1.elf", "/bin/winball1.elf")
     install_boot_module_to_vfs("winball2.elf", "/bin/winball2.elf")
+    install_boot_module_to_vfs("filebrowser.elf", "/bin/filebrowser.elf")
+    install_boot_module_to_vfs("editor.elf", "/bin/editor.elf")
+    install_boot_module_to_vfs("terminal.elf", "/bin/terminal.elf")
 }
 
 // Runs as its own scheduled kernel task (spawned from kernel_main, after
@@ -1024,6 +1028,11 @@ func kernel_main(multiboot_ptr: uint) {
     // anything can find it, not launched on demand like the window demos
     // that connect to it (winball1.elf/winball2.elf, via the shell's `run`).
     spawn_boot_user_module("wm.elf")
+    // netd (the e1000 NIC driver) is likewise a persistent, name-looked-up
+    // service, not launched on demand - ping/traceroute (run interactively
+    // via the shell, unlike the drivers above) find it via sys_lookup("netd")
+    // exactly like a window client finds "wm".
+    spawn_boot_user_module("netd.elf")
     Task.spawn_named(vfs_boot_task_entry as uint, "vfsboot")
     Task.start() // never returns - see task.llpl
 

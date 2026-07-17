@@ -13,22 +13,22 @@ namespace EventLog {
     const MESSAGE_MAX = 64
 
     packed struct Entry {
-        let seq: uint
-        let tick: uint
-        let source: char[16]
-        let message: char[64]
-        let arg_count: int
-        let a: uint
-        let b: uint
+        let seq: u64
+        let tick: u64
+        let source: u8[16]
+        let message: u8[64]
+        let arg_count: i64
+        let a: u64
+        let b: u64
     }
 
     let entries: Entry[128]
-    let head: int = 0       // next slot to write
-    let entry_count: int = 0      // capped at CAPACITY
-    let next_seq: uint = 0
+    let head: i64 = 0       // next slot to write
+    let entry_count: i64 = 0      // capped at CAPACITY
+    let next_seq: u64 = 0
 
-    func copy_string(dst: char*, max_len: int, src: char*) {
-        let i: int = 0
+    func copy_string(dst: u8*, max_len: u64, src: u8*) {
+        let i: i64 = 0
         while src[i] != 0 && i < max_len - 1 {
             dst[i] = src[i]
             i = i + 1
@@ -36,15 +36,15 @@ namespace EventLog {
         dst[i] = 0
     }
 
-    func add2(src: char*, message: char*, a: uint, b: uint) {
-        let flags: uint = HAL.read_flags()
+    func add2(src: u8*, message: u8*, a: u64, b: u64) {
+        let flags: u64 = HAL.read_flags()
         HAL.disable_interrupts()
 
         let e: Entry* = &entries[head]
         e.seq = next_seq
         e.tick = timer_ticks
-        copy_string(e.source as char*, SOURCE_MAX, src)
-        copy_string(e.message as char*, MESSAGE_MAX, message)
+        copy_string(e.source as u8*, SOURCE_MAX, src)
+        copy_string(e.message as u8*, MESSAGE_MAX, message)
         e.arg_count = 2
         e.a = a
         e.b = b
@@ -58,15 +58,15 @@ namespace EventLog {
         HAL.write_flags(flags)
     }
 
-    func add1(src: char*, message: char*, a: uint) {
-        let flags: uint = HAL.read_flags()
+    func add1(src: u8*, message: u8*, a: u64) {
+        let flags: u64 = HAL.read_flags()
         HAL.disable_interrupts()
 
         let e: Entry* = &entries[head]
         e.seq = next_seq
         e.tick = timer_ticks
-        copy_string(e.source as char*, SOURCE_MAX, src)
-        copy_string(e.message as char*, MESSAGE_MAX, message)
+        copy_string(e.source as u8*, SOURCE_MAX, src)
+        copy_string(e.message as u8*, MESSAGE_MAX, message)
         e.arg_count = 1
         e.a = a
         e.b = 0
@@ -80,15 +80,15 @@ namespace EventLog {
         HAL.write_flags(flags)
     }
 
-    func add0(src: char*, message: char*) {
-        let flags: uint = HAL.read_flags()
+    func add0(src: u8*, message: u8*) {
+        let flags: u64 = HAL.read_flags()
         HAL.disable_interrupts()
 
         let e: Entry* = &entries[head]
         e.seq = next_seq
         e.tick = timer_ticks
-        copy_string(e.source as char*, SOURCE_MAX, src)
-        copy_string(e.message as char*, MESSAGE_MAX, message)
+        copy_string(e.source as u8*, SOURCE_MAX, src)
+        copy_string(e.message as u8*, MESSAGE_MAX, message)
         e.arg_count = 0
         e.a = 0
         e.b = 0
@@ -103,7 +103,7 @@ namespace EventLog {
     }
 
     func clear() {
-        let flags: uint = HAL.read_flags()
+        let flags: u64 = HAL.read_flags()
         HAL.disable_interrupts()
         head = 0
         entry_count = 0
@@ -111,33 +111,33 @@ namespace EventLog {
         HAL.write_flags(flags)
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return entry_count
     }
 
-    func dropped() -> uint {
-        if next_seq > entry_count as uint {
-            return next_seq - (entry_count as uint)
+    func dropped() -> u64 {
+        if next_seq > entry_count as u64 {
+            return next_seq - (entry_count as u64)
         }
         return 0
     }
 
-    func physical_index(logical: int) -> int {
-        let oldest: int = 0
+    func physical_index(logical: i64) -> i64 {
+        let oldest: i64 = 0
         if entry_count == CAPACITY {
             oldest = head
         }
         return (oldest + logical) % CAPACITY
     }
 
-    func entry_at(logical: int) -> Entry* {
+    func entry_at(logical: i64) -> Entry* {
         if logical < 0 || logical >= entry_count {
             return null
         }
         return &entries[physical_index(logical)]
     }
 
-    func seq_at(logical: int) -> uint {
+    func seq_at(logical: i64) -> u64 {
         let e: Entry* = entry_at(logical)
         if e == null {
             return 0
@@ -145,7 +145,7 @@ namespace EventLog {
         return e.seq
     }
 
-    func tick_at(logical: int) -> uint {
+    func tick_at(logical: i64) -> u64 {
         let e: Entry* = entry_at(logical)
         if e == null {
             return 0
@@ -153,23 +153,23 @@ namespace EventLog {
         return e.tick
     }
 
-    func source_at(logical: int) -> char* {
+    func source_at(logical: i64) -> u8* {
         let e: Entry* = entry_at(logical)
         if e == null {
             return ""
         }
-        return e.source as char*
+        return e.source as u8*
     }
 
-    func message_at(logical: int) -> char* {
+    func message_at(logical: i64) -> u8* {
         let e: Entry* = entry_at(logical)
         if e == null {
             return ""
         }
-        return e.message as char*
+        return e.message as u8*
     }
 
-    func arg_count_at(logical: int) -> int {
+    func arg_count_at(logical: i64) -> i64 {
         let e: Entry* = entry_at(logical)
         if e == null {
             return 0
@@ -177,7 +177,7 @@ namespace EventLog {
         return e.arg_count
     }
 
-    func arg_a_at(logical: int) -> uint {
+    func arg_a_at(logical: i64) -> u64 {
         let e: Entry* = entry_at(logical)
         if e == null {
             return 0
@@ -185,7 +185,7 @@ namespace EventLog {
         return e.a
     }
 
-    func arg_b_at(logical: int) -> uint {
+    func arg_b_at(logical: i64) -> u64 {
         let e: Entry* = entry_at(logical)
         if e == null {
             return 0

@@ -1,0 +1,321 @@
+// A small windowed file browser over the persistent VFS (vfs.llpl) - lists
+// the current directory, arrow keys move the selection, ENTER descends
+// into a directory or spawns editor.elf on a selected file, ESC goes up
+// one level. Read-only browsing; editor.elf does the actual editing.
+//
+// Directory contents come from Syscall.sys_readdir (syscall.llpl), one
+// fixed 48-byte record per call: name[32], then kind and size as two
+// 8-byte uints at offset 32/40 - see that syscall's own doc comment.
+// Only the real on-disk VFS is browsable (no /boot tmpfs mount), which
+// covers everything actually useful to open: every installed program,
+// and anything the editor itself has saved.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+import "wm_client"
+import "font"
+
+const MAX_ENTRIES = 48
+const ENTRY_SIZE = 48
+const ROWS_VISIBLE = 10
+const ROW_H = 16
+const LIST_TOP = 24
+
+const BG_COLOR: uint32 = 0x101018
+const HEADER_COLOR: uint32 = 0x60A0FF
+const DIR_COLOR: uint32 = 0x70D0FF
+const FILE_COLOR: uint32 = 0xD0D0D0
+const SEL_BG: uint32 = 0x30609F
+const SEL_FG: uint32 = 0xFFFFFF
+const VFS_KIND_DIR = 2
+const SCROLLBAR_W = 4
+const SCROLLBAR_TRACK: uint32 = 0x202020
+const SCROLLBAR_THUMB: uint32 = 0x506080
+
+let cur_path: char[96]
+let entries: char[2304] // MAX_ENTRIES(48) * ENTRY_SIZE(48)
+let entry_count: int = 0
+let selected: int = 0
+let scroll: int = 0
+
+func path_len(p: char*) -> uint {
+    let i: uint = 0
+    while p[i] != 0 {
+        i = i + 1
+    }
+    return i
+}
+
+func entry_at(i: int) -> char* {
+    return (entries as char*) + i * ENTRY_SIZE
+}
+
+func entry_kind(i: int) -> uint {
+    let fields: uint* = (entry_at(i) + 32) as uint*
+    return fields[0]
+}
+
+func entry_size(i: int) -> uint {
+    let fields: uint* = (entry_at(i) + 32) as uint*
+    return fields[1]
+}
+
+// Appends "/name" (or just "name" if base already ends in '/') to base,
+// writing the result into dst - safe to call with dst == base (every
+// byte written past position path_len(base) never aliases a byte still
+// being read).
+func join_path(dst: char*, base: char*, name: char*) {
+    let base_len: uint = path_len(base)
+    let i: uint = 0
+    while i < base_len {
+        dst[i] = base[i]
+        i = i + 1
+    }
+    let pos: uint = base_len
+    if base_len == 0 || base[base_len - 1] != 47 {
+        dst[pos] = 47
+        pos = pos + 1
+    }
+    let j: uint = 0
+    while name[j] != 0 {
+        dst[pos] = name[j]
+        pos = pos + 1
+        j = j + 1
+    }
+    dst[pos] = 0
+}
+
+func go_up() {
+    let len: uint = path_len(cur_path as char*)
+    if len <= 1 {
+        return
+    }
+    let i: int = (len as int) - 1
+    while i > 0 && cur_path[i] == 47 {
+        i = i - 1
+    }
+    while i > 0 && cur_path[i] != 47 {
+        i = i - 1
+    }
+    if i <= 0 {
+        cur_path[1] = 0
+    } else {
+        cur_path[i] = 0
+    }
+}
+
+func refresh_listing() {
+    entry_count = 0
+    let i: uint = 0
+    let done: bool = false
+    while (i as int) < MAX_ENTRIES && !done {
+        let buf: char[48]
+        let ok: uint = sys_readdir(cur_path as char*, i, buf as char*)
+        if ok == RT_SYS_ERR {
+            done = true
+        } else {
+            let dst: char* = entry_at(entry_count)
+            let j: int = 0
+            while j < 48 {
+                dst[j] = buf[j]
+                j = j + 1
+            }
+            entry_count = entry_count + 1
+            i = i + 1
+        }
+    }
+    selected = 0
+    scroll = 0
+}
+
+func fill_row(buf: uint32*, y: uint, color: uint32) {
+    let ry: uint = 0
+    while ry < ROW_H {
+        let rx: uint = 0
+        while rx < (Wm.WIN_W as uint) {
+            buf[(y + ry) * (Wm.WIN_W as uint) + rx] = color
+            rx = rx + 1
+        }
+        ry = ry + 1
+    }
+}
+
+// Thin vertical bar along the right edge, only drawn once there's
+// actually more to scroll than fits on screen - a fixed-size track plus
+// a thumb sized/positioned proportionally to scroll/entry_count, same
+// idea as any ordinary scrollbar. Informational only (not click-
+// draggable itself); the mouse wheel is what actually moves it - see
+// this file's main loop.
+func draw_scrollbar() {
+    if entry_count <= ROWS_VISIBLE {
+        return
+    }
+    let track_top: int = LIST_TOP
+    let track_h: int = ROWS_VISIBLE * ROW_H
+    let sb_x: int = (Wm.WIN_W as int) - SCROLLBAR_W - 2
+
+    let ty: int = 0
+    while ty < track_h {
+        let tx: int = 0
+        while tx < SCROLLBAR_W {
+            wm_put_pixel((sb_x + tx) as uint, (track_top + ty) as uint, SCROLLBAR_TRACK)
+            tx = tx + 1
+        }
+        ty = ty + 1
+    }
+
+    let thumb_h: int = (track_h * ROWS_VISIBLE) / entry_count
+    if thumb_h < 8 {
+        thumb_h = 8
+    }
+    if thumb_h > track_h {
+        thumb_h = track_h
+    }
+    let max_scroll: int = entry_count - ROWS_VISIBLE
+    let thumb_y: int = track_top
+    if max_scroll > 0 {
+        thumb_y = track_top + ((track_h - thumb_h) * scroll) / max_scroll
+    }
+
+    let ty2: int = 0
+    while ty2 < thumb_h {
+        let tx2: int = 0
+        while tx2 < SCROLLBAR_W {
+            wm_put_pixel((sb_x + tx2) as uint, (thumb_y + ty2) as uint, SCROLLBAR_THUMB)
+            tx2 = tx2 + 1
+        }
+        ty2 = ty2 + 1
+    }
+}
+
+func render() {
+    wm_fill(BG_COLOR)
+    let buf: uint32* = wm_buffer()
+    let win_w: uint = Wm.WIN_W as uint
+    let win_h: uint = Wm.WIN_H as uint
+    Font.draw_string(buf, win_w, win_h, 4, 4, cur_path as char*, HEADER_COLOR, BG_COLOR)
+
+    let row: int = 0
+    while row < ROWS_VISIBLE {
+        let idx: int = scroll + row
+        let y: uint = (LIST_TOP as uint) + (row as uint) * ROW_H
+        if idx < entry_count {
+            let kind: uint = entry_kind(idx)
+            let fg: uint32 = FILE_COLOR
+            if kind == VFS_KIND_DIR {
+                fg = DIR_COLOR
+            }
+            let bg: uint32 = BG_COLOR
+            if idx == selected {
+                fg = SEL_FG
+                bg = SEL_BG
+                fill_row(buf, y, bg)
+            }
+            let prefix: char[3]
+            if kind == VFS_KIND_DIR {
+                prefix[0] = 100 // 'd'
+            } else {
+                prefix[0] = 102 // 'f'
+            }
+            prefix[1] = 32 // ' '
+            prefix[2] = 0
+            Font.draw_string(buf, win_w, win_h, 4, y, prefix as char*, fg, bg)
+            Font.draw_string(buf, win_w, win_h, 20, y, entry_at(idx), fg, bg)
+        }
+        row = row + 1
+    }
+    draw_scrollbar()
+    wm_present()
+}
+
+func move_selection_up() {
+    if selected > 0 {
+        selected = selected - 1
+        if selected < scroll {
+            scroll = selected
+        }
+    }
+}
+
+func move_selection_down() {
+    if selected < entry_count - 1 {
+        selected = selected + 1
+        if selected >= scroll + ROWS_VISIBLE {
+            scroll = selected - ROWS_VISIBLE + 1
+        }
+    }
+}
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("filebrowser: starting")
+    if !wm_connect() {
+        sys_putln("filebrowser: wm_connect failed")
+        rt_exit(1)
+    }
+    if !wm_create_window() {
+        sys_putln("filebrowser: create_window failed")
+        rt_exit(1)
+    }
+
+    cur_path[0] = 47
+    cur_path[1] = 0
+    refresh_listing()
+
+    while true {
+        let key: uint = wm_poll_input()
+        if key == (KEY_CLOSE_REQ as uint) {
+            // Nothing here worth keeping around to ask about (unlike
+            // editor.llpl) - close immediately. Deliberately a separate
+            // branch from KEY_ESC below, which already means "go up a
+            // directory" for this app, not "close".
+            wm_close()
+            rt_exit(0)
+        } else if key == (KEY_UP as uint) {
+            move_selection_up()
+        } else if key == (KEY_DOWN as uint) {
+            move_selection_down()
+        } else if key == 10 {
+            if entry_count > 0 {
+                let name: char* = entry_at(selected)
+                let kind: uint = entry_kind(selected)
+                if kind == VFS_KIND_DIR {
+                    join_path(cur_path as char*, cur_path as char*, name)
+                    refresh_listing()
+                } else {
+                    let full: char[160]
+                    join_path(full as char*, cur_path as char*, name)
+                    sys_spawn("/bin/editor.elf", full as char*)
+                }
+            }
+        } else if key == (KEY_ESC as uint) {
+            go_up()
+            refresh_listing()
+        }
+
+        // Mouse wheel: one notch moves the selection exactly like a
+        // single arrow-key press would, capped at 3 steps per poll so a
+        // stray huge value (there shouldn't be one, but this is the
+        // boundary of what a client trusts from outside itself) can't
+        // send `selected` flying. Positive = wheel scrolled up/away, per
+        // the raw PS/2 convention (see mouse.llpl) - that's "up" on
+        // screen too, matching KEY_UP above.
+        let wheel: int = wm_wheel_delta()
+        if wheel > 3 {
+            wheel = 3
+        } else if wheel < -3 {
+            wheel = -3
+        }
+        while wheel > 0 {
+            move_selection_up()
+            wheel = wheel - 1
+        }
+        while wheel < 0 {
+            move_selection_down()
+            wheel = wheel + 1
+        }
+
+        render()
+        sys_sleep(30)
+    }
+}

@@ -21,12 +21,17 @@ namespace Wm {
 
     // Fixed window geometry - simplest possible allocator (one shared arena
     // sliced into MAX_WINDOWS equal, fixed-size pieces, see wm.llpl) at the
-    // cost of every window being the same size. WIN_W * WIN_H * 4 bytes/
-    // pixel * MAX_WINDOWS must not exceed Task.SHM_MAX_PAGES * 4096 (the
-    // whole-region cap on a single sys_shm_create call) - 104*52*4*3 =
-    // 64896 bytes, just under the 65536-byte (16-page) ceiling.
-    const MAX_WINDOWS = 3
-    const WIN_W = 104
-    const WIN_H = 52
-    const WIN_BYTES = 21632 // WIN_W(104) * WIN_H(52) * 4
+    // cost of every window being the same size. Sized for real app windows
+    // (editor/filebrowser) now, not just the original ball-bouncer demos -
+    // 320x200 is enough for a usable 40-column x 12-row text grid at the
+    // client-side Font module's 8x16 glyphs (see userapp/font.llpl).
+    // WIN_W * WIN_H * 4 bytes/pixel * MAX_WINDOWS must not exceed
+    // Task.SHM_MAX_PAGES * 4096 (the whole-region cap on a single
+    // sys_shm_create call) - 320*200*4*4 = 1024000 bytes, just under the
+    // 1048576-byte (256-page) ceiling task.llpl's SHM_MAX_PAGES was raised
+    // to for exactly this.
+    const MAX_WINDOWS = 4
+    const WIN_W = 320
+    const WIN_H = 200
+    const WIN_BYTES = 256000 // WIN_W(320) * WIN_H(200) * 4
 }

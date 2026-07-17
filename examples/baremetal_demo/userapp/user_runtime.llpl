@@ -22,11 +22,77 @@ func rt_put_uint_line(label: char*, n: uint) {
     sys_puts("\n")
 }
 
+const RT_HEX_DIGITS = "0123456789abcdef"
+
+// Prints exactly two lowercase hex digits for the low byte of `n` -
+// used for MAC-address octets (netd.llpl et al) where a byte can be
+// e.g. 0x0A and must print as "0a", not "a".
+func rt_print_hex_byte(n: uint) {
+    let buf: char[3]
+    buf[0] = RT_HEX_DIGITS[(n >> 4) & 0xF]
+    buf[1] = RT_HEX_DIGITS[n & 0xF]
+    buf[2] = 0
+    sys_puts(buf as char*)
+}
+
 func rt_arg(argc: uint, argv: uint*, index: uint, fallback: char*) -> char* {
     if index < argc {
         return argv[index] as char*
     }
     return fallback
+}
+
+// Parses a dotted-decimal IPv4 address ("10.0.2.2") into a single
+// packed uint (a<<24|b<<16|c<<8|d, host order - matches netd.llpl's own
+// make_ip). 0xFFFFFFFF (never a real unicast target) on any parse
+// failure - not 0, since 0.0.0.0 has its own (different) reserved
+// meaning and shouldn't be confused with "couldn't parse this".
+const RT_IP_INVALID = 0xFFFFFFFF
+
+func rt_parse_ip(s: char*) -> uint {
+    let octets: uint[4]
+    let oct: int = 0
+    let val: uint = 0
+    let have_digit: bool = false
+    let i: int = 0
+    while true {
+        let ch: char = s[i]
+        if ch >= 48 && ch <= 57 {
+            val = val * 10 + ((ch as uint) - 48)
+            have_digit = true
+            if val > 255 {
+                return RT_IP_INVALID
+            }
+        } else if ch == 46 { // '.'
+            if !have_digit || oct >= 4 {
+                return RT_IP_INVALID
+            }
+            octets[oct] = val
+            oct = oct + 1
+            val = 0
+            have_digit = false
+        } else if ch == 0 {
+            if !have_digit || oct != 3 {
+                return RT_IP_INVALID
+            }
+            octets[oct] = val
+            return (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]
+        } else {
+            return RT_IP_INVALID
+        }
+        i = i + 1
+    }
+    return RT_IP_INVALID
+}
+
+func rt_print_ip(ip: uint) {
+    rt_print_uint((ip >> 24) & 0xFF)
+    sys_puts(".")
+    rt_print_uint((ip >> 16) & 0xFF)
+    sys_puts(".")
+    rt_print_uint((ip >> 8) & 0xFF)
+    sys_puts(".")
+    rt_print_uint(ip & 0xFF)
 }
 
 func rt_exit(code: uint) {

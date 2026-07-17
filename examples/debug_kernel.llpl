@@ -1,10 +1,10 @@
 // Debug kernel with serial output
 
-extern func outb(port: uint, value: char)
-extern func inb(port: uint) -> char
+extern func outb(port: u64, value: u8)
+extern func inb(port: u64) -> u8
 
-let COM1: uint = 1016  // 0x3F8
-let VGA_BUFFER: uint = 753664  // 0xB8000
+let COM1: u64 = 1016  // 0x3F8
+let VGA_BUFFER: u64 = 753664  // 0xB8000
 
 func serial_init() {
     outb(COM1 + 1, 0)
@@ -16,14 +16,14 @@ func serial_init() {
     outb(COM1 + 4, 11)
 }
 
-func serial_write(c: char) {
+func serial_write(c: u8) {
     while (inb(COM1 + 5) & 32) == 0 {
         // Wait
     }
     outb(COM1, c)
 }
 
-func serial_print(msg: char*) {
+func serial_print(msg: u8*) {
     let i: int = 0
     while msg[i] != 0 {
         serial_write(msg[i])
@@ -41,7 +41,7 @@ func kernel_main() {
     serial_print("Testing VGA write...\n")
 
     // Write to VGA
-    let buffer: char* = VGA_BUFFER as char*
+    let buffer = VGA_BUFFER as u8*
     buffer[0] = 79   // 'O'
     buffer[1] = 15   // White
     buffer[2] = 75   // 'K'

@@ -17,17 +17,17 @@ import "../libsys/imports"
 import "user_runtime"
 import "wm_protocol"
 
-let wm_handle: uint = 0xFFFFFFFFFFFFFFFF
+let wm_handle: u64 = 0xFFFFFFFFFFFFFFFF
 let wm_slot: int = -1
-let wm_arena: char* = null
-let wm_win_x: uint = 0
-let wm_win_y: uint = 0
+let wm_arena: u8* = null
+let wm_win_x: u64 = 0
+let wm_win_y: u64 = 0
 
 // Looks up "wm" (retrying briefly - wm.elf may not have registered yet
 // if this client happens to start first) and maps the shared arena.
 // Must succeed before any other wm_* call.
 func wm_connect() -> bool {
-    let tries: uint = 0
+    let tries: u64 = 0
     while wm_handle == RT_SYS_ERR && tries < 200000 {
         wm_handle = sys_lookup("wm")
         if wm_handle == RT_SYS_ERR {
@@ -43,15 +43,15 @@ func wm_connect() -> bool {
 }
 
 func wm_create_window() -> bool {
-    let req: char[40]
-    let r: uint* = (req as char*) as uint*
-    r[0] = Wm.OP_CREATE as uint
+    let req: u8[40]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_CREATE as u64
     r[1] = 0
-    let n: uint = sys_msg_send(wm_handle, req as char*, 40)
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 40)
     if n == RT_SYS_ERR {
         return false
     }
-    if r[0] != (Wm.STATUS_OK as uint) {
+    if r[0] != (Wm.STATUS_OK as u64) {
         return false
     }
     wm_slot = r[1] as int
@@ -63,22 +63,22 @@ func wm_create_window() -> bool {
 // A pointer to this window's own slice of the shared arena - draw into
 // it with wm_put_pixel/wm_fill below, then call wm_present() to make it
 // visible.
-func wm_buffer() -> uint32* {
-    return (wm_arena + (wm_slot as uint) * Wm.WIN_BYTES) as uint32*
+func wm_buffer() -> u32* {
+    return (wm_arena + (wm_slot as u64) * Wm.WIN_BYTES) as u32*
 }
 
-func wm_put_pixel(x: uint, y: uint, color: uint32) {
-    if x >= (Wm.WIN_W as uint) || y >= (Wm.WIN_H as uint) {
+func wm_put_pixel(x: u64, y: u64, color: u32) {
+    if x >= (Wm.WIN_W as u64) || y >= (Wm.WIN_H as u64) {
         return
     }
-    let buf: uint32* = wm_buffer()
-    buf[y * (Wm.WIN_W as uint) + x] = color
+    let buf: u32* = wm_buffer()
+    buf[y * (Wm.WIN_W as u64) + x] = color
 }
 
-func wm_fill(color: uint32) {
-    let buf: uint32* = wm_buffer()
-    let total: uint = (Wm.WIN_W as uint) * (Wm.WIN_H as uint)
-    let i: uint = 0
+func wm_fill(color: u32) {
+    let buf: u32* = wm_buffer()
+    let total: u64 = (Wm.WIN_W as u64) * (Wm.WIN_H as u64)
+    let i: u64 = 0
     while i < total {
         buf[i] = color
         i = i + 1
@@ -86,37 +86,68 @@ func wm_fill(color: uint32) {
 }
 
 func wm_present() -> bool {
-    let req: char[16]
-    let r: uint* = (req as char*) as uint*
-    r[0] = Wm.OP_PRESENT as uint
-    r[1] = wm_slot as uint
-    let n: uint = sys_msg_send(wm_handle, req as char*, 16)
+    let req: u8[16]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_PRESENT as u64
+    r[1] = wm_slot as u64
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 16)
     if n == RT_SYS_ERR {
         return false
     }
-    return r[0] == (Wm.STATUS_OK as uint)
+    if r[0] != (Wm.STATUS_OK as u64) {
+        // wm's own STATUS_FAIL here means this window doesn't exist from
+        // its side anymore - the only way that happens without this
+        // program ever calling wm_close() itself is the user clicking
+        // the titlebar's close button (wm.llpl's hit_test_close_button),
+        // which has no way to push a message back to a specific client
+        // (no such channel exists - see wm.llpl's own header comment on
+        // pull-based input). This reply is the only place a force-closed
+        // client ever learns about it, so treat it the same as if it had
+        // decided to close itself.
+        rt_exit(0)
+    }
+    return true
 }
 
 // Non-blocking, same convention as sys_kbd_poll: 0 if nothing is pending
 // for this window right now (also 0 if it isn't the focused window - see
 // wm.llpl's own doc comment on why an unfocused poll can't steal a
 // keystroke meant for someone else).
-func wm_poll_input() -> uint {
-    let req: char[16]
-    let r: uint* = (req as char*) as uint*
-    r[0] = Wm.OP_POLL_INPUT as uint
-    r[1] = wm_slot as uint
-    let n: uint = sys_msg_send(wm_handle, req as char*, 16)
+// Set as a side effect of every wm_poll_input() call below - read it
+// with wm_wheel_delta() right after, before the next poll overwrites it.
+let wm_last_wheel: int = 0
+
+func wm_poll_input() -> u64 {
+    let req: u8[24]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_POLL_INPUT as u64
+    r[1] = wm_slot as u64
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 24)
     if n == RT_SYS_ERR {
         return 0
     }
+    if r[0] != (Wm.STATUS_OK as u64) {
+        // See wm_present's own comment just above - same force-close
+        // signal, just as likely to be noticed here first depending on
+        // which call a client's main loop happens to make next.
+        rt_exit(0)
+    }
+    wm_last_wheel = r[2] as int
     return r[1]
 }
 
+// Wheel notches since the last poll (positive = scrolled up/away from
+// the user, negative = down/toward, matching the raw PS/2 convention -
+// see mouse.llpl) - only ever nonzero right after a wm_poll_input() call
+// on the currently focused window (wm.llpl's own doc comment on why).
+func wm_wheel_delta() -> int {
+    return wm_last_wheel
+}
+
 func wm_close() {
-    let req: char[16]
-    let r: uint* = (req as char*) as uint*
-    r[0] = Wm.OP_CLOSE as uint
-    r[1] = wm_slot as uint
-    sys_msg_send(wm_handle, req as char*, 16)
+    let req: u8[16]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_CLOSE as u64
+    r[1] = wm_slot as u64
+    sys_msg_send(wm_handle, req as u8*, 16)
 }

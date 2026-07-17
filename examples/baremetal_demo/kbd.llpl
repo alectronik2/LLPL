@@ -20,6 +20,14 @@ namespace Keyboard {
     const KEY_DOWN = 201
     const KEY_LEFT = 202
     const KEY_RIGHT = 203
+    // Same sentinel convention, for the editor/filebrowser apps: ESC
+    // (back/cancel) and F2 (save) aren't in the printable scancode table
+    // below (F2's scancode is well past its 58-entry bound, same as F12
+    // already was; ESC's scancode 0x01 IS in-bounds but maps to 0 - "no
+    // printable character" - in that table, so it needs its own explicit
+    // check the same way F12's toggle does, below).
+    const KEY_ESC = 204
+    const KEY_F2 = 205
 
     // The shell's own Keyboard.read_char() and every ring-3 program's
     // sys_kbd_poll() (Syscall.sys_kbd_poll, syscall.llpl) used to drain
@@ -131,6 +139,23 @@ namespace Keyboard {
                     input_focus = FOCUS_CONSOLE
                     HAL.Serial.write("\ninput: -> console (F12 for windowing)\n")
                 }
+            }
+            return
+        }
+
+        // ESC (0x01) and F2 (0x3C): pushed as sentinels exactly like the
+        // arrow keys above, not intercepted globally like F12 - these are
+        // meant to be consumed by whichever app is polling (the editor/
+        // filebrowser), not to change any driver-wide state themselves.
+        if key == 0x01 {
+            if !released {
+                push(KEY_ESC as char)
+            }
+            return
+        }
+        if key == 0x3C {
+            if !released {
+                push(KEY_F2 as char)
             }
             return
         }

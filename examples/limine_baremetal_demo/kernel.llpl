@@ -13,7 +13,7 @@ import hal.cpu
 alias hs = HAL.Serial
 
 @section(".limine_requests_start") @used
-let limine_requests_start_marker: uint[4] = limine_start_marker_id
+let limine_requests_start_marker: u64[4] = limine_start_marker_id
 
 @section(".limine_requests") @used
 let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
@@ -37,7 +37,7 @@ let hhdm_request: LimineHhdmRequest = LimineHhdmRequest {
 }
 
 @section(".limine_requests_end") @used
-let limine_requests_end_marker: uint[2] = limine_end_marker_id
+let limine_requests_end_marker: u64[2] = limine_end_marker_id
 
 func limine_get_framebuffer() -> LimineFramebuffer* {
     if framebuffer_request.response == 0 {
@@ -71,7 +71,7 @@ func memmap_type_name(t: uint) -> string {
     }
 }
 
-func memmap_type_color(t: uint) -> uint32 {
+func memmap_type_color(t: u64) -> u32 {
     match t {
         case MemMapType.Usable =>                { return 0x1fbf75 }
         case MemMapType.Reserved =>              { return 0x777777 }
@@ -86,7 +86,7 @@ func memmap_type_color(t: uint) -> uint32 {
     }
 }
 
-func put_pixel(fb: LimineFramebuffer*, x: uint, y: uint, rgb: uint32) {
+func put_pixel(fb: LimineFramebuffer*, x: u64, y: u64, rgb: u32) {
     if fb.bpp != 32 as uint16 {
         return
     }
@@ -95,10 +95,10 @@ func put_pixel(fb: LimineFramebuffer*, x: uint, y: uint, rgb: uint32) {
     p[0] = rgb
 }
 
-func fill_rect(fb: LimineFramebuffer*, x0: uint, y0: uint, w: uint, h: uint, rgb: uint32) {
-    let y: uint = 0
+func fill_rect(fb: LimineFramebuffer*, x0: u64, y0: u64, w: u64, h: u64, rgb: u32) {
+    let y = 0
     while y < h {
-        let x: uint = 0
+        let x = 0
         while x < w {
             if x0 + x < fb.width && y0 + y < fb.height {
                 put_pixel(fb, x0 + x, y0 + y, rgb)
@@ -110,21 +110,21 @@ func fill_rect(fb: LimineFramebuffer*, x0: uint, y0: uint, w: uint, h: uint, rgb
 }
 
 func draw_demo(fb: LimineFramebuffer*) {
-    let max_y: uint = fb.height
+    let max_y = fb.height
     if max_y > 240 {
         max_y = 240
     }
-    let max_x: uint = fb.width
+    let max_x = fb.width
     if max_x > 320 {
         max_x = 320
     }
 
-    let y: uint = 0
+    let y = 0
     while y < max_y {
-        let x: uint = 0
+        let x = 0
         while x < max_x {
-            let r = ((x * 255 / max_x) & 255) as uint32
-            let g = ((y * 255 / max_y) & 255) as uint32
+            let r = ((x * 255 / max_x) & 255) as u32
+            let g = ((y * 255 / max_y) & 255) as u32
             let b = 0x80
             put_pixel(fb, x, y, (r << 16) | (g << 8) | b)
             x = x + 1
@@ -137,7 +137,7 @@ func print_memmap(memmap: LimineMemmapResponse*) {
     hs.write("Limine memory map entries: \(memmap.entry_count)\n")
 
     let entries = memmap.entries as uint*
-    let i: uint = 0
+    let i = 0
     while i < memmap.entry_count {
         let entry = entries[i] as LimineMemmapEntry*
         hs.write("  \(entry.base:hex) - \(entry.base + entry.length:hex) \(memmap_type_name(entry.entry_type))\n")
@@ -176,9 +176,9 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
     i = 0
     while i < memmap.entry_count {
         let entry = entries[i] as LimineMemmapEntry*
-        let x0: uint = plot_x + (entry.base * plot_w) / max_end
-        let x1: uint = plot_x + ((entry.base + entry.length) * plot_w) / max_end
-        let w: uint = x1 - x0
+        let x0 = plot_x + (entry.base * plot_w) / max_end
+        let x1 = plot_x + ((entry.base + entry.length) * plot_w) / max_end
+        let w = x1 - x0
         if w == 0 {
             w = 1
         }
@@ -197,10 +197,10 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
 func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
     hs.write("Limine HHDM offset: \(hhdm.offset:hex)\n")
 
-    let entries: uint* = memmap.entries as uint*
-    let probe_phys: uint = 0
-    let found: bool = false
-    let i: uint = 0
+    let entries= memmap.entries as uint*
+    let probe_phys = 0
+    let found = false
+    let i = 0
     while i < memmap.entry_count && !found {
         let entry = entries[i] as LimineMemmapEntry*
         if entry.entry_type == MemMapType.Usable && entry.length > 0 {

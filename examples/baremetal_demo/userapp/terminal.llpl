@@ -1,0 +1,571 @@
+// A small windowed terminal - the only way to launch a program with
+// arguments (or browse/cat a path) from inside the GUI without going
+// back to the always-visible taskbar's fixed buttons. Modeled closely on
+// filebrowser.llpl/editor.llpl: same window size, same wm_client plumbing,
+// same wheel-scroll/scrollbar convention.
+//
+// Everything - every prompt, every echoed command, every command's own
+// output - lives in one flat scrollback buffer (like editor.llpl's text
+// buffer), rendered a screenful at a time. There is no line-editing
+// cursor: typing only ever appends to the end of the buffer, and
+// backspace only erases back to wherever the current input line started
+// (`input_start`) - a real terminal's line discipline, not a text editor's.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+import "wm_client"
+import "font"
+
+const SCROLLBACK_CAP = 8192
+const ROW_H = 16
+const TOP = 4
+const VISIBLE_ROWS = 12
+// Same reasoning as editor.llpl's own MAX_COLS: window width in
+// characters, minus a few pixels on the right for the scrollbar.
+const MAX_COLS = 37
+const SCROLLBAR_W = 4
+const SCROLLBAR_TRACK: uint32 = 0x202020
+const SCROLLBAR_THUMB: uint32 = 0x506080
+
+const BG_COLOR: uint32 = 0x0C0C14
+const TEXT_COLOR: uint32 = 0xD8D8D8
+const PROMPT_COLOR: uint32 = 0x70D0FF
+const ERROR_COLOR: uint32 = 0xFF6060
+const CARET_COLOR: uint32 = 0xFFD000
+
+const VFS_KIND_DIR = 2
+const MAX_LS_ENTRIES = 48
+const ENTRY_SIZE = 48
+
+let buf: char[8192] // SCROLLBACK_CAP
+let buf_len: uint = 0
+let top_line: uint = 0
+// Offset into `buf` where the line currently being typed starts (right
+// after the freshest prompt) - typing appends past this; backspace
+// refuses to erase anything before it, so a command's own already-
+// printed prompt can never be clobbered by an eager backspace.
+let input_start: uint = 0
+let cur_dir: char[96]
+
+func path_len(p: char*) -> uint {
+    let i: uint = 0
+    while p[i] != 0 {
+        i = i + 1
+    }
+    return i
+}
+
+// Same append-only "/base" + "name" join filebrowser.llpl's own
+// join_path uses - see that copy's doc comment for why writing through
+// dst == base is safe here too.
+func join_path(dst: char*, base: char*, name: char*) {
+    let base_len: uint = path_len(base)
+    let i: uint = 0
+    while i < base_len {
+        dst[i] = base[i]
+        i = i + 1
+    }
+    let pos: uint = base_len
+    if base_len == 0 || base[base_len - 1] != 47 {
+        dst[pos] = 47
+        pos = pos + 1
+    }
+    let j: uint = 0
+    while name[j] != 0 {
+        dst[pos] = name[j]
+        pos = pos + 1
+        j = j + 1
+    }
+    dst[pos] = 0
+}
+
+func go_up_dir() {
+    let len: uint = path_len(cur_dir as char*)
+    if len <= 1 {
+        return
+    }
+    let i: int = (len as int) - 1
+    while i > 0 && cur_dir[i] == 47 {
+        i = i - 1
+    }
+    while i > 0 && cur_dir[i] != 47 {
+        i = i - 1
+    }
+    if i <= 0 {
+        cur_dir[1] = 0
+    } else {
+        cur_dir[i] = 0
+    }
+}
+
+// Resolves `arg` (a "cd"/"ls"/"cat" argument, or "" for "current dir")
+// against cur_dir, writing the absolute result into `dst` - "/x" is
+// already absolute, anything else is joined onto cur_dir the same way
+// filebrowser.llpl resolves a selected entry's name.
+func resolve_path(dst: char*, arg: char*) {
+    if arg[0] == 0 {
+        let i: uint = 0
+        while cur_dir[i] != 0 {
+            dst[i] = cur_dir[i]
+            i = i + 1
+        }
+        dst[i] = 0
+    } else if arg[0] == 47 {
+        let i: uint = 0
+        while arg[i] != 0 {
+            dst[i] = arg[i]
+            i = i + 1
+        }
+        dst[i] = 0
+    } else {
+        join_path(dst, cur_dir as char*, arg)
+    }
+}
+
+// Drops the whole scrollback rather than trying to make room piecemeal -
+// simplest safe behavior once history fills the fixed buffer, same
+// tradeoff EventLog.llpl's own fixed-capacity ring makes, just without
+// the ring (a terminal's whole point is reading back what's on screen
+// *now*, not perfect infinite history).
+func ensure_space(extra: uint) {
+    if buf_len + extra >= (SCROLLBACK_CAP as uint) {
+        buf_len = 0
+        top_line = 0
+    }
+}
+
+func append_str(s: char*) {
+    let i: uint = 0
+    while s[i] != 0 {
+        ensure_space(1)
+        buf[buf_len] = s[i]
+        buf_len = buf_len + 1
+        i = i + 1
+    }
+}
+
+func append_char(c: char) {
+    ensure_space(1)
+    buf[buf_len] = c
+    buf_len = buf_len + 1
+}
+
+func append_uint(n: uint) {
+    if n >= 10 {
+        append_uint(n / 10)
+    }
+    append_char(((n % 10) + 48) as char)
+}
+
+func print_prompt() {
+    append_str(cur_dir as char*)
+    append_str("> ")
+    input_start = buf_len
+}
+
+// Splits `line` in place on the first space into (word, rest) - `rest`
+// points just past that space (or at line's own NUL if there was no
+// space, i.e. no arguments at all).
+func split_first_word(line: char*) -> char* {
+    let i: uint = 0
+    while line[i] != 0 && line[i] != 32 {
+        i = i + 1
+    }
+    if line[i] == 32 {
+        line[i] = 0
+        return line + i + 1
+    }
+    return line + i
+}
+
+func cmd_ls(arg: char*) {
+    let target: char[96]
+    resolve_path(target as char*, arg)
+    let i: uint = 0
+    let done: bool = false
+    let any: bool = false
+    while (i as int) < MAX_LS_ENTRIES && !done {
+        let rec: char[48]
+        let ok: uint = sys_readdir(target as char*, i, rec as char*)
+        if ok == RT_SYS_ERR {
+            done = true
+        } else {
+            any = true
+            let fields: uint* = (rec as char* + 32) as uint*
+            let kind: uint = fields[0]
+            if kind == VFS_KIND_DIR {
+                append_char(100) // 'd'
+            } else {
+                append_char(102) // 'f'
+            }
+            append_char(32)
+            append_str(rec as char*)
+            append_char(10)
+            i = i + 1
+        }
+    }
+    if !any {
+        append_str("(empty or no such directory)\n")
+    }
+}
+
+// Module-level, not a local in cmd_cat below - the user stack is a
+// single 4KB page (VMM.USER_STACK_TOP - USER_STACK_BASE), so a buffer
+// this size can only ever live in .bss, the same reason buf/cur_dir
+// above aren't locals either. A local here faulted immediately in
+// testing: a plain "cat <file>" walked straight through the stack
+// guard page before sys_read_all even got a chance to return.
+let cat_filebuf: char[4096]
+
+func cmd_cat(arg: char*) {
+    if arg[0] == 0 {
+        append_str("usage: cat <path>\n")
+        return
+    }
+    let target: char[96]
+    resolve_path(target as char*, arg)
+    let filebuf: char* = cat_filebuf as char*
+    let n: uint = sys_read_all(target as char*, filebuf, 4095)
+    if n == RT_SYS_ERR {
+        append_str("cat: cannot read '")
+        append_str(target as char*)
+        append_str("'\n")
+        return
+    }
+    filebuf[n] = 0
+    append_str(filebuf as char*)
+    if n == 0 || filebuf[n - 1] != 10 {
+        append_char(10)
+    }
+}
+
+func cmd_cd(arg: char*) {
+    if arg[0] == 0 || sys_streq(arg, "/") {
+        cur_dir[0] = 47
+        cur_dir[1] = 0
+    } else if sys_streq(arg, "..") {
+        go_up_dir()
+    } else if arg[0] == 47 {
+        let i: uint = 0
+        while arg[i] != 0 {
+            cur_dir[i] = arg[i]
+            i = i + 1
+        }
+        cur_dir[i] = 0
+    } else {
+        join_path(cur_dir as char*, cur_dir as char*, arg)
+    }
+}
+
+func cmd_run(word: char*, arg: char*) {
+    let path: char[96]
+    if word[0] == 47 {
+        let i: uint = 0
+        while word[i] != 0 {
+            path[i] = word[i]
+            i = i + 1
+        }
+        path[i] = 0
+    } else {
+        // Bare name (e.g. "editor") resolves the same way the always-on
+        // taskbar's own tiles do - /bin/<name>.elf - so a command typed
+        // here matches whatever's already visible as a taskbar button.
+        let prefix: char[6]
+        prefix[0] = 47
+        prefix[1] = 98
+        prefix[2] = 105
+        prefix[3] = 110
+        prefix[4] = 47
+        prefix[5] = 0
+        let pi: uint = 0
+        while prefix[pi] != 0 {
+            path[pi] = prefix[pi]
+            pi = pi + 1
+        }
+        let wi: uint = 0
+        while word[wi] != 0 {
+            path[pi] = word[wi]
+            pi = pi + 1
+            wi = wi + 1
+        }
+        path[pi] = 46
+        path[pi + 1] = 101
+        path[pi + 2] = 108
+        path[pi + 3] = 102
+        path[pi + 4] = 0
+    }
+    let handle: uint = sys_spawn(path as char*, arg)
+    if handle == RT_SYS_ERR {
+        append_str("spawn failed: ")
+        append_str(path as char*)
+        append_char(10)
+    } else {
+        append_str("started ")
+        append_str(path as char*)
+        append_char(10)
+    }
+}
+
+func run_command(line: char*) {
+    let arg: char* = split_first_word(line)
+    if line[0] == 0 {
+        return
+    }
+    if sys_streq(line, "help") {
+        append_str("ls [path]   cat <path>\n")
+        append_str("cd <path>   pwd\n")
+        append_str("clear       help\n")
+        append_str("anything else: spawns\n")
+        append_str("/bin/<name>.elf, or an\n")
+        append_str("absolute /path\n")
+    } else if sys_streq(line, "clear") {
+        buf_len = 0
+        top_line = 0
+    } else if sys_streq(line, "pwd") {
+        append_str(cur_dir as char*)
+        append_char(10)
+    } else if sys_streq(line, "ls") {
+        cmd_ls(arg)
+    } else if sys_streq(line, "cat") {
+        cmd_cat(arg)
+    } else if sys_streq(line, "cd") {
+        cmd_cd(arg)
+    } else {
+        cmd_run(line, arg)
+    }
+}
+
+func line_start_at_or_before(pos: uint) -> uint {
+    let i: uint = pos
+    while i > 0 && buf[i - 1] != 10 {
+        i = i - 1
+    }
+    return i
+}
+
+func line_number_of(pos: uint) -> uint {
+    let i: uint = 0
+    let line: uint = 0
+    while i < pos {
+        if buf[i] == 10 {
+            line = line + 1
+        }
+        i = i + 1
+    }
+    return line
+}
+
+func offset_of_line(line: uint) -> uint {
+    let i: uint = 0
+    let cur_line: uint = 0
+    while cur_line < line && i < buf_len {
+        if buf[i] == 10 {
+            cur_line = cur_line + 1
+        }
+        i = i + 1
+    }
+    return i
+}
+
+func draw_scrollbar(fb: uint32*, win_w: uint) {
+    let total: uint = line_number_of(buf_len) + 1
+    if total <= (VISIBLE_ROWS as uint) {
+        return
+    }
+    let track_top: int = TOP
+    let track_h: int = VISIBLE_ROWS * ROW_H
+    let sb_x: int = (win_w as int) - SCROLLBAR_W - 2
+
+    let ty: int = 0
+    while ty < track_h {
+        let tx: int = 0
+        while tx < SCROLLBAR_W {
+            fb[((track_top + ty) as uint) * win_w + ((sb_x + tx) as uint)] = SCROLLBAR_TRACK
+            tx = tx + 1
+        }
+        ty = ty + 1
+    }
+
+    let thumb_h: int = (track_h * (VISIBLE_ROWS as int)) / (total as int)
+    if thumb_h < 8 {
+        thumb_h = 8
+    }
+    if thumb_h > track_h {
+        thumb_h = track_h
+    }
+    let max_scroll: int = (total as int) - (VISIBLE_ROWS as int)
+    let thumb_y: int = track_top
+    if max_scroll > 0 {
+        thumb_y = track_top + ((track_h - thumb_h) * (top_line as int)) / max_scroll
+    }
+
+    let ty2: int = 0
+    while ty2 < thumb_h {
+        let tx2: int = 0
+        while tx2 < SCROLLBAR_W {
+            fb[((thumb_y + ty2) as uint) * win_w + ((sb_x + tx2) as uint)] = SCROLLBAR_THUMB
+            tx2 = tx2 + 1
+        }
+        ty2 = ty2 + 1
+    }
+}
+
+func scroll_up_one() {
+    if top_line > 0 {
+        top_line = top_line - 1
+    }
+}
+
+func scroll_down_one() {
+    let total: uint = line_number_of(buf_len) + 1
+    if top_line + (VISIBLE_ROWS as uint) < total {
+        top_line = top_line + 1
+    }
+}
+
+func render() {
+    wm_fill(BG_COLOR)
+    let win_buf: uint32* = wm_buffer()
+    let win_w: uint = Wm.WIN_W as uint
+    let win_h: uint = Wm.WIN_H as uint
+
+    // Auto-scroll so the line currently being typed always stays on
+    // screen, the same rule editor.llpl's own render() applies to its
+    // cursor line.
+    let cur_line: uint = line_number_of(buf_len)
+    if cur_line < top_line {
+        top_line = cur_line
+    }
+    if cur_line >= top_line + (VISIBLE_ROWS as uint) {
+        top_line = cur_line - (VISIBLE_ROWS as uint) + 1
+    }
+
+    let offset: uint = offset_of_line(top_line)
+    let row: uint = 0
+    while row < (VISIBLE_ROWS as uint) {
+        if offset <= buf_len {
+            let line_end: uint = offset
+            while line_end < buf_len && buf[line_end] != 10 {
+                line_end = line_end + 1
+            }
+            let y: uint = (TOP as uint) + row * ROW_H
+            let linebuf: char[40]
+            let col: uint = 0
+            let p: uint = offset
+            while p < line_end && col < (MAX_COLS as uint) {
+                linebuf[col] = buf[p]
+                col = col + 1
+                p = p + 1
+            }
+            linebuf[col] = 0
+            let is_prompt_line: bool = offset <= input_start && input_start <= line_end
+            let fg: uint32 = TEXT_COLOR
+            if is_prompt_line {
+                fg = PROMPT_COLOR
+            }
+            Font.draw_string(win_buf, win_w, win_h, 4, y, linebuf as char*, fg, BG_COLOR)
+            if line_end < buf_len {
+                offset = line_end + 1
+            } else {
+                offset = buf_len + 1
+            }
+        }
+        row = row + 1
+    }
+
+    // Caret at the end of the buffer (always the live input point - see
+    // this file's own header comment on why there's no other cursor).
+    if cur_line >= top_line {
+        let row_of_end: uint = cur_line - top_line
+        if row_of_end < (VISIBLE_ROWS as uint) {
+            let line_start: uint = line_start_at_or_before(buf_len)
+            let col: uint = buf_len - line_start
+            if col > (MAX_COLS as uint) {
+                col = MAX_COLS as uint
+            }
+            let cx: uint = 4 + col * 8
+            let cy: uint = (TOP as uint) + row_of_end * ROW_H
+            if cx + 1 < win_w {
+                let dy: uint = 0
+                while dy < ROW_H {
+                    win_buf[(cy + dy) * win_w + cx] = CARET_COLOR
+                    win_buf[(cy + dy) * win_w + cx + 1] = CARET_COLOR
+                    dy = dy + 1
+                }
+            }
+        }
+    }
+
+    draw_scrollbar(win_buf, win_w)
+    wm_present()
+}
+
+func _start(argc: uint, argv: uint*) {
+    sys_putln("terminal: starting")
+    cur_dir[0] = 47
+    cur_dir[1] = 0
+
+    if !wm_connect() {
+        sys_putln("terminal: wm_connect failed")
+        rt_exit(1)
+    }
+    if !wm_create_window() {
+        sys_putln("terminal: create_window failed")
+        rt_exit(1)
+    }
+
+    append_str("LLPL terminal - 'help' for commands\n")
+    print_prompt()
+
+    while true {
+        let key: uint = wm_poll_input()
+        if key == (KEY_CLOSE_REQ as uint) {
+            wm_close()
+            rt_exit(0)
+        } else if key == 10 {
+            let line: char[128]
+            let n: uint = buf_len - input_start
+            if n > 127 {
+                n = 127
+            }
+            let i: uint = 0
+            while i < n {
+                line[i] = buf[input_start + i]
+                i = i + 1
+            }
+            line[n] = 0
+            append_char(10)
+            run_command(line as char*)
+            print_prompt()
+        } else if key == 8 {
+            if buf_len > input_start {
+                buf_len = buf_len - 1
+            }
+        } else if key == (KEY_UP as uint) {
+            scroll_up_one()
+        } else if key == (KEY_DOWN as uint) {
+            scroll_down_one()
+        } else if key != 0 && key >= 32 && key < 127 {
+            append_char(key as char)
+        }
+
+        let wheel: int = wm_wheel_delta()
+        if wheel > 3 {
+            wheel = 3
+        } else if wheel < -3 {
+            wheel = -3
+        }
+        while wheel > 0 {
+            scroll_up_one()
+            wheel = wheel - 1
+        }
+        while wheel < 0 {
+            scroll_down_one()
+            wheel = wheel + 1
+        }
+
+        render()
+        sys_sleep(15)
+    }
+}

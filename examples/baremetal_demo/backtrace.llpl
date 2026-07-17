@@ -17,23 +17,23 @@ namespace Backtrace {
     const MAX_FRAMES = 16
     const MAX_FRAME_DELTA = 16384
 
-    func print_from(frame_addr: uint) {
+    func print_from(frame_addr: u64) {
         HAL.Serial.write("Backtrace:\n")
 
-        let depth: int = 0
+        let depth: i64 = 0
         let done: bool = false
         while frame_addr != 0 && depth < MAX_FRAMES && !done {
-            let frame: uint* = frame_addr as uint*
-            let next: uint = frame[0]
-            let rip: uint = frame[1]
+            let frame: u64* = frame_addr as u64*
+            let next: u64 = frame[0]
+            let rip: u64 = frame[1]
 
             if rip == 0 {
                 done = true
             } else {
-                let sym: char* = llpl_resolve_symbol(rip)
+                let sym: u8* = llpl_resolve_symbol(rip)
                 if sym != null {
                     HAL.Log.ksnprintf(
-                        HAL.Log.buffer as char*,
+                        HAL.Log.buffer as u8*,
                         128,
                         "  #%02d rbp=0x%016x rip=0x%016x %s (%s:%d)\n",
                         depth,
@@ -45,7 +45,7 @@ namespace Backtrace {
                     )
                 } else {
                     HAL.Log.ksnprintf(
-                        HAL.Log.buffer as char*,
+                        HAL.Log.buffer as u8*,
                         128,
                         "  #%02d rbp=0x%016x rip=0x%016x <unknown>\n",
                         depth,
@@ -79,7 +79,7 @@ namespace Backtrace {
     }
 
     func print() {
-        let rbp: uint = 0
+        let rbp: u64 = 0
         asm("movq %%rbp, %0" : "=r"(rbp))
         print_from(rbp)
     }
