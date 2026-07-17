@@ -134,6 +134,20 @@ namespace Mouse {
         packet_index = 0
 
         let b0: int = (packet[0] as int) & 255
+
+        left_was_down = left_down
+        left_down = (b0 & 1) != 0
+
+        // Bits 6/7 are the X/Y overflow flags: the mouse moved further
+        // than one packet's 9-bit signed range could represent, so
+        // dx/dy for *this* packet are meaningless - a real driver must
+        // drop the motion (not just skip clamping it), or a single fast
+        // sweep decodes as a huge, wrong jump instead of just losing a
+        // little precision. Button state above is still valid and kept.
+        if (b0 & 0xC0) != 0 {
+            return
+        }
+
         let dx_raw: int = (packet[1] as int) & 255
         let dy_raw: int = (packet[2] as int) & 255
 
@@ -149,8 +163,5 @@ namespace Mouse {
         mx = clampi(mx + dx, min_x, max_x)
         // PS/2 reports +dy as "moved up", the opposite of screen-space y.
         my = clampi(my - dy, min_y, max_y)
-
-        left_was_down = left_down
-        left_down = (b0 & 1) != 0
     }
 }
