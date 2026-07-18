@@ -1,0 +1,170 @@
+// Example: Simple HTTP server using the standard library
+// Demonstrates integration of file I/O, networking, and string utilities
+
+import "../../stdlib/text/string_utils.llpl"
+import "../../stdlib/io/file.llpl"
+import "../../stdlib/net/socket.llpl"
+
+using namespace std.text
+using namespace std.io
+using namespace std.net
+
+// Parse HTTP request and extract method and path
+func parse_request(request: String) -> (String, String) {
+    let lines: Vector<String> = StringUtils.split(request, '\n')
+
+    if lines.len() == 0 {
+        return (new String(""), new String(""))
+    }
+
+    let first_line: String = lines.get(0)
+    let parts: Vector<String> = StringUtils.split(first_line, ' ')
+
+    if parts.len() < 2 {
+        return (new String(""), new String(""))
+    }
+
+    let method: String = parts.get(0)
+    let path: String = parts.get(1)
+
+    return (method, path)
+}
+
+// Build HTTP response
+func build_response(status: String, content_type: String, body: String) -> String {
+    let sb: StringBuilder = new StringBuilder()
+
+    // Status line
+    sb.append(new String("HTTP/1.1 "))
+    sb.append(status)
+    sb.append(new String("\r\n"))
+
+    // Headers
+    sb.append(new String("Content-Type: "))
+    sb.append(content_type)
+    sb.append(new String("\r\n"))
+
+    sb.append(new String("Content-Length: "))
+    sb.append_int(body.length())
+    sb.append(new String("\r\n"))
+
+    sb.append(new String("Connection: close\r\n"))
+    sb.append(new String("\r\n"))
+
+    // Body
+    sb.append(body)
+
+    return sb.to_string()
+}
+
+// Handle HTTP GET request
+func handle_get(path: String) -> String {
+    // Remove leading slash
+    let file_path: String = if StringUtils.starts_with(path, new String("/")) {
+        path.substring(1, path.length())
+    } else {
+        path
+    }
+
+    // Default to index.html
+    if StringUtils.is_whitespace(file_path) || file_path.length() == 0 {
+        file_path = new String("index.html")
+    }
+
+    // Try to read the file
+    let content_result: Result<String, char*> = std.io.read_file(file_path.c_str())
+
+    if content_result.is_ok() {
+        let content: String = content_result.unwrap()
+
+        // Determine content type
+        let content_type: String = if StringUtils.ends_with(file_path, new String(".html")) {
+            new String("text/html")
+        } else if StringUtils.ends_with(file_path, new String(".txt")) {
+            new String("text/plain")
+        } else if StringUtils.ends_with(file_path, new String(".json")) {
+            new String("application/json")
+        } else {
+            new String("application/octet-stream")
+        }
+
+        return build_response(new String("200 OK"), content_type, content)
+    } else {
+        // File not found
+        let not_found_html: String = new String("<html><body><h1>404 Not Found</h1><p>The requested file was not found.</p></body></html>")
+        return build_response(new String("404 Not Found"), new String("text/html"), not_found_html)
+    }
+}
+
+// Handle client connection
+func handle_client(client: Socket) {
+    // Receive HTTP request
+    let request_result: Result<String, char*> = client.recv_string(4096)
+
+    if !request_result.is_ok() {
+        return
+    }
+
+    let request: String = request_result.unwrap()
+
+    // Parse request
+    let (method, path) = parse_request(request)
+
+    // Generate response
+    let response: String = if StringUtils.to_upper(method) == StringUtils.to_upper(new String("GET")) {
+        handle_get(path)
+    } else {
+        // Method not supported
+        let error_html: String = new String("<html><body><h1>405 Method Not Allowed</h1></body></html>")
+        build_response(new String("405 Method Not Allowed"), new String("text/html"), error_html)
+    }
+
+    // Send response
+    client.send_string(response)
+}
+
+func create_sample_files() {
+    // Create sample index.html
+    let html: String = new String("<html>\n<head><title>LLPL HTTP Server</title></head>\n<body>\n<h1>Welcome to LLPL HTTP Server!</h1>\n<p>This is a simple HTTP server built with the LLPL standard library.</p>\n<ul>\n<li><a href=\"/index.html\">Home</a></li>\n<li><a href=\"/test.txt\">Test File</a></li>\n<li><a href=\"/data.json\">JSON Data</a></li>\n</ul>\n</body>\n</html>")
+
+    std.io.write_file("index.html", html)
+
+    // Create sample test.txt
+    let txt: String = new String("This is a plain text file served by the LLPL HTTP server.\n\nIt demonstrates file I/O integration with the network layer.")
+
+    std.io.write_file("test.txt", txt)
+
+    // Create sample data.json
+    let json: String = new String("{\n  \"server\": \"LLPL HTTP Server\",\n  \"version\": \"1.0\",\n  \"features\": [\"file-io\", \"networking\", \"string-utils\"]\n}")
+
+    std.io.write_file("data.json", json)
+}
+
+func main() -> int {
+    // Create sample files for serving
+    create_sample_files()
+
+    // Create HTTP server on port 8080
+    let server: TcpServer = new TcpServer(8080)
+
+    let start_result: Result<bool, char*> = server.start_server(10)
+
+    if !start_result.is_ok() {
+        return 1
+    }
+
+    // Server is running
+    // In a real application, you would log: "HTTP Server listening on port 8080"
+
+    // Main server loop
+    while true {
+        let client_result: Result<Socket, char*> = server.accept_client()
+
+        if client_result.is_ok() {
+            let client: Socket = client_result.unwrap()
+            handle_client(client)
+        }
+    }
+
+    return 0
+}

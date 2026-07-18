@@ -217,6 +217,9 @@ class Parser {
     }
 
     private ASTNode declaration() {
+        if (check(TokenType.Hash)) {
+            return hashDirective();
+        }
         VarAttribute[] attrs = parseAttributes();
         if (attrs.length > 0 && !(check(TokenType.Let) || check(TokenType.Const) ||
                 check(TokenType.Volatile) || check(TokenType.Class) ||
@@ -225,6 +228,8 @@ class Parser {
         }
         if (check(TokenType.Import)) {
             return importStmt();
+        } else if (check(TokenType.Using)) {
+            return usingNamespaceStmt();
         } else if (check(TokenType.Namespace)) {
             return namespaceDecl();
         } else if (check(TokenType.Enum)) {
@@ -239,6 +244,8 @@ class Parser {
             return classDecl(attrs);
         } else if (check(TokenType.Struct) || check(TokenType.Packed)) {
             return structDecl(attrs);
+        } else if (check(TokenType.Union)) {
+            return unionDecl();
         } else if (check(TokenType.Extern)) {
             return externDecl();
         } else if (check(TokenType.Trait)) {
@@ -279,6 +286,28 @@ class Parser {
             attrs ~= attr;
         }
         return attrs;
+    }
+
+    // `#link "NAME"` / `#flags "..."` - see ast.d's LinkDecl/FlagsDecl for
+    // what these actually do. Both are standalone directives (not attached
+    // to any other declaration), so this is checked for and parsed before
+    // parseAttributes()/the rest of declaration() ever runs, the same way
+    // import/using are. Both share the same `# IDENT STRING` shape, so one
+    // function parses either, dispatching on the identifier.
+    private ASTNode hashDirective() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Hash);
+        Token nameTok = expect(TokenType.Identifier, "Expected a directive name after '#'");
+        if (nameTok.value == "link") {
+            Token libTok = expect(TokenType.String, "Expected a string library name after '#link'");
+            return new LinkDecl(libTok.value, startLine, startColumn);
+        } else if (nameTok.value == "flags") {
+            Token flagsTok = expect(TokenType.String, "Expected a string of compiler flags after '#flags'");
+            return new FlagsDecl(flagsTok.value, startLine, startColumn);
+        }
+        error(format("Unknown compiler directive '#%s'", nameTok.value));
+        return null;
     }
 
     private NamespaceDecl namespaceDecl() {
@@ -547,6 +576,21 @@ class Parser {
         return new ImportStmt(modulePath, alias_, names, isSelective, startLine, startColumn);
     }
 
+    private UsingNamespaceStmt usingNamespaceStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Using);
+        expect(TokenType.Namespace);
+
+        // Parse the namespace path: Foo or Foo.Bar.Baz
+        string namespacePath = expect(TokenType.Identifier).value;
+        while (match(TokenType.Dot)) {
+            namespacePath ~= "." ~ expect(TokenType.Identifier).value;
+        }
+
+        return new UsingNamespaceStmt(namespacePath, startLine, startColumn);
+    }
+
     // Parses a comma-separated `name: Type` parameter list, with an optional
     // trailing `...` marking the function as variadic (used to bind to a C
     // vararg function like the runtime's `snprintf`). ISO C requires at
@@ -732,6 +776,7 @@ class Parser {
             // a constructor/destructor always needs to be reachable via
             // `new`/automatic cleanup, so `private` isn't offered there.
             bool isPrivateMember = match(TokenType.Private);
+            bool isStaticMember = match(TokenType.Static);
             if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
             } else if (check(TokenType.Destructor)) {
@@ -739,6 +784,7 @@ class Parser {
             } else if (check(TokenType.Function)) {
                 auto method = functionDecl();
                 method.isPrivate = isPrivateMember;
+                method.isStatic = isStaticMember;
                 methods ~= method;
             } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 auto field = varDecl();
@@ -771,16 +817,48 @@ class Parser {
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
+        FunctionDecl[] constructors;
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
             if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 fields ~= varDecl();
+            } else if (check(TokenType.Constructor)) {
+                constructors ~= constructorDecl(name);
             } else {
-                error("Expected field declaration");
+                error("Expected field or constructor declaration");
             }
         }
 
         expect(TokenType.RightBrace);
-        return new StructDecl(name, fields, packed, startLine, startColumn, typeParams, typeParamBounds, attrs);
+        return new StructDecl(name, fields, packed, startLine, startColumn, typeParams, typeParamBounds, attrs,
+            constructors);
+    }
+
+    // `union Name { let field: T  ...  constructor(...) { ... } }` - same
+    // shape as structDecl just above, minus `packed`/generics/attributes
+    // (a union's overlapping layout makes `packed` meaningless, and this
+    // type exists mainly to bind a real C library's own union exactly -
+    // see UnionDecl's own doc comment - not to be a fully general type).
+    private UnionDecl unionDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Union);
+        string name = expect(TokenType.Identifier).value;
+        expect(TokenType.LeftBrace);
+
+        VarDecl[] fields;
+        FunctionDecl[] constructors;
+        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
+                fields ~= varDecl();
+            } else if (check(TokenType.Constructor)) {
+                constructors ~= constructorDecl(name);
+            } else {
+                error("Expected field or constructor declaration");
+            }
+        }
+
+        expect(TokenType.RightBrace);
+        return new UnionDecl(name, fields, startLine, startColumn, constructors);
     }
 
     // `trait Name { func sig(...) -> T  func sig2(...) -> T  ... }` -
@@ -2101,6 +2179,14 @@ class Parser {
         if (match(TokenType.Integer)) {
             long value = parseIntegerValue(tokens[pos - 1].value);
             return new IntLiteral(value, tokLine, tokColumn);
+        }
+        if (match(TokenType.Float)) {
+            return new FloatLiteral(tokens[pos - 1].value, tokLine, tokColumn);
+        }
+        if (match(TokenType.Char)) {
+            import std.conv : to;
+            int value = to!int(tokens[pos - 1].value);
+            return new CharLiteral(value, tokLine, tokColumn);
         }
         if (match(TokenType.String)) {
             return new StringLiteral(tokens[pos - 1].value, tokLine, tokColumn);

@@ -1,0 +1,382 @@
+// Standard library: SDL3 Window and Renderer Wrappers
+// Namespace: std::sdl
+
+namespace std {
+namespace sdl {
+
+// High-level Window wrapper with RAII. Its own public API deliberately
+// stays in this language's ergonomic default width (`int`/`uint`, what a
+// bare integer literal at a call site infers as) rather than SDL3's
+// exact-width `i32`/`u64` - overload resolution requires an *exact*
+// type match against a declared param (see codegen.d's resolveOverload),
+// so a two-constructor class taking i32 params would reject a plain
+// `new Window(title, 800, 600)` call outright (800/600 infer as the
+// 64-bit `int`, not `i32`) even though the values themselves fit fine.
+// The narrowing to SDL3's real i32/u32/etc. widths happens with an
+// explicit cast at each call into the raw `extern func` bindings below,
+// not in this wrapper's own signature.
+class Window {
+    let handle: SDL_Window*
+    let width: int
+    let height: int
+    let title: String
+
+    constructor(title_str: String, w: int, h: int, flags: uint) {
+        self.title = title_str
+        self.width = w
+        self.height = h
+        self.handle = SDL_CreateWindow(title_str.c_str(), w as i32, h as i32, flags)
+    }
+
+    constructor(title_str: String, w: int, h: int) {
+        self.title = title_str
+        self.width = w
+        self.height = h
+        self.handle = SDL_CreateWindow(title_str.c_str(), w as i32, h as i32, SDL_WINDOW_RESIZABLE)
+    }
+
+    destructor() {
+        if self.handle != null {
+            SDL_DestroyWindow(self.handle)
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.handle != null
+    }
+
+    func get_handle() -> SDL_Window* {
+        return self.handle
+    }
+
+    func set_title(new_title: String) -> bool {
+        self.title = new_title
+        return SDL_SetWindowTitle(self.handle, new_title.c_str())
+    }
+
+    func get_size() -> (int, int) {
+        let w: i32 = 0
+        let h: i32 = 0
+        SDL_GetWindowSize(self.handle, &w, &h)
+        return (w as int, h as int)
+    }
+
+    func set_size(w: int, h: int) -> bool {
+        self.width = w
+        self.height = h
+        return SDL_SetWindowSize(self.handle, w as i32, h as i32)
+    }
+
+    func show() -> bool {
+        return SDL_ShowWindow(self.handle)
+    }
+
+    func hide() -> bool {
+        return SDL_HideWindow(self.handle)
+    }
+}
+
+// High-level Renderer wrapper
+class Renderer {
+    let handle: SDL_Renderer*
+    let window: Window
+
+    constructor(win: Window) {
+        self.window = win
+        self.handle = SDL_CreateRenderer(win.get_handle(), null)
+    }
+
+    destructor() {
+        if self.handle != null {
+            SDL_DestroyRenderer(self.handle)
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.handle != null
+    }
+
+    func get_handle() -> SDL_Renderer* {
+        return self.handle
+    }
+
+    func clear() -> bool {
+        return SDL_RenderClear(self.handle)
+    }
+
+    func present() {
+        SDL_RenderPresent(self.handle)
+    }
+
+    func set_draw_color(r: u8, g: u8, b: u8, a: u8) -> bool {
+        return SDL_SetRenderDrawColor(self.handle, r, g, b, a)
+    }
+
+    func set_draw_color_from_color(color: SDL_Color) -> bool {
+        return SDL_SetRenderDrawColor(self.handle, color.r, color.g, color.b, color.a)
+    }
+
+    func set_blend_mode(mode: u32) -> bool {
+        return SDL_SetRenderDrawBlendMode(self.handle, mode)
+    }
+
+    // Drawing primitives
+    func draw_point(x: float, y: float) -> bool {
+        return SDL_RenderPoint(self.handle, x, y)
+    }
+
+    func draw_line(x1: float, y1: float, x2: float, y2: float) -> bool {
+        return SDL_RenderLine(self.handle, x1, y1, x2, y2)
+    }
+
+    // SDL3 only has a float-rect render path (see sdl_core.llpl's own
+    // header comment on SDL_RenderRect/SDL_RenderFillRect) - draw_rect/
+    // fill_rect convert their int SDL_Rect to an SDL_FRect before calling
+    // it, so callers that only have integer coordinates don't need to
+    // do that conversion themselves.
+    func draw_rect(rect: SDL_Rect) -> bool {
+        let frect: SDL_FRect = new SDL_FRect(rect.x as float, rect.y as float, rect.w as float, rect.h as float)
+        return SDL_RenderRect(self.handle, &frect)
+    }
+
+    func fill_rect(rect: SDL_Rect) -> bool {
+        let frect: SDL_FRect = new SDL_FRect(rect.x as float, rect.y as float, rect.w as float, rect.h as float)
+        return SDL_RenderFillRect(self.handle, &frect)
+    }
+
+    func draw_frect(rect: SDL_FRect) -> bool {
+        return SDL_RenderRect(self.handle, &rect)
+    }
+
+    func fill_frect(rect: SDL_FRect) -> bool {
+        return SDL_RenderFillRect(self.handle, &rect)
+    }
+
+    // Texture rendering
+    func render_texture(texture: Texture, src: SDL_FRect*, dst: SDL_FRect*) -> bool {
+        return SDL_RenderTexture(self.handle, texture.get_handle(), src, dst)
+    }
+
+    func render_texture_simple(texture: Texture, x: i32, y: i32) -> bool {
+        let dst: SDL_FRect = new SDL_FRect(x as float, y as float, texture.get_width() as float, texture.get_height() as float)
+        return SDL_RenderTexture(self.handle, texture.get_handle(), null, &dst)
+    }
+
+    // Load texture from file
+    func load_texture(filepath: char*) -> Result<Texture, char*> {
+        let result: Result<Texture, char*> = new Result<Texture, char*>()
+
+        let surface: SDL_Surface* = SDL_LoadBMP(filepath)
+        if surface == null {
+            result.set_err(SDL_GetError())
+            return result
+        }
+
+        let texture_handle: SDL_Texture* = SDL_CreateTextureFromSurface(self.handle, surface)
+        SDL_DestroySurface(surface)
+
+        if texture_handle == null {
+            result.set_err(SDL_GetError())
+            return result
+        }
+
+        let texture: Texture = new Texture(texture_handle)
+        result.set_ok(texture)
+        return result
+    }
+}
+
+// Texture wrapper
+class Texture {
+    let handle: SDL_Texture*
+    let width: int
+    let height: int
+
+    constructor(texture_handle: SDL_Texture*) {
+        self.handle = texture_handle
+        self.width = 0
+        self.height = 0
+        // In real implementation, would query texture size
+    }
+
+    constructor(texture_handle: SDL_Texture*, w: int, h: int) {
+        self.handle = texture_handle
+        self.width = w
+        self.height = h
+    }
+
+    destructor() {
+        if self.handle != null {
+            SDL_DestroyTexture(self.handle)
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.handle != null
+    }
+
+    func get_handle() -> SDL_Texture* {
+        return self.handle
+    }
+
+    func get_width() -> int {
+        return self.width
+    }
+
+    func get_height() -> int {
+        return self.height
+    }
+
+    func set_blend_mode(mode: u32) -> bool {
+        return SDL_SetTextureBlendMode(self.handle, mode)
+    }
+
+    func set_alpha(alpha: u8) -> bool {
+        return SDL_SetTextureAlphaMod(self.handle, alpha)
+    }
+
+    func set_color_mod(r: u8, g: u8, b: u8) -> bool {
+        return SDL_SetTextureColorMod(self.handle, r, g, b)
+    }
+}
+
+// Event handler helper
+class EventHandler {
+    let event: SDL_Event
+
+    constructor() {
+        self.event = new SDL_Event()
+    }
+
+    func poll() -> bool {
+        return SDL_PollEvent(&self.event)
+    }
+
+    func wait() -> bool {
+        return SDL_WaitEvent(&self.event)
+    }
+
+    func wait_timeout(timeout_ms: i32) -> bool {
+        return SDL_WaitEventTimeout(&self.event, timeout_ms)
+    }
+
+    // SDL_Event's own leading discriminant field (see sdl_core.llpl's
+    // SDL_Event) is named `type`, matching the real SDL3 union's member
+    // name exactly.
+    func get_type() -> u32 {
+        return self.event.type
+    }
+
+    func is_quit() -> bool {
+        return self.event.type == SDL_EVENT_QUIT
+    }
+
+    func is_key_down() -> bool {
+        return self.event.type == SDL_EVENT_KEY_DOWN
+    }
+
+    func is_key_up() -> bool {
+        return self.event.type == SDL_EVENT_KEY_UP
+    }
+
+    func is_mouse_button_down() -> bool {
+        return self.event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
+    }
+
+    func is_mouse_button_up() -> bool {
+        return self.event.type == SDL_EVENT_MOUSE_BUTTON_UP
+    }
+
+    func is_mouse_motion() -> bool {
+        return self.event.type == SDL_EVENT_MOUSE_MOTION
+    }
+
+    // Get keyboard event (cast event data)
+    func get_key_event() -> SDL_KeyboardEvent* {
+        return &self.event as SDL_KeyboardEvent*
+    }
+
+    // Get mouse button event
+    func get_mouse_button_event() -> SDL_MouseButtonEvent* {
+        return &self.event as SDL_MouseButtonEvent*
+    }
+
+    // Get mouse motion event
+    func get_mouse_motion_event() -> SDL_MouseMotionEvent* {
+        return &self.event as SDL_MouseMotionEvent*
+    }
+}
+
+// Input state helpers
+class Input {
+    // SDL_GetKeyboardState really does return `const bool*` (one bool per
+    // scancode), not a byte array - see sdl_core.llpl's own extern decl.
+    static func get_keyboard_state() -> bool* {
+        let numkeys: i32 = 0
+        return SDL_GetKeyboardState(&numkeys)
+    }
+
+    static func is_key_pressed(scancode: i32) -> bool {
+        let state: bool* = Input.get_keyboard_state()
+        return state[scancode]
+    }
+
+    static func get_mouse_position() -> (float, float) {
+        let x: float = 0.0
+        let y: float = 0.0
+        SDL_GetMouseState(&x, &y)
+        return (x, y)
+    }
+
+    static func get_mouse_state() -> u32 {
+        let x: float = 0.0
+        let y: float = 0.0
+        return SDL_GetMouseState(&x, &y)
+    }
+}
+
+// Color presets
+namespace Colors {
+     func black() -> SDL_Color {
+        return new SDL_Color(0 as u8, 0 as u8, 0 as u8, 255 as u8)
+    }
+
+     func white() -> SDL_Color {
+        return new SDL_Color(255 as u8, 255 as u8, 255 as u8, 255 as u8)
+    }
+
+     func red() -> SDL_Color {
+        return new SDL_Color(255 as u8, 0 as u8, 0 as u8, 255 as u8)
+    }
+
+     func green() -> SDL_Color {
+        return new SDL_Color(0 as u8, 255 as u8, 0 as u8, 255 as u8)
+    }
+
+     func blue() -> SDL_Color {
+        return new SDL_Color(0 as u8, 0 as u8, 255 as u8, 255 as u8)
+    }
+
+     func yellow() -> SDL_Color {
+        return new SDL_Color(255 as u8, 255 as u8, 0 as u8, 255 as u8)
+    }
+
+     func cyan() -> SDL_Color {
+        return new SDL_Color(0 as u8, 255 as u8, 255 as u8, 255 as u8)
+    }
+
+     func magenta() -> SDL_Color {
+        return new SDL_Color(255 as u8, 0 as u8, 255 as u8, 255 as u8)
+    }
+
+     func gray() -> SDL_Color {
+        return new SDL_Color(128 as u8, 128 as u8, 128 as u8, 255 as u8)
+    }
+
+     func transparent() -> SDL_Color {
+        return new SDL_Color(0 as u8, 0 as u8, 0 as u8, 0 as u8)
+    }
+}
+
+} // namespace sdl
+} // namespace std

@@ -1,0 +1,515 @@
+// Standard library: Advanced String Functions
+// Namespace: std::text
+
+namespace std {
+namespace text {
+
+// Helper function to create a string from a single character
+func char_to_string(c: char) -> String {
+    let buf: char* = llpl_alloc(2)
+    buf[0] = c
+    buf[1] = 0
+    let result: String = new String(buf)
+    llpl_free(buf)
+    return result
+}
+
+// String manipulation utilities
+class StringUtils {
+    // Split string by delimiter
+    static func split(s: String, delimiter: char) -> Vector<String> {
+        let result: Vector<String> = new Vector<String>()
+        let current: String = new String("")
+        let len: int = s.len()
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let c: char = s[i]
+            if c == delimiter {
+                if current.len() > 0 {
+                    result.push(current)
+                    current = new String("")
+                }
+            } else {
+                current = current + char_to_string(c).c_str()
+            }
+        }
+
+        if current.len() > 0 {
+            result.push(current)
+        }
+
+        return result
+    }
+
+    // Split by string delimiter
+    static func split_str(s: String, delimiter: String) -> Vector<String> {
+        let result: Vector<String> = new Vector<String>()
+        let len: int = s.len()
+        let delim_len: int = delimiter.len()
+
+        if delim_len == 0 {
+            result.push(s)
+            return result
+        }
+
+        let start: int = 0
+        let i: int = 0
+
+        for i = 0, i <= len - delim_len, i = i + 1 {
+            let is_match: bool =1
+            for let j: int = 0, j < delim_len, j = j + 1 {
+                if s[i + j] != delimiter[j] {
+                    is_match = 0
+                    break
+                }
+            }
+
+            if is_match {
+                let substr: String = s.substring(start, i)
+                result.push(substr)
+                start = i + delim_len
+                i = i + delim_len - 1
+            }
+        }
+
+        let final_substr: String = s.substring(start, len)
+        result.push(final_substr)
+
+        return result
+    }
+
+    // Join strings with delimiter
+    static func join(strings: Vector<String>, delimiter: String) -> String {
+        let result: String = new String("")
+        let size: int = strings.len()
+
+        for let i: int = 0, i < size, i = i + 1 {
+            result = result + strings.get(i).c_str()
+            if i < size - 1 {
+                result = result + delimiter.c_str()
+            }
+        }
+
+        return result
+    }
+
+    // Trim whitespace from start
+    static func trim_start(s: String) -> String {
+        let len: int = s.len()
+        let start: int = 0
+
+        for start = 0, start < len, start = start + 1 {
+            let c: char = s[start]
+            if c != 32 && c != 9 && c != 10 && c != 13 {
+                break
+            }
+        }
+
+        return s.substring(start, len)
+    }
+
+    // Trim whitespace from end
+    static func trim_end(s: String) -> String {
+        let len: int = s.len()
+        let end: int = len
+
+        for end = len, end > 0, end = end - 1 {
+            let c: char = s[end - 1]
+            if c != 32 && c != 9 && c != 10 && c != 13 {
+                break
+            }
+        }
+
+        return s.substring(0, end)
+    }
+
+    // Trim whitespace from both ends
+    static func trim(s: String) -> String {
+        return StringUtils.trim_end(StringUtils.trim_start(s))
+    }
+
+    // Convert to uppercase
+    static func to_upper(s: String) -> String {
+        let result: String = new String("")
+        let len: int = s.len()
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let c: char = s[i]
+            if c >= 97 && c <= 122 {
+                c = c - 32
+            }
+            result = result + char_to_string(c).c_str()
+        }
+
+        return result
+    }
+
+    // Convert to lowercase
+    static func to_lower(s: String) -> String {
+        let result: String = new String("")
+        let len: int = s.len()
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let c: char = s[i]
+            if c >= 65 && c <= 90 {
+                c = c + 32
+            }
+            result = result + char_to_string(c).c_str()
+        }
+
+        return result
+    }
+
+    // Check if string starts with prefix
+    static func starts_with(s: String, prefix: String) -> bool {
+        let s_len: int = s.len()
+        let p_len: int = prefix.len()
+
+        if p_len > s_len {
+            return 0
+        }
+
+        for let i: int = 0, i < p_len, i = i + 1 {
+            if s[i] != prefix[i] {
+                return 0
+            }
+        }
+
+        return 1
+    }
+
+    // Check if string ends with suffix
+    static func ends_with(s: String, suffix: String) -> bool {
+        let s_len: int = s.len()
+        let suf_len: int = suffix.len()
+
+        if suf_len > s_len {
+            return 0
+        }
+
+        let offset: int = s_len - suf_len
+
+        for let i: int = 0, i < suf_len, i = i + 1 {
+            if s[offset + i] != suffix[i] {
+                return 0
+            }
+        }
+
+        return 1
+    }
+
+    // Check if string contains substring
+    static func contains(s: String, substr: String) -> bool {
+        return StringUtils.index_of(s, substr) >= 0
+    }
+
+    // Find first occurrence of substring
+    static func index_of(s: String, substr: String) -> int {
+        let s_len: int = s.len()
+        let sub_len: int = substr.len()
+
+        if sub_len > s_len {
+            return -1
+        }
+
+        for let i: int = 0, i <= s_len - sub_len, i = i + 1 {
+            let is_match: bool =1
+            for let j: int = 0, j < sub_len, j = j + 1 {
+                if s[i + j] != substr[j] {
+                    is_match = 0
+                    break
+                }
+            }
+            if is_match {
+                return i
+            }
+        }
+
+        return -1
+    }
+
+    // Find last occurrence of substring
+    static func last_index_of(s: String, substr: String) -> int {
+        let s_len: int = s.len()
+        let sub_len: int = substr.len()
+
+        if sub_len > s_len {
+            return -1
+        }
+
+        for let i: int = s_len - sub_len, i >= 0, i = i - 1 {
+            let is_match: bool =1
+            for let j: int = 0, j < sub_len, j = j + 1 {
+                if s[i + j] != substr[j] {
+                    is_match = 0
+                    break
+                }
+            }
+            if is_match {
+                return i
+            }
+        }
+
+        return -1
+    }
+
+    // Replace all occurrences
+    static func replace_all(s: String, old_substr: String, new_substr: String) -> String {
+        let result: String = new String("")
+        let len: int = s.len()
+        let old_len: int = old_substr.len()
+
+        if old_len == 0 {
+            return s
+        }
+
+        let i: int = 0
+        for i = 0, i < len, i = i + 1 {
+            let is_match: bool =1
+
+            if i <= len - old_len {
+                for let j: int = 0, j < old_len, j = j + 1 {
+                    if s[i + j] != old_substr[j] {
+                        is_match = 0
+                        break
+                    }
+                }
+            } else {
+                is_match = 0
+            }
+
+            if is_match {
+                result = result + new_substr.c_str()
+                i = i + old_len - 1
+            } else {
+                let c: char = s[i]
+                result = result + char_to_string(c).c_str()
+            }
+        }
+
+        return result
+    }
+
+    // Replace first occurrence
+    static func replace_first(s: String, old_substr: String, new_substr: String) -> String {
+        let idx: int = StringUtils.index_of(s, old_substr)
+        if idx < 0 {
+            return s
+        }
+
+        let before: String = s.substring(0, idx)
+        let after: String = s.substring(idx + old_substr.len(), s.len())
+
+        return before + new_substr.c_str() + after.c_str()
+    }
+
+    // Pad string to length with character
+    static func pad_left(s: String, length: int, pad_char: char) -> String {
+        let current_len: int = s.len()
+        if current_len >= length {
+            return s
+        }
+
+        let result: String = new String("")
+        let padding_needed: int = length - current_len
+
+        for let i: int = 0, i < padding_needed, i = i + 1 {
+            result = result + char_to_string(pad_char).c_str()
+        }
+
+        result = result + s.c_str()
+        return result
+    }
+
+    static func pad_right(s: String, length: int, pad_char: char) -> String {
+        let current_len: int = s.len()
+        if current_len >= length {
+            return s
+        }
+
+        let result: String = s
+        let padding_needed: int = length - current_len
+
+        for let i: int = 0, i < padding_needed, i = i + 1 {
+            result = result + char_to_string(pad_char).c_str()
+        }
+
+        return result
+    }
+
+    // Reverse string
+    static func reverse(s: String) -> String {
+        let len: int = s.len()
+        let result: String = new String("")
+
+        for let i: int = len - 1, i >= 0, i = i - 1 {
+            let c: char = s[i]
+            result = result + char_to_string(c).c_str()
+        }
+
+        return result
+    }
+
+    // Repeat string n times
+    static func repeat(s: String, times: int) -> String {
+        let result: String = new String("")
+
+        for let i: int = 0, i < times, i = i + 1 {
+            result = result + s.c_str()
+        }
+
+        return result
+    }
+
+    // Check if string is empty or whitespace
+    static func is_whitespace(s: String) -> bool {
+        let len: int = s.len()
+
+        if len == 0 {
+            return 1
+        }
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let c: char = s[i]
+            if c != 32 && c != 9 && c != 10 && c != 13 {
+                return 0
+            }
+        }
+
+        return 1
+    }
+}
+
+// String builder for efficient concatenation
+class StringBuilder {
+    let parts: Vector<String>
+    let total_length: int
+
+    constructor() {
+        self.parts = new Vector<String>()
+        self.total_length = 0
+    }
+
+    func append(s: String) {
+        self.parts.push(s)
+        self.total_length = self.total_length + s.len()
+    }
+
+    func append_char(c: char) {
+        self.append(char_to_string(c))
+    }
+
+    func append_int(value: int) {
+        // Convert int to string
+        let is_negative: bool = value < 0
+        if is_negative {
+            value = -value
+        }
+
+        let digits: Vector<char> = new Vector<char>()
+
+        if value == 0 {
+            digits.push(48)
+        } else {
+            while value > 0 {
+                let digit: char = (48 + (value % 10)) as char
+                digits.push(digit)
+                value = value / 10
+            }
+        }
+
+        if is_negative {
+            self.append_char(45)
+        }
+
+        // Reverse digits
+        let size: int = digits.len()
+        for let i: int = size - 1, i >= 0, i = i - 1 {
+            self.append_char(digits.get(i))
+        }
+    }
+
+    func to_string() -> String {
+        return StringUtils.join(self.parts, new String(""))
+    }
+
+    func clear() {
+        self.parts = new Vector<String>()
+        self.total_length = 0
+    }
+
+    func length() -> int {
+        return self.total_length
+    }
+}
+
+// Format string with placeholders
+class Format {
+    static func format(template: String, args: Vector<String>) -> String {
+        let result: StringBuilder = new StringBuilder()
+        let len: int = template.len()
+        let arg_idx: int = 0
+        let args_size: int = args.len()
+
+        let i: int = 0
+        for i = 0, i < len, i = i + 1 {
+            let c: char = template[i]
+
+            if c == 123 && i + 1 < len && template[i + 1] == 125 {
+                if arg_idx < args_size {
+                    result.append(args.get(arg_idx))
+                    arg_idx = arg_idx + 1
+                }
+                i = i + 1  // Skip the '}'
+            } else {
+                result.append_char(c)
+            }
+        }
+
+        return result.to_string()
+    }
+}
+
+// Character utilities
+class CharUtils {
+    static func is_alpha(c: char) -> bool {
+        return (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
+    }
+
+    static func is_digit(c: char) -> bool {
+        return c >= 48 && c <= 57
+    }
+
+    static func is_alphanumeric(c: char) -> bool {
+        return CharUtils.is_alpha(c) || CharUtils.is_digit(c)
+    }
+
+    static func is_whitespace(c: char) -> bool {
+        return c == 32 || c == 9 || c == 10 || c == 13
+    }
+
+    static func is_upper(c: char) -> bool {
+        return c >= 65 && c <= 90
+    }
+
+    static func is_lower(c: char) -> bool {
+        return c >= 97 && c <= 122
+    }
+
+    static func to_upper(c: char) -> char {
+        if CharUtils.is_lower(c) {
+            return c - 32
+        }
+        return c
+    }
+
+    static func to_lower(c: char) -> char {
+        if CharUtils.is_upper(c) {
+            return c + 32
+        }
+        return c
+    }
+}
+
+} // namespace text
+} // namespace std

@@ -40,6 +40,30 @@ namespace Shell {
     let history_head: int = 0  // next slot history_push() will write
     let history_count: int = 0 // how many slots are populated (caps at HISTORY_SIZE)
 
+    // The shell's own PATH, colon-separated directories searched (in
+    // order) when a command line's first word isn't one of the builtins
+    // above and doesn't resolve as a path on its own - "ping 10.0.2.2"
+    // works the same way "run /boot/ping.elf 10.0.2.2" already did,
+    // without spelling out where ping.elf actually lives. Mirrors
+    // kernel.llpl's own PATH=/bin:/boot:. (the environment variable
+    // pushed onto every *spawned ELF's* own stack) - same default, same
+    // two directories user executables actually get installed into
+    // (/bin by vfs_boot_task_entry, /boot being every GRUB module) -
+    // but this is a separate copy the shell consults directly, since the
+    // shell itself is kernel-side code, not a ring-3 process with an
+    // envp of its own to read. Settable at runtime via "export PATH=...".
+    const PATH_MAX = 128
+    let shell_path: char[128]
+
+    func str_copy(dst: char*, src: char*) {
+        let i: int = 0
+        while src[i] != 0 {
+            dst[i] = src[i]
+            i = i + 1
+        }
+        dst[i] = 0
+    }
+
     func echo_char(c: char) {
         let buf: char[2]
         buf[0] = c
@@ -424,6 +448,9 @@ namespace Shell {
         print("  rm PATH       - remove a file or empty directory\n")
         print("  run PATH      - spawn an ELF user executable\n")
         print("  ./PATH        - spawn an ELF executable from the current directory\n")
+        print("  NAME [args]   - spawn NAME.elf found on PATH (like 'run', without the path)\n")
+        print("  path          - print the current PATH\n")
+        print("  export PATH=DIRS - set PATH (colon-separated, default /bin:/boot:.)\n")
         print("\n")
         print("\"boot\" (shown by plain ls at the root) is the read-only tmpfs\n")
         print("of multiboot2 modules GRUB loaded alongside the kernel - \"cd\n")
@@ -922,6 +949,127 @@ namespace Shell {
         }
     }
 
+    // True if `path` resolves to something run_user_executable_with_args
+    // could actually spawn - checked separately (rather than just trying
+    // to spawn every PATH candidate and seeing what sticks) so
+    // path_lookup below can silently try several candidates without
+    // each failed guess logging its own "no such executable" line (see
+    // run_user_executable_with_args_parent, kernel.llpl).
+    func vfs_is_runnable(path: char*) -> bool {
+        match VFS.resolve(path) {
+            case VFS.Node.TmpfsFile(idx) => {
+                return TmpFS.size_at(idx) > 0
+            }
+            case VFS.Node.Disk(idx) => {
+                return VFS.inode_kind(idx) == VFS.KIND_FILE && VFS.inode_size(idx) > 0
+            }
+            default => {
+                return false
+            }
+        }
+    }
+
+    func str_append(dst: char*, dst_len: int, src: char*) -> int {
+        let i: int = dst_len
+        let j: int = 0
+        while src[j] != 0 {
+            dst[i] = src[j]
+            i = i + 1
+            j = j + 1
+        }
+        dst[i] = 0
+        return i
+    }
+
+    // Searches shell_path's colon-separated directories (in order) for
+    // `name` - tried both bare and with a ".elf" suffix, since every
+    // installed executable in this demo ends in .elf but a user
+    // shouldn't have to type it - writing the first match found into
+    // `out` (must be at least PATH_MAX bytes) and returning true, or
+    // false if `name` isn't found anywhere on the path.
+    func path_lookup(name: char*, out: char*) -> bool {
+        let path: char* = shell_path as char*
+        let i: int = 0
+        while path[i] != 0 {
+            let start: int = i
+            while path[i] != 0 && path[i] != 58 { // ':'
+                i = i + 1
+            }
+            let seg_len: int = i - start
+            if seg_len > 0 {
+                let dir: char[128]
+                let k: int = 0
+                while k < seg_len {
+                    dir[k] = path[start + k]
+                    k = k + 1
+                }
+                dir[seg_len] = 0
+
+                let candidate: char[128]
+                let n: int = 0
+                n = str_append(candidate as char*, 0, dir as char*)
+                n = str_append(candidate as char*, n, "/")
+                let name_end: int = str_append(candidate as char*, n, name)
+                if vfs_is_runnable(candidate as char*) {
+                    str_copy(out, candidate as char*)
+                    return true
+                }
+
+                let with_elf: char[128]
+                str_copy(with_elf as char*, candidate as char*)
+                str_append(with_elf as char*, name_end, ".elf")
+                if vfs_is_runnable(with_elf as char*) {
+                    str_copy(out, with_elf as char*)
+                    return true
+                }
+            }
+            if path[i] == 58 {
+                i = i + 1
+            }
+        }
+        return false
+    }
+
+    // Splits `line` into a command name (up to the first space) and the
+    // rest as its args, looks the name up on shell_path, and spawns it
+    // if found - the fallback run_line's own final `else` reaches for
+    // once none of the exact-match/prefix-match builtins above claimed
+    // the line, so "ping 10.0.2.2" behaves like "run /boot/ping.elf
+    // 10.0.2.2" without spelling out where ping.elf lives.
+    func try_run_by_name(line: char*) -> bool {
+        let sep: int = find_space(line)
+        let name: char[128]
+        let k: int = 0
+        while k < sep {
+            name[k] = line[k]
+            k = k + 1
+        }
+        name[sep] = 0
+
+        let resolved: char[128]
+        if !path_lookup(name as char*, resolved as char*) {
+            return false
+        }
+
+        let args: char* = ""
+        if line[sep] != 0 {
+            args = line + sep + 1
+        }
+        if run_user_executable_with_args(resolved as char*, args) {
+            log("<WHITE>pid \(last_spawned_user_id)\n</>")
+        }
+        return true
+    }
+
+    func cmd_path(args: char*) {
+        if args[0] == 0 {
+            print(shell_path as char*)
+            print("\n")
+            return
+        }
+        str_copy(shell_path as char*, args)
+    }
+
     func cmd_wait(args: char*) {
         let pid: int = parse_hex(args) as int
         let status: uint = 0
@@ -1016,6 +1164,9 @@ namespace Shell {
             case "pwd" => {
                 cmd_pwd()
             }
+            case "path" => {
+                cmd_path("")
+            }
             default => {
                 if starts_with(line, "echo ") {
                     print(line + 5)
@@ -1058,9 +1209,13 @@ namespace Shell {
                     cmd_write(line + 6)
                 } else if starts_with(line, "run ") {
                     cmd_run(line + 4)
+                } else if starts_with(line, "export PATH=") {
+                    cmd_path(line + 12)
+                } else if starts_with(line, "path ") {
+                    cmd_path(line + 5)
                 } else if starts_with(line, "./") {
                     cmd_run(line)
-                } else {
+                } else if !try_run_by_name(line) {
                     log("<LIGHT_RED>unknown command: </>")
                     print(line)
                     print("\n")
@@ -1070,6 +1225,7 @@ namespace Shell {
     }
 
     func run() {
+        str_copy(shell_path as char*, "/bin:/boot:.")
         log("<CYAN>Starting the shell. Type 'help' for a list of commands.\n</>")
         let buf: char[128]
         while true {

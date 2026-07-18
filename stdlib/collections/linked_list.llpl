@@ -1,0 +1,397 @@
+// Standard library: Linked List implementations
+// Namespace: std::collections
+
+namespace std {
+namespace collections {
+
+// Singly linked list node
+class ListNode<T> {
+    let value: T
+    let next: ListNode<T>*
+
+    constructor(val: T) {
+        self.value = val
+        self.next = null
+    }
+}
+
+// Singly linked list
+class LinkedList<T> {
+    let head: ListNode<T>*
+    let tail: ListNode<T>*
+    let count: int
+
+    constructor() {
+        self.head = null
+        self.tail = null
+        self.count = 0
+    }
+
+    destructor() {
+        self.clear()
+    }
+
+    func size() -> int {
+        return self.count
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+
+    func push_front(value: T) {
+        let node: ListNode<T>* = malloc(sizeof(ListNode<T>)) as ListNode<T>*
+        *node = new ListNode<T>(value)
+
+        (*node).next = self.head
+        self.head = node
+
+        if self.tail == null {
+            self.tail = node
+        }
+
+        self.count = self.count + 1
+    }
+
+    func push_back(value: T) {
+        let node: ListNode<T>* = malloc(sizeof(ListNode<T>)) as ListNode<T>*
+        *node = new ListNode<T>(value)
+
+        if self.tail == null {
+            self.head = node
+            self.tail = node
+        } else {
+            (*self.tail).next = node
+            self.tail = node
+        }
+
+        self.count = self.count + 1
+    }
+
+    func pop_front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.head == null {
+            result.set_err("List is empty")
+            return result
+        }
+
+        let value: T = (*self.head).value
+        let old_head: ListNode<T>* = self.head
+        self.head = (*self.head).next
+
+        if self.head == null {
+            self.tail = null
+        }
+
+        free(old_head as void*)
+        self.count = self.count - 1
+
+        result.set_ok(value)
+        return result
+    }
+
+    func front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.head == null {
+            result.set_err("List is empty")
+            return result
+        }
+
+        result.set_ok((*self.head).value)
+        return result
+    }
+
+    func back() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.tail == null {
+            result.set_err("List is empty")
+            return result
+        }
+
+        result.set_ok((*self.tail).value)
+        return result
+    }
+
+    func get(index: int) -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if index < 0 || index >= self.count {
+            result.set_err("Index out of bounds")
+            return result
+        }
+
+        let current: ListNode<T>* = self.head
+        for let i: int = 0, i < index, i = i + 1 {
+            current = (*current).next
+        }
+
+        result.set_ok((*current).value)
+        return result
+    }
+
+    func insert(index: int, value: T) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
+
+        if index < 0 || index > self.count {
+            result.set_err("Index out of bounds")
+            return result
+        }
+
+        if index == 0 {
+            self.push_front(value)
+            result.set_ok(1)
+            return result
+        }
+
+        if index == self.count {
+            self.push_back(value)
+            result.set_ok(1)
+            return result
+        }
+
+        let current: ListNode<T>* = self.head
+        for let i: int = 0, i < index - 1, i = i + 1 {
+            current = (*current).next
+        }
+
+        let node: ListNode<T>* = malloc(sizeof(ListNode<T>)) as ListNode<T>*
+        *node = new ListNode<T>(value)
+        (*node).next = (*current).next
+        (*current).next = node
+
+        self.count = self.count + 1
+        result.set_ok(1)
+        return result
+    }
+
+    func remove(index: int) -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if index < 0 || index >= self.count {
+            result.set_err("Index out of bounds")
+            return result
+        }
+
+        if index == 0 {
+            return self.pop_front()
+        }
+
+        let current: ListNode<T>* = self.head
+        for let i: int = 0, i < index - 1, i = i + 1 {
+            current = (*current).next
+        }
+
+        let to_remove: ListNode<T>* = (*current).next
+        let value: T = (*to_remove).value
+
+        (*current).next = (*to_remove).next
+
+        if to_remove == self.tail {
+            self.tail = current
+        }
+
+        free(to_remove as void*)
+        self.count = self.count - 1
+
+        result.set_ok(value)
+        return result
+    }
+
+    func clear() {
+        while self.head != null {
+            self.pop_front()
+        }
+    }
+
+    func to_vector() -> Vector<T> {
+        let vec: Vector<T> = new Vector<T>()
+        let current: ListNode<T>* = self.head
+
+        while current != null {
+            vec.push((*current).value)
+            current = (*current).next
+        }
+
+        return vec
+    }
+}
+
+// Doubly linked list node
+class DListNode<T> {
+    let value: T
+    let next: DListNode<T>*
+    let prev: DListNode<T>*
+
+    constructor(val: T) {
+        self.value = val
+        self.next = null
+        self.prev = null
+    }
+}
+
+// Doubly linked list
+class DoublyLinkedList<T> {
+    let head: DListNode<T>*
+    let tail: DListNode<T>*
+    let count: int
+
+    constructor() {
+        self.head = null
+        self.tail = null
+        self.count = 0
+    }
+
+    destructor() {
+        self.clear()
+    }
+
+    func size() -> int {
+        return self.count
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+
+    func push_front(value: T) {
+        let node: DListNode<T>* = malloc(sizeof(DListNode<T>)) as DListNode<T>*
+        *node = new DListNode<T>(value)
+
+        if self.head == null {
+            self.head = node
+            self.tail = node
+        } else {
+            (*node).next = self.head
+            (*self.head).prev = node
+            self.head = node
+        }
+
+        self.count = self.count + 1
+    }
+
+    func push_back(value: T) {
+        let node: DListNode<T>* = malloc(sizeof(DListNode<T>)) as DListNode<T>*
+        *node = new DListNode<T>(value)
+
+        if self.tail == null {
+            self.head = node
+            self.tail = node
+        } else {
+            (*node).prev = self.tail
+            (*self.tail).next = node
+            self.tail = node
+        }
+
+        self.count = self.count + 1
+    }
+
+    func pop_front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.head == null {
+            result.set_err("List is empty")
+            return result
+        }
+
+        let value: T = (*self.head).value
+        let old_head: DListNode<T>* = self.head
+        self.head = (*self.head).next
+
+        if self.head == null {
+            self.tail = null
+        } else {
+            (*self.head).prev = null
+        }
+
+        free(old_head as void*)
+        self.count = self.count - 1
+
+        result.set_ok(value)
+        return result
+    }
+
+    func pop_back() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.tail == null {
+            result.set_err("List is empty")
+            return result
+        }
+
+        let value: T = (*self.tail).value
+        let old_tail: DListNode<T>* = self.tail
+        self.tail = (*self.tail).prev
+
+        if self.tail == null {
+            self.head = null
+        } else {
+            (*self.tail).next = null
+        }
+
+        free(old_tail as void*)
+        self.count = self.count - 1
+
+        result.set_ok(value)
+        return result
+    }
+
+    func front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.head == null {
+            result.set_err("List is empty")
+            return result
+        }
+
+        result.set_ok((*self.head).value)
+        return result
+    }
+
+    func back() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.tail == null {
+            result.set_err("List is empty")
+            return result
+        }
+
+        result.set_ok((*self.tail).value)
+        return result
+    }
+
+    func clear() {
+        while self.head != null {
+            self.pop_front()
+        }
+    }
+
+    func to_vector() -> Vector<T> {
+        let vec: Vector<T> = new Vector<T>()
+        let current: DListNode<T>* = self.head
+
+        while current != null {
+            vec.push((*current).value)
+            current = (*current).next
+        }
+
+        return vec
+    }
+
+    func reverse_iterate() -> Vector<T> {
+        let vec: Vector<T> = new Vector<T>()
+        let current: DListNode<T>* = self.tail
+
+        while current != null {
+            vec.push((*current).value)
+            current = (*current).prev
+        }
+
+        return vec
+    }
+}
+
+} // namespace collections
+} // namespace std

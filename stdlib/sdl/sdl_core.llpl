@@ -1,0 +1,359 @@
+// Standard library: SDL3 Core Bindings
+// Namespace: std::sdl
+
+// Every extern func below binds to the real libSDL3 shared library - any
+// program that imports this module needs the final binary linked against
+// it, whether or not it happens to only use functions declared in one of
+// the other sdl_*.llpl files.
+#link "SDL3"
+
+namespace std {
+namespace sdl {
+
+// SDL3 Init Flags
+const SDL_INIT_TIMER: u32 = 0x00000001
+const SDL_INIT_AUDIO: u32 = 0x00000010
+const SDL_INIT_VIDEO: u32 = 0x00000020
+const SDL_INIT_JOYSTICK: u32 = 0x00000200
+const SDL_INIT_HAPTIC: u32 = 0x00001000
+const SDL_INIT_GAMEPAD: u32 = 0x00002000
+const SDL_INIT_EVENTS: u32 = 0x00004000
+const SDL_INIT_SENSOR: u32 = 0x00008000
+const SDL_INIT_CAMERA: u32 = 0x00010000
+
+// Window Flags - SDL_WindowFlags is a Uint64 in real SDL3
+const SDL_WINDOW_FULLSCREEN: u64 = 0x0000000000000001
+const SDL_WINDOW_OPENGL: u64 = 0x0000000000000002
+const SDL_WINDOW_VULKAN: u64 = 0x0000000000000008
+const SDL_WINDOW_HIDDEN: u64 = 0x0000000000000020
+const SDL_WINDOW_BORDERLESS: u64 = 0x0000000000000010
+const SDL_WINDOW_RESIZABLE: u64 = 0x0000000000000020
+const SDL_WINDOW_MINIMIZED: u64 = 0x0000000000000040
+const SDL_WINDOW_MAXIMIZED: u64 = 0x0000000000000080
+const SDL_WINDOW_HIGH_PIXEL_DENSITY: u64 = 0x0000000000002000
+
+// Window position
+const SDL_WINDOWPOS_UNDEFINED: i32 = 0x1FFF0000
+const SDL_WINDOWPOS_CENTERED: i32 = 0x2FFF0000
+
+// Renderer Flags
+const SDL_RENDERER_SOFTWARE: u32 = 0x00000001
+const SDL_RENDERER_ACCELERATED: u32 = 0x00000002
+const SDL_RENDERER_PRESENTVSYNC: u32 = 0x00000004
+
+// Blend Modes - SDL_BlendMode is a Uint32 in real SDL3
+const SDL_BLENDMODE_NONE: u32 = 0x00000000
+const SDL_BLENDMODE_BLEND: u32 = 0x00000001
+const SDL_BLENDMODE_ADD: u32 = 0x00000002
+const SDL_BLENDMODE_MOD: u32 = 0x00000004
+const SDL_BLENDMODE_MUL: u32 = 0x00000008
+
+// Event type constants - the union's own leading discriminant is Uint32
+const SDL_EVENT_QUIT: u32 = 0x100
+const SDL_EVENT_TERMINATING: u32 = 0x101
+const SDL_EVENT_LOW_MEMORY: u32 = 0x102
+const SDL_EVENT_KEY_DOWN: u32 = 0x300
+const SDL_EVENT_KEY_UP: u32 = 0x301
+const SDL_EVENT_TEXT_INPUT: u32 = 0x303
+const SDL_EVENT_MOUSE_MOTION: u32 = 0x400
+const SDL_EVENT_MOUSE_BUTTON_DOWN: u32 = 0x401
+const SDL_EVENT_MOUSE_BUTTON_UP: u32 = 0x402
+const SDL_EVENT_MOUSE_WHEEL: u32 = 0x403
+
+// Keycodes (subset) - SDL_Keycode is a Uint32 in real SDL3
+const SDLK_UNKNOWN: u32 = 0
+const SDLK_RETURN: u32 = 13
+const SDLK_ESCAPE: u32 = 27
+const SDLK_BACKSPACE: u32 = 8
+const SDLK_TAB: u32 = 9
+const SDLK_SPACE: u32 = 32
+const SDLK_a: u32 = 97
+const SDLK_b: u32 = 98
+const SDLK_c: u32 = 99
+const SDLK_d: u32 = 100
+const SDLK_w: u32 = 119
+const SDLK_s: u32 = 115
+const SDLK_UP: u32 = 0x40000052
+const SDLK_DOWN: u32 = 0x40000051
+const SDLK_LEFT: u32 = 0x40000050
+const SDLK_RIGHT: u32 = 0x4000004F
+
+// Scancodes (subset) - SDL_Scancode is a plain enum (4 bytes) in real
+// SDL3, and a *different* numbering from the SDLK_* keycodes just above -
+// physical-key state (Input.get_keyboard_state()/is_key_pressed(), backed
+// by SDL_GetKeyboardState) is indexed by scancode, never by keycode. The
+// two only coincide by chance for a few low ASCII letters/digits; SDLK_UP
+// (0x40000052) used as an array index instead of SDL_SCANCODE_UP (82) is
+// an out-of-bounds read far past the ~512-entry table SDL_GetKeyboardState
+// actually returns.
+const SDL_SCANCODE_A: i32 = 4
+const SDL_SCANCODE_D: i32 = 7
+const SDL_SCANCODE_S: i32 = 22
+const SDL_SCANCODE_W: i32 = 26
+const SDL_SCANCODE_ESCAPE: i32 = 41
+const SDL_SCANCODE_DOWN: i32 = 81
+const SDL_SCANCODE_UP: i32 = 82
+
+// Mouse buttons
+const SDL_BUTTON_LEFT: u8 = 1
+const SDL_BUTTON_MIDDLE: u8 = 2
+const SDL_BUTTON_RIGHT: u8 = 3
+
+// Opaque type aliases - SDL_Window, SDL_Renderer, etc are defined in SDL3 headers
+// We only declare the ones we use directly as opaque pointers
+// (SDL3 headers provide the actual definitions)
+
+// Color structure - `struct`, not `class`: this is passed *by value* into
+// SDL3's own real C functions (e.g. SDL_SetRenderDrawColor's r/g/b/a args
+// come from one of these), and a class in this compiler is always a
+// heap-allocated, reference-counted pointer under the hood (a hidden
+// `RefCount ref_count` field prepended to every class's real C struct -
+// see codegen.d's generateClass) - completely different, ABI-incompatible
+// memory layout from SDL3's own plain `struct SDL_Color { Uint8 r,g,b,a;
+// }`. Every SDL3 "plain data" type in this file (Color/Rect/FRect/Point/
+// the event structs) has the same requirement, for the same reason.
+struct SDL_Color {
+    let r: u8
+    let g: u8
+    let b: u8
+    let a: u8
+
+    constructor(red: u8, green: u8, blue: u8, alpha: u8) {
+        self.r = red
+        self.g = green
+        self.b = blue
+        self.a = alpha
+    }
+
+    constructor(red: u8, green: u8, blue: u8) {
+        self.r = red
+        self.g = green
+        self.b = blue
+        self.a = 255
+    }
+}
+
+// Rectangle structure - SDL_Rect's x/y/w/h are `int` (32-bit) in real
+// SDL3, not LLPL's own 64-bit `int` - see this file's own header comment
+// on why every field here matches SDL3's real declared widths exactly.
+struct SDL_Rect {
+    let x: i32
+    let y: i32
+    let w: i32
+    let h: i32
+
+    constructor(px: i32, py: i32, width: i32, height: i32) {
+        self.x = px
+        self.y = py
+        self.w = width
+        self.h = height
+    }
+}
+
+// FRect (floating point rectangle) - the *only* rect type SDL3's own
+// render functions actually take (SDL_RenderRect/SDL_RenderFillRect/
+// SDL_RenderTexture all want `const SDL_FRect*`, not SDL_Rect* - real
+// SDL3 has no separate int-rect render calls at all, unlike this
+// binding's own former SDL_RenderFRect/SDL_RenderFillFRect, which never
+// existed in the real library and have been removed below).
+struct SDL_FRect {
+    let x: float
+    let y: float
+    let w: float
+    let h: float
+
+    constructor(px: float, py: float, width: float, height: float) {
+        self.x = px
+        self.y = py
+        self.w = width
+        self.h = height
+    }
+}
+
+// Point structure
+struct SDL_Point {
+    let x: i32
+    let y: i32
+
+    constructor(px: i32, py: i32) {
+        self.x = px
+        self.y = py
+    }
+}
+
+// Event structures - each is reached by type-punning a pointer into the
+// SDL_Event union below (see sdl_window.llpl's get_key_event() et al.,
+// which literally cast `&self.event` to one of these), so field order,
+// width, AND presence (the `reserved` field the original binding was
+// missing entirely, which shifted every field after it by 4 bytes) all
+// have to match SDL3's own real struct layout exactly, or reading e.g.
+// `.key` off a live keyboard event returns whatever garbage happened to
+// be 4 bytes further into the union instead.
+struct SDL_KeyboardEvent {
+    let type: u32       // SDL_EventType type
+    let reserved: u32
+    let timestamp: u64    // nanoseconds
+    let windowID: u32     // SDL_WindowID
+    let which: u32        // SDL_KeyboardID
+    let scancode: u32     // SDL_Scancode
+    let key: u32          // SDL_Keycode
+    let mod: u16          // SDL_Keymod
+    let raw: u16
+    let down: bool
+    let repeat: bool
+}
+
+struct SDL_MouseMotionEvent {
+    let type: u32       // SDL_EventType type
+    let reserved: u32
+    let timestamp: u64
+    let windowID: u32     // SDL_WindowID
+    let which: u32        // SDL_MouseID
+    let state: u32        // SDL_MouseButtonFlags
+    let x: float
+    let y: float
+    let xrel: float
+    let yrel: float
+}
+
+struct SDL_MouseButtonEvent {
+    let type: u32       // SDL_EventType type
+    let reserved: u32
+    let timestamp: u64
+    let windowID: u32     // SDL_WindowID
+    let which: u32        // SDL_MouseID
+    let button: u8
+    let down: bool
+    let clicks: u8
+    let padding: u8
+    let x: float
+    let y: float
+}
+
+// SDL3's own SDL_Event is a real C union (`Uint32 type` shared with
+// every event's own leading field, plus one member per event kind, all
+// overlapping the same storage, padded to a fixed 128-byte ABI-stable
+// size - see SDL_events.h's own comment on why) - a genuine `union`
+// here too (this codebase's own compiler support - see UnionDecl's doc
+// comment), not the struct-pretending-to-be-a-union workaround this
+// binding used before that existed. Its body is never (re-)defined in
+// the generated C (see mangledUnion/generateUnion's own comments) -
+// <SDL3/SDL.h> already provides the complete, real definition; `type`/
+// `padding` here exist only so this binding's own code (get_type(),
+// is_quit(), the zero-initializing constructor) has something to read/
+// write - the individual event structs (SDL_KeyboardEvent et al.) are
+// still reached by pointer-casting this, in sdl_window.llpl, rather than
+// through a matching named member here, since this binding never
+// bothered declaring one for every real member.
+union SDL_Event {
+    let type: u32
+    let padding: char[128]
+
+    // Zero-init is automatic (see generateUnionConstructor - `self` here
+    // starts as `SDL_Event self = {0};`, zeroing every byte of the union,
+    // not just `type`), so there's nothing left for this body to do.
+    constructor() {}
+}
+
+// Core SDL3 Functions - widths and return types matched exactly against
+// the real installed SDL3 headers (SDL_init.h/SDL_video.h/SDL_render.h/
+// SDL_surface.h/SDL_events.h/SDL_keyboard.h/SDL_mouse.h/SDL_timer.h): a
+// signature that merely happens to be ABI-compatible still fails outright
+// at the C level once <SDL3/SDL.h> is *also* included (see codegen.d's
+// own "conflicting types" comment on typeToC's `bool` case) - `int` vs
+// SDL3's real `bool`, or LLPL's 64-bit `int`/`uint` vs SDL3's real 32-bit
+// `int`/`Uint32`/`SDL_WindowFlags`, are both hard redeclaration errors,
+// not just a style mismatch.
+extern func SDL_Init(flags: u32) -> bool
+extern func SDL_Quit()
+extern func SDL_GetError() -> char*
+
+// Window Management
+extern func SDL_CreateWindow(title: char*, w: i32, h: i32, flags: u64) -> SDL_Window*
+extern func SDL_DestroyWindow(window: SDL_Window*)
+extern func SDL_SetWindowTitle(window: SDL_Window*, title: char*) -> bool
+extern func SDL_GetWindowSize(window: SDL_Window*, w: i32*, h: i32*) -> bool
+extern func SDL_SetWindowSize(window: SDL_Window*, w: i32, h: i32) -> bool
+extern func SDL_ShowWindow(window: SDL_Window*) -> bool
+extern func SDL_HideWindow(window: SDL_Window*) -> bool
+
+// Renderer Management
+extern func SDL_CreateRenderer(window: SDL_Window*, name: char*) -> SDL_Renderer*
+extern func SDL_DestroyRenderer(renderer: SDL_Renderer*)
+extern func SDL_RenderClear(renderer: SDL_Renderer*) -> bool
+extern func SDL_RenderPresent(renderer: SDL_Renderer*) -> bool
+extern func SDL_SetRenderDrawColor(renderer: SDL_Renderer*, r: u8, g: u8, b: u8, a: u8) -> bool
+extern func SDL_SetRenderDrawBlendMode(renderer: SDL_Renderer*, blendMode: u32) -> bool
+
+// Drawing primitives - SDL3 only has a *float*-rect render path (no
+// separate int-rect entry points at all); SDL_RenderRect/SDL_RenderFillRect
+// themselves take `const SDL_FRect*` in the real library, so there's no
+// separate SDL_RenderFRect/SDL_RenderFillFRect to bind (a former version
+// of this file invented those two - they don't exist in real SDL3 and
+// have been removed; see sdl_window.llpl's draw_rect/fill_rect, which
+// convert their SDL_Rect to an SDL_FRect before calling these).
+extern func SDL_RenderPoint(renderer: SDL_Renderer*, x: float, y: float) -> bool
+extern func SDL_RenderLine(renderer: SDL_Renderer*, x1: float, y1: float, x2: float, y2: float) -> bool
+extern func SDL_RenderRect(renderer: SDL_Renderer*, rect: SDL_FRect*) -> bool
+extern func SDL_RenderFillRect(renderer: SDL_Renderer*, rect: SDL_FRect*) -> bool
+
+// Texture Management
+extern func SDL_CreateTexture(renderer: SDL_Renderer*, format: i32, access: i32, w: i32, h: i32) -> SDL_Texture*
+extern func SDL_CreateTextureFromSurface(renderer: SDL_Renderer*, surface: SDL_Surface*) -> SDL_Texture*
+extern func SDL_DestroyTexture(texture: SDL_Texture*)
+extern func SDL_RenderTexture(renderer: SDL_Renderer*, texture: SDL_Texture*, srcrect: SDL_FRect*, dstrect: SDL_FRect*) -> bool
+extern func SDL_SetTextureBlendMode(texture: SDL_Texture*, blendMode: u32) -> bool
+extern func SDL_SetTextureAlphaMod(texture: SDL_Texture*, alpha: u8) -> bool
+extern func SDL_SetTextureColorMod(texture: SDL_Texture*, r: u8, g: u8, b: u8) -> bool
+
+// Surface Management
+extern func SDL_LoadBMP(file: char*) -> SDL_Surface*
+extern func SDL_DestroySurface(surface: SDL_Surface*)
+
+// Event Handling
+extern func SDL_PollEvent(event: SDL_Event*) -> bool
+extern func SDL_WaitEvent(event: SDL_Event*) -> bool
+extern func SDL_WaitEventTimeout(event: SDL_Event*, timeoutMS: i32) -> bool
+
+// Input State - SDL_GetKeyboardState really does return `const bool*`
+// (an array of one bool per scancode), not a byte array
+extern func SDL_GetKeyboardState(numkeys: i32*) -> bool*
+extern func SDL_GetMouseState(x: float*, y: float*) -> u32
+
+// Timing
+extern func SDL_GetTicks() -> u64
+extern func SDL_Delay(ms: u32)
+
+// High-level wrapper class
+namespace SDL {
+    func init(flags: u32) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
+
+        if SDL_Init(flags) {
+            result.set_ok(true)
+        } else {
+            result.set_err(SDL_GetError())
+        }
+
+        return result
+    }
+
+    func quit() {
+        SDL_Quit()
+    }
+
+    func get_error() -> String {
+        return new String(SDL_GetError())
+    }
+
+    func get_ticks() -> u64 {
+        return SDL_GetTicks()
+    }
+
+    func delay(ms: u32) {
+        SDL_Delay(ms)
+    }
+}
+
+} // namespace sdl
+} // namespace std

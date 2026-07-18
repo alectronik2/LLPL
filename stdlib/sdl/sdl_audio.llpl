@@ -1,0 +1,267 @@
+// Standard library: SDL3 Audio Bindings
+// Namespace: std::sdl
+
+namespace std {
+namespace sdl {
+
+// Audio format constants - SDL_AudioFormat is a plain C enum (defaults to
+// a 4-byte `int`, not Uint16 - see this file's own SDL_AudioSpec comment)
+const SDL_AUDIO_U8: i32 = 0x0008
+const SDL_AUDIO_S8: i32 = 0x8008
+const SDL_AUDIO_U16LSB: i32 = 0x0010
+const SDL_AUDIO_S16LSB: i32 = 0x8010
+const SDL_AUDIO_U16MSB: i32 = 0x1010
+const SDL_AUDIO_S16MSB: i32 = 0x9010
+const SDL_AUDIO_S32LSB: i32 = 0x8020
+const SDL_AUDIO_F32LSB: i32 = 0x8120
+
+// Audio device opaque alias
+alias SDL_AudioDeviceID = u32
+alias SDL_AudioStream = void
+
+// Audio spec structure - `struct`, not `class` (see sdl_core.llpl's own
+// header comment on why every SDL3 plain-data FFI type here is): real
+// SDL_AudioSpec is `{ SDL_AudioFormat format; int channels; int freq; }` -
+// three 4-byte fields, format included (a plain C enum, not Uint16).
+struct SDL_AudioSpec {
+    let format: i32
+    let channels: i32
+    let freq: i32
+
+    constructor(frequency: i32, num_channels: i32, audio_format: i32) {
+        self.freq = frequency
+        self.channels = num_channels
+        self.format = audio_format
+    }
+}
+
+// Audio extern functions
+extern func SDL_GetNumAudioDrivers() -> i32
+extern func SDL_GetAudioDriver(index: i32) -> char*
+extern func SDL_GetCurrentAudioDriver() -> char*
+
+// Real SDL3 names these Get*Devices, not GetNum*Devices - they return a
+// pointer to the array of device IDs (count written through the out
+// param), matching what's declared below.
+extern func SDL_GetAudioPlaybackDevices(count: i32*) -> SDL_AudioDeviceID*
+extern func SDL_GetAudioRecordingDevices(count: i32*) -> SDL_AudioDeviceID*
+extern func SDL_GetAudioDeviceName(devid: SDL_AudioDeviceID) -> char*
+
+// SDL_LoadWAV's buffer (and other SDL-allocated memory) has to be released
+// with SDL's own allocator, not the C library's free() - SDL3 can be built
+// against a custom allocator (SDL_SetMemoryFunctions), so freeing an
+// SDL-allocated pointer with plain free() is undefined behavior whenever
+// that custom allocator differs from the C library's.
+extern func SDL_free(mem: void*)
+
+extern func SDL_OpenAudioDevice(devid: SDL_AudioDeviceID, spec: SDL_AudioSpec*) -> SDL_AudioDeviceID
+extern func SDL_CloseAudioDevice(dev: SDL_AudioDeviceID)
+extern func SDL_PauseAudioDevice(dev: SDL_AudioDeviceID) -> bool
+extern func SDL_ResumeAudioDevice(dev: SDL_AudioDeviceID) -> bool
+
+// Audio stream functions
+extern func SDL_CreateAudioStream(src_spec: SDL_AudioSpec*, dst_spec: SDL_AudioSpec*) -> SDL_AudioStream*
+extern func SDL_DestroyAudioStream(stream: SDL_AudioStream*)
+extern func SDL_PutAudioStreamData(stream: SDL_AudioStream*, buf: void*, len: i32) -> bool
+extern func SDL_GetAudioStreamData(stream: SDL_AudioStream*, buf: void*, len: i32) -> i32
+extern func SDL_FlushAudioStream(stream: SDL_AudioStream*) -> bool
+extern func SDL_ClearAudioStream(stream: SDL_AudioStream*) -> bool
+extern func SDL_BindAudioStream(dev: SDL_AudioDeviceID, stream: SDL_AudioStream*) -> bool
+extern func SDL_UnbindAudioStream(stream: SDL_AudioStream*)
+
+// Load WAV file
+extern func SDL_LoadWAV(file: char*, spec: SDL_AudioSpec*, audio_buf: u8**, audio_len: u32*) -> bool
+
+// High-level audio device wrapper
+class AudioDevice {
+    let device_id: SDL_AudioDeviceID
+    let spec: SDL_AudioSpec
+    let is_playback: bool
+
+    constructor(spec_config: SDL_AudioSpec, playback: bool) {
+        self.spec = spec_config
+        self.is_playback = playback
+
+        if playback {
+            self.device_id = SDL_OpenAudioDevice(0, &self.spec)
+        } else {
+            self.device_id = SDL_OpenAudioDevice(0, &self.spec)
+        }
+    }
+
+    destructor() {
+        if self.device_id != 0 {
+            SDL_CloseAudioDevice(self.device_id)
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.device_id != 0
+    }
+
+    func pause() -> bool {
+        return SDL_PauseAudioDevice(self.device_id)
+    }
+
+    func resume() -> bool {
+        return SDL_ResumeAudioDevice(self.device_id)
+    }
+
+    func get_id() -> SDL_AudioDeviceID {
+        return self.device_id
+    }
+}
+
+// Audio stream wrapper
+class AudioStream {
+    let handle: SDL_AudioStream*
+    let src_spec: SDL_AudioSpec
+    let dst_spec: SDL_AudioSpec
+
+    constructor(source_spec: SDL_AudioSpec, dest_spec: SDL_AudioSpec) {
+        self.src_spec = source_spec
+        self.dst_spec = dest_spec
+        self.handle = SDL_CreateAudioStream(&self.src_spec, &self.dst_spec)
+    }
+
+    destructor() {
+        if self.handle != null {
+            SDL_DestroyAudioStream(self.handle)
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.handle != null
+    }
+
+    func put_data(buffer: void*, length: i32) -> bool {
+        return SDL_PutAudioStreamData(self.handle, buffer, length)
+    }
+
+    func get_data(buffer: void*, length: i32) -> i32 {
+        return SDL_GetAudioStreamData(self.handle, buffer, length)
+    }
+
+    func flush() -> bool {
+        return SDL_FlushAudioStream(self.handle)
+    }
+
+    func clear() -> bool {
+        return SDL_ClearAudioStream(self.handle)
+    }
+
+    func bind_to_device(device: AudioDevice) -> bool {
+        return SDL_BindAudioStream(device.get_id(), self.handle)
+    }
+
+    func unbind() {
+        SDL_UnbindAudioStream(self.handle)
+    }
+}
+
+// WAV file loader
+class WavFile {
+    let spec: SDL_AudioSpec
+    let buffer: u8*
+    let length: u32
+
+    constructor(filepath: char*) {
+        self.spec = new SDL_AudioSpec(44100, 2, SDL_AUDIO_S16LSB)
+        self.buffer = null
+        self.length = 0
+
+        SDL_LoadWAV(filepath, &self.spec, &self.buffer, &self.length)
+    }
+
+    destructor() {
+        if self.buffer != null {
+            SDL_free(self.buffer as void*)
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.buffer != null
+    }
+
+    func get_buffer() -> u8* {
+        return self.buffer
+    }
+
+    func get_length() -> u32 {
+        return self.length
+    }
+
+    func get_spec() -> SDL_AudioSpec {
+        return self.spec
+    }
+}
+
+// Audio helper functions
+namespace Audio {
+     func get_num_playback_devices() -> i32 {
+        let count: i32 = 0
+        SDL_GetAudioPlaybackDevices(&count)
+        return count
+    }
+
+     func get_num_recording_devices() -> i32 {
+        let count: i32 = 0
+        SDL_GetAudioRecordingDevices(&count)
+        return count
+    }
+
+     func get_device_name(device_id: SDL_AudioDeviceID) -> String {
+        let name: char* = SDL_GetAudioDeviceName(device_id)
+        if name != null {
+            return new String(name)
+        }
+        return new String("")
+    }
+
+     func get_current_driver() -> String {
+        let driver: char* = SDL_GetCurrentAudioDriver()
+        if driver != null {
+            return new String(driver)
+        }
+        return new String("")
+    }
+
+    // Play a simple WAV file
+     func play_wav(filepath: char*) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
+
+        let wav: WavFile = new WavFile(filepath)
+        if !wav.is_valid() {
+            result.set_err("Failed to load WAV file")
+            return result
+        }
+
+        let device: AudioDevice = new AudioDevice(wav.get_spec(), true)
+        if !device.is_valid() {
+            result.set_err("Failed to open audio device")
+            return result
+        }
+
+        let stream: AudioStream = new AudioStream(wav.get_spec(), wav.get_spec())
+        if !stream.is_valid() {
+            result.set_err("Failed to create audio stream")
+            return result
+        }
+
+        stream.bind_to_device(device)
+        stream.put_data(wav.get_buffer() as void*, wav.get_length() as i32)
+        stream.flush()
+
+        device.resume()
+
+        // Wait for audio to play (simple delay based on length)
+        let duration_ms: u32 = (wav.get_length() * 1000) / (wav.get_spec().freq * wav.get_spec().channels * 2)
+        SDL_Delay(duration_ms + 100)
+
+        result.set_ok(true)
+        return result
+    }
+}
+
+} // namespace sdl
+} // namespace std

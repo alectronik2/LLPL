@@ -7,12 +7,16 @@ import std.array : replicate;
 enum NodeType {
     Program,
     ImportStmt,
+    UsingNamespaceStmt,
     NamespaceDecl,
     AliasDecl,
     ArrayAliasDecl,
     FunctionDecl,
     ClassDecl,
     StructDecl,
+    UnionDecl,
+    LinkDecl,
+    FlagsDecl,
     EnumDecl,
     VarDecl,
     IfStmt,
@@ -34,6 +38,8 @@ enum NodeType {
     IndexExpr,
     Identifier,
     IntLiteral,
+    FloatLiteral,
+    CharLiteral,
     StringLiteral,
     RegexLiteral,
     BoolLiteral,
@@ -111,6 +117,17 @@ class ImportStmt : ASTNode {
     }
 }
 
+// A `using namespace Foo.Bar` statement. Brings all symbols from the specified
+// namespace into scope, allowing unqualified access.
+class UsingNamespaceStmt : ASTNode {
+    string namespacePath; // e.g., "HAL.Serial" for `using namespace HAL.Serial`
+
+    this(string namespacePath, int line = 0, int column = 0) {
+        super(NodeType.UsingNamespaceStmt, line, column);
+        this.namespacePath = namespacePath;
+    }
+}
+
 // A `namespace Name { ... }` block. Resolved away by the code generator,
 // which flattens its declarations into the top level with mangled names.
 class NamespaceDecl : ASTNode {
@@ -177,6 +194,39 @@ class ArrayAliasDecl : ASTNode {
         super(NodeType.ArrayAliasDecl, line, column);
         this.name = name;
         this.elements = elements;
+    }
+}
+
+// `#link "NAME"` - a compiler directive requesting the final binary be
+// linked against a shared/static library named `NAME` (e.g. `#link "SDL3"`
+// for `-lSDL3`), rather than any construct with its own C representation -
+// it produces no code of its own; the code generator just collects it into
+// a flat list of requested link libraries (see CodeGenerator.linkLibraries)
+// that `--binary` mode (main.d's compileToBinary) passes to the system C
+// compiler as `-l<name>` flags. A two-step build (`llpl foo.llpl -o foo.c`
+// then a hand-written `cc`/linker invocation) has no such automatic step -
+// the caller still has to pass `-lSDL3` themselves in that mode, the same
+// as any other library dependency C code doesn't embed.
+class LinkDecl : ASTNode {
+    string libraryName;
+
+    this(string libraryName, int line = 0, int column = 0) {
+        super(NodeType.LinkDecl, line, column);
+        this.libraryName = libraryName;
+    }
+}
+
+// `#flags "-O2"` - same shape and purpose as LinkDecl just above, but for
+// arbitrary extra C compiler flags instead of a library name (e.g. an
+// optimization level, `-Wall`, or a `-D` define a binding needs). Also
+// produces no code of its own; collected into CodeGenerator.compilerFlags
+// and passed to the system C compiler by `--binary` mode.
+class FlagsDecl : ASTNode {
+    string flags;
+
+    this(string flags, int line = 0, int column = 0) {
+        super(NodeType.FlagsDecl, line, column);
+        this.flags = flags;
     }
 }
 
@@ -381,6 +431,9 @@ class FunctionDecl : ASTNode {
     // meaningful for a method (set by classDecl() in parser.d); a plain
     // top-level function is never marked private.
     bool isPrivate;
+    // `static func` - a class method that doesn't receive a `self` parameter
+    // and can be called on the class itself rather than on instances.
+    bool isStatic;
 
     this(string name, Parameter[] params, Type returnType, Block body_, bool isExtern = false,
          bool isInterrupt = false, bool isVariadic = false, int line = 0, int column = 0,
@@ -429,17 +482,30 @@ class ClassDecl : ASTNode {
 }
 
 // A plain value-type aggregate: no ref-counting header, no heap allocation,
-// no constructor/destructor. Compiles to a bare C struct, usable as a
-// stack/global value, array element, or (with `packed`) a hardware-layout
-// descriptor like a GDT/IDT entry. Can't declare methods *inline* the way
-// a class can, but can still gain real methods from an external
-// `impl Trait for StructName { ... }` block (see codegen.d's
-// processImplBlock) - those are generated as ordinary top-level functions
-// taking this struct by value as an explicit first parameter, not stored
-// anywhere on StructDecl itself.
+// no destructor. Compiles to a bare C struct, usable as a stack/global
+// value, array element, or (with `packed`) a hardware-layout descriptor
+// like a GDT/IDT entry. Can't declare methods *inline* the way a class
+// can, but can still gain real methods from an external `impl Trait for
+// StructName { ... }` block (see codegen.d's processImplBlock) - those
+// are generated as ordinary top-level functions taking this struct by
+// value as an explicit first parameter, not stored anywhere on
+// StructDecl itself.
+//
+// A struct *can* declare one or more `constructor(...)` blocks (see
+// FunctionDecl parity with ClassDecl.constructors, same "empty means no
+// constructor, 2+ are overloads" convention) - unlike a class
+// constructor, a struct one never heap-allocates: it builds a local
+// value of the struct's own type and returns it by value (see
+// codegen.d's generateStructConstructor), matching `new StructName(...)`
+// evaluating to a plain StructName, not a StructName* - useful for a
+// plain-data FFI type (e.g. an SDL3 struct bound via `extern func`) that
+// still wants constructor-call ergonomics without paying for a class's
+// ref-counted heap box, which would silently corrupt its ABI-mandated
+// flat layout.
 class StructDecl : ASTNode {
     string name;
     VarDecl[] fields;
+    FunctionDecl[] constructors;
     bool packed;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     string[] typeParams; // `<T, U>` after the struct name - see FunctionDecl.typeParams
@@ -447,7 +513,8 @@ class StructDecl : ASTNode {
     VarAttribute[] attributes;
 
     this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0,
-         string[] typeParams = [], string[] typeParamBounds = [], VarAttribute[] attributes = []) {
+         string[] typeParams = [], string[] typeParamBounds = [], VarAttribute[] attributes = [],
+         FunctionDecl[] constructors = []) {
         super(NodeType.StructDecl, line, column);
         this.name = name;
         this.fields = fields;
@@ -455,6 +522,35 @@ class StructDecl : ASTNode {
         this.typeParams = typeParams;
         this.typeParamBounds = typeParamBounds;
         this.attributes = attributes;
+        this.constructors = constructors;
+    }
+}
+
+// A C-style union: every field overlaps the same storage (size is the
+// largest field's, not the sum), no field-liveness tracking of any kind -
+// same "plain value type, no ref-counting" shape as StructDecl (see its
+// own comment), just with overlapping instead of sequential field
+// layout. Exists mainly for binding a real C library's own union type
+// exactly (e.g. SDL3's `SDL_Event`, whose leading discriminant field can
+// then be read/written through *any* of the union's members without a
+// pointer-cast trick), not something ordinary LLPL code is expected to
+// reach for often. Same "empty means no constructor" convention as
+// ClassDecl.constructors; a union constructor's body still just assigns
+// through `self.field = ...` like a struct's, understanding that doing
+// so for more than one field overwrites the same bytes repeatedly rather
+// than storing them all - that's what a union *is*, not a bug in this
+// type's own codegen.
+class UnionDecl : ASTNode {
+    string name;
+    VarDecl[] fields;
+    FunctionDecl[] constructors;
+    string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+
+    this(string name, VarDecl[] fields, int line = 0, int column = 0, FunctionDecl[] constructors = []) {
+        super(NodeType.UnionDecl, line, column);
+        this.name = name;
+        this.fields = fields;
+        this.constructors = constructors;
     }
 }
 
@@ -1076,6 +1172,24 @@ class IntLiteral : ASTNode {
 
     this(long value, int line = 0, int column = 0) {
         super(NodeType.IntLiteral, line, column);
+        this.value = value;
+    }
+}
+
+class FloatLiteral : ASTNode {
+    string value; // Store as string to preserve exact representation
+
+    this(string value, int line = 0, int column = 0) {
+        super(NodeType.FloatLiteral, line, column);
+        this.value = value;
+    }
+}
+
+class CharLiteral : ASTNode {
+    int value; // ASCII value of the character
+
+    this(int value, int line = 0, int column = 0) {
+        super(NodeType.CharLiteral, line, column);
         this.value = value;
     }
 }

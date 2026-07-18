@@ -1,0 +1,329 @@
+// Example: Comprehensive demonstration of stdlib collections
+
+import "../../stdlib/collections/linked_list.llpl"
+import "../../stdlib/collections/stack_queue.llpl"
+import "../../stdlib/collections/heap.llpl"
+import "../../stdlib/collections/hashmap.llpl"
+import "../../stdlib/collections/rbtree.llpl"
+import "../../stdlib/collections/trie.llpl"
+
+using namespace std.collections
+
+func demo_linked_lists() {
+    // Singly linked list
+    let slist: LinkedList<int> = new LinkedList<int>()
+    slist.push_back(1)
+    slist.push_back(2)
+    slist.push_back(3)
+    slist.push_front(0)  // [0, 1, 2, 3]
+
+    let first: Result<int, char*> = slist.pop_front()  // 0
+    let value: Result<int, char*> = slist.get(1)  // 2
+
+    // Doubly linked list
+    let dlist: DoublyLinkedList<String> = new DoublyLinkedList<String>()
+    dlist.push_back(new String("first"))
+    dlist.push_back(new String("second"))
+    dlist.push_back(new String("third"))
+
+    let last: Result<String, char*> = dlist.pop_back()  // "third"
+    let reversed: Vector<String> = dlist.reverse_iterate()
+}
+
+func demo_stack_queue() {
+    // Stack (LIFO)
+    let stack: Stack<int> = new Stack<int>()
+    stack.push(10)
+    stack.push(20)
+    stack.push(30)
+
+    let top: Result<int, char*> = stack.pop()  // 30
+    let peek: Result<int, char*> = stack.peek()  // 20
+
+    // Queue (FIFO)
+    let queue: Queue<String> = new Queue<String>()
+    queue.enqueue(new String("first"))
+    queue.enqueue(new String("second"))
+    queue.enqueue(new String("third"))
+
+    let item: Result<String, char*> = queue.dequeue()  // "first"
+
+    // Deque (double-ended)
+    let deque: Deque<int> = new Deque<int>()
+    deque.push_front(1)
+    deque.push_back(2)
+    deque.push_front(0)  // [0, 1, 2]
+
+    let front: Result<int, char*> = deque.pop_front()  // 0
+    let back: Result<int, char*> = deque.pop_back()  // 2
+}
+
+func demo_circular_buffer() {
+    let buffer: CircularBuffer<int> = new CircularBuffer<int>(3)
+
+    buffer.push(1)
+    buffer.push(2)
+    buffer.push(3)
+
+    if buffer.is_full() {
+        // Overwrite oldest
+        buffer.push_overwrite(4)  // Now contains [2, 3, 4]
+    }
+
+    let value: Result<int, char*> = buffer.pop()  // 2
+}
+
+func demo_rbtree() {
+    let tree: RBTree<int, String> = new RBTree<int, String>()
+
+    tree.insert(50, new String("fifty"))
+    tree.insert(30, new String("thirty"))
+    tree.insert(70, new String("seventy"))
+    tree.insert(20, new String("twenty"))
+    tree.insert(40, new String("forty"))
+    tree.insert(60, new String("sixty"))
+    tree.insert(80, new String("eighty"))
+
+    // Search
+    let result: Result<String, char*> = tree.find(40)
+    if result.is_ok() {
+        let value: String = result.unwrap()  // "forty"
+    }
+
+    // Get sorted keys
+    let keys: Vector<int> = tree.keys()  // [20, 30, 40, 50, 60, 70, 80]
+
+    // Min and max
+    let min: Result<int, char*> = tree.min_key()  // 20
+    let max: Result<int, char*> = tree.max_key()  // 80
+
+    // Tree height
+    let height: int = tree.height()
+}
+
+func demo_heaps() {
+    // Min heap
+    let min_heap: BinaryHeap<int> = new BinaryHeap<int>()
+    min_heap.insert(50)
+    min_heap.insert(30)
+    min_heap.insert(70)
+    min_heap.insert(10)
+
+    let min: Result<int, char*> = min_heap.extract_min()  // 10
+
+    // Max heap
+    let max_heap: MaxHeap<int> = new MaxHeap<int>()
+    max_heap.insert(50)
+    max_heap.insert(30)
+    max_heap.insert(70)
+    max_heap.insert(10)
+
+    let max: Result<int, char*> = max_heap.extract_max()  // 70
+
+    // Priority queue
+    let pq: PriorityQueue<String> = new PriorityQueue<String>()
+    pq.enqueue(new String("Low priority task"), 10)
+    pq.enqueue(new String("High priority task"), 1)
+    pq.enqueue(new String("Medium priority task"), 5)
+
+    let urgent: Result<String, char*> = pq.dequeue()  // "High priority task"
+}
+
+func demo_hashmap() {
+    let map: EnhancedHashMap<String, int> = new EnhancedHashMap<String, int>()
+
+    map.insert(new String("apple"), 1)
+    map.insert(new String("banana"), 2)
+    map.insert(new String("cherry"), 3)
+
+    let value: Result<int, char*> = map.get(new String("banana"))  // 2
+
+    let has_apple: bool = map.contains(new String("apple"))  // true
+
+    // Remove
+    map.remove(new String("apple"))
+
+    // Get all keys
+    let keys: Vector<String> = map.keys()
+
+    // Performance metrics
+    let load: int = map.get_load_factor()
+    let collisions: int = map.get_collision_count()
+}
+
+func demo_hashset() {
+    let set1: HashSet<int> = new HashSet<int>()
+    set1.insert(1)
+    set1.insert(2)
+    set1.insert(3)
+    set1.insert(4)
+
+    let set2: HashSet<int> = new HashSet<int>()
+    set2.insert(3)
+    set2.insert(4)
+    set2.insert(5)
+    set2.insert(6)
+
+    // Set operations
+    let union_set: HashSet<int> = set1.union(set2)  // {1, 2, 3, 4, 5, 6}
+    let intersection: HashSet<int> = set1.intersection(set2)  // {3, 4}
+    let difference: HashSet<int> = set1.difference(set2)  // {1, 2}
+
+    let contains: bool = set1.contains(2)  // true
+}
+
+func demo_trie() {
+    let trie: Trie = new Trie()
+
+    // Insert words
+    trie.insert("cat")
+    trie.insert("car")
+    trie.insert("card")
+    trie.insert("care")
+    trie.insert("dog")
+    trie.insert("dodge")
+
+    // Search
+    let found: bool = trie.search("car")  // true
+    let not_found: bool = trie.search("ca")  // false
+
+    // Prefix operations
+    let has_prefix: bool = trie.starts_with("ca")  // true
+    let count: int = trie.count_prefix("ca")  // 4
+
+    // Get all words with prefix
+    let words: Vector<String> = trie.get_words_with_prefix("ca")
+    // Returns: ["car", "card", "care", "cat"]
+
+    // All words
+    let all_words: Vector<String> = trie.get_all_words()
+
+    // Insert with value
+    trie.insert_with_value("api_v1", 1)
+    trie.insert_with_value("api_v2", 2)
+
+    let version: Result<int, char*> = trie.search_value("api_v1")  // 1
+
+    // Delete
+    trie.remove("car")
+}
+
+func demo_graph() {
+    // Undirected graph
+    let graph: std.Graph = new std.Graph(5, false)
+
+    graph.add_edge(0, 1, 10)
+    graph.add_edge(1, 2, 5)
+    graph.add_edge(2, 3, 3)
+    graph.add_edge(3, 4, 7)
+    graph.add_edge(0, 4, 2)
+
+    // Get neighbors
+    let neighbors: Vector<int> = graph.get_neighbors(0)  // [1, 4]
+
+    // Degree
+    let degree: int = graph.get_degree(1)
+
+    // BFS traversal
+    let bfs_order: Vector<int> = graph.bfs(0)
+
+    // DFS traversal
+    let dfs_order: Vector<int> = graph.dfs(0)
+
+    // Check connectivity
+    let connected: bool = graph.is_connected()
+
+    // Directed graph for topological sort
+    let dag: std.Graph = new std.Graph(6, true)
+    dag.add_edge_unweighted(5, 2)
+    dag.add_edge_unweighted(5, 0)
+    dag.add_edge_unweighted(4, 0)
+    dag.add_edge_unweighted(4, 1)
+    dag.add_edge_unweighted(2, 3)
+    dag.add_edge_unweighted(3, 1)
+
+    let topo_result: Result<Vector<int>, char*> = dag.topological_sort()
+    if topo_result.is_ok() {
+        let order: Vector<int> = topo_result.unwrap()
+        // Possible: [5, 4, 2, 3, 1, 0] or other valid orderings
+    }
+
+    // Cycle detection
+    let has_cycle: bool = dag.has_cycle_directed()
+}
+
+func demo_graph_matrix() {
+    let graph: std.GraphMatrix = new std.GraphMatrix(4, false)
+
+    graph.add_edge(0, 1, 4)
+    graph.add_edge(1, 2, 3)
+    graph.add_edge(2, 3, 2)
+    graph.add_edge(0, 3, 10)
+
+    // Check edge
+    let has_edge: bool = graph.has_edge(0, 1)  // true
+    let weight: int = graph.get_weight(0, 1)  // 4
+
+    // Floyd-Warshall (all-pairs shortest paths)
+    let distances: int** = graph.floyd_warshall()
+
+    // Shortest path from 0 to 3
+    let shortest: int = distances[0][3]  // Should be 9 (0->1->2->3)
+}
+
+func demo_real_world_use_cases() {
+    // Use case 1: Task scheduling with priority queue
+    let task_queue: PriorityQueue<String> = new PriorityQueue<String>()
+    task_queue.enqueue(new String("Send email"), 5)
+    task_queue.enqueue(new String("Critical bug fix"), 1)
+    task_queue.enqueue(new String("Update docs"), 10)
+
+    // Process tasks by priority
+    while !task_queue.is_empty() {
+        let task: Result<String, char*> = task_queue.dequeue()
+        // Execute task...
+    }
+
+    // Use case 2: Autocomplete with Trie
+    let autocomplete: Trie = new Trie()
+    autocomplete.insert("apple")
+    autocomplete.insert("application")
+    autocomplete.insert("apply")
+    autocomplete.insert("banana")
+
+    let suggestions: Vector<String> = autocomplete.get_words_with_prefix("app")
+    // Returns: ["apple", "application", "apply"]
+
+    // Use case 3: Graph for social network
+    let social_network: std.Graph = new std.Graph(100, false)
+    social_network.add_edge_unweighted(0, 1)  // User 0 friends with User 1
+    social_network.add_edge_unweighted(0, 2)
+    social_network.add_edge_unweighted(1, 3)
+
+    let friends: Vector<int> = social_network.get_neighbors(0)
+
+    // Use case 4: LRU cache with DoublyLinkedList + HashMap
+    // (Would need custom implementation combining both)
+
+    // Use case 5: Recent items with CircularBuffer
+    let recent_files: CircularBuffer<String> = new CircularBuffer<String>(10)
+    recent_files.push_overwrite(new String("file1.txt"))
+    recent_files.push_overwrite(new String("file2.txt"))
+    // Automatically overwrites oldest when full
+}
+
+func main() -> int {
+    demo_linked_lists()
+    demo_stack_queue()
+    demo_circular_buffer()
+    demo_rbtree()
+    demo_heaps()
+    demo_hashmap()
+    demo_hashset()
+    demo_trie()
+    demo_graph()
+    demo_graph_matrix()
+    demo_real_world_use_cases()
+
+    return 0
+}

@@ -1,0 +1,452 @@
+// Standard library: Graph data structures
+// Namespace: std::collections
+
+namespace std {
+namespace collections {
+
+// Graph edge
+class Edge {
+    let from_vertex: int
+    let to_vertex: int
+    let weight: int
+
+    constructor(f: int, t: int, w: int) {
+        self.from_vertex = f
+        self.to_vertex = t
+        self.weight = w
+    }
+
+    constructor(f: int, t: int) {
+        self.from_vertex = f
+        self.to_vertex = t
+        self.weight = 1
+    }
+}
+
+// Adjacency list node
+class AdjListNode {
+    let vertex: int
+    let weight: int
+    let next: AdjListNode*
+
+    constructor(v: int, w: int) {
+        self.vertex = v
+        self.weight = w
+        self.next = null
+    }
+}
+
+// Graph using adjacency list representation
+class Graph {
+    let adjacency_list: AdjListNode**
+    let vertex_count: int
+    let edge_count: int
+    let is_directed: bool
+
+    constructor(vertices: int, directed: bool) {
+        self.vertex_count = vertices
+        self.edge_count = 0
+        self.is_directed = directed
+        self.adjacency_list = malloc(vertices * sizeof(AdjListNode*)) as AdjListNode**
+
+        for let i: int = 0, i < vertices, i = i + 1 {
+            self.adjacency_list[i] = null
+        }
+    }
+
+    destructor() {
+        if self.adjacency_list != null {
+            for let i: int = 0, i < self.vertex_count, i = i + 1 {
+                let current: AdjListNode* = self.adjacency_list[i]
+                while current != null {
+                    let next: AdjListNode* = (*current).next
+                    free(current as void*)
+                    current = next
+                }
+            }
+            free(self.adjacency_list as void*)
+        }
+    }
+
+    func add_edge(from_v: int, to_v: int, weight: int) -> bool {
+        if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
+            return false
+        }
+
+        // Add edge from -> to
+        let node: AdjListNode* = malloc(sizeof(AdjListNode)) as AdjListNode*
+        *node = new AdjListNode(to_v, weight)
+        (*node).next = self.adjacency_list[from_v]
+        self.adjacency_list[from_v] = node
+
+        // If undirected, add edge to -> from
+        if !self.is_directed && from_v != to_v {
+            let reverse_node: AdjListNode* = malloc(sizeof(AdjListNode)) as AdjListNode*
+            *reverse_node = new AdjListNode(from_v, weight)
+            (*reverse_node).next = self.adjacency_list[to_v]
+            self.adjacency_list[to_v] = reverse_node
+        }
+
+        self.edge_count = self.edge_count + 1
+        return true
+    }
+
+    func add_edge_unweighted(from_v: int, to_v: int) -> bool {
+        return self.add_edge(from_v, to_v, 1)
+    }
+
+    func has_edge(from_v: int, to_v: int) -> bool {
+        if from_v < 0 || from_v >= self.vertex_count {
+            return false
+        }
+
+        let current: AdjListNode* = self.adjacency_list[from_v]
+        while current != null {
+            if (*current).vertex == to_v {
+                return true
+            }
+            current = (*current).next
+        }
+
+        return false
+    }
+
+    func get_neighbors(vertex: int) -> Vector<int> {
+        let result: Vector<int> = new Vector<int>()
+
+        if vertex < 0 || vertex >= self.vertex_count {
+            return result
+        }
+
+        let current: AdjListNode* = self.adjacency_list[vertex]
+        while current != null {
+            result.push((*current).vertex)
+            current = (*current).next
+        }
+
+        return result
+    }
+
+    func get_edges(vertex: int) -> Vector<Edge> {
+        let result: Vector<Edge> = new Vector<Edge>()
+
+        if vertex < 0 || vertex >= self.vertex_count {
+            return result
+        }
+
+        let current: AdjListNode* = self.adjacency_list[vertex]
+        while current != null {
+            result.push(new Edge(vertex, (*current).vertex, (*current).weight))
+            current = (*current).next
+        }
+
+        return result
+    }
+
+    func get_degree(vertex: int) -> int {
+        if vertex < 0 || vertex >= self.vertex_count {
+            return 0
+        }
+
+        let degree: int = 0
+        let current: AdjListNode* = self.adjacency_list[vertex]
+
+        while current != null {
+            degree = degree + 1
+            current = (*current).next
+        }
+
+        return degree
+    }
+
+    // Breadth-first search
+    func bfs(start: int) -> Vector<int> {
+        let result: Vector<int> = new Vector<int>()
+
+        if start < 0 || start >= self.vertex_count {
+            return result
+        }
+
+        let visited: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            visited[i] = false
+        }
+
+        let queue: Queue<int> = new Queue<int>()
+        queue.enqueue(start)
+        visited[start] = true
+
+        while !queue.is_empty() {
+            let v_result: Result<int, char*> = queue.dequeue()
+            if !v_result.is_ok() {
+                break
+            }
+
+            let v: int = v_result.unwrap()
+            result.push(v)
+
+            let current: AdjListNode* = self.adjacency_list[v]
+            while current != null {
+                let neighbor: int = (*current).vertex
+                if !visited[neighbor] {
+                    visited[neighbor] = true
+                    queue.enqueue(neighbor)
+                }
+                current = (*current).next
+            }
+        }
+
+        free(visited as void*)
+        return result
+    }
+
+    // Depth-first search
+    func dfs(start: int) -> Vector<int> {
+        let result: Vector<int> = new Vector<int>()
+
+        if start < 0 || start >= self.vertex_count {
+            return result
+        }
+
+        let visited: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            visited[i] = false
+        }
+
+        self.dfs_helper(start, visited, result)
+
+        free(visited as void*)
+        return result
+    }
+
+    func dfs_helper(vertex: int, visited: bool*, result: Vector<int>) {
+        visited[vertex] = true
+        result.push(vertex)
+
+        let current: AdjListNode* = self.adjacency_list[vertex]
+        while current != null {
+            let neighbor: int = (*current).vertex
+            if !visited[neighbor] {
+                self.dfs_helper(neighbor, visited, result)
+            }
+            current = (*current).next
+        }
+    }
+
+    // Check if graph is connected
+    func is_connected() -> bool {
+        if self.vertex_count == 0 {
+            return true
+        }
+
+        let visited: Vector<int> = self.bfs(0)
+        return visited.size() == self.vertex_count
+    }
+
+    // Topological sort (for directed acyclic graphs)
+    func topological_sort() -> Result<Vector<int>, char*> {
+        let result_container: Result<Vector<int>, char*> = new Result<Vector<int>, char*>()
+
+        if !self.is_directed {
+            result_container.set_err("Graph must be directed")
+            return result_container
+        }
+
+        let in_degree: int* = malloc(self.vertex_count * sizeof(int)) as int*
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            in_degree[i] = 0
+        }
+
+        // Calculate in-degrees
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            let current: AdjListNode* = self.adjacency_list[i]
+            while current != null {
+                in_degree[(*current).vertex] = in_degree[(*current).vertex] + 1
+                current = (*current).next
+            }
+        }
+
+        let queue: Queue<int> = new Queue<int>()
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            if in_degree[i] == 0 {
+                queue.enqueue(i)
+            }
+        }
+
+        let result: Vector<int> = new Vector<int>()
+
+        while !queue.is_empty() {
+            let v_result: Result<int, char*> = queue.dequeue()
+            if !v_result.is_ok() {
+                break
+            }
+
+            let v: int = v_result.unwrap()
+            result.push(v)
+
+            let current: AdjListNode* = self.adjacency_list[v]
+            while current != null {
+                let neighbor: int = (*current).vertex
+                in_degree[neighbor] = in_degree[neighbor] - 1
+                if in_degree[neighbor] == 0 {
+                    queue.enqueue(neighbor)
+                }
+                current = (*current).next
+            }
+        }
+
+        free(in_degree as void*)
+
+        if result.size() != self.vertex_count {
+            result_container.set_err("Graph has a cycle")
+        } else {
+            result_container.set_ok(result)
+        }
+
+        return result_container
+    }
+
+    // Detect cycle in directed graph
+    func has_cycle_directed() -> bool {
+        let visited: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
+        let rec_stack: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
+
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            visited[i] = false
+            rec_stack[i] = false
+        }
+
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            if !visited[i] {
+                if self.has_cycle_directed_helper(i, visited, rec_stack) {
+                    free(visited as void*)
+                    free(rec_stack as void*)
+                    return true
+                }
+            }
+        }
+
+        free(visited as void*)
+        free(rec_stack as void*)
+        return false
+    }
+
+    func has_cycle_directed_helper(vertex: int, visited: bool*, rec_stack: bool*) -> bool {
+        visited[vertex] = true
+        rec_stack[vertex] = true
+
+        let current: AdjListNode* = self.adjacency_list[vertex]
+        while current != null {
+            let neighbor: int = (*current).vertex
+
+            if !visited[neighbor] {
+                if self.has_cycle_directed_helper(neighbor, visited, rec_stack) {
+                    return true
+                }
+            } else if rec_stack[neighbor] {
+                return true
+            }
+
+            current = (*current).next
+        }
+
+        rec_stack[vertex] = false
+        return false
+    }
+}
+
+// Weighted graph using adjacency matrix
+class GraphMatrix {
+    let matrix: int**
+    let vertex_count: int
+    let is_directed: bool
+
+    const INFINITY: int = 999999
+
+    constructor(vertices: int, directed: bool) {
+        self.vertex_count = vertices
+        self.is_directed = directed
+        self.matrix = malloc(vertices * sizeof(int*)) as int**
+
+        for let i: int = 0, i < vertices, i = i + 1 {
+            self.matrix[i] = malloc(vertices * sizeof(int)) as int*
+            for let j: int = 0, j < vertices, j = j + 1 {
+                if i == j {
+                    self.matrix[i][j] = 0
+                } else {
+                    self.matrix[i][j] = INFINITY
+                }
+            }
+        }
+    }
+
+    destructor() {
+        if self.matrix != null {
+            for let i: int = 0, i < self.vertex_count, i = i + 1 {
+                if self.matrix[i] != null {
+                    free(self.matrix[i] as void*)
+                }
+            }
+            free(self.matrix as void*)
+        }
+    }
+
+    func add_edge(from_v: int, to_v: int, weight: int) -> bool {
+        if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
+            return false
+        }
+
+        self.matrix[from_v][to_v] = weight
+
+        if !self.is_directed {
+            self.matrix[to_v][from_v] = weight
+        }
+
+        return true
+    }
+
+    func has_edge(from_v: int, to_v: int) -> bool {
+        if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
+            return false
+        }
+
+        return self.matrix[from_v][to_v] != INFINITY
+    }
+
+    func get_weight(from_v: int, to_v: int) -> int {
+        if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
+            return INFINITY
+        }
+
+        return self.matrix[from_v][to_v]
+    }
+
+    // Floyd-Warshall algorithm for all-pairs shortest paths
+    func floyd_warshall() -> int** {
+        let dist: int** = malloc(self.vertex_count * sizeof(int*)) as int**
+
+        // Initialize distance matrix
+        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            dist[i] = malloc(self.vertex_count * sizeof(int)) as int*
+            for let j: int = 0, j < self.vertex_count, j = j + 1 {
+                dist[i][j] = self.matrix[i][j]
+            }
+        }
+
+        // Floyd-Warshall algorithm
+        for let k: int = 0, k < self.vertex_count, k = k + 1 {
+            for let i: int = 0, i < self.vertex_count, i = i + 1 {
+                for let j: int = 0, j < self.vertex_count, j = j + 1 {
+                    if dist[i][k] + dist[k][j] < dist[i][j] {
+                        dist[i][j] = dist[i][k] + dist[k][j]
+                    }
+                }
+            }
+        }
+
+        return dist
+    }
+}
+
+} // namespace collections
+} // namespace std

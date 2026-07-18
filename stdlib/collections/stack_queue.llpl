@@ -1,0 +1,240 @@
+// Standard library: Stack, Queue, and Deque
+// Namespace: std::collections
+
+namespace std {
+namespace collections {
+
+// Stack (LIFO) - backed by Vector
+class Stack<T> {
+    let data: Vector<T>
+
+    constructor() {
+        self.data = new Vector<T>()
+    }
+
+    func push(value: T) {
+        self.data.push(value)
+    }
+
+    func pop() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.data.size() == 0 {
+            result.set_err("Stack is empty")
+            return result
+        }
+
+        let value: T = self.data.get(self.data.size() - 1)
+        self.data.remove(self.data.size() - 1)
+
+        result.set_ok(value)
+        return result
+    }
+
+    func peek() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.data.size() == 0 {
+            result.set_err("Stack is empty")
+            return result
+        }
+
+        result.set_ok(self.data.get(self.data.size() - 1))
+        return result
+    }
+
+    func size() -> int {
+        return self.data.size()
+    }
+
+    func is_empty() -> bool {
+        return self.data.size() == 0
+    }
+
+    func clear() {
+        self.data = new Vector<T>()
+    }
+}
+
+// Queue (FIFO) - backed by DoublyLinkedList for efficient operations
+class Queue<T> {
+    let list: DoublyLinkedList<T>
+
+    constructor() {
+        self.list = new DoublyLinkedList<T>()
+    }
+
+    func enqueue(value: T) {
+        self.list.push_back(value)
+    }
+
+    func dequeue() -> Result<T, char*> {
+        return self.list.pop_front()
+    }
+
+    func front() -> Result<T, char*> {
+        return self.list.front()
+    }
+
+    func back() -> Result<T, char*> {
+        return self.list.back()
+    }
+
+    func size() -> int {
+        return self.list.size()
+    }
+
+    func is_empty() -> bool {
+        return self.list.is_empty()
+    }
+
+    func clear() {
+        self.list.clear()
+    }
+}
+
+// Deque (Double-ended queue) - backed by DoublyLinkedList
+class Deque<T> {
+    let list: DoublyLinkedList<T>
+
+    constructor() {
+        self.list = new DoublyLinkedList<T>()
+    }
+
+    func push_front(value: T) {
+        self.list.push_front(value)
+    }
+
+    func push_back(value: T) {
+        self.list.push_back(value)
+    }
+
+    func pop_front() -> Result<T, char*> {
+        return self.list.pop_front()
+    }
+
+    func pop_back() -> Result<T, char*> {
+        return self.list.pop_back()
+    }
+
+    func front() -> Result<T, char*> {
+        return self.list.front()
+    }
+
+    func back() -> Result<T, char*> {
+        return self.list.back()
+    }
+
+    func size() -> int {
+        return self.list.size()
+    }
+
+    func is_empty() -> bool {
+        return self.list.is_empty()
+    }
+
+    func clear() {
+        self.list.clear()
+    }
+}
+
+// Circular buffer / Ring buffer
+class CircularBuffer<T> {
+    let buffer: T*
+    let capacity: int
+    let head: int
+    let tail: int
+    let count: int
+
+    constructor(cap: int) {
+        self.capacity = cap
+        self.buffer = malloc(cap * sizeof(T)) as T*
+        self.head = 0
+        self.tail = 0
+        self.count = 0
+    }
+
+    destructor() {
+        if self.buffer != null {
+            free(self.buffer as void*)
+        }
+    }
+
+    func is_full() -> bool {
+        return self.count == self.capacity
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+
+    func size() -> int {
+        return self.count
+    }
+
+    func push(value: T) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
+
+        if self.is_full() {
+            result.set_err("Buffer is full")
+            return result
+        }
+
+        self.buffer[self.tail] = value
+        self.tail = (self.tail + 1) % self.capacity
+        self.count = self.count + 1
+
+        result.set_ok(true)
+        return result
+    }
+
+    func pop() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.is_empty() {
+            result.set_err("Buffer is empty")
+            return result
+        }
+
+        let value: T = self.buffer[self.head]
+        self.head = (self.head + 1) % self.capacity
+        self.count = self.count - 1
+
+        result.set_ok(value)
+        return result
+    }
+
+    func peek() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.is_empty() {
+            result.set_err("Buffer is empty")
+            return result
+        }
+
+        result.set_ok(self.buffer[self.head])
+        return result
+    }
+
+    func clear() {
+        self.head = 0
+        self.tail = 0
+        self.count = 0
+    }
+
+    // Overwrite oldest element if full
+    func push_overwrite(value: T) {
+        if self.is_full() {
+            self.buffer[self.tail] = value
+            self.tail = (self.tail + 1) % self.capacity
+            self.head = (self.head + 1) % self.capacity
+        } else {
+            self.buffer[self.tail] = value
+            self.tail = (self.tail + 1) % self.capacity
+            self.count = self.count + 1
+        }
+    }
+}
+
+} // namespace collections
+} // namespace std

@@ -89,10 +89,18 @@ void main(string[] args) {
         }
 
         if (binaryMode) {
-            compileToBinary(cCode, outputFile, ccOverride, keepC, verbose);
+            compileToBinary(cCode, outputFile, ccOverride, keepC, verbose,
+                codegen.linkLibraries, codegen.compilerFlags);
         } else {
             std.file.write(outputFile, cCode);
             writefln("Successfully compiled to %s", outputFile);
+            if (codegen.linkLibraries.length > 0 || codegen.compilerFlags.length > 0) {
+                string linkFlags = codegen.linkLibraries.map!(lib => "-l" ~ lib).join(" ");
+                string extraFlags = codegen.compilerFlags.join(" ");
+                string allFlags = [extraFlags, linkFlags].filter!(s => s.length > 0).join(" ");
+                writefln("Note: this program requires: %s (e.g. `cc %s runtime/runtime.c %s -o <output>`)",
+                    allFlags, outputFile, allFlags);
+            }
         }
 
     } catch (MultiCompileError e) {
@@ -120,7 +128,8 @@ void main(string[] args) {
 // assembly, and `-ffreestanding`-style flags this has no way to know
 // about, so --binary isn't meant for those - use the Makefile-based
 // two-step build there instead.
-private void compileToBinary(string cCode, string outputFile, string ccOverride, bool keepC, bool verbose) {
+private void compileToBinary(string cCode, string outputFile, string ccOverride, bool keepC, bool verbose,
+        string[] linkLibraries, string[] compilerFlags) {
     string runtimeDir = buildNormalizedPath(dirName(thisExePath()), "runtime");
     string runtimeC = buildNormalizedPath(runtimeDir, "runtime.c");
     string runtimeH = buildNormalizedPath(runtimeDir, "runtime.h");
@@ -134,7 +143,23 @@ private void compileToBinary(string cCode, string outputFile, string ccOverride,
     std.file.write(cFile, cCode);
 
     string cc = ccOverride.length > 0 ? ccOverride : environment.get("CC", "cc");
-    string[] cmd = [cc, cFile, runtimeC, "-I", runtimeDir, "-o", outputFile];
+    string[] cmd = [cc, cFile, runtimeC, "-I", runtimeDir];
+    // `#flags "..."` directives (see ast.d's FlagsDecl) - split on
+    // whitespace since execute() takes an argv array, not a shell string;
+    // a single "-O2 -Wall" entry passed through whole would otherwise be
+    // handed to the C compiler as one literal argument containing a space.
+    foreach (flagsStr; compilerFlags) {
+        foreach (flag; flagsStr.split()) {
+            cmd ~= flag;
+        }
+    }
+    // `#link "NAME"` directives (see ast.d's LinkDecl) - collected by the
+    // code generator, surfaced here so `--binary` doesn't need every
+    // caller to already know a program like the SDL bindings needs -lSDL3.
+    foreach (lib; linkLibraries) {
+        cmd ~= "-l" ~ lib;
+    }
+    cmd ~= ["-o", outputFile];
 
     if (verbose) {
         writefln("Running: %s", cmd.join(" "));

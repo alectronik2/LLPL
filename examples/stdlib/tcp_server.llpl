@@ -1,0 +1,60 @@
+// Example: TCP Echo Server using the standard library
+
+import "../../stdlib/text/string_utils.llpl"
+import "../../stdlib/io/file.llpl"
+import "../../stdlib/net/socket.llpl"
+
+using namespace std.text
+using namespace std.io
+using namespace std.net
+
+func handle_client(client: Socket) {
+    // Receive data from client
+    let recv_result: Result<String, char*> = client.recv_string(1024)
+
+    if recv_result.is_ok() {
+        let message: String = recv_result.unwrap()
+
+        // Echo back to client with prefix
+        let response: String = new String("Echo: ") + message
+        client.send_string(response)
+    }
+}
+
+func main() -> int {
+    // Create TCP server on port 8080
+    let server: TcpServer = new TcpServer(8080)
+
+    // Start the server with backlog of 10
+    let start_result: Result<bool, char*> = server.start_server(10)
+
+    if !start_result.is_ok() {
+        // Failed to start server
+        return 1
+    }
+
+    if !server.is_valid() {
+        // Server not valid
+        return 1
+    }
+
+    // Server started successfully
+    // In a real application, you would log this
+
+    // Main server loop
+    while true {
+        // Accept incoming connections
+        let client_result: Result<Socket, char*> = server.accept_client()
+
+        if client_result.is_ok() {
+            let client: Socket = client_result.unwrap()
+
+            // Handle client connection
+            handle_client(client)
+
+            // Client socket automatically closed when it goes out of scope
+        }
+    }
+
+    return 0
+}

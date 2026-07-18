@@ -1,0 +1,48 @@
+// Example: TCP Client using the standard library
+
+import "../../stdlib/text/string_utils.llpl"
+import "../../stdlib/io/file.llpl"
+import "../../stdlib/net/socket.llpl"
+
+using namespace std.text
+using namespace std.io
+
+func main() -> int {
+    // Create TCP client
+    let client: std.net.TcpClient = new std.net.TcpClient()
+
+    if !client.is_valid() {
+        return 1
+    }
+
+    // Connect to localhost (127.0.0.1) on port 8080
+    let connect_result: Result<bool, char*> = client.connect_to_host(127 as uint8, 0 as uint8, 0 as uint8, 1 as uint8, 8080 as uint16)
+
+    if !connect_result.is_ok() {
+        // Connection failed
+        return 1
+    }
+
+    // Send message to server
+    let message: String = new String("Hello, Server!")
+    let send_result: Result<int, char*> = client.send_message(message)
+
+    if !send_result.is_ok() {
+        client.close_connection()
+        return 1
+    }
+
+    // Receive response from server
+    let recv_result: Result<String, char*> = client.recv_message(1024)
+
+    if recv_result.is_ok() {
+        let response: String = recv_result.unwrap()
+        // In a real application, you would print the response
+        // Expected: "Echo: Hello, Server!"
+    }
+
+    // Close the connection
+    client.close_connection()
+
+    return 0
+}

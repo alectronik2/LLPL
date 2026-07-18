@@ -1,0 +1,49 @@
+// LLPL Standard Library - SDL3 Module
+// Main entry point for SDL3 bindings
+
+// Import all SDL3 modules
+import "sdl_core.llpl"
+import "sdl_window.llpl"
+import "sdl_audio.llpl"
+
+// Re-export for convenience
+namespace std {
+namespace sdl {
+    // All classes and functions are already defined in their respective files
+    // This file serves as a single import point for all SDL3 functionality
+
+    // Available components:
+    //
+    // Core:
+    // - SDL                    - Main SDL initialization and utilities
+    // - SDL_Color              - RGBA color
+    // - SDL_Rect, SDL_FRect    - Rectangles
+    // - SDL_Point              - 2D point
+    // - SDL_Event              - Event structure
+    //
+    // Window & Rendering:
+    // - Window                 - High-level window wrapper
+    // - Renderer               - High-level renderer wrapper
+    // - Texture                - Texture wrapper
+    // - Colors                 - Color presets (black, white, red, etc.)
+    //
+    // Input:
+    // - EventHandler           - Event polling and handling
+    // - Input                  - Keyboard and mouse state
+    //
+    // Audio:
+    // - AudioDevice            - Audio playback/recording device
+    // - AudioStream            - Audio stream for processing
+    // - WavFile                - WAV file loader
+    // - Audio                  - Audio utility functions
+    //
+    // All SDL3 constants and flags are available:
+    // - SDL_INIT_* flags
+    // - SDL_WINDOW_* flags
+    // - SDL_RENDERER_* flags
+    // - SDL_EVENT_* types
+    // - SDLK_* keycodes
+    // - SDL_AUDIO_* formats
+
+} // namespace sdl
+} // namespace std

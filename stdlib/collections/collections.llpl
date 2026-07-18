@@ -1,0 +1,50 @@
+// LLPL Standard Library - Collections Module
+// Main entry point for all data structures
+
+// Import all collection types
+import "linked_list.llpl"
+import "rbtree.llpl"
+import "stack_queue.llpl"
+import "heap.llpl"
+import "hashmap.llpl"
+import "trie.llpl"
+import "graph.llpl"
+
+// Re-export for convenience
+namespace std {
+namespace collections {
+    // Note: All classes are already defined in their respective files
+    // This file serves as a single import point for all collections
+
+    // Available data structures:
+    //
+    // Linear Collections:
+    // - LinkedList<T>          - Singly linked list
+    // - DoublyLinkedList<T>    - Doubly linked list
+    // - Stack<T>               - LIFO stack
+    // - Queue<T>               - FIFO queue
+    // - Deque<T>               - Double-ended queue
+    // - CircularBuffer<T>      - Ring buffer with fixed capacity
+    //
+    // Trees:
+    // - RBTree<K, V>           - Red-black tree (self-balancing BST)
+    //
+    // Heaps:
+    // - BinaryHeap<T>          - Min-heap
+    // - MaxHeap<T>             - Max-heap
+    // - PriorityQueue<T>       - Priority queue with custom priorities
+    //
+    // Hash-based:
+    // - EnhancedHashMap<K, V>  - Hash map with automatic resizing
+    // - HashSet<T>             - Set of unique values
+    //
+    // String Collections:
+    // - Trie                   - Prefix tree for strings
+    //
+    // Graphs:
+    // - Graph                  - Adjacency list representation
+    // - GraphMatrix            - Adjacency matrix representation
+    // - Edge                   - Graph edge with weight
+
+} // namespace collections
+} // namespace std

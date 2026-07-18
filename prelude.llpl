@@ -1113,6 +1113,11 @@ class Result<T, E> {
         return self.value
     }
 
+    // Alias for get_ok() - more idiomatic name
+    func unwrap() -> T {
+        return self.value
+    }
+
     func get_err() -> E {
         return self.error
     }

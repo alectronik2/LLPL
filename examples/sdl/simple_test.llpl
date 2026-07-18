@@ -1,0 +1,19 @@
+// Minimal SDL3 test - just init and quit
+
+import "../../stdlib/sdl/sdl.llpl"
+
+using namespace std.sdl
+
+func main() -> int {
+    // Initialize SDL3
+    let result: int = SDL_Init(SDL_INIT_VIDEO)
+
+    if result == 0 {
+        // Success - SDL initialized
+    }
+
+    // Clean up
+    SDL_Quit()
+
+    return 0
+}

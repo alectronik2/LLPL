@@ -1,0 +1,347 @@
+// Standard library: Trie (Prefix Tree)
+// Namespace: std::collections
+// Efficient for prefix-based string operations
+
+namespace std {
+namespace collections {
+
+const TRIE_ALPHABET_SIZE: int = 256  // Support all ASCII characters
+
+// Trie node
+class TrieNode {
+    let children: TrieNode**
+    let is_end_of_word: bool
+    let value: int  // Optional associated value
+
+    constructor() {
+        self.children = malloc(TRIE_ALPHABET_SIZE * sizeof(TrieNode*)) as TrieNode**
+        self.is_end_of_word = false
+        self.value = 0
+
+        for let i: int = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+            self.children[i] = null
+        }
+    }
+
+    destructor() {
+        if self.children != null {
+            for let i: int = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+                if self.children[i] != null {
+                    free(self.children[i] as void*)
+                }
+            }
+            free(self.children as void*)
+        }
+    }
+}
+
+// Trie (Prefix Tree) data structure
+class Trie {
+    let root: TrieNode*
+    let count: int
+
+    constructor() {
+        self.root = malloc(sizeof(TrieNode)) as TrieNode*
+        *self.root = new TrieNode()
+        self.count = 0
+    }
+
+    destructor() {
+        if self.root != null {
+            free(self.root as void*)
+        }
+    }
+
+    func size() -> int {
+        return self.count
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+
+    // Insert a word into the trie
+    func insert(word: char*) {
+        let current: TrieNode* = self.root
+        let len: int = 0
+
+        // Calculate length
+        while word[len] != '\0' {
+            len = len + 1
+        }
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let index: int = word[i] as int
+
+            if (*current).children[index] == null {
+                (*current).children[index] = malloc(sizeof(TrieNode)) as TrieNode*
+                *(*current).children[index] = new TrieNode()
+            }
+
+            current = (*current).children[index]
+        }
+
+        if !(*current).is_end_of_word {
+            (*current).is_end_of_word = true
+            self.count = self.count + 1
+        }
+    }
+
+    // Insert word with associated value
+    func insert_with_value(word: char*, value: int) {
+        let current: TrieNode* = self.root
+        let len: int = 0
+
+        while word[len] != '\0' {
+            len = len + 1
+        }
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let index: int = word[i] as int
+
+            if (*current).children[index] == null {
+                (*current).children[index] = malloc(sizeof(TrieNode)) as TrieNode*
+                *(*current).children[index] = new TrieNode()
+            }
+
+            current = (*current).children[index]
+        }
+
+        if !(*current).is_end_of_word {
+            self.count = self.count + 1
+        }
+
+        (*current).is_end_of_word = true
+        (*current).value = value
+    }
+
+    // Search for a word
+    func search(word: char*) -> bool {
+        let current: TrieNode* = self.root
+        let len: int = 0
+
+        while word[len] != '\0' {
+            len = len + 1
+        }
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let index: int = word[i] as int
+
+            if (*current).children[index] == null {
+                return false
+            }
+
+            current = (*current).children[index]
+        }
+
+        return (*current).is_end_of_word
+    }
+
+    // Search and get associated value
+    func search_value(word: char*) -> Result<int, char*> {
+        let result: Result<int, char*> = new Result<int, char*>()
+        let current: TrieNode* = self.root
+        let len: int = 0
+
+        while word[len] != '\0' {
+            len = len + 1
+        }
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let index: int = word[i] as int
+
+            if (*current).children[index] == null {
+                result.set_err("Word not found")
+                return result
+            }
+
+            current = (*current).children[index]
+        }
+
+        if !(*current).is_end_of_word {
+            result.set_err("Word not found")
+            return result
+        }
+
+        result.set_ok((*current).value)
+        return result
+    }
+
+    // Check if any word starts with the given prefix
+    func starts_with(prefix: char*) -> bool {
+        let current: TrieNode* = self.root
+        let len: int = 0
+
+        while prefix[len] != '\0' {
+            len = len + 1
+        }
+
+        for let i: int = 0, i < len, i = i + 1 {
+            let index: int = prefix[i] as int
+
+            if (*current).children[index] == null {
+                return false
+            }
+
+            current = (*current).children[index]
+        }
+
+        return true
+    }
+
+    // Remove a word from the trie
+    func remove(word: char*) -> bool {
+        let len: int = 0
+        while word[len] != '\0' {
+            len = len + 1
+        }
+
+        return self.remove_helper(self.root, word, 0, len)
+    }
+
+    func remove_helper(node: TrieNode*, word: char*, index: int, len: int) -> bool {
+        if node == null {
+            return false
+        }
+
+        // Reached end of word
+        if index == len {
+            if !(*node).is_end_of_word {
+                return false
+            }
+
+            (*node).is_end_of_word = false
+            self.count = self.count - 1
+
+            // Check if node has no children
+            return self.has_no_children(node)
+        }
+
+        let char_index: int = word[index] as int
+        let child: TrieNode* = (*node).children[char_index]
+
+        if self.remove_helper(child, word, index + 1, len) {
+            // Delete child reference
+            free(child as void*)
+            (*node).children[char_index] = null
+
+            // If current node is not end of word and has no children
+            return !(*node).is_end_of_word && self.has_no_children(node)
+        }
+
+        return false
+    }
+
+    func has_no_children(node: TrieNode*) -> bool {
+        for let i: int = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+            if (*node).children[i] != null {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Get all words with given prefix
+    func get_words_with_prefix(prefix: char*) -> Vector<String> {
+        let result: Vector<String> = new Vector<String>()
+        let current: TrieNode* = self.root
+        let len: int = 0
+
+        while prefix[len] != '\0' {
+            len = len + 1
+        }
+
+        // Navigate to prefix
+        for let i: int = 0, i < len, i = i + 1 {
+            let index: int = prefix[i] as int
+
+            if (*current).children[index] == null {
+                return result
+            }
+
+            current = (*current).children[index]
+        }
+
+        // Collect all words with this prefix
+        let current_word: char[256]
+        for let i: int = 0, i < len, i = i + 1 {
+            current_word[i] = prefix[i]
+        }
+        current_word[len] = '\0'
+
+        self.collect_words(current, current_word, len, result)
+
+        return result
+    }
+
+    func collect_words(node: TrieNode*, current_word: char*, len: int, result: Vector<String>) {
+        if node == null {
+            return
+        }
+
+        if (*node).is_end_of_word {
+            current_word[len] = '\0'
+            result.push(new String(current_word))
+        }
+
+        for let i: int = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+            if (*node).children[i] != null {
+                current_word[len] = i as char
+                self.collect_words((*node).children[i], current_word, len + 1, result)
+            }
+        }
+    }
+
+    // Get all words in the trie
+    func get_all_words() -> Vector<String> {
+        let result: Vector<String> = new Vector<String>()
+        let current_word: char[256]
+        current_word[0] = '\0'
+
+        self.collect_words(self.root, current_word, 0, result)
+
+        return result
+    }
+
+    // Count words with given prefix
+    func count_prefix(prefix: char*) -> int {
+        let words: Vector<String> = self.get_words_with_prefix(prefix)
+        return words.size()
+    }
+
+    // Find longest common prefix of all words
+    func longest_common_prefix() -> String {
+        let result: char[256]
+        let len: int = 0
+
+        let current: TrieNode* = self.root
+
+        while true {
+            // Count non-null children
+            let child_count: int = 0
+            let next_char: int = -1
+
+            for let i: int = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+                if (*current).children[i] != null {
+                    child_count = child_count + 1
+                    next_char = i
+                }
+            }
+
+            // Stop if we reach end of word or branching
+            if (*current).is_end_of_word || child_count != 1 {
+                break
+            }
+
+            result[len] = next_char as char
+            len = len + 1
+            current = (*current).children[next_char]
+        }
+
+        result[len] = '\0'
+        return new String(result)
+    }
+}
+
+} // namespace collections
+} // namespace std

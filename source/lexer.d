@@ -8,6 +8,8 @@ import std.stdio;
 enum TokenType {
     // Literals
     Integer,
+    Float,
+    Char,
     String,
     Regex,
     Identifier,
@@ -18,6 +20,7 @@ enum TokenType {
     Function,
     Class,
     Struct,
+    Union,
     Packed,
     Interrupt,
     Constructor,
@@ -26,6 +29,7 @@ enum TokenType {
     Const,
     Volatile,
     Private,
+    Static,
     If,
     Else,
     While,
@@ -44,6 +48,7 @@ enum TokenType {
     Extern,
     As,
     From,
+    Using,
     Match,
     Case,
     Default,
@@ -116,6 +121,7 @@ enum TokenType {
     Ellipsis,
     Colon,
     At,
+    Hash, // `#`, for compiler directives (`#link "SDL3"`)
 
     // Special
     Newline,
@@ -157,6 +163,7 @@ class Lexer {
             "func": "Function",
             "class": "Class",
             "struct": "Struct",
+            "union": "Union",
             "packed": "Packed",
             "interrupt": "Interrupt",
             "constructor": "Constructor",
@@ -165,6 +172,7 @@ class Lexer {
             "const": "Const",
             "volatile": "Volatile",
             "private": "Private",
+            "static": "Static",
             "if": "If",
             "else": "Else",
             "while": "While",
@@ -183,6 +191,7 @@ class Lexer {
             "extern": "Extern",
             "as": "As",
             "from": "From",
+            "using": "Using",
             "match": "Match",
             "case": "Case",
             "default": "Default",
@@ -272,6 +281,7 @@ class Lexer {
         int startLine = line;
         int startColumn = column;
         string num = "";
+        bool isFloat = false;
 
         // Radix-prefixed literals: 0x/0X (hex), 0b/0B (binary), 0o/0O (octal)
         if (current == '0' && (peek() == 'x' || peek() == 'X' ||
@@ -294,12 +304,52 @@ class Lexer {
             return Token(TokenType.Integer, num, startLine, startColumn);
         }
 
+        // Parse integer part
         while (current != '\0' && (isDigit(current) || current == '_')) {
             if (current != '_') num ~= current;
             advance();
         }
 
-        return Token(TokenType.Integer, num, startLine, startColumn);
+        // Check for decimal point
+        if (current == '.' && isDigit(peek())) {
+            isFloat = true;
+            num ~= current;
+            advance();
+
+            // Parse fractional part
+            while (current != '\0' && (isDigit(current) || current == '_')) {
+                if (current != '_') num ~= current;
+                advance();
+            }
+        }
+
+        // Check for scientific notation (e.g., 1e10, 3.14e-5)
+        if (current == 'e' || current == 'E') {
+            isFloat = true;
+            num ~= current;
+            advance();
+
+            // Optional sign
+            if (current == '+' || current == '-') {
+                num ~= current;
+                advance();
+            }
+
+            // Exponent digits
+            while (current != '\0' && (isDigit(current) || current == '_')) {
+                if (current != '_') num ~= current;
+                advance();
+            }
+        }
+
+        // Check for float/double suffix (f, F, d, D)
+        if (current == 'f' || current == 'F' || current == 'd' || current == 'D') {
+            isFloat = true;
+            num ~= current;
+            advance();
+        }
+
+        return Token(isFloat ? TokenType.Float : TokenType.Integer, num, startLine, startColumn);
     }
 
     // Called right after consuming the '(' of a `\(...)` interpolation -
@@ -414,6 +464,55 @@ class Lexer {
         return tok;
     }
 
+    private Token char_() {
+        int startLine = line;
+        int startColumn = column;
+        advance(); // skip opening quote
+
+        int value = 0;
+        if (current == '\\') {
+            advance();
+            switch (current) {
+                case 'n': value = '\n'; break;
+                case 't': value = '\t'; break;
+                case 'r': value = '\r'; break;
+                case '\\': value = '\\'; break;
+                case '\'': value = '\''; break;
+                case '0': value = '\0'; break;
+                case 'e': value = '\x1b'; break;
+                case 'x': {
+                    // \xHH - exactly two hex digits
+                    advance();
+                    value = 0;
+                    int digits = 0;
+                    while (digits < 2 && isHexDigit(current)) {
+                        value = value * 16 + hexDigitValue(current);
+                        advance();
+                        digits++;
+                    }
+                    // Don't advance again at the end since we already did
+                    if (current == '\'') {
+                        advance(); // skip closing quote
+                    }
+                    import std.conv : to;
+                    return Token(TokenType.Char, to!string(value), startLine, startColumn);
+                }
+                default: value = current; break;
+            }
+            advance();
+        } else {
+            value = current;
+            advance();
+        }
+
+        if (current == '\'') {
+            advance(); // skip closing quote
+        }
+
+        import std.conv : to;
+        return Token(TokenType.Char, to!string(value), startLine, startColumn);
+    }
+
     private bool regexLiteralAllowed() {
         if (!hasPreviousToken) return true;
         switch (previousTokenType) {
@@ -510,6 +609,7 @@ class Lexer {
                 case "Function": type = TokenType.Function; break;
                 case "Class": type = TokenType.Class; break;
                 case "Struct": type = TokenType.Struct; break;
+                case "Union": type = TokenType.Union; break;
                 case "Packed": type = TokenType.Packed; break;
                 case "Interrupt": type = TokenType.Interrupt; break;
                 case "Constructor": type = TokenType.Constructor; break;
@@ -518,6 +618,7 @@ class Lexer {
                 case "Const": type = TokenType.Const; break;
                 case "Volatile": type = TokenType.Volatile; break;
                 case "Private": type = TokenType.Private; break;
+                case "Static": type = TokenType.Static; break;
                 case "If": type = TokenType.If; break;
                 case "Else": type = TokenType.Else; break;
                 case "While": type = TokenType.While; break;
@@ -536,6 +637,7 @@ class Lexer {
                 case "Extern": type = TokenType.Extern; break;
                 case "As": type = TokenType.As; break;
                 case "From": type = TokenType.From; break;
+                case "Using": type = TokenType.Using; break;
                 case "Match": type = TokenType.Match; break;
                 case "Case": type = TokenType.Case; break;
                 case "Default": type = TokenType.Default; break;
@@ -591,6 +693,11 @@ class Lexer {
             // Strings
             if (current == '"') {
                 return string_();
+            }
+
+            // Character literals
+            if (current == '\'') {
+                return char_();
             }
 
             // Regex literals. Kept context-sensitive so ordinary division
@@ -790,6 +897,9 @@ class Lexer {
                 case '@':
                     advance();
                     return Token(TokenType.At, "@", startLine, startColumn);
+                case '#':
+                    advance();
+                    return Token(TokenType.Hash, "#", startLine, startColumn);
                 default:
                     stderr.writefln("Unexpected character: '%s' at %d:%d", current, line, column);
                     advance();

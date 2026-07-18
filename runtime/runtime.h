@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 // Reference counting structure. `count` (strong references) drives
 // destruction - the destructor runs and the object's *value* is gone the
@@ -121,7 +122,7 @@ void rc_release(void* ptr, void (*destructor)(void*));
 void rc_retain(char* ptr);
 void rc_weak_retain(char* ptr);
 void rc_weak_release(char* ptr);
-int rc_is_alive(char* ptr);
+bool rc_is_alive(char* ptr);
 
 // Memory functions for kernel
 void* memset(void* dest, int val, size_t count);
@@ -139,14 +140,14 @@ int strcmp(const char* a, const char* b);
 // ksnprintf below - hence separate wrappers instead of reusing the names.
 uint64_t llpl_strlen(char* s);
 int64_t llpl_strcmp(char* a, char* b);
-int llpl_utf8_valid(char* s);
+bool llpl_utf8_valid(char* s);
 uint64_t llpl_utf8_len(char* s);
 uint64_t llpl_utf8_byte_offset(char* s, uint64_t char_index);
 uint64_t llpl_utf8_char_index(char* s, uint64_t byte_offset);
 uint64_t llpl_utf8_codepoint_at(char* s, uint64_t char_index);
-int llpl_regex_match(char* pattern, char* text);
+bool llpl_regex_match(char* pattern, char* text);
 uint64_t llpl_regex_group_count(char* pattern);
-int llpl_regex_capture_bounds(char* pattern, char* text, uint64_t group, int64_t* start, int64_t* end);
+bool llpl_regex_capture_bounds(char* pattern, char* text, uint64_t group, int64_t* start, int64_t* end);
 char* llpl_regex_capture(char* pattern, char* text, uint64_t group);
 char* llpl_reflect_type(char* name);
 char* llpl_reflect_type_name(char* type);

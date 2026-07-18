@@ -1,0 +1,258 @@
+// Standard library: Binary Heap (Priority Queue)
+// Namespace: std::collections
+
+namespace std {
+namespace collections {
+
+// Min-heap implementation
+// For max-heap, negate values when inserting/extracting
+class BinaryHeap<T> {
+    let data: Vector<T>
+
+    constructor() {
+        self.data = new Vector<T>()
+    }
+
+    func size() -> int {
+        return self.data.size()
+    }
+
+    func is_empty() -> bool {
+        return self.data.size() == 0
+    }
+
+    // Helper: Get parent index
+    func parent(index: int) -> int {
+        return (index - 1) / 2
+    }
+
+    // Helper: Get left child index
+    func left_child(index: int) -> int {
+        return 2 * index + 1
+    }
+
+    // Helper: Get right child index
+    func right_child(index: int) -> int {
+        return 2 * index + 2
+    }
+
+    // Helper: Swap two elements
+    func swap(i: int, j: int) {
+        let temp: T = self.data.get(i)
+        self.data.set(i, self.data.get(j))
+        self.data.set(j, temp)
+    }
+
+    // Bubble up element at index
+    func bubble_up(index: int) {
+        while index > 0 {
+            let parent_idx: int = self.parent(index)
+
+            if self.data.get(index) < self.data.get(parent_idx) {
+                self.swap(index, parent_idx)
+                index = parent_idx
+            } else {
+                break
+            }
+        }
+    }
+
+    // Bubble down element at index
+    func bubble_down(index: int) {
+        let size: int = self.data.size()
+
+        while true {
+            let smallest: int = index
+            let left: int = self.left_child(index)
+            let right: int = self.right_child(index)
+
+            if left < size && self.data.get(left) < self.data.get(smallest) {
+                smallest = left
+            }
+
+            if right < size && self.data.get(right) < self.data.get(smallest) {
+                smallest = right
+            }
+
+            if smallest != index {
+                self.swap(index, smallest)
+                index = smallest
+            } else {
+                break
+            }
+        }
+    }
+
+    // Insert element into heap
+    func insert(value: T) {
+        self.data.push(value)
+        self.bubble_up(self.data.size() - 1)
+    }
+
+    // Remove and return minimum element
+    func extract_min() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.is_empty() {
+            result.set_err("Heap is empty")
+            return result
+        }
+
+        let min_value: T = self.data.get(0)
+
+        if self.data.size() == 1 {
+            self.data.remove(0)
+        } else {
+            self.data.set(0, self.data.get(self.data.size() - 1))
+            self.data.remove(self.data.size() - 1)
+            self.bubble_down(0)
+        }
+
+        result.set_ok(min_value)
+        return result
+    }
+
+    // Peek at minimum element without removing
+    func peek_min() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+
+        if self.is_empty() {
+            result.set_err("Heap is empty")
+            return result
+        }
+
+        result.set_ok(self.data.get(0))
+        return result
+    }
+
+    // Clear the heap
+    func clear() {
+        self.data = new Vector<T>()
+    }
+
+    // Build heap from vector (heapify)
+    func heapify(values: Vector<T>) {
+        self.data = values
+
+        let size: int = self.data.size()
+        // Start from last non-leaf node and bubble down
+        for let i: int = (size / 2) - 1, i >= 0, i = i - 1 {
+            self.bubble_down(i)
+        }
+    }
+}
+
+// Priority Queue with custom priority values
+class PriorityQueueItem<T> {
+    let value: T
+    let priority: int
+
+    constructor(val: T, pri: int) {
+        self.value = val
+        self.priority = pri
+    }
+
+    func operator<(other: PriorityQueueItem<T>) -> bool {
+        return self.priority < other.priority
+    }
+}
+
+class PriorityQueue<T> {
+    let heap: BinaryHeap<PriorityQueueItem<T>>
+
+    constructor() {
+        self.heap = new BinaryHeap<PriorityQueueItem<T>>()
+    }
+
+    func enqueue(value: T, priority: int) {
+        let item: PriorityQueueItem<T> = new PriorityQueueItem<T>(value, priority)
+        self.heap.insert(item)
+    }
+
+    func dequeue() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+        let item_result: Result<PriorityQueueItem<T>, char*> = self.heap.extract_min()
+
+        if !item_result.is_ok() {
+            result.set_err("Queue is empty")
+            return result
+        }
+
+        let item: PriorityQueueItem<T> = item_result.unwrap()
+        result.set_ok(item.value)
+        return result
+    }
+
+    func peek() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
+        let item_result: Result<PriorityQueueItem<T>, char*> = self.heap.peek_min()
+
+        if !item_result.is_ok() {
+            result.set_err("Queue is empty")
+            return result
+        }
+
+        let item: PriorityQueueItem<T> = item_result.unwrap()
+        result.set_ok(item.value)
+        return result
+    }
+
+    func size() -> int {
+        return self.heap.size()
+    }
+
+    func is_empty() -> bool {
+        return self.heap.is_empty()
+    }
+
+    func clear() {
+        self.heap.clear()
+    }
+}
+
+// Max-heap (for convenience)
+class MaxHeap<T> {
+    let min_heap: BinaryHeap<T>
+
+    constructor() {
+        self.min_heap = new BinaryHeap<T>()
+    }
+
+    func insert(value: T) {
+        // Negate value for max-heap behavior
+        self.min_heap.insert(-value)
+    }
+
+    func extract_max() -> Result<T, char*> {
+        let result: Result<T, char*> = self.min_heap.extract_min()
+        if result.is_ok() {
+            let val: T = result.unwrap()
+            result.set_ok(-val)
+        }
+        return result
+    }
+
+    func peek_max() -> Result<T, char*> {
+        let result: Result<T, char*> = self.min_heap.peek_min()
+        if result.is_ok() {
+            let val: T = result.unwrap()
+            result.set_ok(-val)
+        }
+        return result
+    }
+
+    func size() -> int {
+        return self.min_heap.size()
+    }
+
+    func is_empty() -> bool {
+        return self.min_heap.is_empty()
+    }
+
+    func clear() {
+        self.min_heap.clear()
+    }
+}
+
+} // namespace collections
+} // namespace std

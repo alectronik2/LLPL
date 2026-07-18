@@ -73,6 +73,19 @@ private struct GenericCallResolution {
 }
 
 class CodeGenerator {
+    // Library names requested by `#link "NAME"` directives (see LinkDecl),
+    // in first-seen order, deduplicated. Populated by generateMultiple;
+    // read by main.d's --binary mode to pass `-l<name>` to the system C
+    // compiler. Public since main.d has no other reason to reach into the
+    // generator's internals.
+    string[] linkLibraries;
+
+    // Raw compiler flags requested by `#flags "..."` directives (see
+    // FlagsDecl), in first-seen order, deduplicated - same mechanism and
+    // caller (main.d's --binary mode) as linkLibraries, just for arbitrary
+    // extra flags (`-O2`, `-Wall`, a `-D` define, ...) instead of `-l`.
+    string[] compilerFlags;
+
     private int indentLevel;
     private DeferInfo[] deferredStatements;
     // Stack of TryFrames, innermost last - what throw/`?` inside a try block
@@ -90,11 +103,28 @@ class CodeGenerator {
     private Type currentReturnTypeAsWritten; // Same, but a clone captured *before* resolveType mutated it - see resolveStructLiteralTarget
     private string currentModulePath; // Module whose code is currently being generated, for error citations
     private string[] currentNamespaceSegments; // Enclosing namespace path of the declaration being generated
+    // The *template's* original namespace, for resolving a sibling generic
+    // type mentioned anywhere inside a monomorphized clone's body (fields,
+    // constructor/method signatures, and - unlike currentNamespaceSegments,
+    // which generateClass/generateMethod overwrite back to the clone's own
+    // always-empty namespaceSegments before generating each method body,
+    // see cloneClassDeclWithTypeSubs's own comment - method *bodies* too).
+    // Set (and restored) around one instantiateGenericTypeArgs call in
+    // resolveType's typeArgs branch; enclosingQualifications below tries it
+    // in addition to currentNamespaceSegments. Needed for e.g. Queue<T>
+    // (namespace std.collections) whose own field type DoublyLinkedList<T>
+    // is a sibling generic in that same namespace, whose *own* fields/
+    // methods in turn reference another sibling, DListNode<T> - three
+    // levels deep, all needing the same original namespace to resolve
+    // long after currentNamespaceSegments has been cleared for mangling.
+    private string[] currentGenericTemplateNamespace;
+    private string[][string] moduleUsingNamespaces; // Maps module path to list of using-namespace declarations (each is "Foo.Bar")
     private Type[string] variableTypes; // Maps variable names to their types
     private bool[string] constVariables; // Names (mangled) of `const`-declared variables
     private FunctionDecl[string] functionRegistry; // Functions, by mangled (namespace-prefixed) name
     private ClassDecl[string] classRegistry; // Classes, by mangled (namespace-prefixed) name
     private StructDecl[string] structRegistry; // Structs, by mangled (namespace-prefixed) name
+    private UnionDecl[string] unionRegistry; // Unions, by mangled (namespace-prefixed) name
     private MacroDecl[string] macroRegistry; // Macros, by mangled (namespace-prefixed) name
     private VarDecl[string] globalVarRegistry; // Global lets/consts (incl. enum members), by mangled name
     private VariantInfo[string] variantRegistry; // Tagged-enum variant constructors, by mangled function name
@@ -110,6 +140,7 @@ class CodeGenerator {
     private string[string] functionModulePath;
     private string[string] classModulePath;
     private string[string] structModulePath;
+    private string[string] unionModulePath;
     private string[string] macroModulePath;
     private string[string] globalVarModulePath;
     private string[string] typeAliasModulePath;
@@ -201,6 +232,8 @@ class CodeGenerator {
     private Type[][string] monomorphizedTypeArgs;
     private string[] genericForwardDecls; // opaque struct tags / function prototypes, spliced before genericInstanceDecls
     private string[] genericInstanceDecls; // full monomorphized class/struct/function bodies, emitted up front
+    private string[] genericStructInstances; // monomorphized struct instances only
+    private string[] genericClassInstances;  // monomorphized class instances only
 
     // Which monomorphized instantiations came specifically from prelude.llpl's
     // `Optional<T>`/`Result<T, E>` templates, by mangled name (e.g.
@@ -456,6 +489,10 @@ class CodeGenerator {
         return format("%sstruct %s (%d field(s))", st.packed ? "packed " : "", displayName, st.fields.length);
     }
 
+    private string unionSignature(UnionDecl ud, string displayName) {
+        return format("union %s (%d field(s))", displayName, ud.fields.length);
+    }
+
     private string macroSignature(MacroDecl m, string displayName) {
         return format("macro %s(%s)", displayName, m.params.join(", "));
     }
@@ -522,6 +559,14 @@ class CodeGenerator {
                     collectedSymbols ~= SymbolInfo(dname, "struct", prog.modulePath,
                         structDecl.line, structDecl.column, structSignature(structDecl, dname));
                     foreach (field; structDecl.fields) {
+                        collectedSymbols ~= SymbolInfo(dname ~ "." ~ field.name, "field", prog.modulePath,
+                            field.line, field.column, fieldSignature(field, dname));
+                    }
+                } else if (auto unionDecl = cast(UnionDecl)decl) {
+                    string dname = mangledUnion(unionDecl);
+                    collectedSymbols ~= SymbolInfo(dname, "union", prog.modulePath,
+                        unionDecl.line, unionDecl.column, unionSignature(unionDecl, dname));
+                    foreach (field; unionDecl.fields) {
                         collectedSymbols ~= SymbolInfo(dname ~ "." ~ field.name, "field", prog.modulePath,
                             field.line, field.column, fieldSignature(field, dname));
                     }
@@ -607,7 +652,25 @@ class CodeGenerator {
     }
 
     private string mangledStruct(StructDecl st) {
+        // An "SDL_"-named struct (see sdl_core.llpl/sdl_audio.llpl) mirrors
+        // a real SDL3 struct that <SDL3/SDL.h> already defines under its
+        // own, unnamespaced tag (plain "SDL_Rect", not "std_sdl_SDL_Rect") -
+        // matching the real header's own name exactly (skipping the
+        // namespace prefix entirely, unlike every other struct) is what
+        // lets `SDL_RenderRect(renderer, &rect)` (a real extern C function
+        // whose prototype - see the isSdlBinding skip above - comes
+        // straight from that header) accept a pointer to this struct as
+        // the *same* C type, not a same-layout-but-distinct one GCC
+        // rejects as an incompatible pointer type.
+        if (st.name.startsWith("SDL_")) return st.name;
         return mangled(st.namespaceSegments, st.name);
+    }
+
+    // See mangledStruct's matching comment - same "SDL_"-named exception,
+    // same reason (SDL_Event is the motivating case: a real SDL3 union).
+    private string mangledUnion(UnionDecl ud) {
+        if (ud.name.startsWith("SDL_")) return ud.name;
+        return mangled(ud.namespaceSegments, ud.name);
     }
 
     // Recorded per tagged-enum variant, keyed by its constructor's mangled
@@ -694,11 +757,18 @@ class CodeGenerator {
     // Recursively hoists the contents of `namespace` blocks to the top level,
     // stamping each contained function/class/struct/global with the full
     // chain of enclosing namespace names (innermost last).
-    private ASTNode[] flattenNamespaces(ASTNode[] decls, string[] segments) {
+    private ASTNode[] flattenNamespaces(ASTNode[] decls, string[] segments, string modulePath = "") {
         ASTNode[] result;
         foreach (decl; decls) {
-            if (auto ns = cast(NamespaceDecl)decl) {
-                result ~= flattenNamespaces(ns.declarations, segments ~ ns.name);
+            if (auto usingStmt = cast(UsingNamespaceStmt)decl) {
+                // Collect using-namespace declarations for this module
+                if (modulePath !in moduleUsingNamespaces) {
+                    moduleUsingNamespaces[modulePath] = [];
+                }
+                moduleUsingNamespaces[modulePath] ~= usingStmt.namespacePath;
+                // Don't include in result - these are processed during name resolution
+            } else if (auto ns = cast(NamespaceDecl)decl) {
+                result ~= flattenNamespaces(ns.declarations, segments ~ ns.name, modulePath);
             } else if (auto funcDecl = cast(FunctionDecl)decl) {
                 funcDecl.namespaceSegments = segments;
                 result ~= funcDecl;
@@ -708,6 +778,9 @@ class CodeGenerator {
             } else if (auto structDecl = cast(StructDecl)decl) {
                 structDecl.namespaceSegments = segments;
                 result ~= structDecl;
+            } else if (auto unionDecl = cast(UnionDecl)decl) {
+                unionDecl.namespaceSegments = segments;
+                result ~= unionDecl;
             } else if (auto enumDecl = cast(EnumDecl)decl) {
                 enumDecl.namespaceSegments = segments;
                 result ~= enumDecl;
@@ -729,6 +802,15 @@ class CodeGenerator {
             } else if (auto implDecl = cast(ImplDecl)decl) {
                 implDecl.namespaceSegments = segments;
                 result ~= implDecl;
+            } else if (auto linkDecl = cast(LinkDecl)decl) {
+                // Not namespace-scoped (see LinkDecl's own doc comment) -
+                // passed through unchanged, same as the fallback branch
+                // below would do anyway; called out explicitly so it's
+                // clear this is deliberate, not an oversight.
+                result ~= linkDecl;
+            } else if (auto flagsDecl = cast(FlagsDecl)decl) {
+                // Same as LinkDecl just above.
+                result ~= flagsDecl;
             } else {
                 result ~= decl;
             }
@@ -753,7 +835,25 @@ class CodeGenerator {
         // Resolve namespace blocks into flat, mangled top-level declarations
         // before anything else looks at prog.declarations.
         foreach (prog; programs) {
-            prog.declarations = flattenNamespaces(prog.declarations, []);
+            prog.declarations = flattenNamespaces(prog.declarations, [], prog.modulePath);
+        }
+
+        // Collect `#link "NAME"` directives from every module into a flat,
+        // deduplicated list (see linkLibraries' own doc comment) - a shared
+        // library like SDL3 only needs to be named once even if several
+        // modules (or the same one, imported more than once) all declare it.
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto linkDecl = cast(LinkDecl)decl) {
+                    if (!linkLibraries.canFind(linkDecl.libraryName)) {
+                        linkLibraries ~= linkDecl.libraryName;
+                    }
+                } else if (auto flagsDecl = cast(FlagsDecl)decl) {
+                    if (!compilerFlags.canFind(flagsDecl.flags)) {
+                        compilerFlags ~= flagsDecl.flags;
+                    }
+                }
+            }
         }
 
         // Desugar tagged enums into the struct + constructor functions they
@@ -854,7 +954,15 @@ class CodeGenerator {
                         (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
                     if (isTypeAlias) {
                         string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
-                        string baseName = aliasDecl.targetPath.join("_");
+                        // An `alias X = u32` target is parsed as a plain
+                        // dotted identifier path, not a type annotation, so
+                        // it never goes through the parser's short-form
+                        // rewrite (see canonicalIntTypeName) - normalize it
+                        // here too, or primitiveToC (which only knows the
+                        // long forms) emits the literal, meaningless C type
+                        // name "u32" verbatim.
+                        string baseName = aliasDecl.targetPath.length == 1 ?
+                            canonicalIntTypeName(aliasDecl.targetPath[0]) : aliasDecl.targetPath.join("_");
                         typeAliases[mangledName] = new Type(baseName, aliasDecl.targetPointerDepth,
                             aliasDecl.targetIsArray, aliasDecl.targetArraySize);
                         typeAliasModulePath[mangledName] = prog.modulePath;
@@ -908,6 +1016,11 @@ class CodeGenerator {
                     string key = mangledStruct(structDecl);
                     structRegistry[key] = structDecl;
                     structModulePath[key] = prog.modulePath;
+                    exportsByModule[prog.modulePath][key] = true;
+                } else if (auto unionDecl = cast(UnionDecl)decl) {
+                    string key = mangledUnion(unionDecl);
+                    unionRegistry[key] = unionDecl;
+                    unionModulePath[key] = prog.modulePath;
                     exportsByModule[prog.modulePath][key] = true;
                 } else if (auto macroDecl = cast(MacroDecl)decl) {
                     string key = mangled(macroDecl.namespaceSegments, macroDecl.name);
@@ -967,6 +1080,17 @@ class CodeGenerator {
                             checkBitfield(field);
                         }
                     }
+                } else if (auto unionDecl = cast(UnionDecl)decl) {
+                    currentNamespaceSegments = unionDecl.namespaceSegments;
+                    foreach (field; unionDecl.fields) {
+                        if (field.type is null) {
+                            field.type = inferType(field.initializer);
+                        }
+                        resolveType(field.type);
+                        if (field.bitWidth >= 0) {
+                            checkBitfield(field);
+                        }
+                    }
                 }
             }
         }
@@ -998,7 +1122,26 @@ class CodeGenerator {
         // Include runtime header
         code ~= "#include <stdint.h>\n";
         code ~= "#include <stddef.h>\n";
-        code ~= "#include \"runtime.h\"\n\n";
+        code ~= "#include <stdbool.h>\n"; // for `bool` - see primitiveToC's own comment
+        code ~= "#include \"runtime.h\"\n";
+
+        // Check if SDL is used and include SDL3 headers
+        bool usesSDL = false;
+        foreach (prog; programs) {
+            import std.algorithm : canFind;
+            import std.uni : toLower;
+            // Check if module path contains sdl
+            if (prog.modulePath.toLower().canFind("sdl")) {
+                usesSDL = true;
+                break;
+            }
+        }
+
+        if (usesSDL) {
+            code ~= "#include <SDL3/SDL.h>\n";
+        }
+
+        code ~= "\n";
 
         // Everything below through the alias #defines used to be appended
         // straight into `code`, but any of these passes can - via
@@ -1022,8 +1165,26 @@ class CodeGenerator {
                     string cName = mangledClass(classDecl);
                     earlyDeclCode ~= format("typedef struct %s %s;\n", cName, cName);
                 } else if (auto structDecl = cast(StructDecl)decl) {
-                    string sName = mangledStruct(structDecl);
-                    earlyDeclCode ~= format("typedef struct %s %s;\n", sName, sName);
+                    // An "SDL_"-named struct's own typedef already exists,
+                    // straight from <SDL3/SDL.h> - and unlike every other
+                    // struct this codebase ever generates, some real SDL3
+                    // types (SDL_Event) are actually a C `union`, not a
+                    // `struct` - blindly forward-declaring "typedef struct
+                    // SDL_Event SDL_Event;" here is a hard "defined as
+                    // wrong kind of tag" error against that real
+                    // definition, not a harmless redundant one. See
+                    // mangledStruct/generateStruct's matching comments.
+                    if (!structDecl.name.startsWith("SDL_")) {
+                        string sName = mangledStruct(structDecl);
+                        earlyDeclCode ~= format("typedef struct %s %s;\n", sName, sName);
+                    }
+                } else if (auto unionDecl = cast(UnionDecl)decl) {
+                    // Same "SDL_"-prefix exception as the StructDecl case
+                    // just above.
+                    if (!unionDecl.name.startsWith("SDL_")) {
+                        string uName = mangledUnion(unionDecl);
+                        earlyDeclCode ~= format("typedef union %s %s;\n", uName, uName);
+                    }
                 }
             }
         }
@@ -1039,14 +1200,40 @@ class CodeGenerator {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
                     currentNamespaceSegments = funcDecl.namespaceSegments;
                     if (funcDecl.isExtern) {
-                        string params = "";
-                        foreach (i, param; funcDecl.params) {
-                            if (i > 0) params ~= ", ";
-                            params ~= format("%s %s", typeToC(param.type), param.name);
+                        // An `extern func SDL_Whatever(...)` binds to a
+                        // real SDL3 library symbol that <SDL3/SDL.h> (see
+                        // generateMultiple's own usesSDL check) already
+                        // declares, correctly, including `const`-qualified
+                        // pointer params LLPL's own type system has no way
+                        // to spell (there's no "pointer to const" type at
+                        // all - see this module's own header comments).
+                        // Re-declaring it here too, with LLPL's best
+                        // non-const approximation, doesn't just duplicate
+                        // that declaration, it *conflicts* with it - GCC
+                        // treats a bare `char*` extern re-declaration of a
+                        // symbol the real header already declared
+                        // `const char*` (or `SDL_FRect*` vs `const
+                        // SDL_FRect*`, etc.) as a hard "conflicting types"
+                        // error, not a harmless duplicate. Skipping the
+                        // redeclaration for anything named like an SDL3
+                        // symbol leaves the real header's own prototype as
+                        // the only one in scope, which is both correct
+                        // and sufficient - LLPL's own extern func still
+                        // provides the parameter/return *types* codegen
+                        // needs to generate a correct call site, it just
+                        // doesn't need to also re-assert them to the C
+                        // compiler.
+                        bool isSdlBinding = funcDecl.name.startsWith("SDL_");
+                        if (!isSdlBinding) {
+                            string params = "";
+                            foreach (i, param; funcDecl.params) {
+                                if (i > 0) params ~= ", ";
+                                params ~= format("%s %s", typeToC(param.type), param.name);
+                            }
+                            if (funcDecl.isVariadic) params ~= ", ...";
+                            earlyDeclCode ~= format("extern %s %s(%s);\n",
+                                typeToC(funcDecl.returnType), mangledFunc(funcDecl), params);
                         }
-                        if (funcDecl.isVariadic) params ~= ", ...";
-                        earlyDeclCode ~= format("extern %s %s(%s);\n",
-                            typeToC(funcDecl.returnType), mangledFunc(funcDecl), params);
                     } else if (funcDecl.isInterrupt) {
                         string params = "void* __frame";
                         if (funcDecl.params.length >= 1) {
@@ -1111,13 +1298,56 @@ class CodeGenerator {
                         // as-written when it later runs.
                         Type returnTypeForFwd = cloneType(method.returnType);
                         resolveType(returnTypeForFwd);
-                        string params = format("%s* self", cName);
-                        foreach (param; method.params) {
+                        string params = "";
+                        // Static methods don't receive a 'self' parameter
+                        if (!method.isStatic) {
+                            params = format("%s* self", cName);
+                        }
+                        foreach (i, param; method.params) {
                             resolveType(param.type);
-                            params ~= format(", %s %s", typeToC(param.type), param.name);
+                            if (!method.isStatic || i > 0) params ~= ", ";
+                            params ~= format("%s %s", typeToC(param.type), param.name);
                         }
                         earlyDeclCode ~= format("%s %s(%s);\n",
                             typeToC(returnTypeForFwd), mangleMethodName(classDecl, cName, method), params);
+                    }
+                } else if (auto structDecl = cast(StructDecl)decl) {
+                    // Constructor forward declaration(s) - see
+                    // generateStructConstructor's own comment: unlike a
+                    // class constructor, this returns the struct *by
+                    // value* (no trailing `*`), and there's no destructor/
+                    // methods branch to mirror since a struct has neither.
+                    if (structDecl.constructors.length > 0) {
+                        currentNamespaceSegments = structDecl.namespaceSegments;
+                        string sName = mangledStruct(structDecl);
+                        checkNoDuplicateSignatures(structDecl.constructors, format("constructor of '%s'", sName),
+                            structDecl.line, structDecl.column);
+                        foreach (ctor; structDecl.constructors) {
+                            string params = "";
+                            foreach (i, param; ctor.params) {
+                                resolveType(param.type);
+                                if (i > 0) params ~= ", ";
+                                params ~= format("%s %s", typeToC(param.type), param.name);
+                            }
+                            earlyDeclCode ~= format("%s %s(%s);\n", sName, mangleConstructorName(structDecl, sName, ctor), params);
+                        }
+                    }
+                } else if (auto unionDecl = cast(UnionDecl)decl) {
+                    // Same shape as the StructDecl case just above.
+                    if (unionDecl.constructors.length > 0) {
+                        currentNamespaceSegments = unionDecl.namespaceSegments;
+                        string uName = mangledUnion(unionDecl);
+                        checkNoDuplicateSignatures(unionDecl.constructors, format("constructor of '%s'", uName),
+                            unionDecl.line, unionDecl.column);
+                        foreach (ctor; unionDecl.constructors) {
+                            string params = "";
+                            foreach (i, param; ctor.params) {
+                                resolveType(param.type);
+                                if (i > 0) params ~= ", ";
+                                params ~= format("%s %s", typeToC(param.type), param.name);
+                            }
+                            earlyDeclCode ~= format("%s %s(%s);\n", uName, mangleConstructorName(unionDecl, uName, ctor), params);
+                        }
                     }
                 }
             }
@@ -1145,7 +1375,8 @@ class CodeGenerator {
                     // style nit.
                     string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
                     bool isStructOrClassElement = !varDecl.type.isPointer &&
-                        (isStructTypeName(varDecl.type.name) || isClassTypeName(varDecl.type.name));
+                        (isStructTypeName(varDecl.type.name) || isClassTypeName(varDecl.type.name) ||
+                         isUnionTypeName(varDecl.type.name));
                     if (varDecl.type.isArray && varDecl.type.arraySize > 0 && isStructOrClassElement) {
                         // An array of struct/class values (not pointers) needs
                         // its element type *complete* even just to declare the
@@ -1185,16 +1416,38 @@ class CodeGenerator {
         earlyDeclCode ~= "\n";
 
         // Generate declarations from all modules (skip import statements).
-        // Collected into declCode, not appended to code directly, because
-        // generating these bodies is what discovers this module's `\(...)`
-        // string interpolations (interpBufferDecls) - and those scratch
-        // buffers need to land *before* any code that might reference them.
-        string declCode = "";
+        // Collected into structDeclCode and classDeclCode separately to ensure
+        // proper ordering: all structs before all classes to avoid dependency issues.
+        string structDeclCode = "";
+        string classDeclCode = "";
+
+        // First pass: generate all structs (and unions - same "plain
+        // value type, no dependency on classes" shape)
         foreach (prog; programs) {
             currentModulePath = prog.modulePath;
-            if (prog.modulePath.length > 0) {
-                declCode ~= format("// Module: %s\n", prog.modulePath);
+            bool hasStructs = false;
+            foreach (decl; prog.declarations) {
+                if (cast(StructDecl)decl || cast(UnionDecl)decl) {
+                    if (!hasStructs) {
+                        if (prog.modulePath.length > 0) {
+                            structDeclCode ~= format("// Module: %s (structs)\n", prog.modulePath);
+                        }
+                        hasStructs = true;
+                    }
+                    try {
+                        structDeclCode ~= generateDeclaration(decl);
+                        structDeclCode ~= "\n";
+                    } catch (CompileError e) {
+                        collectedErrors ~= e;
+                    }
+                }
             }
+        }
+
+        // Second pass: generate all non-struct declarations (classes, functions, etc.)
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            bool hasNonStructs = false;
             foreach (decl; prog.declarations) {
                 if (cast(ImportStmt)decl) {
                     continue;  // Skip import statements in code generation
@@ -1206,19 +1459,28 @@ class CodeGenerator {
                 if (cast(AliasDecl)decl) {
                     continue;  // Already emitted above, ahead of everything that might use it.
                 }
+                if (cast(StructDecl)decl || cast(UnionDecl)decl) {
+                    continue;  // Already generated in first pass
+                }
                 // Caught and collected, not left to abort the whole
                 // compile - see collectedErrors's own comment. Safe to
                 // just skip this one declaration's contribution to
-                // declCode and move on: every registry/field/generic-
+                // classDeclCode and move on: every registry/field/generic-
                 // template resolution any *other* declaration could
                 // depend on already happened in the passes above, so
                 // this declaration's own failure can't cascade into a
-                // false error anywhere else. None of declCode ends up
+                // false error anywhere else. None of classDeclCode ends up
                 // used anyway once collectedErrors is non-empty (see the
                 // very end of this function).
+                if (!hasNonStructs) {
+                    if (prog.modulePath.length > 0) {
+                        classDeclCode ~= format("// Module: %s\n", prog.modulePath);
+                    }
+                    hasNonStructs = true;
+                }
                 try {
-                    declCode ~= generateDeclaration(decl);
-                    declCode ~= "\n";
+                    classDeclCode ~= generateDeclaration(decl);
+                    classDeclCode ~= "\n";
                 } catch (CompileError e) {
                     collectedErrors ~= e;
                 }
@@ -1241,14 +1503,8 @@ class CodeGenerator {
             code ~= "\n";
         }
 
-        if (genericInstanceDecls.length > 0) {
-            code ~= "// Monomorphized generic instantiations - full bodies\n";
-            foreach (instDecl; genericInstanceDecls) {
-                code ~= instDecl;
-            }
-            code ~= "\n";
-        }
-
+        // Regular class forward declarations must come before generic instance bodies
+        // so that generic destructors can call regular class destructors
         code ~= earlyDeclCode;
 
         if (interpBufferDecls.length > 0) {
@@ -1275,7 +1531,42 @@ class CodeGenerator {
             code ~= "\n";
         }
 
-        code ~= declCode;
+        // Output in dependency order. Generic instantiations (Result<T,E>,
+        // Optional<T>, ...) go first, matching this codebase's own prior,
+        // long-proven-correct ordering (genericInstanceDecls used to be
+        // emitted before earlyDeclCode entirely) - plain top-level
+        // functions in classDeclCode routinely propagate/unwrap a
+        // Result<T,E>/Optional<T> (via `?`, match, etc.), so those
+        // monomorphized class bodies must be *fully* defined before
+        // classDeclCode, not after it: emitting genericClassInstances
+        // after classDeclCode (as a struct-vs-class split first did)
+        // left every such call site referencing an incomplete typedef -
+        // see this file's own git history for the "invalid use of
+        // incomplete typedef 'Result_int_char_ptr'" regression this
+        // fixed.
+        // 1. Generic struct instances (e.g., Slice<char>)
+        if (genericStructInstances.length > 0) {
+            code ~= "// Monomorphized struct instantiations\n";
+            foreach (instDecl; genericStructInstances) {
+                code ~= instDecl;
+            }
+            code ~= "\n";
+        }
+
+        // 2. Generic class instances (e.g., Vector<String>, Result<T,E>)
+        if (genericClassInstances.length > 0) {
+            code ~= "// Monomorphized class instantiations\n";
+            foreach (instDecl; genericClassInstances) {
+                code ~= instDecl;
+            }
+            code ~= "\n";
+        }
+
+        // 3. Regular structs
+        code ~= structDeclCode;
+
+        // 4. Regular classes
+        code ~= classDeclCode;
 
         if (deferredFunctionBodies.length > 0) {
             code ~= "// Function bodies deferred until after plain class/struct definitions exist\n";
@@ -1318,6 +1609,8 @@ class CodeGenerator {
             return generateClass(classDecl);
         } else if (auto structDecl = cast(StructDecl)node) {
             return generateStruct(structDecl);
+        } else if (auto unionDecl = cast(UnionDecl)node) {
+            return generateUnion(unionDecl);
         } else if (auto varDecl = cast(VarDecl)node) {
             return generateGlobalVar(varDecl);
         } else if (auto aliasDecl = cast(AliasDecl)node) {
@@ -1424,6 +1717,45 @@ class CodeGenerator {
         if (!isKnownSymbol(flatTarget) && isNamespacePrefix(flatTarget)) {
             namespaceAliases[mangledName] = flatTarget;
             return "";
+        }
+
+        // `alias LinkedList = collections.LinkedList` where LinkedList<T>
+        // is a generic class/struct template, not yet instantiated with
+        // any concrete type argument - isKnownSymbol only ever finds
+        // *monomorphized* instances (genericClassTemplates/
+        // genericStructTemplates is a separate table, see
+        // instantiateGenericTypeArgs), so resolveAliasTarget below would
+        // always fail for a bare, uninstantiated template name, even
+        // though it's exactly the kind of re-export a stdlib aggregator
+        // module wants (so callers can write `std.LinkedList<int>`
+        // instead of spelling out `std.collections.LinkedList<int>`).
+        // Same "nothing to #define, just register the name" shape as the
+        // namespace-alias case just above: there's no single concrete C
+        // symbol to point at until someone actually instantiates it, at
+        // which point findGenericTemplateKey's own exact-match check
+        // (tried first, before enclosingQualifications) finds it under
+        // this alias name directly.
+        if (!isKnownSymbol(flatTarget)) {
+            string classKey = findGenericTemplateKey(flatTarget, (k) => (k in genericClassTemplates) !is null);
+            if (classKey.length > 0) {
+                genericClassTemplates[mangledName] = genericClassTemplates[classKey];
+                // collectSymbolTable (LSP symbol listing) walks every
+                // genericClassTemplates entry and indexes straight into
+                // genericTemplateModulePath by the same key with no
+                // existence check - every key in the former must have a
+                // matching one in the latter, or it's a RangeError crash,
+                // not a compile error.
+                genericTemplateModulePath[mangledName] = genericTemplateModulePath[classKey];
+                exportsByModule[currentModulePath][mangledName] = true;
+                return "";
+            }
+            string structKey = findGenericTemplateKey(flatTarget, (k) => (k in genericStructTemplates) !is null);
+            if (structKey.length > 0) {
+                genericStructTemplates[mangledName] = genericStructTemplates[structKey];
+                genericTemplateModulePath[mangledName] = genericTemplateModulePath[structKey];
+                exportsByModule[currentModulePath][mangledName] = true;
+                return "";
+            }
         }
 
         string target = resolveAliasTarget(aliasDecl.targetPath, aliasDecl.line, aliasDecl.column);
@@ -1605,12 +1937,167 @@ class CodeGenerator {
         string sName = mangledStruct(structDecl);
         currentNamespaceSegments = structDecl.namespaceSegments;
 
-        string attr = structDecl.packed ? " __attribute__((packed))" : "";
-        string code = format("struct%s %s {\n", attr, sName);
-        foreach (field; structDecl.fields) {
-            code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
+        string code = "";
+        // An "SDL_"-named struct's body is never (re-)defined here - see
+        // mangledStruct's own comment: <SDL3/SDL.h> already provides the
+        // complete `struct SDL_Rect { ... }` definition (the *earlier*
+        // `typedef struct SDL_Rect SDL_Rect;` forward-declaration pass is
+        // harmless to repeat - C11 explicitly allows redeclaring a typedef
+        // to the exact same type - but defining the same struct tag's
+        // body twice is a hard "redefinition" error). This struct's own
+        // fields are only needed by LLPL's own type-checking (structRegistry
+        // already has them from parsing); constructors, if any, are still
+        // generated below - they're just ordinary LLPL-side convenience
+        // functions over the type, real SDL3 has no notion of them at all.
+        if (!structDecl.name.startsWith("SDL_")) {
+            string attr = structDecl.packed ? " __attribute__((packed))" : "";
+            code ~= format("struct%s %s {\n", attr, sName);
+            foreach (field; structDecl.fields) {
+                code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
+            }
+            code ~= "};\n";
         }
-        code ~= "};\n";
+
+        foreach (ctor; structDecl.constructors) {
+            code ~= generateStructConstructor(structDecl, ctor);
+        }
+        return code;
+    }
+
+    // A struct constructor's body-generation twin to generateConstructor
+    // (classes) - deliberately much simpler, since a struct has none of a
+    // class's reference-counting machinery to set up: `self` here is a
+    // local *value* of the struct's own type (zero-initialized, so any
+    // field the constructor's own body doesn't explicitly assign reads as
+    // 0/NULL rather than whatever garbage happened to be on the stack),
+    // and the generated function returns that value directly - `new
+    // StructName(...)` (see checkNotStruct and the NewExpr codegen sites)
+    // compiles straight to a call to this function, which is itself just
+    // an ordinary value-returning C function; no allocation, no pointer.
+    private string generateStructConstructor(StructDecl structDecl, FunctionDecl constructor) {
+        string sName = mangledStruct(structDecl);
+        string code = "";
+        string params = "";
+
+        string prevClassName = currentClassName;
+        currentClassName = sName;
+        currentNamespaceSegments = structDecl.namespaceSegments;
+        variableTypes["self"] = new Type(sName);
+
+        foreach (i, param; constructor.params) {
+            resolveType(param.type);
+            if (i > 0) params ~= ", ";
+            params ~= format("%s %s", typeToC(param.type), param.name);
+            variableTypes[param.name] = param.type;
+        }
+
+        code ~= format("%s %s(%s) {\n", sName, mangleConstructorName(structDecl, sName, constructor), params);
+        indentLevel++;
+        code ~= indent() ~ format("%s self = {0};\n\n", sName);
+
+        deferredStatements = [];
+
+        string bodyCode = "";
+        if (constructor.body_) {
+            foreach (stmt; constructor.body_.statements) {
+                bodyCode ~= generateBodyStatement(stmt, false);
+            }
+        }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+        code ~= indent() ~ "return self;\n";
+        indentLevel--;
+        code ~= "}\n\n";
+
+        currentClassName = prevClassName;
+
+        // See generateConstructor's matching comment on why these are
+        // un-bound again immediately after: leaving them live would
+        // permanently shadow any later same-named global/field.
+        foreach (param; constructor.params) {
+            variableTypes.remove(param.name);
+        }
+        variableTypes.remove("self");
+
+        return code;
+    }
+
+    // generateStruct's twin for `union` - same "skip the body for an
+    // 'SDL_'-named one, the real header already defines it" exception
+    // (see mangledUnion/mangledStruct's own comments), just emitting
+    // `union` instead of `struct`.
+    private string generateUnion(UnionDecl unionDecl) {
+        string uName = mangledUnion(unionDecl);
+        currentNamespaceSegments = unionDecl.namespaceSegments;
+
+        string code = "";
+        if (!unionDecl.name.startsWith("SDL_")) {
+            code ~= format("union %s {\n", uName);
+            foreach (field; unionDecl.fields) {
+                code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
+            }
+            code ~= "};\n";
+        }
+
+        foreach (ctor; unionDecl.constructors) {
+            code ~= generateUnionConstructor(unionDecl, ctor);
+        }
+        return code;
+    }
+
+    // generateStructConstructor's twin for `union` - see its own comment
+    // for the overall shape (local value, zero-initialized, returned by
+    // value, no allocation). `self = {0}` zero-fills the *entire* union
+    // here too, not just its first member - see UnionDecl's own doc
+    // comment on why a union constructor assigning more than one field
+    // just overwrites the same bytes rather than storing them all
+    // (that's what a union *is*, not a bug in this codegen).
+    private string generateUnionConstructor(UnionDecl unionDecl, FunctionDecl constructor) {
+        string uName = mangledUnion(unionDecl);
+        string code = "";
+        string params = "";
+
+        string prevClassName = currentClassName;
+        currentClassName = uName;
+        currentNamespaceSegments = unionDecl.namespaceSegments;
+        variableTypes["self"] = new Type(uName);
+
+        foreach (i, param; constructor.params) {
+            resolveType(param.type);
+            if (i > 0) params ~= ", ";
+            params ~= format("%s %s", typeToC(param.type), param.name);
+            variableTypes[param.name] = param.type;
+        }
+
+        code ~= format("%s %s(%s) {\n", uName, mangleConstructorName(unionDecl, uName, constructor), params);
+        indentLevel++;
+        code ~= indent() ~ format("%s self = {0};\n\n", uName);
+
+        deferredStatements = [];
+
+        string bodyCode = "";
+        if (constructor.body_) {
+            foreach (stmt; constructor.body_.statements) {
+                bodyCode ~= generateBodyStatement(stmt, false);
+            }
+        }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+        code ~= indent() ~ "return self;\n";
+        indentLevel--;
+        code ~= "}\n\n";
+
+        currentClassName = prevClassName;
+
+        foreach (param; constructor.params) {
+            variableTypes.remove(param.name);
+        }
+        variableTypes.remove("self");
+
         return code;
     }
 
@@ -1893,7 +2380,8 @@ class CodeGenerator {
         // never reference-counted and must be excluded here the same way
         // typeToC/isStructTypeName already exclude them from auto-pointering.
         foreach (field; classDecl.fields) {
-            if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer && !isStructTypeName(field.type.name)) {
+            if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer &&
+                    !isStructTypeName(field.type.name) && !isUnionTypeName(field.type.name)) {
                 code ~= indent() ~ format("if (self->%s) rc_release(self->%s, %s_destroy);\n",
                     field.name, field.name, field.type.name);
             }
@@ -1910,22 +2398,32 @@ class CodeGenerator {
     private string generateMethod(ClassDecl classDecl, FunctionDecl method) {
         string cName = mangledClass(classDecl);
         string code = "";
-        string params = format("%s* self", cName);
+        string params = "";
+
+        // Static methods don't receive a 'self' parameter
+        if (!method.isStatic) {
+            params = format("%s* self", cName);
+        }
 
         // Set current class/namespace context
         string prevClassName = currentClassName;
         currentClassName = cName;
         currentNamespaceSegments = classDecl.namespaceSegments;
-        variableTypes["self"] = new Type(cName);
+
+        // Register 'self' only for non-static methods
+        if (!method.isStatic) {
+            variableTypes["self"] = new Type(cName);
+        }
 
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
         currentReturnTypeAsWritten = cloneType(method.returnType);
         resolveType(method.returnType);
         Type prevReturnType = currentReturnType;
         currentReturnType = method.returnType;
-        foreach (param; method.params) {
+        foreach (i, param; method.params) {
             resolveType(param.type);
-            params ~= format(", %s %s", typeToC(param.type), param.name);
+            if (!method.isStatic || i > 0) params ~= ", ";
+            params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
         }
 
@@ -1959,14 +2457,22 @@ class CodeGenerator {
         foreach (param; method.params) {
             variableTypes.remove(param.name);
         }
-        variableTypes.remove("self");
+        if (!method.isStatic) {
+            variableTypes.remove("self");
+        }
 
         return code;
     }
 
     private string generateFunction(FunctionDecl funcDecl) {
         if (funcDecl.isExtern) {
-            // Just a forward declaration
+            // Just a forward declaration - but see the early-forward-decl
+            // loop's own isSdlBinding comment: a symbol named like an SDL3
+            // function already has the real, correct prototype in scope
+            // via <SDL3/SDL.h>, and re-declaring it here too (with LLPL's
+            // best non-const approximation) conflicts with it rather than
+            // harmlessly duplicating it. Same skip, same reason.
+            if (funcDecl.name.startsWith("SDL_")) return "";
             string params = "";
             foreach (i, param; funcDecl.params) {
                 if (i > 0) params ~= ", ";
@@ -2889,6 +3395,10 @@ class CodeGenerator {
             return new Identifier(ident.name, ident.line, ident.column);
         } else if (auto intLit = cast(IntLiteral)node) {
             return new IntLiteral(intLit.value, intLit.line, intLit.column);
+        } else if (auto floatLit = cast(FloatLiteral)node) {
+            return new FloatLiteral(floatLit.value, floatLit.line, floatLit.column);
+        } else if (auto charLit = cast(CharLiteral)node) {
+            return new CharLiteral(charLit.value, charLit.line, charLit.column);
         } else if (auto strLit = cast(StringLiteral)node) {
             return new StringLiteral(strLit.value, strLit.line, strLit.column);
         } else if (auto regexLit = cast(RegexLiteral)node) {
@@ -3070,7 +3580,9 @@ class CodeGenerator {
             fields ~= new VarDecl(f.name, cloneType(f.type, typeSubs), null, f.isConst,
                 f.line, f.column, f.bitWidth, f.isVolatile);
         }
-        auto clone = new StructDecl(newName, fields, st.packed, st.line, st.column);
+        FunctionDecl[] ctors;
+        foreach (c; st.constructors) ctors ~= cloneFunctionDeclWithTypeSubs(c, typeSubs, c.name);
+        auto clone = new StructDecl(newName, fields, st.packed, st.line, st.column, [], [], [], ctors);
         clone.namespaceSegments = [];
         return clone;
     }
@@ -3109,6 +3621,10 @@ class CodeGenerator {
             return new Identifier(ident.name, ident.line, ident.column);
         } else if (auto intLit = cast(IntLiteral)node) {
             return new IntLiteral(intLit.value, intLit.line, intLit.column);
+        } else if (auto floatLit = cast(FloatLiteral)node) {
+            return new FloatLiteral(floatLit.value, floatLit.line, floatLit.column);
+        } else if (auto charLit = cast(CharLiteral)node) {
+            return new CharLiteral(charLit.value, charLit.line, charLit.column);
         } else if (auto strLit = cast(StringLiteral)node) {
             return new StringLiteral(strLit.value, strLit.line, strLit.column);
         } else if (auto regexLit = cast(RegexLiteral)node) {
@@ -3575,10 +4091,51 @@ class CodeGenerator {
     // lookup works inside nested namespaces.
     private string[] enclosingQualifications(string suffix) {
         string[] candidates;
+
+        // Check current namespace and all enclosing namespaces
         for (size_t i = currentNamespaceSegments.length; i > 0; i--) {
             candidates ~= currentNamespaceSegments[0 .. i].join("_") ~ "_" ~ suffix;
         }
+
+        // A monomorphized generic clone's own namespaceSegments is always
+        // empty (needed for correct mangling - see
+        // cloneClassDeclWithTypeSubs), so once its body is being generated,
+        // currentNamespaceSegments no longer reflects where it was
+        // originally declared - currentGenericTemplateNamespace is the
+        // separate, non-mangling-affecting record of that, kept alive for
+        // the clone's whole field/signature/body generation. See its own
+        // declaration comment.
+        for (size_t i = currentGenericTemplateNamespace.length; i > 0; i--) {
+            candidates ~= currentGenericTemplateNamespace[0 .. i].join("_") ~ "_" ~ suffix;
+        }
+
+        // Check imported namespaces from 'using namespace' declarations
+        if (currentModulePath in moduleUsingNamespaces) {
+            foreach (usingPath; moduleUsingNamespaces[currentModulePath]) {
+                // Convert "Foo.Bar" to "Foo_Bar_suffix"
+                string mangledPrefix = usingPath.replace(".", "_");
+                candidates ~= mangledPrefix ~ "_" ~ suffix;
+            }
+        }
+
         return candidates;
+    }
+
+    // Mirrors parser.d's own canonicalIntTypeName - see this module's
+    // alias-registration comment on why an alias target needs this same
+    // rewrite applied again here.
+    private static string canonicalIntTypeName(string name) {
+        switch (name) {
+            case "u8": return "uint8";
+            case "u16": return "uint16";
+            case "u32": return "uint32";
+            case "u64": return "uint";
+            case "i8": return "int8";
+            case "i16": return "int16";
+            case "i32": return "int32";
+            case "i64": return "int";
+            default: return name;
+        }
     }
 
     private bool isPrimitiveTypeName(string name) {
@@ -3587,7 +4144,22 @@ class CodeGenerator {
             case "int8": case "uint8":
             case "int16": case "uint16":
             case "int32": case "uint32":
+            case "int64": case "uint64":
+            // The short forms (u8/u16/.../i64) are normally rewritten to
+            // their long-form name above by the parser the moment a type
+            // annotation is parsed (`let x: u32` never reaches codegen as
+            // "u32" at all) - but an `alias X = u32` target is parsed as a
+            // plain dotted identifier path, not a type annotation, so it
+            // never goes through that rewrite and reaches here exactly as
+            // written. Recognized here too so a short-form alias target
+            // is still correctly treated as a type alias, not an unknown
+            // symbol reference.
+            case "u8": case "i8":
+            case "u16": case "i16":
+            case "u32": case "i32":
+            case "u64": case "i64":
             case "char": case "bool": case "void": case "string":
+            case "float": case "double":
                 return true;
             default:
                 return false;
@@ -3603,7 +4175,7 @@ class CodeGenerator {
             case "int16": case "uint16": return 16;
             case "int8": case "uint8": return 8;
             case "char": return 8;
-            case "bool": return 32; // backed by C `int`
+            case "bool": return 8; // backed by C `_Bool` (1 byte)
             default: return -1;
         }
     }
@@ -3703,13 +4275,24 @@ class CodeGenerator {
         }
     }
 
-    // Structs are plain value types with no constructor/allocator; `new`
-    // only makes sense for classes.
+    // Structs (and unions) are plain value types with no allocator -
+    // `new StructName(...)`/`new UnionName(...)` only makes sense at all
+    // if a constructor was actually declared (see generateStructConstructor/
+    // generateUnionConstructor); otherwise there's nothing to call.
     private void checkNotStruct(NewExpr newExpr) {
-        if (newExpr.type.name in structRegistry) {
+        if (auto sd = newExpr.type.name in structRegistry) {
+            if (sd.constructors.length > 0) return;
             string message = format(
-                "Cannot 'new' a struct: '%s' is a value type - declare a variable of that type " ~
-                "and assign its fields directly",
+                "Cannot 'new' a struct: '%s' is a value type with no declared constructor - " ~
+                "either add one, or declare a variable of that type and assign its fields directly",
+                newExpr.type.name);
+            throw new CompileError(message, currentModulePath, newExpr.line, newExpr.column);
+        }
+        if (auto ud = newExpr.type.name in unionRegistry) {
+            if (ud.constructors.length > 0) return;
+            string message = format(
+                "Cannot 'new' a union: '%s' is a value type with no declared constructor - " ~
+                "either add one, or declare a variable of that type and assign its fields directly",
                 newExpr.type.name);
             throw new CompileError(message, currentModulePath, newExpr.line, newExpr.column);
         }
@@ -4281,10 +4864,40 @@ class CodeGenerator {
                 }
             }
 
+            // generateClass/generateStruct (below) unconditionally set the
+            // *shared* currentNamespaceSegments to the clone's own (always
+            // empty) namespaceSegments and never restore it - harmless when
+            // that's the outermost thing being generated, but this whole
+            // instantiation can just as easily run *nested*, mid-generation
+            // of some other class's method body (e.g. Graph.bfs resolving
+            // `new Vector<int>()` and then, on the very next line, `new
+            // Queue<int>()`) - without saving/restoring here, the first
+            // monomorphization's clone.namespaceSegments (= []) leaks out
+            // and clobbers whatever the *enclosing* generateMethod had
+            // correctly set (Graph's own ["std","collections"]), so the
+            // second lookup sees an empty namespace and fails to find a
+            // perfectly real, already-registered sibling generic.
+            string[] savedNamespaceSegments = currentNamespaceSegments;
+            scope(exit) currentNamespaceSegments = savedNamespaceSegments;
+
             if (isClass) {
                 auto clone = cloneClassDeclWithTypeSubs(genericClassTemplates[templateKey], typeSubs, mangledName);
                 classRegistry[mangledName] = clone;
-                currentNamespaceSegments = [];
+                // The template's own namespace, kept alive (via
+                // currentGenericTemplateNamespace, not currentNamespaceSegments -
+                // see that field's own comment) through field resolution,
+                // constructor/method signatures, AND generateClass's method
+                // *bodies* below - a field, param, or a plain `new Foo<T>()`
+                // call anywhere in this clone's body can reference another
+                // generic template declared in this same original namespace
+                // (e.g. Queue<T>'s `list: DoublyLinkedList<T>` field, whose
+                // own methods in turn `new DListNode<T>(...)`  - three
+                // namespace-qualified levels deep, std.collections all the
+                // way down), and would otherwise resolve as a bare,
+                // unqualified name and fail with "'X' is not a generic
+                // type" even though X is right there.
+                string[] savedGenericNamespace = currentGenericTemplateNamespace;
+                currentGenericTemplateNamespace = genericClassTemplates[templateKey].namespaceSegments;
 
                 // Ordinary (non-generic) class/struct fields get resolveType
                 // called on them by a dedicated upfront pass in
@@ -4354,17 +4967,25 @@ class CodeGenerator {
                 // cleanup would otherwise delete a same-named live binding
                 // the caller still needs.
                 Type[string] savedVarTypes = variableTypes.dup;
-                genericInstanceDecls ~= generateClass(clone);
+                string classBody = generateClass(clone);
+                genericInstanceDecls ~= classBody;
+                genericClassInstances ~= classBody;
                 variableTypes = savedVarTypes;
+                currentGenericTemplateNamespace = savedGenericNamespace;
             } else {
                 auto clone = cloneStructDeclWithTypeSubs(genericStructTemplates[templateKey], typeSubs, mangledName);
                 structRegistry[mangledName] = clone;
-                currentNamespaceSegments = [];
+                // See the matching comment in the isClass branch above.
+                string[] savedGenericNamespace = currentGenericTemplateNamespace;
+                currentGenericTemplateNamespace = genericStructTemplates[templateKey].namespaceSegments;
                 foreach (field; clone.fields) {
                     if (field.type is null) field.type = inferType(field.initializer);
                     resolveType(field.type);
                 }
-                genericInstanceDecls ~= generateStruct(clone);
+                string structBody = generateStruct(clone);
+                genericInstanceDecls ~= structBody;
+                genericStructInstances ~= structBody;
+                currentGenericTemplateNamespace = savedGenericNamespace;
             }
         }
 
@@ -4511,7 +5132,23 @@ class CodeGenerator {
             t.name = localAliasTarget;
         }
 
-        if (auto aliased = t.name in typeAliases) {
+        // A type alias is stored under its mangled (namespace-qualified)
+        // name, but a use site inside the same namespace writes the bare
+        // name (e.g. `SDL_AudioDeviceID` inside `namespace std.sdl` itself,
+        // where the alias is mangled to `std_sdl_SDL_AudioDeviceID`) - try
+        // the bare name first, then each enclosing-namespace qualification,
+        // mirroring the classRegistry/structRegistry lookup further below.
+        Type* aliasedPtr = t.name in typeAliases;
+        if (aliasedPtr is null) {
+            foreach (candidate; enclosingQualifications(t.name)) {
+                if (auto found = candidate in typeAliases) {
+                    aliasedPtr = found;
+                    break;
+                }
+            }
+        }
+        Type aliased = aliasedPtr is null ? null : *aliasedPtr;
+        if (aliased !is null) {
             // Substitute the alias's own type in place - a use site that
             // *also* wrote its own `*` on an already-pointer alias
             // (`string*` where `string` is `char*`) stacks depth (giving
@@ -4581,6 +5218,10 @@ class CodeGenerator {
         return (name in classRegistry) !is null;
     }
 
+    private bool isUnionTypeName(string name) {
+        return (name in unionRegistry) !is null;
+    }
+
     // C's default variadic argument promotions only widen types smaller than
     // `int` up to `int` - a bare integer literal or an already-`int`-sized
     // value is passed exactly as-is. Our runtime's va_arg reads every
@@ -4590,7 +5231,8 @@ class CodeGenerator {
     private string variadicPromote(ASTNode arg, string argCode) {
         try {
             Type t = inferType(arg);
-            if (t.isPointer || t.isArray || isStructTypeName(t.name) || isClassTypeName(t.name)) {
+            if (t.isPointer || t.isArray || isStructTypeName(t.name) || isClassTypeName(t.name) ||
+                    isUnionTypeName(t.name)) {
                 return argCode;
             }
             return format("((long long)(%s))", argCode);
@@ -4826,6 +5468,21 @@ class CodeGenerator {
         return format("%s_new%s", cName, overloadSuffix(ctor.params));
     }
 
+    // Same convention as the ClassDecl overload above - a struct
+    // constructor is named identically, it just generates differently
+    // (see generateStructConstructor: a plain value-returning function,
+    // no heap allocation).
+    private string mangleConstructorName(StructDecl sd, string sName, FunctionDecl ctor) {
+        if (sd.constructors.length <= 1) return format("%s_new", sName);
+        return format("%s_new%s", sName, overloadSuffix(ctor.params));
+    }
+
+    // Same convention again, for `union`.
+    private string mangleConstructorName(UnionDecl ud, string uName, FunctionDecl ctor) {
+        if (ud.constructors.length <= 1) return format("%s_new", uName);
+        return format("%s_new%s", uName, overloadSuffix(ctor.params));
+    }
+
     // Groups every top-level FunctionDecl by its plain (pre-overload-
     // suffix) mangled name - i.e. exactly what mangledFunc(fn) already
     // produces today. A key with more than one candidate is an overloaded
@@ -5053,7 +5710,7 @@ class CodeGenerator {
     private string memberAccessor(ASTNode object) {
         try {
             Type t = inferType(object);
-            if (!t.isPointer && isStructTypeName(t.name)) {
+            if (!t.isPointer && (isStructTypeName(t.name) || isUnionTypeName(t.name))) {
                 return ".";
             }
             return "->";
@@ -5080,13 +5737,16 @@ class CodeGenerator {
         try {
             Type selfType = inferType(selfOperand);
             resolveType(selfType);
-            if (auto classDecl = selfType.name in classRegistry) {
-                foreach (method; classDecl.methods) {
-                    if (method.name == methodName) return method;
+            // Only look for operator overloads on non-pointer, non-array types
+            if (selfType.pointerDepth == 0 && !selfType.isArray) {
+                if (auto classDecl = selfType.name in classRegistry) {
+                    foreach (method; classDecl.methods) {
+                        if (method.name == methodName) return method;
+                    }
                 }
-            }
-            if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
-                return *fn;
+                if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
+                    return *fn;
+                }
             }
         } catch (Exception e) {
             // fall through - not an overload
@@ -5725,6 +6385,41 @@ class CodeGenerator {
                     return format("%s(%s)", externFunc, qargs);
                 }
 
+                // Check for static method call (ClassName.staticMethod)
+                if (auto classNameIdent = cast(Identifier)memberExpr.object) {
+                    string resolvedClassName = resolveName(classNameIdent.name, (n) => (n in classRegistry) !is null);
+                    if (resolvedClassName in classRegistry) {
+                        ClassDecl cd = classRegistry[resolvedClassName];
+                        FunctionDecl[] candidates = methodCandidatesNamed(cd, memberExpr.member);
+                        // Filter for static methods only
+                        FunctionDecl[] staticCandidates;
+                        foreach (candidate; candidates) {
+                            if (candidate.isStatic) {
+                                staticCandidates ~= candidate;
+                            }
+                        }
+                        if (staticCandidates.length > 0) {
+                            string calleeDescription = format("static method '%s.%s'", resolvedClassName, memberExpr.member);
+                            FunctionDecl methodDecl = resolveOverload(staticCandidates, callExpr.args, callExpr.argNames,
+                                calleeDescription, callExpr.line, callExpr.column);
+                            checkMemberAccess(methodDecl.isPrivate, resolvedClassName, calleeDescription,
+                                callExpr.line, callExpr.column);
+                            ASTNode[] resolvedArgs = resolveCallArguments(methodDecl.params, false, callExpr.args,
+                                callExpr.argNames, calleeDescription, callExpr.line, callExpr.column);
+                            string methodSymbol = mangleMethodName(cd, resolvedClassName, methodDecl);
+
+                            // Static methods don't receive 'self' parameter
+                            string args = "";
+                            foreach (i, arg; resolvedArgs) {
+                                if (i > 0) args ~= ", ";
+                                args ~= generateExpression(arg);
+                            }
+                            recordUsage(resolvedClassName ~ "." ~ memberExpr.member, memberExpr.line, memberExpr.column);
+                            return format("%s(%s)", methodSymbol, args);
+                        }
+                    }
+                }
+
                 string objectExpr = generateExpression(memberExpr.object);
                 string methodName = memberExpr.member;
 
@@ -5763,6 +6458,7 @@ class CodeGenerator {
                 FunctionDecl[] candidates = cd !is null ? methodCandidatesNamed(cd, methodName) : [];
                 string calleeDescription = format("method '%s.%s'", className, methodName);
                 ASTNode[] resolvedArgs;
+                FunctionDecl methodDecl = null;
                 // Blind fallback for a method that isn't in cd.methods at
                 // all (e.g. impl-block-provided trait methods, generated
                 // separately by processImplBlock under this exact name) -
@@ -5779,7 +6475,7 @@ class CodeGenerator {
                     }
                     resolvedArgs = callExpr.args;
                 } else {
-                    FunctionDecl methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                    methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
                         calleeDescription, callExpr.line, callExpr.column);
                     checkMemberAccess(methodDecl.isPrivate, className, calleeDescription,
                         callExpr.line, callExpr.column);
@@ -5788,10 +6484,14 @@ class CodeGenerator {
                     methodSymbol = mangleMethodName(cd, className, methodDecl);
                 }
 
-                // Generate method call with object as first parameter
-                string args = objectExpr;
-                foreach (arg; resolvedArgs) {
-                    args ~= ", " ~ generateExpression(arg);
+                // Generate method call with object as first parameter (except for static methods)
+                string args = "";
+                if (methodDecl is null || !methodDecl.isStatic) {
+                    args = objectExpr;
+                }
+                foreach (i, arg; resolvedArgs) {
+                    if (args.length > 0) args ~= ", ";
+                    args ~= generateExpression(arg);
                 }
 
                 if (className.length > 0) {
@@ -6004,7 +6704,16 @@ class CodeGenerator {
             }
 
             string accessor = memberAccessor(memberExpr.object);
-            return format("%s%s%s", generateExpression(memberExpr.object), accessor, memberExpr.member);
+            string objectCode = generateExpression(memberExpr.object);
+            // C's `.`/`->` bind tighter than a prefix unary/binary/cast
+            // operator - `(*p).field`/`(a+b).field` need to keep their
+            // explicit grouping in the generated C, or `*p.field` parses
+            // as `*(p.field)` instead of `(*p).field`.
+            if (cast(UnaryExpr)memberExpr.object || cast(BinaryExpr)memberExpr.object ||
+                    cast(CastExpr)memberExpr.object || cast(IfExpr)memberExpr.object) {
+                objectCode = format("(%s)", objectCode);
+            }
+            return format("%s%s%s", objectCode, accessor, memberExpr.member);
         } else if (auto indexExpr = cast(IndexExpr)node) {
             string overloadCall = tryIndexOperatorOverloadCall(indexExpr);
             if (overloadCall.length > 0) {
@@ -6022,6 +6731,10 @@ class CodeGenerator {
             return resolved;
         } else if (auto intLit = cast(IntLiteral)node) {
             return to!string(intLit.value);
+        } else if (auto floatLit = cast(FloatLiteral)node) {
+            return floatLit.value;
+        } else if (auto charLit = cast(CharLiteral)node) {
+            return to!string(charLit.value);
         } else if (auto strLit = cast(StringLiteral)node) {
             return format("\"%s\"", escapeCString(strLit.value));
         } else if (auto regexLit = cast(RegexLiteral)node) {
@@ -6044,7 +6757,10 @@ class CodeGenerator {
             checkNotStruct(newExpr);
             recordUsage(newExpr.type.name, newExpr.line, newExpr.column);
             ClassDecl cd = newExpr.type.name in classRegistry ? classRegistry[newExpr.type.name] : null;
-            FunctionDecl[] ctors = cd !is null ? cd.constructors : [];
+            StructDecl sd = newExpr.type.name in structRegistry ? structRegistry[newExpr.type.name] : null;
+            UnionDecl ud = newExpr.type.name in unionRegistry ? unionRegistry[newExpr.type.name] : null;
+            FunctionDecl[] ctors = cd !is null ? cd.constructors :
+                (sd !is null ? sd.constructors : (ud !is null ? ud.constructors : []));
             string calleeDescription = format("constructor of '%s'", newExpr.type.name);
             ASTNode[] resolvedArgs;
             string ctorSymbol;
@@ -6061,7 +6777,9 @@ class CodeGenerator {
                     newExpr.line, newExpr.column);
                 resolvedArgs = resolveCallArguments(ctor.params, false, newExpr.args, newExpr.argNames,
                     calleeDescription, newExpr.line, newExpr.column);
-                ctorSymbol = mangleConstructorName(cd, newExpr.type.name, ctor);
+                ctorSymbol = cd !is null ? mangleConstructorName(cd, newExpr.type.name, ctor)
+                    : (sd !is null ? mangleConstructorName(sd, newExpr.type.name, ctor)
+                                   : mangleConstructorName(ud, newExpr.type.name, ctor));
             }
             string args = "";
             foreach (i, arg; resolvedArgs) {
@@ -6117,6 +6835,15 @@ class CodeGenerator {
     private Type inferType(ASTNode expr) {
         if (cast(IntLiteral)expr) {
             return new Type("int");
+        } else if (auto floatLit = cast(FloatLiteral)expr) {
+            // Check suffix to determine float vs double
+            string val = floatLit.value;
+            if (val.length > 0 && (val[$-1] == 'f' || val[$-1] == 'F')) {
+                return new Type("float");
+            }
+            return new Type("double"); // default to double
+        } else if (cast(CharLiteral)expr) {
+            return new Type("char");
         } else if (cast(StringLiteral)expr) {
             return new Type("char", true);
         } else if (cast(RegexLiteral)expr) {
@@ -6355,10 +7082,33 @@ class CodeGenerator {
             case "uint16": return "uint16_t";
             case "int32": return "int32_t";
             case "uint32": return "uint32_t";
+            // "int64"/"uint64" (unlike the u8/u16/.../i64 short forms,
+            // which the parser always rewrites to a long form before
+            // codegen ever sees them - see isPrimitiveTypeName's own
+            // comment) were never a recognized type at all before: this
+            // fell through to the `default: return name` case below,
+            // silently emitting the literal, meaningless C type name
+            // "int64"/"uint64" - a real bug, not just an unsupported
+            // alias, since `func f() -> uint64 {...}` compiled at the
+            // LLPL level but produced invalid C (see this file's own
+            // git history for the exact "uint64*" garbage this produced
+            // in a generated SDL binding).
+            case "int64": return "int64_t";
+            case "uint64": return "uint64_t";
             case "char": return "char";
             case "string": return "char*";
-            case "bool": return "int";
+            case "bool": return "bool"; // real C99 boolean (<stdbool.h>,
+                                        // included below in generateMultiple) -
+                                        // not "int", so an `extern func ... ->
+                                        // bool` binding to a real C library
+                                        // (e.g. SDL3, which returns actual
+                                        // bool from many of its own functions)
+                                        // doesn't conflict with that library's
+                                        // own header declaration - see the SDL
+                                        // stdlib bindings (stdlib/sdl/*.llpl)
             case "void": return "void";
+            case "float": return "float";
+            case "double": return "double";
             default: return name;
         }
     }
@@ -6367,8 +7117,8 @@ class CodeGenerator {
         string cType = primitiveToC(type.name);
 
         // Classes are always heap-allocated and accessed by pointer; structs
-        // are plain value types with no such auto-pointering.
-        if (!isPrimitiveTypeName(type.name) && !isStructTypeName(type.name)) {
+        // and unions are plain value types with no such auto-pointering.
+        if (!isPrimitiveTypeName(type.name) && !isStructTypeName(type.name) && !isUnionTypeName(type.name)) {
             if (!type.isPointer && !type.isArray) {
                 cType ~= "*"; // Classes are always pointers
             }

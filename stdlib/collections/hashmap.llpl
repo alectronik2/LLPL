@@ -1,0 +1,360 @@
+// Standard library: Enhanced HashMap
+// Namespace: std::collections
+// Note: prelude.llpl has a basic HashMap, this is an enhanced version with more features
+
+namespace std {
+namespace collections {
+
+// Hash map entry
+class HashMapEntry<K, V> {
+    let key: K
+    let value: V
+    let hash: uint
+    let next: HashMapEntry<K, V>*
+
+    constructor(k: K, v: V, h: uint) {
+        self.key = k
+        self.value = v
+        self.hash = h
+        self.next = null
+    }
+}
+
+// Enhanced HashMap with chaining for collision resolution
+// Requires K to implement Hashable trait
+class EnhancedHashMap<K: Hashable, V> {
+    let buckets: HashMapEntry<K, V>**
+    let capacity: int
+    let count: int
+    let load_factor: int  // Percentage (e.g., 75 for 0.75)
+
+    constructor() {
+        self.capacity = 16
+        self.count = 0
+        self.load_factor = 75
+        self.buckets = malloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
+
+        for let i: int = 0, i < self.capacity, i = i + 1 {
+            self.buckets[i] = null
+        }
+    }
+
+    constructor(initial_capacity: int) {
+        self.capacity = initial_capacity
+        self.count = 0
+        self.load_factor = 75
+        self.buckets = malloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
+
+        for let i: int = 0, i < self.capacity, i = i + 1 {
+            self.buckets[i] = null
+        }
+    }
+
+    destructor() {
+        self.clear()
+        if self.buckets != null {
+            free(self.buckets as void*)
+        }
+    }
+
+    func size() -> int {
+        return self.count
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+
+    func get_bucket_index(hash: uint) -> int {
+        return (hash as int) % self.capacity
+    }
+
+    func should_resize() -> bool {
+        return (self.count * 100) / self.capacity > self.load_factor
+    }
+
+    func resize() {
+        let old_capacity: int = self.capacity
+        let old_buckets: HashMapEntry<K, V>** = self.buckets
+
+        self.capacity = self.capacity * 2
+        self.buckets = malloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
+
+        for let i: int = 0, i < self.capacity, i = i + 1 {
+            self.buckets[i] = null
+        }
+
+        self.count = 0
+
+        // Rehash all entries
+        for let i: int = 0, i < old_capacity, i = i + 1 {
+            let entry: HashMapEntry<K, V>* = old_buckets[i]
+
+            while entry != null {
+                let next: HashMapEntry<K, V>* = (*entry).next
+                self.insert((*entry).key, (*entry).value)
+                free(entry as void*)
+                entry = next
+            }
+        }
+
+        free(old_buckets as void*)
+    }
+
+    func insert(key: K, value: V) {
+        let hash: uint = key.hash()
+        let bucket_idx: int = self.get_bucket_index(hash)
+
+        let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
+
+        // Check if key already exists
+        while entry != null {
+            if (*entry).hash == hash && (*entry).key.equals(key) {
+                (*entry).value = value
+                return
+            }
+            entry = (*entry).next
+        }
+
+        // Create new entry
+        let new_entry: HashMapEntry<K, V>* = malloc(sizeof(HashMapEntry<K, V>)) as HashMapEntry<K, V>*
+        *new_entry = new HashMapEntry<K, V>(key, value, hash)
+
+        (*new_entry).next = self.buckets[bucket_idx]
+        self.buckets[bucket_idx] = new_entry
+        self.count = self.count + 1
+
+        if self.should_resize() {
+            self.resize()
+        }
+    }
+
+    func get(key: K) -> Result<V, char*> {
+        let result: Result<V, char*> = new Result<V, char*>()
+        let hash: uint = key.hash()
+        let bucket_idx: int = self.get_bucket_index(hash)
+
+        let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
+
+        while entry != null {
+            if (*entry).hash == hash && (*entry).key.equals(key) {
+                result.set_ok((*entry).value)
+                return result
+            }
+            entry = (*entry).next
+        }
+
+        result.set_err("Key not found")
+        return result
+    }
+
+    func contains(key: K) -> bool {
+        let hash: uint = key.hash()
+        let bucket_idx: int = self.get_bucket_index(hash)
+
+        let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
+
+        while entry != null {
+            if (*entry).hash == hash && (*entry).key.equals(key) {
+                return true
+            }
+            entry = (*entry).next
+        }
+
+        return false
+    }
+
+    func remove(key: K) -> Result<V, char*> {
+        let result: Result<V, char*> = new Result<V, char*>()
+        let hash: uint = key.hash()
+        let bucket_idx: int = self.get_bucket_index(hash)
+
+        let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
+        let prev: HashMapEntry<K, V>* = null
+
+        while entry != null {
+            if (*entry).hash == hash && (*entry).key.equals(key) {
+                let value: V = (*entry).value
+
+                if prev == null {
+                    self.buckets[bucket_idx] = (*entry).next
+                } else {
+                    (*prev).next = (*entry).next
+                }
+
+                free(entry as void*)
+                self.count = self.count - 1
+
+                result.set_ok(value)
+                return result
+            }
+
+            prev = entry
+            entry = (*entry).next
+        }
+
+        result.set_err("Key not found")
+        return result
+    }
+
+    func keys() -> Vector<K> {
+        let result: Vector<K> = new Vector<K>()
+
+        for let i: int = 0, i < self.capacity, i = i + 1 {
+            let entry: HashMapEntry<K, V>* = self.buckets[i]
+
+            while entry != null {
+                result.push((*entry).key)
+                entry = (*entry).next
+            }
+        }
+
+        return result
+    }
+
+    func values() -> Vector<V> {
+        let result: Vector<V> = new Vector<V>()
+
+        for let i: int = 0, i < self.capacity, i = i + 1 {
+            let entry: HashMapEntry<K, V>* = self.buckets[i]
+
+            while entry != null {
+                result.push((*entry).value)
+                entry = (*entry).next
+            }
+        }
+
+        return result
+    }
+
+    func clear() {
+        for let i: int = 0, i < self.capacity, i = i + 1 {
+            let entry: HashMapEntry<K, V>* = self.buckets[i]
+
+            while entry != null {
+                let next: HashMapEntry<K, V>* = (*entry).next
+                free(entry as void*)
+                entry = next
+            }
+
+            self.buckets[i] = null
+        }
+
+        self.count = 0
+    }
+
+    // Get load factor as percentage
+    func get_load_factor() -> int {
+        if self.capacity == 0 {
+            return 0
+        }
+        return (self.count * 100) / self.capacity
+    }
+
+    // Get number of collisions (for performance analysis)
+    func get_collision_count() -> int {
+        let collisions: int = 0
+
+        for let i: int = 0, i < self.capacity, i = i + 1 {
+            let entry: HashMapEntry<K, V>* = self.buckets[i]
+            let chain_length: int = 0
+
+            while entry != null {
+                chain_length = chain_length + 1
+                entry = (*entry).next
+            }
+
+            if chain_length > 1 {
+                collisions = collisions + (chain_length - 1)
+            }
+        }
+
+        return collisions
+    }
+}
+
+// HashSet - set of unique values
+class HashSet<T: Hashable> {
+    let map: EnhancedHashMap<T, bool>
+
+    constructor() {
+        self.map = new EnhancedHashMap<T, bool>()
+    }
+
+    func insert(value: T) {
+        self.map.insert(value, true)
+    }
+
+    func contains(value: T) -> bool {
+        return self.map.contains(value)
+    }
+
+    func remove(value: T) -> bool {
+        let result: Result<bool, char*> = self.map.remove(value)
+        return result.is_ok()
+    }
+
+    func size() -> int {
+        return self.map.size()
+    }
+
+    func is_empty() -> bool {
+        return self.map.is_empty()
+    }
+
+    func clear() {
+        self.map.clear()
+    }
+
+    func to_vector() -> Vector<T> {
+        return self.map.keys()
+    }
+
+    // Set operations
+    func union(other: HashSet<T>) -> HashSet<T> {
+        let result: HashSet<T> = new HashSet<T>()
+
+        let this_items: Vector<T> = self.to_vector()
+        for let i: int = 0, i < this_items.size(), i = i + 1 {
+            result.insert(this_items.get(i))
+        }
+
+        let other_items: Vector<T> = other.to_vector()
+        for let i: int = 0, i < other_items.size(), i = i + 1 {
+            result.insert(other_items.get(i))
+        }
+
+        return result
+    }
+
+    func intersection(other: HashSet<T>) -> HashSet<T> {
+        let result: HashSet<T> = new HashSet<T>()
+
+        let this_items: Vector<T> = self.to_vector()
+        for let i: int = 0, i < this_items.size(), i = i + 1 {
+            let item: T = this_items.get(i)
+            if other.contains(item) {
+                result.insert(item)
+            }
+        }
+
+        return result
+    }
+
+    func difference(other: HashSet<T>) -> HashSet<T> {
+        let result: HashSet<T> = new HashSet<T>()
+
+        let this_items: Vector<T> = self.to_vector()
+        for let i: int = 0, i < this_items.size(), i = i + 1 {
+            let item: T = this_items.get(i)
+            if !other.contains(item) {
+                result.insert(item)
+            }
+        }
+
+        return result
+    }
+}
+
+} // namespace collections
+} // namespace std

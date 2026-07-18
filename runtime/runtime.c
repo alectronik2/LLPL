@@ -266,8 +266,8 @@ void rc_weak_release(char* ptr) {
     }
 }
 
-int rc_is_alive(char* ptr) {
-    if (!ptr) return 0;
+bool rc_is_alive(char* ptr) {
+    if (!ptr) return false;
     RefCount* rc = (RefCount*)ptr;
     return rc->count > 0;
 }
@@ -356,19 +356,19 @@ invalid:
     return 0xFFFD;
 }
 
-int llpl_utf8_valid(char* s) {
-    if (!s) return 0;
+bool llpl_utf8_valid(char* s) {
+    if (!s) return false;
     const unsigned char* p = (const unsigned char*)s;
     size_t remaining = strlen(s);
     while (remaining > 0) {
         size_t width = 0;
         int valid = 0;
         llpl_utf8_decode_one(p, remaining, &width, &valid);
-        if (!valid) return 0;
+        if (!valid) return false;
         p += width;
         remaining -= width;
     }
-    return 1;
+    return true;
 }
 
 uint64_t llpl_utf8_len(char* s) {
@@ -824,7 +824,7 @@ static int llpl_regex_match_internal(char* pattern, char* text, int64_t* starts,
     return 0;
 }
 
-int llpl_regex_match(char* pattern, char* text) {
+bool llpl_regex_match(char* pattern, char* text) {
     uint64_t groups = llpl_regex_group_count(pattern) + 1;
     int64_t* starts = (int64_t*)rc_alloc(groups * sizeof(int64_t));
     int64_t* ends = (int64_t*)rc_alloc(groups * sizeof(int64_t));
@@ -835,7 +835,7 @@ int llpl_regex_match(char* pattern, char* text) {
     return matched;
 }
 
-int llpl_regex_capture_bounds(char* pattern, char* text, uint64_t group, int64_t* start, int64_t* end) {
+bool llpl_regex_capture_bounds(char* pattern, char* text, uint64_t group, int64_t* start, int64_t* end) {
     uint64_t groups = llpl_regex_group_count(pattern) + 1;
     if (group >= groups) {
         if (start) *start = -1;

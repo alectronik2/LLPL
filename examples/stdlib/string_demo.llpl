@@ -1,0 +1,192 @@
+// Example: String manipulation using the standard library
+
+import "../../stdlib/text/string_utils.llpl"
+
+using namespace std.text
+
+func demo_string_basics() {
+    let s: String = new String("  Hello, World!  ")
+
+    // Trimming
+    let trimmed: String = StringUtils.trim(s)
+    let left_trim: String = StringUtils.trim_start(s)
+    let right_trim: String = StringUtils.trim_end(s)
+
+    // Case conversion
+    let upper: String = StringUtils.to_upper(trimmed)
+    let lower: String = StringUtils.to_lower(trimmed)
+
+    // Padding
+    let num: String = new String("42")
+    let padded: String = StringUtils.pad_left(num, 5, '0')  // "00042"
+
+    // Repetition
+    let repeated: String = StringUtils.repeat(new String("Ha"), 3)  // "HaHaHa"
+
+    // Reversal
+    let reversed: String = StringUtils.reverse(new String("LLPL"))  // "LPPL"
+}
+
+func demo_string_search() {
+    let text: String = new String("The quick brown fox jumps over the lazy dog")
+
+    // Contains check
+    let has_fox: bool = StringUtils.contains(text, new String("fox"))
+
+    // Find index
+    let idx: int = StringUtils.index_of(text, new String("fox"))
+    let last_idx: int = StringUtils.last_index_of(text, new String("the"))
+
+    // Prefix/suffix checks
+    let starts: bool = StringUtils.starts_with(text, new String("The"))
+    let ends: bool = StringUtils.ends_with(text, new String("dog"))
+
+    // Check if string is only whitespace
+    let ws: String = new String("   \t\n  ")
+    let is_ws: bool = StringUtils.is_whitespace(ws)  // true
+}
+
+func demo_string_splitting() {
+    // Split by character
+    let csv: String = new String("apple,banana,cherry")
+    let fruits: Vector<String> = StringUtils.split(csv, ',')
+    // fruits contains: ["apple", "banana", "cherry"]
+
+    // Split by string delimiter
+    let path: String = new String("one.two.three.four")
+    let parts: Vector<String> = StringUtils.split_str(path, new String("."))
+    // parts contains: ["one", "two", "three", "four"]
+
+    // Join strings
+    let joined: String = StringUtils.join(parts, new String(" -> "))
+    // "one -> two -> three -> four"
+}
+
+func demo_string_replacement() {
+    let s: String = new String("foo bar foo baz foo")
+
+    // Replace all occurrences
+    let all_replaced: String = StringUtils.replace_all(
+        s,
+        new String("foo"),
+        new String("qux")
+    )
+    // "qux bar qux baz qux"
+
+    // Replace first occurrence only
+    let first_replaced: String = StringUtils.replace_first(
+        s,
+        new String("foo"),
+        new String("qux")
+    )
+    // "qux bar foo baz foo"
+}
+
+func demo_string_builder() {
+    let sb: StringBuilder = new StringBuilder()
+
+    // Build a formatted string
+    sb.append(new String("Name: "))
+    sb.append(new String("Alice"))
+    sb.append_char('\n')
+
+    sb.append(new String("Age: "))
+    sb.append_int(30)
+    sb.append_char('\n')
+
+    sb.append(new String("Role: "))
+    sb.append(new String("Engineer"))
+    sb.append_char('\n')
+
+    // Get the final string
+    let result: String = sb.to_string()
+    // "Name: Alice\nAge: 30\nRole: Engineer\n"
+
+    // Get length without building
+    let len: int = sb.length()
+
+    // Clear for reuse
+    sb.clear()
+    sb.append(new String("New content"))
+}
+
+func demo_format_strings() {
+    let args: Vector<String> = new Vector<String>()
+    args.push(new String("Alice"))
+    args.push(new String("Engineer"))
+    args.push(new String("42"))
+
+    let formatted: String = Format.format(
+        new String("Name: {}, Role: {}, ID: {}"),
+        args
+    )
+    // "Name: Alice, Role: Engineer, ID: 42"
+}
+
+func demo_char_utils() {
+    // Character classification
+    let alpha: bool = CharUtils.is_alpha('A')           // true
+    let digit: bool = CharUtils.is_digit('5')           // true
+    let alnum: bool = CharUtils.is_alphanumeric('B')    // true
+    let ws: bool = CharUtils.is_whitespace(' ')         // true
+    let upper: bool = CharUtils.is_upper('A')           // true
+    let lower: bool = CharUtils.is_lower('a')           // true
+
+    // Character conversion
+    let to_lower: char = CharUtils.to_lower('A')        // 'a'
+    let to_upper: char = CharUtils.to_upper('b')        // 'B'
+}
+
+func demo_csv_parser() {
+    // Example: Parse CSV data
+    let csv_data: String = new String("Name,Age,City\nAlice,30,NYC\nBob,25,LA\nCharlie,35,SF")
+
+    let lines: Vector<String> = StringUtils.split(csv_data, '\n')
+    let num_lines: int = lines.len()
+
+    for let i: int = 0, i < num_lines, i = i + 1 {
+        let line: String = lines.get(i)
+        let fields: Vector<String> = StringUtils.split(line, ',')
+
+        // Process each field
+        let num_fields: int = fields.len()
+        for let j: int = 0, j < num_fields, j = j + 1 {
+            let field: String = fields.get(j)
+            // In a real app, you would process the field
+        }
+    }
+}
+
+func demo_log_formatter() {
+    // Example: Build formatted log messages
+    let sb: StringBuilder = new StringBuilder()
+
+    sb.append(new String("[INFO] "))
+    sb.append(new String("2024-01-15 10:30:45"))
+    sb.append(new String(" - "))
+    sb.append(new String("Server started on port "))
+    sb.append_int(8080)
+    sb.append_char('\n')
+
+    sb.append(new String("[INFO] "))
+    sb.append(new String("2024-01-15 10:30:46"))
+    sb.append(new String(" - "))
+    sb.append(new String("Accepted connection from client "))
+    sb.append_int(1)
+
+    let log: String = sb.to_string()
+}
+
+func main() -> int {
+    demo_string_basics()
+    demo_string_search()
+    demo_string_splitting()
+    demo_string_replacement()
+    demo_string_builder()
+    demo_format_strings()
+    demo_char_utils()
+    demo_csv_parser()
+    demo_log_formatter()
+
+    return 0
+}

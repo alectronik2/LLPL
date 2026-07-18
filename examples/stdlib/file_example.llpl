@@ -1,0 +1,80 @@
+// Example: File I/O operations using the standard library
+
+import "../../stdlib/text/string_utils.llpl"
+import "../../stdlib/io/file.llpl"
+import "../../stdlib/net/socket.llpl"
+
+using namespace std.text
+using namespace std.io
+using namespace std.net
+
+func main() -> int {
+    // Example 1: Write and read a file
+    let content: String = new String("Hello from LLPL!\nThis is line 2.\n")
+
+    let write_result: Result<int, char*> = std.io.write_file("test_output.txt", content)
+    if !write_result.is_ok() {
+        return 1
+    }
+
+    // Example 2: Read the file back
+    let read_result: Result<String, char*> = std.io.read_file("test_output.txt")
+    if read_result.is_ok() {
+        let data: String = read_result.unwrap()
+        // In a real program, you would print this
+    }
+
+    // Example 3: Append to file
+    std.io.append_file("test_output.txt", new String("Appended line.\n"))
+
+    // Example 4: Manual file operations
+    let f: File = new File("manual_test.txt", std.io.O_RDWR | std.io.O_CREAT | std.io.O_TRUNC)
+
+    if f.is_valid() {
+        // Write multiple lines
+        f.write_string(new String("Line 1\n"))
+        f.write_string(new String("Line 2\n"))
+        f.write_string(new String("Line 3\n"))
+
+        // Get file size
+        let size_result: Result<int, char*> = f.size()
+        if size_result.is_ok() {
+            let file_size: int = size_result.unwrap()
+            // File size is available here
+        }
+
+        // Seek to beginning
+        f.seek(0, std.io.SEEK_SET)
+
+        // Read all content
+        let all_content: Result<String, char*> = f.read_all()
+        if all_content.is_ok() {
+            let text: String = all_content.unwrap()
+            // Text contains all file content
+        }
+    }
+
+    // Example 5: File utilities
+    if std.io.file_exists("test_output.txt") {
+        // File exists, rename it
+        std.io.rename_file("test_output.txt", "renamed_output.txt")
+    }
+
+    // Example 6: Read file in chunks
+    let chunk_file: File = new File("renamed_output.txt", std.io.O_RDONLY)
+    if chunk_file.is_valid() {
+        let buffer: char[128]
+        let bytes_result: Result<int, char*> = chunk_file.read_bytes(buffer, 128)
+
+        if bytes_result.is_ok() {
+            let bytes_read: int = bytes_result.unwrap()
+            // Process buffer with bytes_read bytes
+        }
+    }
+
+    // Cleanup
+    std.io.delete_file("manual_test.txt")
+    std.io.delete_file("renamed_output.txt")
+
+    return 0
+}

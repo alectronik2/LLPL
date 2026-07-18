@@ -1,0 +1,183 @@
+// LLPL Standard Library
+// Main entry point for importing all stdlib modules
+
+// Import all standard library modules
+import "io/file.llpl"
+import "net/socket.llpl"
+import "text/string_utils.llpl"
+import "collections/collections.llpl"
+import "sdl/sdl.llpl"
+
+// Re-export commonly used aliass and functions for convenience
+namespace std {
+    // Convenient alias aliases
+    alias File = io.File
+    alias Socket = net.Socket
+    alias TcpServer = net.TcpServer
+    alias TcpClient = net.TcpClient
+    alias UdpSocket = net.UdpSocket
+    alias SockAddrIn = net.SockAddrIn
+    alias StringBuilder = text.StringBuilder
+    alias StringUtils = text.StringUtils
+    alias CharUtils = text.CharUtils
+    alias Format = text.Format
+
+    // Collection alias aliases
+    alias LinkedList = collections.LinkedList
+    alias DoublyLinkedList = collections.DoublyLinkedList
+    alias Stack = collections.Stack
+    alias Queue = collections.Queue
+    alias Deque = collections.Deque
+    alias CircularBuffer = collections.CircularBuffer
+    alias RBTree = collections.RBTree
+    alias BinaryHeap = collections.BinaryHeap
+    alias MaxHeap = collections.MaxHeap
+    alias PriorityQueue = collections.PriorityQueue
+    alias EnhancedHashMap = collections.EnhancedHashMap
+    alias HashSet = collections.HashSet
+    alias Trie = collections.Trie
+    alias Graph = collections.Graph
+    alias GraphMatrix = collections.GraphMatrix
+    alias Edge = collections.Edge
+
+    // Commonly used constants
+    namespace io_const {
+        const O_RDONLY: int = io.O_RDONLY
+        const O_WRONLY: int = io.O_WRONLY
+        const O_RDWR: int = io.O_RDWR
+        const O_CREAT: int = io.O_CREAT
+        const O_TRUNC: int = io.O_TRUNC
+        const O_APPEND: int = io.O_APPEND
+    }
+
+    namespace net_const {
+        const AF_INET: int = net.AF_INET
+        const SOCK_STREAM: int = net.SOCK_STREAM
+        const SOCK_DGRAM: int = net.SOCK_DGRAM
+        const IPPROTO_TCP: int = net.IPPROTO_TCP
+        const IPPROTO_UDP: int = net.IPPROTO_UDP
+    }
+}
+
+// Example usage patterns (commented out):
+/*
+// File I/O example
+func example_file_io() {
+    // Read entire file
+    let content: Result<String, char*> = std.io.read_file("test.txt")
+    if content.is_ok() {
+        let text: String = content.unwrap()
+        // Use text...
+    }
+
+    // Write file
+    std.io.write_file("output.txt", new String("Hello, World!"))
+
+    // Manual file handling
+    let f: std.File = new std.File("data.txt", std.io.O_RDWR | std.io.O_CREAT)
+    if f.is_valid() {
+        f.write_string(new String("Line 1\n"))
+        f.write_string(new String("Line 2\n"))
+
+        f.seek(0, std.io.SEEK_SET)
+        let read_result: Result<String, char*> = f.read_string(100)
+        // File automatically closed when f goes out of scope
+    }
+}
+
+// Network I/O example - TCP Server
+func example_tcp_server() {
+    let server: std.TcpServer = new std.TcpServer(8080)
+    let start_result: Result<bool, char*> = server.start(10)
+
+    if start_result.is_ok() {
+        for true {  // infinite loop
+            let client_result: Result<std.Socket, char*> = server.accept()
+            if client_result.is_ok() {
+                let client: std.Socket = client_result.unwrap()
+                let recv_result: Result<String, char*> = client.recv_string(1024)
+
+                if recv_result.is_ok() {
+                    let message: String = recv_result.unwrap()
+                    client.send_string(new String("Echo: ") + message)
+                }
+            }
+        }
+    }
+}
+
+// Network I/O example - TCP Client
+func example_tcp_client() {
+    let client: std.TcpClient = new std.TcpClient()
+    let connect_result: Result<bool, char*> = client.connect(127, 0, 0, 1, 8080)
+
+    if connect_result.is_ok() {
+        client.send(new String("Hello, Server!"))
+        let response: Result<String, char*> = client.recv(1024)
+
+        if response.is_ok() {
+            let msg: String = response.unwrap()
+            // Process message...
+        }
+
+        client.close()
+    }
+}
+
+// String utilities example
+func example_string_utils() {
+    let s: String = new String("  Hello, World!  ")
+
+    // Trim
+    let trimmed: String = std.StringUtils.trim(s)
+
+    // Split
+    let parts: Vector<String> = std.StringUtils.split(trimmed, ',')
+
+    // Join
+    let joined: String = std.StringUtils.join(parts, new String(" | "))
+
+    // Case conversion
+    let upper: String = std.StringUtils.to_upper(joined)
+    let lower: String = std.StringUtils.to_lower(upper)
+
+    // Search
+    let idx: int = std.StringUtils.index_of(s, new String("World"))
+    let contains: bool = std.StringUtils.contains(s, new String("Hello"))
+
+    // Replace
+    let replaced: String = std.StringUtils.replace_all(s, new String("World"), new String("LLPL"))
+}
+
+// StringBuilder example
+func example_string_builder() {
+    let sb: std.StringBuilder = new std.StringBuilder()
+
+    sb.append(new String("Hello"))
+    sb.append_char(' ')
+    sb.append(new String("from"))
+    sb.append_char(' ')
+    sb.append(new String("LLPL"))
+    sb.append_char('!')
+
+    sb.append_char('\n')
+    sb.append(new String("Number: "))
+    sb.append_int(42)
+
+    let result: String = sb.to_string()
+    // "Hello from LLPL!\nNumber: 42"
+}
+
+// Format string example
+func example_format() {
+    let args: Vector<String> = new Vector<String>()
+    args.push(new String("Alice"))
+    args.push(new String("30"))
+
+    let formatted: String = std.Format.format(
+        new String("Name: {}, Age: {}"),
+        args
+    )
+    // "Name: Alice, Age: 30"
+}
+*/

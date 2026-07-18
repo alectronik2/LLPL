@@ -1,0 +1,281 @@
+// Example: Simple Pong game using SDL3
+
+import "../../stdlib/sdl/sdl.llpl"
+
+using namespace std.sdl
+
+const WINDOW_WIDTH: int = 800
+const WINDOW_HEIGHT: int = 600
+const PADDLE_WIDTH: int = 20
+const PADDLE_HEIGHT: int = 100
+const BALL_SIZE: int = 15
+const PADDLE_SPEED: float = 300.0
+const BALL_SPEED: float = 250.0
+
+class Paddle {
+    let x: float
+    let y: float
+    let width: int
+    let height: int
+    let speed: float
+    let score: int
+
+    constructor(px: float, py: float) {
+        self.x = px
+        self.y = py
+        self.width = PADDLE_WIDTH
+        self.height = PADDLE_HEIGHT
+        self.speed = PADDLE_SPEED
+        self.score = 0
+    }
+
+    func move_up(dt: float) {
+        self.y = self.y - self.speed * dt
+        if self.y < 0.0 {
+            self.y = 0.0
+        }
+    }
+
+    func move_down(dt: float, max_y: int) {
+        self.y = self.y + self.speed * dt
+        if self.y > (max_y - self.height) as float {
+            self.y = (max_y - self.height) as float
+        }
+    }
+
+    func draw(renderer: Renderer) {
+        let rect: SDL_FRect = new SDL_FRect(
+            self.x,
+            self.y,
+            self.width as float,
+            self.height as float
+        )
+        renderer.fill_frect(rect)
+    }
+
+    func get_rect() -> SDL_FRect {
+        return new SDL_FRect(self.x, self.y, self.width as float, self.height as float)
+    }
+}
+
+class Ball {
+    let x: float
+    let y: float
+    let vx: float
+    let vy: float
+    let size: int
+
+    constructor(px: float, py: float) {
+        self.x = px
+        self.y = py
+        self.size = BALL_SIZE
+        self.vx = BALL_SPEED
+        self.vy = BALL_SPEED * 0.5
+    }
+
+    func update(dt: float) {
+        self.x = self.x + self.vx * dt
+        self.y = self.y + self.vy * dt
+
+        // Bounce off top and bottom
+        if self.y < 0.0 {
+            self.y = 0.0
+            self.vy = -self.vy
+        }
+
+        if self.y > (WINDOW_HEIGHT - self.size) as float {
+            self.y = (WINDOW_HEIGHT - self.size) as float
+            self.vy = -self.vy
+        }
+    }
+
+    func draw(renderer: Renderer) {
+        let rect: SDL_FRect = new SDL_FRect(
+            self.x,
+            self.y,
+            self.size as float,
+            self.size as float
+        )
+        renderer.fill_frect(rect)
+    }
+
+    func check_paddle_collision(paddle: Paddle) -> bool {
+        let ball_rect: SDL_FRect = new SDL_FRect(
+            self.x,
+            self.y,
+            self.size as float,
+            self.size as float
+        )
+        let paddle_rect: SDL_FRect = paddle.get_rect()
+
+        // Simple AABB collision
+        let collision: bool = (
+            ball_rect.x < paddle_rect.x + paddle_rect.w &&
+            ball_rect.x + ball_rect.w > paddle_rect.x &&
+            ball_rect.y < paddle_rect.y + paddle_rect.h &&
+            ball_rect.y + ball_rect.h > paddle_rect.y
+        )
+
+        if collision {
+            self.vx = -self.vx
+
+            // Add some randomness to y velocity
+            let center_diff: float = (self.y + (self.size as float) / 2.0) - (paddle_rect.y + paddle_rect.h / 2.0)
+            self.vy = center_diff * 2.0
+        }
+
+        return collision
+    }
+
+    func reset() {
+        self.x = (WINDOW_WIDTH / 2) as float
+        self.y = (WINDOW_HEIGHT / 2) as float
+        self.vx = if self.vx > 0.0 { -BALL_SPEED } else { BALL_SPEED }
+        self.vy = BALL_SPEED * 0.5
+    }
+
+    func is_out_left() -> bool {
+        return self.x < 0.0
+    }
+
+    func is_out_right() -> bool {
+        return self.x > WINDOW_WIDTH as float
+    }
+}
+
+func draw_dotted_line(renderer: Renderer, x: int) {
+    for let y: int = 0, y < WINDOW_HEIGHT, y = y + 20 {
+        let rect: SDL_Rect = new SDL_Rect(x, y, 5, 10)
+        renderer.fill_rect(rect)
+    }
+}
+
+func main() -> int {
+    // Initialize SDL3
+    let init_result: Result<bool, char*> = SDL.init(SDL_INIT_VIDEO)
+
+    if !init_result.is_ok() {
+        return 1
+    }
+
+    // Create window
+    let window: Window = new Window(
+        new String("LLPL Pong - W/S and Up/Down to play"),
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT
+    )
+
+    if !window.is_valid() {
+        SDL.quit()
+        return 1
+    }
+
+    // Create renderer
+    let renderer: Renderer = new Renderer(window)
+
+    if !renderer.is_valid() {
+        SDL.quit()
+        return 1
+    }
+
+    // Create paddles
+    let left_paddle: Paddle = new Paddle(30.0, (WINDOW_HEIGHT / 2 - PADDLE_HEIGHT / 2) as float)
+    let right_paddle: Paddle = new Paddle((WINDOW_WIDTH - 50) as float, (WINDOW_HEIGHT / 2 - PADDLE_HEIGHT / 2) as float)
+
+    // Create ball
+    let ball: Ball = new Ball((WINDOW_WIDTH / 2) as float, (WINDOW_HEIGHT / 2) as float)
+
+    // Event handler
+    let event_handler: EventHandler = new EventHandler()
+
+    // Timing
+    let last_time: uint64 = SDL.get_ticks()
+    let running: bool = true
+
+    // Main game loop
+    while running {
+        // Calculate delta time
+        let current_time: uint64 = SDL.get_ticks()
+        let dt: float = ((current_time - last_time) as float) / 1000.0
+        last_time = current_time
+
+        // Handle events
+        while event_handler.poll() {
+            if event_handler.is_quit() {
+                running = false
+            }
+
+            if event_handler.is_key_down() {
+                let key_event: SDL_KeyboardEvent* = event_handler.get_key_event()
+                if (*key_event).key == SDLK_ESCAPE {
+                    running = false
+                }
+            }
+        }
+
+        // Get keyboard state for continuous input
+        let keys: bool* = Input.get_keyboard_state()
+
+        // Left paddle (W/S keys) - indexed by scancode, not keycode (see
+        // sdl_core.llpl's own SDL_SCANCODE_* comment: SDLK_w/SDLK_s here
+        // would happen to still be in-bounds, but are the wrong table).
+        if keys[SDL_SCANCODE_W as int] {
+            left_paddle.move_up(dt)
+        }
+        if keys[SDL_SCANCODE_S as int] {
+            left_paddle.move_down(dt, WINDOW_HEIGHT)
+        }
+
+        // Right paddle (Up/Down arrows)
+        if keys[SDL_SCANCODE_UP as int] {
+            right_paddle.move_up(dt)
+        }
+        if keys[SDL_SCANCODE_DOWN as int] {
+            right_paddle.move_down(dt, WINDOW_HEIGHT)
+        }
+
+        // Update ball
+        ball.update(dt)
+
+        // Check collisions
+        ball.check_paddle_collision(left_paddle)
+        ball.check_paddle_collision(right_paddle)
+
+        // Check if ball went out
+        if ball.is_out_left() {
+            right_paddle.score = right_paddle.score + 1
+            ball.reset()
+        }
+
+        if ball.is_out_right() {
+            left_paddle.score = left_paddle.score + 1
+            ball.reset()
+        }
+
+        // Render
+        renderer.set_draw_color(0, 0, 0, 255)
+        renderer.clear()
+
+        // Draw center line
+        renderer.set_draw_color(100, 100, 100, 255)
+        draw_dotted_line(renderer, WINDOW_WIDTH / 2 - 2)
+
+        // Draw paddles
+        renderer.set_draw_color(255, 255, 255, 255)
+        left_paddle.draw(renderer)
+        right_paddle.draw(renderer)
+
+        // Draw ball
+        renderer.set_draw_color(255, 255, 0, 255)
+        ball.draw(renderer)
+
+        // Present
+        renderer.present()
+
+        // Cap frame rate
+        SDL.delay(16)
+    }
+
+    SDL.quit()
+    return 0
+}

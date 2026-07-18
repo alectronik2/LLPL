@@ -1,0 +1,368 @@
+// Standard library: Red-Black Tree
+// Namespace: std::collections
+// Self-balancing binary search tree with O(log n) operations
+
+namespace std {
+namespace collections {
+
+// Red-Black tree node colors
+const RB_RED: int = 0
+const RB_BLACK: int = 1
+
+// Red-Black tree node
+class RBNode<K, V> {
+    let key: K
+    let value: V
+    let color: int
+    let left: RBNode<K, V>*
+    let right: RBNode<K, V>*
+    let parent: RBNode<K, V>*
+
+    constructor(k: K, v: V) {
+        self.key = k
+        self.value = v
+        self.color = RB_RED  // New nodes are always red
+        self.left = null
+        self.right = null
+        self.parent = null
+    }
+}
+
+// Red-Black Tree
+// Requires K to be comparable (have <, >, == operators)
+class RBTree<K, V> {
+    let root: RBNode<K, V>*
+    let count: int
+
+    constructor() {
+        self.root = null
+        self.count = 0
+    }
+
+    destructor() {
+        self.clear()
+    }
+
+    func size() -> int {
+        return self.count
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+
+    // Helper: get node color (null nodes are black)
+    func get_color(node: RBNode<K, V>*) -> int {
+        if node == null {
+            return RB_BLACK
+        }
+        return (*node).color
+    }
+
+    // Helper: set node color
+    func set_color(node: RBNode<K, V>*, color: int) {
+        if node != null {
+            (*node).color = color
+        }
+    }
+
+    // Left rotation
+    func rotate_left(node: RBNode<K, V>*) {
+        let right_child: RBNode<K, V>* = (*node).right
+        (*node).right = (*right_child).left
+
+        if (*right_child).left != null {
+            (*(*right_child).left).parent = node
+        }
+
+        (*right_child).parent = (*node).parent
+
+        if (*node).parent == null {
+            self.root = right_child
+        } else if node == (*(*node).parent).left {
+            (*(*node).parent).left = right_child
+        } else {
+            (*(*node).parent).right = right_child
+        }
+
+        (*right_child).left = node
+        (*node).parent = right_child
+    }
+
+    // Right rotation
+    func rotate_right(node: RBNode<K, V>*) {
+        let left_child: RBNode<K, V>* = (*node).left
+        (*node).left = (*left_child).right
+
+        if (*left_child).right != null {
+            (*(*left_child).right).parent = node
+        }
+
+        (*left_child).parent = (*node).parent
+
+        if (*node).parent == null {
+            self.root = left_child
+        } else if node == (*(*node).parent).right {
+            (*(*node).parent).right = left_child
+        } else {
+            (*(*node).parent).left = left_child
+        }
+
+        (*left_child).right = node
+        (*node).parent = left_child
+    }
+
+    // Fix red-black tree properties after insertion
+    func fix_insert(node: RBNode<K, V>*) {
+        while node != self.root && self.get_color((*node).parent) == RB_RED {
+            let parent: RBNode<K, V>* = (*node).parent
+            let grandparent: RBNode<K, V>* = (*parent).parent
+
+            if parent == (*grandparent).left {
+                let uncle: RBNode<K, V>* = (*grandparent).right
+
+                if self.get_color(uncle) == RB_RED {
+                    // Case 1: Uncle is red
+                    self.set_color(parent, RB_BLACK)
+                    self.set_color(uncle, RB_BLACK)
+                    self.set_color(grandparent, RB_RED)
+                    node = grandparent
+                } else {
+                    // Case 2: Uncle is black
+                    if node == (*parent).right {
+                        node = parent
+                        self.rotate_left(node)
+                        parent = (*node).parent
+                    }
+
+                    // Case 3
+                    self.set_color(parent, RB_BLACK)
+                    self.set_color(grandparent, RB_RED)
+                    self.rotate_right(grandparent)
+                }
+            } else {
+                let uncle: RBNode<K, V>* = (*grandparent).left
+
+                if self.get_color(uncle) == RB_RED {
+                    // Case 1: Uncle is red
+                    self.set_color(parent, RB_BLACK)
+                    self.set_color(uncle, RB_BLACK)
+                    self.set_color(grandparent, RB_RED)
+                    node = grandparent
+                } else {
+                    // Case 2: Uncle is black
+                    if node == (*parent).left {
+                        node = parent
+                        self.rotate_right(node)
+                        parent = (*node).parent
+                    }
+
+                    // Case 3
+                    self.set_color(parent, RB_BLACK)
+                    self.set_color(grandparent, RB_RED)
+                    self.rotate_left(grandparent)
+                }
+            }
+        }
+
+        self.set_color(self.root, RB_BLACK)
+    }
+
+    // Insert key-value pair
+    func insert(key: K, value: V) {
+        let new_node: RBNode<K, V>* = malloc(sizeof(RBNode<K, V>)) as RBNode<K, V>*
+        *new_node = new RBNode<K, V>(key, value)
+
+        if self.root == null {
+            self.root = new_node
+            (*new_node).color = RB_BLACK
+            self.count = 1
+            return
+        }
+
+        let current: RBNode<K, V>* = self.root
+        let parent: RBNode<K, V>* = null
+
+        while true {
+            parent = current
+
+            if key < (*current).key {
+                current = (*current).left
+                if current == null {
+                    (*parent).left = new_node
+                    break
+                }
+            } else if key > (*current).key {
+                current = (*current).right
+                if current == null {
+                    (*parent).right = new_node
+                    break
+                }
+            } else {
+                // Key already exists, update value
+                (*current).value = value
+                free(new_node as void*)
+                return
+            }
+        }
+
+        (*new_node).parent = parent
+        self.count = self.count + 1
+        self.fix_insert(new_node)
+    }
+
+    // Find value by key
+    func find(key: K) -> Result<V, char*> {
+        let result: Result<V, char*> = new Result<V, char*>()
+        let current: RBNode<K, V>* = self.root
+
+        while current != null {
+            if key < (*current).key {
+                current = (*current).left
+            } else if key > (*current).key {
+                current = (*current).right
+            } else {
+                result.set_ok((*current).value)
+                return result
+            }
+        }
+
+        result.set_err("Key not found")
+        return result
+    }
+
+    // Check if key exists
+    func contains(key: K) -> bool {
+        let current: RBNode<K, V>* = self.root
+
+        while current != null {
+            if key < (*current).key {
+                current = (*current).left
+            } else if key > (*current).key {
+                current = (*current).right
+            } else {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    // Find minimum node in subtree
+    func find_min(node: RBNode<K, V>*) -> RBNode<K, V>* {
+        while (*node).left != null {
+            node = (*node).left
+        }
+        return node
+    }
+
+    // Find maximum node in subtree
+    func find_max(node: RBNode<K, V>*) -> RBNode<K, V>* {
+        while (*node).right != null {
+            node = (*node).right
+        }
+        return node
+    }
+
+    // Get minimum key
+    func min_key() -> Result<K, char*> {
+        let result: Result<K, char*> = new Result<K, char*>()
+
+        if self.root == null {
+            result.set_err("Tree is empty")
+            return result
+        }
+
+        let min_node: RBNode<K, V>* = self.find_min(self.root)
+        result.set_ok((*min_node).key)
+        return result
+    }
+
+    // Get maximum key
+    func max_key() -> Result<K, char*> {
+        let result: Result<K, char*> = new Result<K, char*>()
+
+        if self.root == null {
+            result.set_err("Tree is empty")
+            return result
+        }
+
+        let max_node: RBNode<K, V>* = self.find_max(self.root)
+        result.set_ok((*max_node).key)
+        return result
+    }
+
+    // In-order traversal (returns sorted keys)
+    func in_order_helper(node: RBNode<K, V>*, result: Vector<K>) {
+        if node == null {
+            return
+        }
+
+        self.in_order_helper((*node).left, result)
+        result.push((*node).key)
+        self.in_order_helper((*node).right, result)
+    }
+
+    func keys() -> Vector<K> {
+        let result: Vector<K> = new Vector<K>()
+        self.in_order_helper(self.root, result)
+        return result
+    }
+
+    // Get all values in sorted key order
+    func values_helper(node: RBNode<K, V>*, result: Vector<V>) {
+        if node == null {
+            return
+        }
+
+        self.values_helper((*node).left, result)
+        result.push((*node).value)
+        self.values_helper((*node).right, result)
+    }
+
+    func values() -> Vector<V> {
+        let result: Vector<V> = new Vector<V>()
+        self.values_helper(self.root, result)
+        return result
+    }
+
+    // Clear tree helper
+    func clear_helper(node: RBNode<K, V>*) {
+        if node == null {
+            return
+        }
+
+        self.clear_helper((*node).left)
+        self.clear_helper((*node).right)
+        free(node as void*)
+    }
+
+    func clear() {
+        self.clear_helper(self.root)
+        self.root = null
+        self.count = 0
+    }
+
+    // Get tree height (for debugging/analysis)
+    func height_helper(node: RBNode<K, V>*) -> int {
+        if node == null {
+            return 0
+        }
+
+        let left_height: int = self.height_helper((*node).left)
+        let right_height: int = self.height_helper((*node).right)
+
+        if left_height > right_height {
+            return left_height + 1
+        } else {
+            return right_height + 1
+        }
+    }
+
+    func height() -> int {
+        return self.height_helper(self.root)
+    }
+}
+
+} // namespace collections
+} // namespace std

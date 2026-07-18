@@ -1,0 +1,241 @@
+// Standard library: File I/O
+// Namespace: std::io
+
+namespace std {
+namespace io {
+
+// File open modes
+const O_RDONLY: int = 0
+const O_WRONLY: int = 1
+const O_RDWR: int = 2
+const O_CREAT: int = 64
+const O_TRUNC: int = 512
+const O_APPEND: int = 1024
+
+// Seek positions
+const SEEK_SET: int = 0
+const SEEK_CUR: int = 1
+const SEEK_END: int = 2
+
+// Error codes
+const ERR_FILE_NOT_FOUND: int = -1
+const ERR_PERMISSION_DENIED: int = -2
+const ERR_IO_ERROR: int = -3
+
+// Forward declarations for C runtime
+extern func open(path: char*, flags: int, mode: int) -> int
+extern func close(fd: int) -> int
+extern func read(fd: int, buf: char*, count: uint) -> int
+extern func write(fd: int, buf: char*, count: uint) -> int
+extern func lseek(fd: int, offset: int, whence: int) -> int
+extern func unlink(path: char*) -> int
+extern func rename(oldpath: char*, newpath: char*) -> int
+
+// File class with RAII semantics
+class File {
+    let fd: int
+    let path: String
+    let is_open: bool
+
+    constructor(filepath: char*, flags: int) {
+        self.path = new String(filepath)
+        self.fd = open(filepath, flags, 0o644)
+        self.is_open = self.fd >= 0
+    }
+
+    constructor(filepath: char*, flags: int, mode: int) {
+        self.path = new String(filepath)
+        self.fd = open(filepath, flags, mode)
+        self.is_open = self.fd >= 0
+    }
+
+    destructor() {
+        if self.is_open {
+            close(self.fd)
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.is_open
+    }
+
+    func read_bytes(buffer: char*, size: uint) -> Result<int, char*> {
+        let result: Result<int, char*> = new Result<int, char*>()
+
+        if !self.is_open {
+            result.set_err("File not open")
+            return result
+        }
+
+        let bytes_read: int = read(self.fd, buffer, size)
+        if bytes_read < 0 {
+            result.set_err("Read error")
+        } else {
+            result.set_ok(bytes_read)
+        }
+
+        return result
+    }
+
+    func write_bytes(buffer: char*, size: uint) -> Result<int, char*> {
+        let result: Result<int, char*> = new Result<int, char*>()
+
+        if !self.is_open {
+            result.set_err("File not open")
+            return result
+        }
+
+        let bytes_written: int = write(self.fd, buffer, size)
+        if bytes_written < 0 {
+            result.set_err("Write error")
+        } else {
+            result.set_ok(bytes_written)
+        }
+
+        return result
+    }
+
+    func read_string(max_size: uint) -> Result<String, char*> {
+        let result: Result<String, char*> = new Result<String, char*>()
+
+        if !self.is_open {
+            result.set_err("File not open")
+            return result
+        }
+
+        let buffer: char* = llpl_alloc(max_size + 1)
+        let bytes_read: int = read(self.fd, buffer, max_size)
+
+        if bytes_read < 0 {
+            llpl_free(buffer)
+            result.set_err("Read error")
+            return result
+        }
+
+        buffer[bytes_read] = '\0'
+        let s: String = new String(buffer)
+        llpl_free(buffer)
+        result.set_ok(s)
+
+        return result
+    }
+
+    func write_string(s: String) -> Result<int, char*> {
+        return self.write_bytes(s.c_str(), s.len() as uint)
+    }
+
+    func seek(offset: int, whence: int) -> Result<int, char*> {
+        let result: Result<int, char*> = new Result<int, char*>()
+
+        if !self.is_open {
+            result.set_err("File not open")
+            return result
+        }
+
+        let pos: int = lseek(self.fd, offset, whence)
+        if pos < 0 {
+            result.set_err("Seek error")
+        } else {
+            result.set_ok(pos)
+        }
+
+        return result
+    }
+
+    func tell() -> Result<int, char*> {
+        return self.seek(0, SEEK_CUR)
+    }
+
+    func size() -> Result<int, char*> {
+        let current_pos_result: Result<int, char*> = self.tell()
+        if !current_pos_result.is_ok() {
+            return current_pos_result
+        }
+        let current_pos: int = current_pos_result.unwrap()
+
+        let end_pos_result: Result<int, char*> = self.seek(0, SEEK_END)
+        if !end_pos_result.is_ok() {
+            return end_pos_result
+        }
+        let file_size: int = end_pos_result.unwrap()
+
+        // Restore position
+        self.seek(current_pos, SEEK_SET)
+
+        let result: Result<int, char*> = new Result<int, char*>()
+        result.set_ok(file_size)
+        return result
+    }
+
+    func read_all() -> Result<String, char*> {
+        let size_result: Result<int, char*> = self.size()
+        if !size_result.is_ok() {
+            let result: Result<String, char*> = new Result<String, char*>()
+            result.set_err("Cannot get file size")
+            return result
+        }
+
+        let file_size: int = size_result.unwrap()
+        self.seek(0, SEEK_SET)
+
+        return self.read_string(file_size as uint)
+    }
+
+    func flush() -> bool {
+        // Note: Would call fsync(self.fd) if available
+        return true
+    }
+}
+
+// Utility functions
+func read_file(path: char*) -> Result<String, char*> {
+    let f: File = new File(path, O_RDONLY)
+    let result: Result<String, char*> = new Result<String, char*>()
+
+    if !f.is_valid() {
+        result.set_err("Cannot open file")
+        return result
+    }
+
+    return f.read_all()
+}
+
+func write_file(path: char*, content: String) -> Result<int, char*> {
+    let f: File = new File(path, O_WRONLY | O_CREAT | O_TRUNC)
+    let result: Result<int, char*> = new Result<int, char*>()
+
+    if !f.is_valid() {
+        result.set_err("Cannot open file")
+        return result
+    }
+
+    return f.write_string(content)
+}
+
+func append_file(path: char*, content: String) -> Result<int, char*> {
+    let f: File = new File(path, O_WRONLY | O_CREAT | O_APPEND)
+    let result: Result<int, char*> = new Result<int, char*>()
+
+    if !f.is_valid() {
+        result.set_err("Cannot open file")
+        return result
+    }
+
+    return f.write_string(content)
+}
+
+func file_exists(path: char*) -> bool {
+    let f: File = new File(path, O_RDONLY)
+    return f.is_valid()
+}
+
+func delete_file(path: char*) -> bool {
+    return unlink(path) == 0
+}
+
+func rename_file(oldpath: char*, newpath: char*) -> bool {
+    return rename(oldpath, newpath) == 0
+}
+
+} // namespace io
+} // namespace std
