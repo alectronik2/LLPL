@@ -1,0 +1,630 @@
+// Standard library: JSON parsing and serialization
+// Namespace: std::json
+//
+// A standards-compliant (RFC 8259) recursive-descent parser plus a
+// matching serializer: objects, arrays, strings (backslash escapes,
+// including \uXXXX - BMP code points only, encoded to UTF-8; no
+// surrogate-pair handling for astral code points, not needed by any
+// config/API-payload use this exists for), numbers (JSON itself makes no
+// int/float distinction - a literal with no '.'/'e'/'E' parses as int,
+// everything else as float, the same convention std.yaml.YamlValue
+// uses), booleans, and null.
+//
+// Usage:
+//
+//   import "stdlib/json/json_parser.llpl"
+//   using namespace std.json
+//
+//   let doc: JsonValue = parse(new String("{\"name\": \"demo\", \"port\": 8080}"))
+//   let name: String = doc.get_or(new String("name"), JsonValue.make_string(new String(""))).as_string()
+//   let port: int = doc.get_or(new String("port"), JsonValue.make_int(0)).as_int()
+//
+//   let out: String = stringify(doc)
+
+import "../text/string_utils.llpl"
+
+using namespace std.text
+
+namespace std {
+namespace json {
+
+const JSON_NULL: int = 0
+const JSON_BOOL: int = 1
+const JSON_INT: int = 2
+const JSON_FLOAT: int = 3
+const JSON_STRING: int = 4
+const JSON_ARRAY: int = 5
+const JSON_OBJECT: int = 6
+
+// A parsed JSON value - a manual tagged union (`kind` plus one field per
+// payload, only the relevant one ever populated) rather than this
+// language's real tagged-enum feature - see std.yaml.YamlValue's own
+// comment on why: this type is directly self-referential (an array/
+// object holds more JsonValues), and a plain class keeps that simple.
+class JsonValue {
+    let kind: int
+    let bool_val: bool
+    let int_val: int
+    let float_val: float
+    let string_val: String
+    let arr_val: Vector<JsonValue>
+    let obj_keys: Vector<String>
+    let obj_values: Vector<JsonValue>
+
+    constructor() {
+        self.kind = JSON_NULL
+        self.bool_val = false
+        self.int_val = 0
+        self.float_val = 0.0
+        self.string_val = new String("")
+        self.arr_val = new Vector<JsonValue>()
+        self.obj_keys = new Vector<String>()
+        self.obj_values = new Vector<JsonValue>()
+    }
+
+    // A class needs an explicit destructor - even an empty one - for any
+    // *other* class's auto-generated cleanup to be able to release a
+    // field of this type (see std.yaml.YamlValue's own identical comment):
+    // Optional<JsonValue> (returned by get() below) needs
+    // JsonValue_destroy to exist at all.
+    destructor() {}
+
+    static func make_null() -> JsonValue {
+        return new JsonValue()
+    }
+
+    static func make_bool(v: bool) -> JsonValue {
+        let val: JsonValue = new JsonValue()
+        val.kind = JSON_BOOL
+        val.bool_val = v
+        return val
+    }
+
+    static func make_int(v: int) -> JsonValue {
+        let val: JsonValue = new JsonValue()
+        val.kind = JSON_INT
+        val.int_val = v
+        return val
+    }
+
+    static func make_float(v: float) -> JsonValue {
+        let val: JsonValue = new JsonValue()
+        val.kind = JSON_FLOAT
+        val.float_val = v
+        return val
+    }
+
+    static func make_string(v: String) -> JsonValue {
+        let val: JsonValue = new JsonValue()
+        val.kind = JSON_STRING
+        val.string_val = v
+        return val
+    }
+
+    static func make_array() -> JsonValue {
+        let val: JsonValue = new JsonValue()
+        val.kind = JSON_ARRAY
+        return val
+    }
+
+    static func make_object() -> JsonValue {
+        let val: JsonValue = new JsonValue()
+        val.kind = JSON_OBJECT
+        return val
+    }
+
+    func is_null() -> bool { return self.kind == JSON_NULL }
+    func is_bool() -> bool { return self.kind == JSON_BOOL }
+    func is_int() -> bool { return self.kind == JSON_INT }
+    func is_float() -> bool { return self.kind == JSON_FLOAT }
+    func is_string() -> bool { return self.kind == JSON_STRING }
+    func is_array() -> bool { return self.kind == JSON_ARRAY }
+    func is_object() -> bool { return self.kind == JSON_OBJECT }
+
+    func as_bool() -> bool { return self.bool_val }
+    func as_int() -> int { return self.int_val }
+
+    // Widens an int value too, so a field that's usually written "1.0"
+    // but occasionally shows up as the plain integer "1" doesn't need
+    // special-casing at every call site (matches std.yaml.YamlValue's
+    // own as_float()).
+    func as_float() -> float {
+        if self.kind == JSON_INT {
+            return self.int_val as float
+        }
+        return self.float_val
+    }
+
+    func as_string() -> String { return self.string_val }
+    func as_array() -> Vector<JsonValue> { return self.arr_val }
+
+    // Number of array elements or object entries; 0 for any scalar kind.
+    func len() -> int {
+        if self.kind == JSON_ARRAY {
+            return self.arr_val.len()
+        }
+        if self.kind == JSON_OBJECT {
+            return self.obj_keys.len()
+        }
+        return 0
+    }
+
+    func push(item: JsonValue) {
+        self.arr_val.push(item)
+    }
+
+    func get_index(index: int) -> JsonValue {
+        return self.arr_val.get(index)
+    }
+
+    // Object lookup - by content, not key identity (String's own
+    // operator== compares content, see prelude.llpl).
+    func get(key: String) -> Optional<JsonValue> {
+        let result: Optional<JsonValue> = new Optional<JsonValue>()
+        let i: int = 0
+        while i < self.obj_keys.len() {
+            if self.obj_keys.get(i) == key {
+                result.set(self.obj_values.get(i))
+                return result
+            }
+            i = i + 1
+        }
+        return result
+    }
+
+    func has_key(key: String) -> bool {
+        return self.get(key).is_some()
+    }
+
+    // Looks up `key`, or returns `fallback` if it's absent - most call
+    // sites want this instead of unwrapping get()'s Optional themselves.
+    func get_or(key: String, fallback: JsonValue) -> JsonValue {
+        let found: Optional<JsonValue> = self.get(key)
+        if found.is_some() {
+            return found.get()
+        }
+        return fallback
+    }
+
+    // Inserts, or replaces in place (preserving its original position)
+    // if `key` is already present - either way, insertion order among
+    // distinct keys is preserved (obj_keys/obj_values are always
+    // extended in parallel, never reordered).
+    func set(key: String, value: JsonValue) {
+        let i: int = 0
+        while i < self.obj_keys.len() {
+            if self.obj_keys.get(i) == key {
+                self.obj_values.set(i, value)
+                return
+            }
+            i = i + 1
+        }
+        self.obj_keys.push(key)
+        self.obj_values.push(value)
+    }
+
+    func keys() -> Vector<String> {
+        return self.obj_keys
+    }
+}
+
+func hex_digit_value(c: char) -> int {
+    if c >= '0' && c <= '9' {
+        return (c as int) - ('0' as int)
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c as int) - ('a' as int) + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c as int) - ('A' as int) + 10
+    }
+    return 0
+}
+
+// Encodes one Unicode code point (as decoded from a `\uXXXX` escape) as
+// UTF-8 into `sb`.
+func append_utf8_codepoint(sb: StringBuilder, code: int) {
+    if code < 0x80 {
+        sb.append_char(code as char)
+    } else if code < 0x800 {
+        sb.append_char((0xC0 | (code >> 6)) as char)
+        sb.append_char((0x80 | (code & 0x3F)) as char)
+    } else {
+        sb.append_char((0xE0 | (code >> 12)) as char)
+        sb.append_char((0x80 | ((code >> 6) & 0x3F)) as char)
+        sb.append_char((0x80 | (code & 0x3F)) as char)
+    }
+}
+
+func parse_int_from_string(s: String) -> int {
+    let len: int = s.byte_len()
+    let i: int = 0
+    let negative: bool = false
+    if len > 0 && s.byte_at(0) == '-' {
+        negative = true
+        i = 1
+    }
+    let value: int = 0
+    while i < len {
+        let c: char = s.byte_at(i)
+        if c >= '0' && c <= '9' {
+            value = value * 10 + ((c as int) - ('0' as int))
+        }
+        i = i + 1
+    }
+    if negative {
+        return -value
+    }
+    return value
+}
+
+func parse_float_from_string(s: String) -> float {
+    let len: int = s.byte_len()
+    let i: int = 0
+    let negative: bool = false
+    if len > 0 && s.byte_at(0) == '-' {
+        negative = true
+        i = 1
+    }
+    let int_part: float = 0.0
+    while i < len && s.byte_at(i) >= '0' && s.byte_at(i) <= '9' {
+        int_part = int_part * 10.0 + (((s.byte_at(i) as int) - ('0' as int)) as float)
+        i = i + 1
+    }
+    let frac_part: float = 0.0
+    let frac_scale: float = 1.0
+    if i < len && s.byte_at(i) == '.' {
+        i = i + 1
+        while i < len && s.byte_at(i) >= '0' && s.byte_at(i) <= '9' {
+            frac_scale = frac_scale / 10.0
+            frac_part = frac_part + (((s.byte_at(i) as int) - ('0' as int)) as float) * frac_scale
+            i = i + 1
+        }
+    }
+    let result: float = int_part + frac_part
+    if i < len && (s.byte_at(i) == 'e' || s.byte_at(i) == 'E') {
+        i = i + 1
+        let exp_negative: bool = false
+        if i < len && (s.byte_at(i) == '-' || s.byte_at(i) == '+') {
+            exp_negative = s.byte_at(i) == '-'
+            i = i + 1
+        }
+        let exp_val: int = 0
+        while i < len && s.byte_at(i) >= '0' && s.byte_at(i) <= '9' {
+            exp_val = exp_val * 10 + ((s.byte_at(i) as int) - ('0' as int))
+            i = i + 1
+        }
+        let j: int = 0
+        while j < exp_val {
+            if exp_negative {
+                result = result / 10.0
+            } else {
+                result = result * 10.0
+            }
+            j = j + 1
+        }
+    }
+    if negative {
+        return -result
+    }
+    return result
+}
+
+// Recursive-descent JSON parser (RFC 8259), character by character - no
+// line/indentation tracking needed, unlike std.yaml: JSON's grammar is
+// always fully delimited by its own punctuation.
+class JsonParser {
+    let text: String
+    let pos: int
+    let len: int
+
+    constructor(text: String) {
+        self.text = text
+        self.pos = 0
+        self.len = text.byte_len()
+    }
+
+    destructor() {}
+
+    func skip_ws() {
+        while self.pos < self.len {
+            let c: char = self.text.byte_at(self.pos)
+            if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+                self.pos = self.pos + 1
+            } else {
+                break
+            }
+        }
+    }
+
+    func peek() -> char {
+        if self.pos >= self.len {
+            return '\0'
+        }
+        return self.text.byte_at(self.pos)
+    }
+
+    func parse_value() -> JsonValue {
+        self.skip_ws()
+        let c: char = self.peek()
+        if c == '{' {
+            return self.parse_object()
+        }
+        if c == '[' {
+            return self.parse_array()
+        }
+        if c == '"' {
+            return JsonValue.make_string(self.parse_string())
+        }
+        if c == 't' || c == 'f' {
+            return self.parse_bool()
+        }
+        if c == 'n' {
+            return self.parse_null()
+        }
+        return self.parse_number()
+    }
+
+    func parse_object() -> JsonValue {
+        let result: JsonValue = JsonValue.make_object()
+        self.pos = self.pos + 1 // consume '{'
+        self.skip_ws()
+        if self.peek() == '}' {
+            self.pos = self.pos + 1
+            return result
+        }
+        while self.pos < self.len {
+            self.skip_ws()
+            let key: String = self.parse_string()
+            self.skip_ws()
+            if self.peek() == ':' {
+                self.pos = self.pos + 1
+            }
+            let value: JsonValue = self.parse_value()
+            result.set(key, value)
+            self.skip_ws()
+            if self.peek() == ',' {
+                self.pos = self.pos + 1
+            } else {
+                break
+            }
+        }
+        self.skip_ws()
+        if self.peek() == '}' {
+            self.pos = self.pos + 1
+        }
+        return result
+    }
+
+    func parse_array() -> JsonValue {
+        let result: JsonValue = JsonValue.make_array()
+        self.pos = self.pos + 1 // consume '['
+        self.skip_ws()
+        if self.peek() == ']' {
+            self.pos = self.pos + 1
+            return result
+        }
+        while self.pos < self.len {
+            result.push(self.parse_value())
+            self.skip_ws()
+            if self.peek() == ',' {
+                self.pos = self.pos + 1
+            } else {
+                break
+            }
+        }
+        self.skip_ws()
+        if self.peek() == ']' {
+            self.pos = self.pos + 1
+        }
+        return result
+    }
+
+    // Parses a quoted JSON string starting at (and consuming) the
+    // opening '"' through the closing one, returning the unescaped
+    // content. Returns an empty string, without consuming anything, if
+    // not actually positioned at a '"' (malformed input).
+    func parse_string() -> String {
+        let sb: StringBuilder = new StringBuilder()
+        if self.peek() != '"' {
+            return sb.to_string()
+        }
+        self.pos = self.pos + 1 // consume opening quote
+        while self.pos < self.len && self.text.byte_at(self.pos) != '"' {
+            let c: char = self.text.byte_at(self.pos)
+            if c == '\\' && self.pos + 1 < self.len {
+                self.pos = self.pos + 1
+                let e: char = self.text.byte_at(self.pos)
+                if e == 'n' {
+                    sb.append_char('\n')
+                } else if e == 't' {
+                    sb.append_char('\t')
+                } else if e == 'r' {
+                    sb.append_char('\r')
+                } else if e == 'b' {
+                    sb.append_char(8 as char)
+                } else if e == 'f' {
+                    sb.append_char(12 as char)
+                } else if e == 'u' {
+                    let code: int = 0
+                    let k: int = 0
+                    while k < 4 && self.pos + 1 < self.len {
+                        self.pos = self.pos + 1
+                        code = code * 16 + hex_digit_value(self.text.byte_at(self.pos))
+                        k = k + 1
+                    }
+                    append_utf8_codepoint(sb, code)
+                } else {
+                    sb.append_char(e)
+                }
+                self.pos = self.pos + 1
+            } else {
+                sb.append_char(c)
+                self.pos = self.pos + 1
+            }
+        }
+        if self.pos < self.len {
+            self.pos = self.pos + 1 // consume closing quote
+        }
+        return sb.to_string()
+    }
+
+    func parse_bool() -> JsonValue {
+        if self.pos + 4 <= self.len && self.text.byte_substring(self.pos, 4) == "true" {
+            self.pos = self.pos + 4
+            return JsonValue.make_bool(true)
+        }
+        if self.pos + 5 <= self.len && self.text.byte_substring(self.pos, 5) == "false" {
+            self.pos = self.pos + 5
+            return JsonValue.make_bool(false)
+        }
+        self.pos = self.pos + 1
+        return JsonValue.make_null()
+    }
+
+    func parse_null() -> JsonValue {
+        if self.pos + 4 <= self.len && self.text.byte_substring(self.pos, 4) == "null" {
+            self.pos = self.pos + 4
+        } else {
+            self.pos = self.pos + 1
+        }
+        return JsonValue.make_null()
+    }
+
+    func parse_number() -> JsonValue {
+        let start: int = self.pos
+        let is_float: bool = false
+        if self.peek() == '-' {
+            self.pos = self.pos + 1
+        }
+        while self.pos < self.len && self.text.byte_at(self.pos) >= '0' && self.text.byte_at(self.pos) <= '9' {
+            self.pos = self.pos + 1
+        }
+        if self.pos < self.len && self.text.byte_at(self.pos) == '.' {
+            is_float = true
+            self.pos = self.pos + 1
+            while self.pos < self.len && self.text.byte_at(self.pos) >= '0' && self.text.byte_at(self.pos) <= '9' {
+                self.pos = self.pos + 1
+            }
+        }
+        if self.pos < self.len && (self.text.byte_at(self.pos) == 'e' || self.text.byte_at(self.pos) == 'E') {
+            is_float = true
+            self.pos = self.pos + 1
+            if self.pos < self.len && (self.text.byte_at(self.pos) == '-' || self.text.byte_at(self.pos) == '+') {
+                self.pos = self.pos + 1
+            }
+            while self.pos < self.len && self.text.byte_at(self.pos) >= '0' && self.text.byte_at(self.pos) <= '9' {
+                self.pos = self.pos + 1
+            }
+        }
+        let raw: String = self.text.byte_substring(start, self.pos - start)
+        if is_float {
+            return JsonValue.make_float(parse_float_from_string(raw))
+        }
+        return JsonValue.make_int(parse_int_from_string(raw))
+    }
+}
+
+// Parses a full JSON document already loaded into memory (see e.g.
+// std.io.read_file for reading one off disk first).
+func parse(text: String) -> JsonValue {
+    let parser: JsonParser = new JsonParser(text)
+    return parser.parse_value()
+}
+
+// Appends `s`, escaped and quoted per RFC 8259, to `sb`.
+func write_json_string(sb: StringBuilder, s: String) {
+    sb.append_char('"')
+    let len: int = s.byte_len()
+    let i: int = 0
+    while i < len {
+        let c: char = s.byte_at(i)
+        if c == '"' {
+            sb.append(new String("\\\""))
+        } else if c == '\\' {
+            sb.append(new String("\\\\"))
+        } else if c == '\n' {
+            sb.append(new String("\\n"))
+        } else if c == '\t' {
+            sb.append(new String("\\t"))
+        } else if c == '\r' {
+            sb.append(new String("\\r"))
+        } else if (c as int) < 0x20 {
+            sb.append(new String("\\u00"))
+            let hi: int = ((c as int) >> 4) & 0xF
+            let lo: int = (c as int) & 0xF
+            sb.append_char(hex_digit_char(hi))
+            sb.append_char(hex_digit_char(lo))
+        } else {
+            sb.append_char(c)
+        }
+        i = i + 1
+    }
+    sb.append_char('"')
+}
+
+func hex_digit_char(v: int) -> char {
+    if v < 10 {
+        return (('0' as int) + v) as char
+    }
+    return (('a' as int) + (v - 10)) as char
+}
+
+func write_json_float(sb: StringBuilder, value: float) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%g", value)
+    sb.append(new String(buf as char*))
+}
+
+func write_json_value(sb: StringBuilder, value: JsonValue) {
+    if value.is_null() {
+        sb.append(new String("null"))
+    } else if value.is_bool() {
+        if value.as_bool() {
+            sb.append(new String("true"))
+        } else {
+            sb.append(new String("false"))
+        }
+    } else if value.is_int() {
+        sb.append_int(value.as_int())
+    } else if value.is_float() {
+        write_json_float(sb, value.as_float())
+    } else if value.is_string() {
+        write_json_string(sb, value.as_string())
+    } else if value.is_array() {
+        sb.append_char('[')
+        let i: int = 0
+        while i < value.len() {
+            if i > 0 {
+                sb.append_char(',')
+            }
+            write_json_value(sb, value.get_index(i))
+            i = i + 1
+        }
+        sb.append_char(']')
+    } else if value.is_object() {
+        sb.append_char('{')
+        let keys: Vector<String> = value.keys()
+        let i: int = 0
+        while i < keys.len() {
+            if i > 0 {
+                sb.append_char(',')
+            }
+            write_json_string(sb, keys.get(i))
+            sb.append_char(':')
+            write_json_value(sb, value.get_or(keys.get(i), JsonValue.make_null()))
+            i = i + 1
+        }
+        sb.append_char('}')
+    }
+}
+
+// Serializes `value` to a compact (no extra whitespace) JSON string.
+func stringify(value: JsonValue) -> String {
+    let sb: StringBuilder = new StringBuilder()
+    write_json_value(sb, value)
+    return sb.to_string()
+}
+
+}
+}

@@ -19,36 +19,36 @@ class Stack<T> {
     func pop() -> Result<T, char*> {
         let result: Result<T, char*> = new Result<T, char*>()
 
-        if self.data.size() == 0 {
+        if self.data.len() == 0 {
             result.set_err("Stack is empty")
             return result
         }
 
-        let value: T = self.data.get(self.data.size() - 1)
-        self.data.remove(self.data.size() - 1)
-
-        result.set_ok(value)
+        // Vector<T> has no remove(index) - only pop() (removes and
+        // returns the last element), which is exactly what a stack pop
+        // needs anyway.
+        result.set_ok(self.data.pop())
         return result
     }
 
     func peek() -> Result<T, char*> {
         let result: Result<T, char*> = new Result<T, char*>()
 
-        if self.data.size() == 0 {
+        if self.data.len() == 0 {
             result.set_err("Stack is empty")
             return result
         }
 
-        result.set_ok(self.data.get(self.data.size() - 1))
+        result.set_ok(self.data.get(self.data.len() - 1))
         return result
     }
 
     func size() -> int {
-        return self.data.size()
+        return self.data.len()
     }
 
     func is_empty() -> bool {
-        return self.data.size() == 0
+        return self.data.len() == 0
     }
 
     func clear() {
@@ -148,7 +148,7 @@ class CircularBuffer<T> {
 
     constructor(cap: int) {
         self.capacity = cap
-        self.buffer = malloc(cap * sizeof(T)) as T*
+        self.buffer = llpl_alloc(cap * sizeof(T)) as T*
         self.head = 0
         self.tail = 0
         self.count = 0
@@ -156,7 +156,7 @@ class CircularBuffer<T> {
 
     destructor() {
         if self.buffer != null {
-            free(self.buffer as void*)
+            llpl_free(self.buffer as char*)
         }
     }
 

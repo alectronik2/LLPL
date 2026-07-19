@@ -1,0 +1,86 @@
+// Example: YAML configuration parsing using the standard library
+
+import "../../stdlib/yaml/yaml_parser.llpl"
+import "../../stdlib/io/file.llpl"
+
+using namespace std.yaml
+using namespace std.io
+
+// Writes a small sample app config to disk, then reads it straight back -
+// the same round trip a real program loading its own config file would do.
+// Covers top-level scalars, a nested mapping, a flow-style sequence, an
+// inline flow mapping, a block sequence, and a sequence of mappings (each
+// with its own extra field) - between them, most of what parse() supports.
+func demo_config_roundtrip() {
+    let config: String = new String("name: demo-app\nversion: 3\ndebug: false\n\nserver:\n  host: 0.0.0.0\n  port: 8080\n\ntags: [web, api, backend]\nlimits: {max_connections: 100, timeout: 30}\n\nroutes:\n  - path: /health\n    method: GET\n  - path: /users\n    method: POST\n    auth_required: true\n")
+    std.io.write_file("config.yaml", config)
+
+    let read_result: Result<String, char*> = std.io.read_file("config.yaml")
+    if !read_result.is_ok() {
+        return
+    }
+
+    let doc: YamlValue = parse(read_result.unwrap())
+
+    // Top-level scalars
+    let name: String = doc.get_or(new String("name"), YamlValue.make_string(new String(""))).as_string()
+    let version: int = doc.get_or(new String("version"), YamlValue.make_int(0)).as_int()
+    let debug: bool = doc.get_or(new String("debug"), YamlValue.make_bool(true)).as_bool()
+
+    // Nested mapping
+    let server: YamlValue = doc.get_or(new String("server"), YamlValue.make_mapping())
+    let host: String = server.get_or(new String("host"), YamlValue.make_string(new String(""))).as_string()
+    let port: int = server.get_or(new String("port"), YamlValue.make_int(0)).as_int()
+
+    // Flow-style sequence
+    let tags: YamlValue = doc.get_or(new String("tags"), YamlValue.make_sequence())
+    let i: int = 0
+    while i < tags.len() {
+        let tag: String = tags.get_index(i).as_string()
+        i = i + 1
+    }
+
+    // Flow-style (inline) mapping
+    let limits: YamlValue = doc.get_or(new String("limits"), YamlValue.make_mapping())
+    let max_connections: int = limits.get_or(new String("max_connections"), YamlValue.make_int(0)).as_int()
+
+    // Block sequence of mappings, each with its own set of keys
+    let routes: YamlValue = doc.get_or(new String("routes"), YamlValue.make_sequence())
+    let r: int = 0
+    while r < routes.len() {
+        let route: YamlValue = routes.get_index(r)
+        let path: String = route.get_or(new String("path"), YamlValue.make_string(new String(""))).as_string()
+        let method: String = route.get_or(new String("method"), YamlValue.make_string(new String(""))).as_string()
+        if route.has_key(new String("auth_required")) {
+            let auth_required: bool = route.get_or(new String("auth_required"), YamlValue.make_bool(false)).as_bool()
+        }
+        r = r + 1
+    }
+
+    std.io.delete_file("config.yaml")
+}
+
+// Parsing directly from an in-memory string - useful for a config baked
+// into the binary, or one received over the network, rather than always
+// needing a real file on disk.
+func demo_parse_from_string() {
+    let doc: YamlValue = parse(new String("count: 5\nratio: 0.75\nlabel: \"hello world\"\n"))
+
+    let count: int = doc.get_or(new String("count"), YamlValue.make_int(0)).as_int()
+    let ratio: float = doc.get_or(new String("ratio"), YamlValue.make_float(0.0)).as_float()
+    let label: String = doc.get_or(new String("label"), YamlValue.make_string(new String(""))).as_string()
+
+    // has_key()/is_*() let a caller distinguish "absent" from "present but
+    // null" without needing to unwrap get()'s Optional<YamlValue> by hand.
+    if !doc.has_key(new String("missing")) {
+        let fallback: YamlValue = doc.get_or(new String("missing"), YamlValue.make_null())
+        let is_missing_null: bool = fallback.is_null()
+    }
+}
+
+func main() -> int {
+    demo_config_roundtrip()
+    demo_parse_from_string()
+
+    return 0
+}

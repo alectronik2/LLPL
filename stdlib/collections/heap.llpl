@@ -14,11 +14,11 @@ class BinaryHeap<T> {
     }
 
     func size() -> int {
-        return self.data.size()
+        return self.data.len()
     }
 
     func is_empty() -> bool {
-        return self.data.size() == 0
+        return self.data.len() == 0
     }
 
     // Helper: Get parent index
@@ -59,7 +59,7 @@ class BinaryHeap<T> {
 
     // Bubble down element at index
     func bubble_down(index: int) {
-        let size: int = self.data.size()
+        let size: int = self.data.len()
 
         while true {
             let smallest: int = index
@@ -86,7 +86,7 @@ class BinaryHeap<T> {
     // Insert element into heap
     func insert(value: T) {
         self.data.push(value)
-        self.bubble_up(self.data.size() - 1)
+        self.bubble_up(self.data.len() - 1)
     }
 
     // Remove and return minimum element
@@ -100,11 +100,15 @@ class BinaryHeap<T> {
 
         let min_value: T = self.data.get(0)
 
-        if self.data.size() == 1 {
-            self.data.remove(0)
+        // Vector<T> has no remove(index) - only pop() (removes and
+        // returns the last element). With one element left, that's the
+        // root itself; otherwise move the last element to the root first,
+        // then pop() the now-duplicated last slot off before bubbling down.
+        if self.data.len() == 1 {
+            self.data.pop()
         } else {
-            self.data.set(0, self.data.get(self.data.size() - 1))
-            self.data.remove(self.data.size() - 1)
+            self.data.set(0, self.data.get(self.data.len() - 1))
+            self.data.pop()
             self.bubble_down(0)
         }
 
@@ -134,7 +138,7 @@ class BinaryHeap<T> {
     func heapify(values: Vector<T>) {
         self.data = values
 
-        let size: int = self.data.size()
+        let size: int = self.data.len()
         // Start from last non-leaf node and bubble down
         for let i: int = (size / 2) - 1, i >= 0, i = i - 1 {
             self.bubble_down(i)

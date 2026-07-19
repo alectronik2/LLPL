@@ -7,14 +7,22 @@ namespace collections {
 
 const TRIE_ALPHABET_SIZE: int = 256  // Support all ASCII characters
 
-// Trie node
+// Trie node - a normal, ref-counted class (unlike LinkedList/RBTree/
+// HashMap's own node types elsewhere in this module, which are raw
+// malloc'd/manually-freed memory): TrieNode's own constructor already
+// does real work (allocating and zero-filling its 256-entry children
+// array), so `new TrieNode()` is used and `delete`d normally throughout,
+// rather than duplicating that allocation logic at every call site the
+// way a manually-managed node would need to. `children` itself is still
+// a plain llpl_alloc'd buffer (not a class), freed by hand in the
+// destructor.
 class TrieNode {
     let children: TrieNode**
     let is_end_of_word: bool
     let value: int  // Optional associated value
 
     constructor() {
-        self.children = malloc(TRIE_ALPHABET_SIZE * sizeof(TrieNode*)) as TrieNode**
+        self.children = llpl_alloc(TRIE_ALPHABET_SIZE * sizeof(TrieNode*)) as TrieNode**
         self.is_end_of_word = false
         self.value = 0
 
@@ -27,10 +35,14 @@ class TrieNode {
         if self.children != null {
             for let i: int = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
                 if self.children[i] != null {
-                    free(self.children[i] as void*)
+                    // A real child TrieNode instance (see this class's
+                    // own comment) - `delete`, not llpl_free, so its own
+                    // destructor runs and recursively cleans up *its*
+                    // children array/subtree instead of leaking it.
+                    delete self.children[i]
                 }
             }
-            free(self.children as void*)
+            llpl_free(self.children as char*)
         }
     }
 }
@@ -41,14 +53,13 @@ class Trie {
     let count: int
 
     constructor() {
-        self.root = malloc(sizeof(TrieNode)) as TrieNode*
-        *self.root = new TrieNode()
+        self.root = new TrieNode()
         self.count = 0
     }
 
     destructor() {
         if self.root != null {
-            free(self.root as void*)
+            delete self.root
         }
     }
 
@@ -74,8 +85,7 @@ class Trie {
             let index: int = word[i] as int
 
             if (*current).children[index] == null {
-                (*current).children[index] = malloc(sizeof(TrieNode)) as TrieNode*
-                *(*current).children[index] = new TrieNode()
+                (*current).children[index] = new TrieNode()
             }
 
             current = (*current).children[index]
@@ -100,8 +110,7 @@ class Trie {
             let index: int = word[i] as int
 
             if (*current).children[index] == null {
-                (*current).children[index] = malloc(sizeof(TrieNode)) as TrieNode*
-                *(*current).children[index] = new TrieNode()
+                (*current).children[index] = new TrieNode()
             }
 
             current = (*current).children[index]
@@ -221,9 +230,18 @@ class Trie {
         let child: TrieNode* = (*node).children[char_index]
 
         if self.remove_helper(child, word, index + 1, len) {
-            // Delete child reference
-            free(child as void*)
+            // Clear the parent's reference *before* delete - a bare
+            // `delete child` immediately followed by a line starting
+            // with `(` would otherwise misparse as `child(*node)...`
+            // (a call on `child`), the same newline-sensitivity gap
+            // documented in parser.d for `*`/`-`/`&`, just not covering
+            // `(` too.
             (*node).children[char_index] = null
+            // Delete child reference - a real TrieNode instance (see
+            // this class's own comment), so `delete` runs its
+            // destructor (recursively freeing its own children array)
+            // instead of just leaking it the way llpl_free would.
+            delete child
 
             // If current node is not end of word and has no children
             return !(*node).is_end_of_word && self.has_no_children(node)
@@ -306,7 +324,7 @@ class Trie {
     // Count words with given prefix
     func count_prefix(prefix: char*) -> int {
         let words: Vector<String> = self.get_words_with_prefix(prefix)
-        return words.size()
+        return words.len()
     }
 
     // Find longest common prefix of all words

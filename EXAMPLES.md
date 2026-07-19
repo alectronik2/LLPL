@@ -471,18 +471,38 @@ overloading once monomorphized), multiple `func operator+`-style
 signatures for the same operator, and `extern func` re-declarations
 (its C symbol is a real, fixed external name).
 
-### `.stringof`
+### Implicit conversion: `as_string`/`as_int`/`as_float`/`as_bool`
 
-`x.stringof` (no call parens - `x.stringof()` already works as an ordinary
-method call, no special support needed) resolves to a class's own
-no-argument `stringof()` method if it defines one, or a compile-time
-string literal of the type's name otherwise - the same fallback a struct
-(which can't have methods at all) or a primitive gets. Casting a
-class/struct value `as string` resolves the same way, instead of
-reinterpreting the value as a raw `char*` - and so does string
-interpolation (`"\(x)"`), implicitly, with no need to spell out
-`"\(x.stringof)"`. See `test/stringof_demo.llpl` for the full runnable
-version this is taken from:
+A class opts into converting like a string/int/float/bool by defining a
+no-argument method named `as_string()`/`as_int()`/`as_float()`/
+`as_bool()` - purely by naming convention, the same unintrusive way
+operator overloading works (`func operator+`), rather than a real
+trait/interface mechanism. Once defined, it's picked up automatically in
+three places:
+
+- **`let x: T = value` / plain assignment** (`x = value`) - `value`'s
+  `as_<kind>()` is called if `T` is `string`/an integer type/`float`/
+  `bool` and `value`'s type defines a matching one.
+- **Casting** - `value as string`/`as int`/`as float`/`as bool` resolves
+  the same way, instead of reinterpreting the value as a raw
+  pointer/integer.
+- **`.as_string` property** (no call parens - `x.as_string()` already
+  works as an ordinary method call, no special support needed) and
+  **string interpolation** (`"\(x)"`, implicitly, with no need to spell
+  out `"\(x.as_string)"`) - `string` specifically *always* converts: a
+  class without an `as_string()` falls back to a compile-time string
+  literal of the type's own name, the same fallback a struct (which
+  can't have methods at all) or a primitive gets. `as_int`/`as_float`/
+  `as_bool` have no such fallback - only an actual matching method
+  converts; anywhere else, assigning/casting a class with no matching
+  method is a real type mismatch, same as before this existed.
+
+If `as_string()` returns this codebase's own `String` class rather than a
+bare `char*`/`string` directly, it's bridged through `String`'s own
+`c_str()` automatically - a class can return either.
+
+See `test/as_string_demo.llpl` for the full runnable version this is
+taken from:
 
 ```swift
 class Point3D {
@@ -498,7 +518,7 @@ class Point3D {
 
     destructor() {}
 
-    func stringof() -> string {
+    func as_string() -> string {
         if self.x == 0 && self.y == 0 && self.z == 0 {
             return "Point3D(origin)"
         }
@@ -514,16 +534,17 @@ class Plain {
 
 func main() -> int {
     let p: Point3D = new Point3D(1, 2, 3)
-    puts(p.stringof)   // "Point3D(non-origin)" - custom method
-    puts(p as string)  // same, via a cast
+    puts(p.as_string)   // "Point3D(non-origin)" - custom method
+    puts(p as string)    // same, via a cast
+    let s: string = p    // same, via a plain assignment
 
     let q: Plain = new Plain(5)
-    puts(q.stringof)   // "Plain" - no stringof() defined, falls back to the type name
+    puts(q.as_string)   // "Plain" - no as_string() defined, falls back to the type name
 
     let n: int = 42
-    puts(n.stringof)   // "int" - primitives fall back too
+    puts(n.as_string)   // "int" - primitives fall back too
 
-    puts("interpolated: \(p)")  // implicit stringof inside "\(...)"
+    puts("interpolated: \(p)")  // implicit as_string inside "\(...)"
     return 0
 }
 ```

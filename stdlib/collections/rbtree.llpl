@@ -170,8 +170,19 @@ class RBTree<K, V> {
 
     // Insert key-value pair
     func insert(key: K, value: V) {
-        let new_node: RBNode<K, V>* = malloc(sizeof(RBNode<K, V>)) as RBNode<K, V>*
-        *new_node = new RBNode<K, V>(key, value)
+        // A raw malloc'd node, not `new RBNode<K, V>(...)` - see
+        // linked_list.llpl's own comment on why (a heap-allocated,
+        // ref-counted class instance assigned into manually-managed
+        // storage corrupts both). This tree frees nodes by hand, so
+        // initialize every field directly instead - `.parent` is set
+        // below once the insertion point is found, `.left`/`.right`
+        // start null the same way the old constructor set them.
+        let new_node: RBNode<K, V>* = llpl_alloc(sizeof(RBNode<K, V>)) as RBNode<K, V>*
+        (*new_node).key = key
+        (*new_node).value = value
+        (*new_node).color = RB_RED
+        (*new_node).left = null
+        (*new_node).right = null
 
         if self.root == null {
             self.root = new_node
@@ -201,7 +212,7 @@ class RBTree<K, V> {
             } else {
                 // Key already exists, update value
                 (*current).value = value
-                free(new_node as void*)
+                llpl_free(new_node as char*)
                 return
             }
         }
@@ -334,7 +345,7 @@ class RBTree<K, V> {
 
         self.clear_helper((*node).left)
         self.clear_helper((*node).right)
-        free(node as void*)
+        llpl_free(node as char*)
     }
 
     func clear() {

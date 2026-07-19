@@ -9,7 +9,10 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 - **String Utilities**: Advanced text processing, formatting, and manipulation
 - **Data Structures**: Comprehensive collection of efficient data structures (linked lists, trees, heaps, hash maps, graphs, tries)
 - **SDL3 Bindings**: Complete graphics, audio, and input handling with high-level wrappers
-- **Namespace Organization**: Clean separation of concerns with `std::io`, `std::net`, `std::text`, `std::collections`, `std::sdl`
+- **Command-line Arguments**: `--name value`/`-n value` flags, positional arguments, `func main(args: string[])` support
+- **YAML Parsing**: Block/flow mappings and sequences, typed scalars
+- **JSON Parsing**: RFC 8259 parser and serializer, typed values
+- **Namespace Organization**: Clean separation of concerns with `std::io`, `std::net`, `std::text`, `std::collections`, `std::sdl`, `std::args`, `std::yaml`, `std::json`
 - **Error Handling**: Comprehensive use of `Result<T, E>` types for safe error propagation
 - **Modern OOP**: Classes with constructors, destructors, and static methods
 
@@ -22,6 +25,8 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 - [Data Structures](#data-structures)
 - [SDL3 Graphics & Audio](#sdl3-graphics--audio)
 - [Command-line Arguments](#command-line-arguments)
+- [YAML Parsing](#yaml-parsing)
+- [JSON Parsing](#json-parsing)
 - [API Reference](#api-reference)
 
 ## Installation
@@ -691,6 +696,116 @@ own to treat everything after it as positional even if it starts with
 seen, a value-taking option was missing its value, or a required option
 (`add_required`) was never supplied - see `get_errors()`/`print_errors()`.
 
+## YAML Parsing
+
+`std::yaml::parse` covers a pragmatic subset of YAML 1.x, not the full
+spec: block-style mappings and sequences (including a sequence of
+mappings, `- key: value` continued on later, more-indented lines), flow-
+style collections (`[a, b, c]`, `{k: v}`), single-/double-quoted scalars
+(with backslash escapes in double-quoted ones), plain scalars auto-typed
+as null/bool/int/float/string, and `#` comments. Not supported: anchors/
+aliases (`&x`/`*x`), multi-line block scalars (`|`/`>`), tags (`!!foo`),
+and multiple documents in one text - none of these are common in the
+config-file use case this exists for.
+
+```swift
+import "stdlib/yaml/yaml_parser.llpl"
+import "stdlib/io/file.llpl"
+using namespace std.yaml
+using namespace std.io
+
+func main() -> int {
+    let content: Result<String, char*> = read_file("config.yaml")
+    if !content.is_ok() {
+        return 1
+    }
+
+    let doc: YamlValue = parse(content.unwrap())
+
+    let name: String = doc.get_or(new String("name"), YamlValue.make_string(new String("")))
+        .as_string()
+    let port: int = doc.get_or(new String("server"), YamlValue.make_mapping())
+        .get_or(new String("port"), YamlValue.make_int(8080))
+        .as_int()
+
+    let tags: YamlValue = doc.get_or(new String("tags"), YamlValue.make_sequence())
+    let i: int = 0
+    while i < tags.len() {
+        let tag: String = tags.get_index(i).as_string()
+        i = i + 1
+    }
+
+    return 0
+}
+```
+
+`YamlValue` is a manual tagged union (`is_null()`/`is_bool()`/`is_int()`/
+`is_float()`/`is_string()`/`is_sequence()`/`is_mapping()`, plus the
+matching `as_*()` accessors) rather than this language's real tagged-enum
+feature, since a parsed document is directly self-referential (a
+mapping/sequence holds more `YamlValue`s). Build values with
+`YamlValue.make_null()`/`make_bool()`/`make_int()`/`make_float()`/
+`make_string()`/`make_sequence()`/`make_mapping()`; read a mapping with
+`get()` (returns `Optional<YamlValue>`), `get_or()` (a fallback instead of
+unwrapping), or `has_key()`; read a sequence with `len()`/`get_index()`.
+Parsing never fails outright - malformed input degrades to a best-effort
+partial parse rather than an error.
+
+## JSON Parsing
+
+`std::json::parse`/`std::json::stringify` implement standards-compliant
+(RFC 8259) JSON: objects, arrays, strings (backslash escapes including
+`\uXXXX`), numbers (auto-typed as int or float depending on whether the
+literal has a `.`/`e`/`E`), booleans, and null - in both directions,
+unlike `std::yaml`, which is read-only.
+
+```swift
+import "stdlib/json/json_parser.llpl"
+import "stdlib/io/file.llpl"
+using namespace std.json
+using namespace std.io
+
+func main() -> int {
+    let content: Result<String, char*> = read_file("config.json")
+    if !content.is_ok() {
+        return 1
+    }
+
+    let doc: JsonValue = parse(content.unwrap())
+
+    let name: String = doc.get_or(new String("name"), JsonValue.make_string(new String("")))
+        .as_string()
+    let port: int = doc.get_or(new String("server"), JsonValue.make_object())
+        .get_or(new String("port"), JsonValue.make_int(8080))
+        .as_int()
+
+    let tags: JsonValue = doc.get_or(new String("tags"), JsonValue.make_array())
+    let i: int = 0
+    while i < tags.len() {
+        let tag: String = tags.get_index(i).as_string()
+        i = i + 1
+    }
+
+    // Build a value and serialize it back to text.
+    let payload: JsonValue = JsonValue.make_object()
+    payload.set(new String("ok"), JsonValue.make_bool(true))
+    let text: String = stringify(payload) // {"ok":true}
+
+    return 0
+}
+```
+
+`JsonValue` is a manual tagged union (`is_null()`/`is_bool()`/`is_int()`/
+`is_float()`/`is_string()`/`is_array()`/`is_object()`, plus the matching
+`as_*()` accessors), the same convention `YamlValue` uses and for the same
+reason (a parsed document is directly self-referential). Build values with
+`JsonValue.make_null()`/`make_bool()`/`make_int()`/`make_float()`/
+`make_string()`/`make_array()`/`make_object()`; read an object with `get()`
+(returns `Optional<JsonValue>`), `get_or()` (a fallback instead of
+unwrapping), `has_key()`, or `keys()`; read an array with
+`len()`/`get_index()`/`push()`; write an object's fields with `set()`.
+`stringify()` serializes any `JsonValue` back to compact JSON text.
+
 ## Examples
 
 See the example programs in the `examples/` directory:
@@ -704,6 +819,10 @@ See the example programs in the `examples/` directory:
 
 **collections examples:**
 - `collections_demo.llpl` - Comprehensive demonstration of all data structures
+
+**parsing examples:**
+- `yaml_demo.llpl` - YAML config file round-trip and in-memory parsing
+- `json_demo.llpl` - JSON config file round-trip, in-memory parsing, and serialization
 
 **sdl examples:**
 - `basic_window.llpl` - Window creation and basic rendering

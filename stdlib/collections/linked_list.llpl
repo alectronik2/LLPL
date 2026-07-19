@@ -40,8 +40,17 @@ class LinkedList<T> {
     }
 
     func push_front(value: T) {
-        let node: ListNode<T>* = malloc(sizeof(ListNode<T>)) as ListNode<T>*
-        *node = new ListNode<T>(value)
+        // A raw malloc'd node, not `new ListNode<T>(...)` - that would be
+        // a heap-allocated, ref-counted *class* instance living at its
+        // *own* separate address; assigning it into `*node` (this
+        // manually-managed node's own storage) would just copy that
+        // instance's ref-counted struct bytes - including its hidden
+        // RefCount header - over whatever `malloc` returned, corrupting
+        // both. This list frees nodes by hand (see pop_front/pop_back's
+        // own `llpl_free()`), so its nodes are plain, unmanaged memory the
+        // whole way through: initialize every field directly instead.
+        let node: ListNode<T>* = llpl_alloc(sizeof(ListNode<T>)) as ListNode<T>*
+        (*node).value = value
 
         (*node).next = self.head
         self.head = node
@@ -54,8 +63,11 @@ class LinkedList<T> {
     }
 
     func push_back(value: T) {
-        let node: ListNode<T>* = malloc(sizeof(ListNode<T>)) as ListNode<T>*
-        *node = new ListNode<T>(value)
+        // See push_front's own comment on why this is initialized field
+        // by field instead of via `new ListNode<T>(...)`.
+        let node: ListNode<T>* = llpl_alloc(sizeof(ListNode<T>)) as ListNode<T>*
+        (*node).value = value
+        (*node).next = null
 
         if self.tail == null {
             self.head = node
@@ -84,7 +96,7 @@ class LinkedList<T> {
             self.tail = null
         }
 
-        free(old_head as void*)
+        llpl_free(old_head as char*)
         self.count = self.count - 1
 
         result.set_ok(value)
@@ -157,8 +169,10 @@ class LinkedList<T> {
             current = (*current).next
         }
 
-        let node: ListNode<T>* = malloc(sizeof(ListNode<T>)) as ListNode<T>*
-        *node = new ListNode<T>(value)
+        // See push_front's own comment on why this is initialized field
+        // by field instead of via `new ListNode<T>(...)`.
+        let node: ListNode<T>* = llpl_alloc(sizeof(ListNode<T>)) as ListNode<T>*
+        (*node).value = value
         (*node).next = (*current).next
         (*current).next = node
 
@@ -193,7 +207,7 @@ class LinkedList<T> {
             self.tail = current
         }
 
-        free(to_remove as void*)
+        llpl_free(to_remove as char*)
         self.count = self.count - 1
 
         result.set_ok(value)
@@ -257,8 +271,13 @@ class DoublyLinkedList<T> {
     }
 
     func push_front(value: T) {
-        let node: DListNode<T>* = malloc(sizeof(DListNode<T>)) as DListNode<T>*
-        *node = new DListNode<T>(value)
+        // See LinkedList.push_front's own comment (a few classes up) on
+        // why this is initialized field by field instead of via `new
+        // DListNode<T>(...)`.
+        let node: DListNode<T>* = llpl_alloc(sizeof(DListNode<T>)) as DListNode<T>*
+        (*node).value = value
+        (*node).next = null
+        (*node).prev = null
 
         if self.head == null {
             self.head = node
@@ -273,8 +292,12 @@ class DoublyLinkedList<T> {
     }
 
     func push_back(value: T) {
-        let node: DListNode<T>* = malloc(sizeof(DListNode<T>)) as DListNode<T>*
-        *node = new DListNode<T>(value)
+        // See LinkedList.push_front's own comment on why this is
+        // initialized field by field instead of via `new DListNode<T>(...)`.
+        let node: DListNode<T>* = llpl_alloc(sizeof(DListNode<T>)) as DListNode<T>*
+        (*node).value = value
+        (*node).next = null
+        (*node).prev = null
 
         if self.tail == null {
             self.head = node
@@ -306,7 +329,7 @@ class DoublyLinkedList<T> {
             (*self.head).prev = null
         }
 
-        free(old_head as void*)
+        llpl_free(old_head as char*)
         self.count = self.count - 1
 
         result.set_ok(value)
@@ -331,7 +354,7 @@ class DoublyLinkedList<T> {
             (*self.tail).next = null
         }
 
-        free(old_tail as void*)
+        llpl_free(old_tail as char*)
         self.count = self.count - 1
 
         result.set_ok(value)

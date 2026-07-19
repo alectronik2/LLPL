@@ -8,6 +8,8 @@ import "text/string_utils.llpl"
 import "collections/collections.llpl"
 import "sdl/sdl.llpl"
 import "args/args_parser.llpl"
+import "yaml/yaml_parser.llpl"
+import "json/json_parser.llpl"
 
 // Re-export commonly used aliass and functions for convenience
 namespace std {
@@ -24,6 +26,8 @@ namespace std {
     alias Format = text.Format
     alias ArgParser = args.ArgParser
     alias ArgOption = args.ArgOption
+    alias YamlValue = yaml.YamlValue
+    alias JsonValue = json.JsonValue
 
     // Collection alias aliases
     alias LinkedList = collections.LinkedList

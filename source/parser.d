@@ -2076,10 +2076,18 @@ class Parser {
         ASTNode expr = primary();
 
         while (true) {
-            if (match(TokenType.LeftParen)) {
+            if (check(TokenType.LeftParen) && !newlineBeforeCurrent()) {
                 // Function call - see argumentList()'s own comment for the
                 // named-argument/struct-literal-inside-suppressed-context
-                // reasoning.
+                // reasoning. Guarded by newlineBeforeCurrent() the same way
+                // `*`/`-`/`&` are in unary(): a statement can legitimately
+                // *start* with `(` (e.g. `(*node).field = value`, the
+                // manual-pointer-dereference style stdlib/collections uses
+                // throughout) right after a preceding statement, and without
+                // this guard that's greedily read as a call continuing the
+                // previous line's trailing expression instead of a fresh
+                // statement.
+                advance();
                 string[] argNames;
                 ASTNode[] args = argumentList(argNames);
                 expr = new CallExpr(expr, args, startLine, startColumn, argNames);
@@ -2089,8 +2097,9 @@ class Parser {
                 int memberColumn = current.column;
                 string member = expectName("Expected member name after '.'").value;
                 expr = new MemberExpr(expr, member, memberLine, memberColumn);
-            } else if (match(TokenType.LeftBracket)) {
-                // Array indexing - same unambiguous-terminator reasoning as `(` above.
+            } else if (check(TokenType.LeftBracket) && !newlineBeforeCurrent()) {
+                // Array indexing - same newline-guarded reasoning as `(` above.
+                advance();
                 bool savedNoStructLiteral = noStructLiteral;
                 noStructLiteral = false;
                 ASTNode index = expression();

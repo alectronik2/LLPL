@@ -21,8 +21,9 @@ class Klass {
         puts("Klass destructor")
     }
 
-    func stringof() -> string {
-        "Overridden: Klass"
+
+    func as_string() -> string {
+        "Overridden: Klass as_string"
     }
 }
 
@@ -120,6 +121,9 @@ func main( args: string[] ) -> uint32 {
     }
 
     let kl = new Klass("With a string")
+    let sz: string = kl
+    puts("sz = \(sz)")
+    "kl as string implicitly: \(kl)" |> puts()
 
     puts("kl.foo = \(kl.foo() as uint)")
 

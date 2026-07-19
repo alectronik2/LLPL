@@ -32,7 +32,7 @@ class EnhancedHashMap<K: Hashable, V> {
         self.capacity = 16
         self.count = 0
         self.load_factor = 75
-        self.buckets = malloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
+        self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
         for let i: int = 0, i < self.capacity, i = i + 1 {
             self.buckets[i] = null
@@ -43,7 +43,7 @@ class EnhancedHashMap<K: Hashable, V> {
         self.capacity = initial_capacity
         self.count = 0
         self.load_factor = 75
-        self.buckets = malloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
+        self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
         for let i: int = 0, i < self.capacity, i = i + 1 {
             self.buckets[i] = null
@@ -53,7 +53,7 @@ class EnhancedHashMap<K: Hashable, V> {
     destructor() {
         self.clear()
         if self.buckets != null {
-            free(self.buckets as void*)
+            llpl_free(self.buckets as char*)
         }
     }
 
@@ -78,7 +78,7 @@ class EnhancedHashMap<K: Hashable, V> {
         let old_buckets: HashMapEntry<K, V>** = self.buckets
 
         self.capacity = self.capacity * 2
-        self.buckets = malloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
+        self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
         for let i: int = 0, i < self.capacity, i = i + 1 {
             self.buckets[i] = null
@@ -93,12 +93,12 @@ class EnhancedHashMap<K: Hashable, V> {
             while entry != null {
                 let next: HashMapEntry<K, V>* = (*entry).next
                 self.insert((*entry).key, (*entry).value)
-                free(entry as void*)
+                llpl_free(entry as char*)
                 entry = next
             }
         }
 
-        free(old_buckets as void*)
+        llpl_free(old_buckets as char*)
     }
 
     func insert(key: K, value: V) {
@@ -116,9 +116,19 @@ class EnhancedHashMap<K: Hashable, V> {
             entry = (*entry).next
         }
 
-        // Create new entry
-        let new_entry: HashMapEntry<K, V>* = malloc(sizeof(HashMapEntry<K, V>)) as HashMapEntry<K, V>*
-        *new_entry = new HashMapEntry<K, V>(key, value, hash)
+        // Create new entry - a raw malloc'd node, not `new
+        // HashMapEntry<K, V>(...)`: that would be a heap-allocated,
+        // ref-counted *class* instance living at its own separate
+        // address, and assigning it into `*new_entry` (this manually-
+        // managed node's own storage) would just copy its ref-counted
+        // struct bytes - including its hidden RefCount header - over
+        // whatever llpl_alloc returned. This map frees entries by hand
+        // (see clear()/remove()'s own llpl_free()), so initialize every
+        // field directly instead.
+        let new_entry: HashMapEntry<K, V>* = llpl_alloc(sizeof(HashMapEntry<K, V>)) as HashMapEntry<K, V>*
+        (*new_entry).key = key
+        (*new_entry).value = value
+        (*new_entry).hash = hash
 
         (*new_entry).next = self.buckets[bucket_idx]
         self.buckets[bucket_idx] = new_entry
@@ -182,7 +192,7 @@ class EnhancedHashMap<K: Hashable, V> {
                     (*prev).next = (*entry).next
                 }
 
-                free(entry as void*)
+                llpl_free(entry as char*)
                 self.count = self.count - 1
 
                 result.set_ok(value)
@@ -233,7 +243,7 @@ class EnhancedHashMap<K: Hashable, V> {
 
             while entry != null {
                 let next: HashMapEntry<K, V>* = (*entry).next
-                free(entry as void*)
+                llpl_free(entry as char*)
                 entry = next
             }
 
@@ -317,12 +327,12 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: int = 0, i < this_items.size(), i = i + 1 {
+        for let i: int = 0, i < this_items.len(), i = i + 1 {
             result.insert(this_items.get(i))
         }
 
         let other_items: Vector<T> = other.to_vector()
-        for let i: int = 0, i < other_items.size(), i = i + 1 {
+        for let i: int = 0, i < other_items.len(), i = i + 1 {
             result.insert(other_items.get(i))
         }
 
@@ -333,7 +343,7 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: int = 0, i < this_items.size(), i = i + 1 {
+        for let i: int = 0, i < this_items.len(), i = i + 1 {
             let item: T = this_items.get(i)
             if other.contains(item) {
                 result.insert(item)
@@ -347,7 +357,7 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: int = 0, i < this_items.size(), i = i + 1 {
+        for let i: int = 0, i < this_items.len(), i = i + 1 {
             let item: T = this_items.get(i)
             if !other.contains(item) {
                 result.insert(item)

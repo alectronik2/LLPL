@@ -1,0 +1,95 @@
+// Example: JSON parsing and serialization using the standard library
+
+import "../../stdlib/json/json_parser.llpl"
+import "../../stdlib/io/file.llpl"
+
+using namespace std.json
+using namespace std.io
+
+// Writes a small sample config to disk, then reads it straight back - the
+// same round trip a real program loading its own config file would do.
+// Covers top-level scalars, a nested object, an array, and null.
+func demo_config_roundtrip() {
+    let config: String = new String("{\"name\": \"demo-app\", \"version\": 3, \"debug\": false, \"server\": {\"host\": \"0.0.0.0\", \"port\": 8080}, \"tags\": [\"web\", \"api\", \"backend\"], \"admin\": null}")
+    std.io.write_file("config.json", config)
+
+    let read_result: Result<String, char*> = std.io.read_file("config.json")
+    if !read_result.is_ok() {
+        return
+    }
+
+    let doc: JsonValue = parse(read_result.unwrap())
+
+    // Top-level scalars
+    let name: String = doc.get_or(new String("name"), JsonValue.make_string(new String(""))).as_string()
+    let version: int = doc.get_or(new String("version"), JsonValue.make_int(0)).as_int()
+    let debug: bool = doc.get_or(new String("debug"), JsonValue.make_bool(true)).as_bool()
+
+    // Nested object
+    let server: JsonValue = doc.get_or(new String("server"), JsonValue.make_object())
+    let host: String = server.get_or(new String("host"), JsonValue.make_string(new String(""))).as_string()
+    let port: int = server.get_or(new String("port"), JsonValue.make_int(0)).as_int()
+
+    // Array
+    let tags: JsonValue = doc.get_or(new String("tags"), JsonValue.make_array())
+    let i: int = 0
+    while i < tags.len() {
+        let tag: String = tags.get_index(i).as_string()
+        i = i + 1
+    }
+
+    // has_key()/is_*() let a caller distinguish "absent" from "present but
+    // null" without needing to unwrap get()'s Optional<JsonValue> by hand.
+    if doc.has_key(new String("admin")) {
+        let admin_is_null: bool = doc.get_or(new String("admin"), JsonValue.make_string(new String(""))).is_null()
+    }
+
+    std.io.delete_file("config.json")
+}
+
+// Parsing directly from an in-memory string - useful for an API response
+// body or a config baked into the binary, rather than always needing a
+// real file on disk.
+func demo_parse_from_string() {
+    let doc: JsonValue = parse(new String("{\"count\": 5, \"ratio\": 0.75, \"label\": \"hello world\"}"))
+
+    let count: int = doc.get_or(new String("count"), JsonValue.make_int(0)).as_int()
+    let ratio: float = doc.get_or(new String("ratio"), JsonValue.make_float(0.0)).as_float()
+    let label: String = doc.get_or(new String("label"), JsonValue.make_string(new String(""))).as_string()
+
+    if !doc.has_key(new String("missing")) {
+        let fallback: JsonValue = doc.get_or(new String("missing"), JsonValue.make_null())
+        let is_missing_null: bool = fallback.is_null()
+    }
+}
+
+// Building a JsonValue tree by hand and serializing it back to text - the
+// direction std.yaml doesn't support, since this module's own config-file
+// use case only ever needs to read YAML, never write it.
+func demo_build_and_stringify() {
+    let payload: JsonValue = JsonValue.make_object()
+    payload.set(new String("id"), JsonValue.make_int(42))
+    payload.set(new String("active"), JsonValue.make_bool(true))
+
+    let scores: JsonValue = JsonValue.make_array()
+    scores.push(JsonValue.make_int(90))
+    scores.push(JsonValue.make_int(85))
+    scores.push(JsonValue.make_int(100))
+    payload.set(new String("scores"), scores)
+
+    // "{"id":42,"active":true,"scores":[90,85,100]}"
+    let text: String = stringify(payload)
+
+    // Round-trips back through parse() the same way any JSON received
+    // from a real API response would.
+    let reparsed: JsonValue = parse(text)
+    let id: int = reparsed.get_or(new String("id"), JsonValue.make_int(-1)).as_int()
+}
+
+func main() -> int {
+    demo_config_roundtrip()
+    demo_parse_from_string()
+    demo_build_and_stringify()
+
+    return 0
+}

@@ -47,7 +47,7 @@ class Graph {
         self.vertex_count = vertices
         self.edge_count = 0
         self.is_directed = directed
-        self.adjacency_list = malloc(vertices * sizeof(AdjListNode*)) as AdjListNode**
+        self.adjacency_list = llpl_alloc(vertices * sizeof(AdjListNode*)) as AdjListNode**
 
         for let i: int = 0, i < vertices, i = i + 1 {
             self.adjacency_list[i] = null
@@ -60,11 +60,11 @@ class Graph {
                 let current: AdjListNode* = self.adjacency_list[i]
                 while current != null {
                     let next: AdjListNode* = (*current).next
-                    free(current as void*)
+                    llpl_free(current as char*)
                     current = next
                 }
             }
-            free(self.adjacency_list as void*)
+            llpl_free(self.adjacency_list as char*)
         }
     }
 
@@ -74,15 +74,23 @@ class Graph {
         }
 
         // Add edge from -> to
-        let node: AdjListNode* = malloc(sizeof(AdjListNode)) as AdjListNode*
-        *node = new AdjListNode(to_v, weight)
+        // A raw malloc'd node, not `new AdjListNode(...)` - see
+        // linked_list.llpl's own comment on why (a heap-allocated,
+        // ref-counted class instance assigned into manually-managed
+        // storage corrupts both). This graph frees nodes by hand (see the
+        // destructor's own llpl_free()), so initialize every field
+        // directly instead.
+        let node: AdjListNode* = llpl_alloc(sizeof(AdjListNode)) as AdjListNode*
+        (*node).vertex = to_v
+        (*node).weight = weight
         (*node).next = self.adjacency_list[from_v]
         self.adjacency_list[from_v] = node
 
         // If undirected, add edge to -> from
         if !self.is_directed && from_v != to_v {
-            let reverse_node: AdjListNode* = malloc(sizeof(AdjListNode)) as AdjListNode*
-            *reverse_node = new AdjListNode(from_v, weight)
+            let reverse_node: AdjListNode* = llpl_alloc(sizeof(AdjListNode)) as AdjListNode*
+            (*reverse_node).vertex = from_v
+            (*reverse_node).weight = weight
             (*reverse_node).next = self.adjacency_list[to_v]
             self.adjacency_list[to_v] = reverse_node
         }
@@ -167,7 +175,7 @@ class Graph {
             return result
         }
 
-        let visited: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
+        let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
         for let i: int = 0, i < self.vertex_count, i = i + 1 {
             visited[i] = false
         }
@@ -196,7 +204,7 @@ class Graph {
             }
         }
 
-        free(visited as void*)
+        llpl_free(visited as char*)
         return result
     }
 
@@ -208,14 +216,14 @@ class Graph {
             return result
         }
 
-        let visited: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
+        let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
         for let i: int = 0, i < self.vertex_count, i = i + 1 {
             visited[i] = false
         }
 
         self.dfs_helper(start, visited, result)
 
-        free(visited as void*)
+        llpl_free(visited as char*)
         return result
     }
 
@@ -240,7 +248,7 @@ class Graph {
         }
 
         let visited: Vector<int> = self.bfs(0)
-        return visited.size() == self.vertex_count
+        return visited.len() == self.vertex_count
     }
 
     // Topological sort (for directed acyclic graphs)
@@ -252,7 +260,7 @@ class Graph {
             return result_container
         }
 
-        let in_degree: int* = malloc(self.vertex_count * sizeof(int)) as int*
+        let in_degree: int* = llpl_alloc(self.vertex_count * sizeof(int)) as int*
         for let i: int = 0, i < self.vertex_count, i = i + 1 {
             in_degree[i] = 0
         }
@@ -295,9 +303,9 @@ class Graph {
             }
         }
 
-        free(in_degree as void*)
+        llpl_free(in_degree as char*)
 
-        if result.size() != self.vertex_count {
+        if result.len() != self.vertex_count {
             result_container.set_err("Graph has a cycle")
         } else {
             result_container.set_ok(result)
@@ -308,8 +316,8 @@ class Graph {
 
     // Detect cycle in directed graph
     func has_cycle_directed() -> bool {
-        let visited: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
-        let rec_stack: bool* = malloc(self.vertex_count * sizeof(bool)) as bool*
+        let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
+        let rec_stack: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
 
         for let i: int = 0, i < self.vertex_count, i = i + 1 {
             visited[i] = false
@@ -319,15 +327,15 @@ class Graph {
         for let i: int = 0, i < self.vertex_count, i = i + 1 {
             if !visited[i] {
                 if self.has_cycle_directed_helper(i, visited, rec_stack) {
-                    free(visited as void*)
-                    free(rec_stack as void*)
+                    llpl_free(visited as char*)
+                    llpl_free(rec_stack as char*)
                     return true
                 }
             }
         }
 
-        free(visited as void*)
-        free(rec_stack as void*)
+        llpl_free(visited as char*)
+        llpl_free(rec_stack as char*)
         return false
     }
 
@@ -355,26 +363,32 @@ class Graph {
     }
 }
 
+// Distance value representing "no edge" in GraphMatrix. Not a class-level
+// `const` inside GraphMatrix itself - that parses as a genuine (per-
+// instance, never-initialized) struct field, not a real constant, since
+// ClassDecl has no notion of a class-level const (see e.g. rbtree.llpl's
+// RB_RED/RB_BLACK, which use this same namespace-level-const pattern for
+// exactly this reason).
+const GRAPH_INFINITY: int = 999999
+
 // Weighted graph using adjacency matrix
 class GraphMatrix {
     let matrix: int**
     let vertex_count: int
     let is_directed: bool
 
-    const INFINITY: int = 999999
-
     constructor(vertices: int, directed: bool) {
         self.vertex_count = vertices
         self.is_directed = directed
-        self.matrix = malloc(vertices * sizeof(int*)) as int**
+        self.matrix = llpl_alloc(vertices * sizeof(int*)) as int**
 
         for let i: int = 0, i < vertices, i = i + 1 {
-            self.matrix[i] = malloc(vertices * sizeof(int)) as int*
+            self.matrix[i] = llpl_alloc(vertices * sizeof(int)) as int*
             for let j: int = 0, j < vertices, j = j + 1 {
                 if i == j {
                     self.matrix[i][j] = 0
                 } else {
-                    self.matrix[i][j] = INFINITY
+                    self.matrix[i][j] = GRAPH_INFINITY
                 }
             }
         }
@@ -384,10 +398,10 @@ class GraphMatrix {
         if self.matrix != null {
             for let i: int = 0, i < self.vertex_count, i = i + 1 {
                 if self.matrix[i] != null {
-                    free(self.matrix[i] as void*)
+                    llpl_free(self.matrix[i] as char*)
                 }
             }
-            free(self.matrix as void*)
+            llpl_free(self.matrix as char*)
         }
     }
 
@@ -410,12 +424,12 @@ class GraphMatrix {
             return false
         }
 
-        return self.matrix[from_v][to_v] != INFINITY
+        return self.matrix[from_v][to_v] != GRAPH_INFINITY
     }
 
     func get_weight(from_v: int, to_v: int) -> int {
         if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
-            return INFINITY
+            return GRAPH_INFINITY
         }
 
         return self.matrix[from_v][to_v]
@@ -423,11 +437,11 @@ class GraphMatrix {
 
     // Floyd-Warshall algorithm for all-pairs shortest paths
     func floyd_warshall() -> int** {
-        let dist: int** = malloc(self.vertex_count * sizeof(int*)) as int**
+        let dist: int** = llpl_alloc(self.vertex_count * sizeof(int*)) as int**
 
         // Initialize distance matrix
         for let i: int = 0, i < self.vertex_count, i = i + 1 {
-            dist[i] = malloc(self.vertex_count * sizeof(int)) as int*
+            dist[i] = llpl_alloc(self.vertex_count * sizeof(int)) as int*
             for let j: int = 0, j < self.vertex_count, j = j + 1 {
                 dist[i][j] = self.matrix[i][j]
             }

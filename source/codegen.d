@@ -120,6 +120,18 @@ class CodeGenerator {
     private string[] currentGenericTemplateNamespace;
     private string[][string] moduleUsingNamespaces; // Maps module path to list of using-namespace declarations (each is "Foo.Bar")
     private Type[string] variableTypes; // Maps variable names to their types
+    // Source variable name -> the C identifier it currently emits as. Only
+    // populated by a plain `let name = ...` (generateStatement's VarDecl
+    // case) - re-`let`ing a name already in variableTypes shadows it (C has
+    // no such concept: two declarations of the same name in one block is a
+    // hard "redefinition" error), so the *emitted* name gets a fresh unique
+    // suffix instead, recorded here so every later reference to `name` (see
+    // generateExpression's Identifier case) picks up the shadowed variable,
+    // not the original. Absent for anything that was never `let`-declared
+    // (function/method/constructor params, `self`, ...) - those still
+    // resolve exactly as before.
+    private string[string] variableCNames;
+    private int shadowRenameCounter;
     private bool[string] constVariables; // Names (mangled) of `const`-declared variables
     private FunctionDecl[string] functionRegistry; // Functions, by mangled (namespace-prefixed) name
     private ClassDecl[string] classRegistry; // Classes, by mangled (namespace-prefixed) name
@@ -409,31 +421,31 @@ class CodeGenerator {
                 InterpFormat spec = interp.specs[i];
                 // A class/struct value has no sensible textual form on its
                 // own (interpFormatSpecifier would otherwise reject it) -
-                // implicitly resolve it the same way `.stringof`/`as
-                // string` do (a custom stringof() method, or the type's
-                // own name) instead of requiring `"\(f.stringof)"` to be
+                // implicitly resolve it the same way `.as_string`/`as
+                // string` do (a custom as_string() method, or the type's
+                // own name) instead of requiring `"\(f.as_string)"` to be
                 // spelled out every time. Not offered alongside an
                 // explicit width/radix modifier (`\(f:016)`) - that's
                 // still a plain-integer-only error, unchanged.
-                bool useStringof = false;
-                Type stringofType;
+                bool useAsString = false;
+                Type asStringType;
                 if (spec.radix.length == 0 && spec.width == 0) {
                     try {
-                        stringofType = inferType(expr);
-                        resolveType(stringofType);
+                        asStringType = inferType(expr);
+                        resolveType(asStringType);
                         // pointerDepth == 0 only - see the matching check
                         // in CastExpr's own `as char*` handling for why an
                         // explicit pointer (Foo*) must not be stringified.
-                        useStringof = stringofType.pointerDepth == 0 &&
-                            ((stringofType.name in classRegistry) !is null ||
-                             (stringofType.name in structRegistry) !is null);
+                        useAsString = asStringType.pointerDepth == 0 &&
+                            ((asStringType.name in classRegistry) !is null ||
+                             (asStringType.name in structRegistry) !is null);
                     } catch (Exception e) {
                         // fall through to the ordinary path below
                     }
                 }
-                if (useStringof) {
+                if (useAsString) {
                     fmt ~= "%s";
-                    args ~= ", " ~ generateStringofValue(stringofType, expr, expr.line, expr.column);
+                    args ~= ", " ~ generateAsStringValue(asStringType, expr, expr.line, expr.column);
                 } else {
                     fmt ~= interpFormatSpecifier(expr, spec);
                     args ~= ", " ~ variadicPromote(expr, generateExpression(expr));
@@ -1194,8 +1206,17 @@ class CodeGenerator {
         // currentNamespaceSegments is set per-declaration so resolveType
         // resolves unqualified namespaced types exactly the way the real
         // definition will, keeping each forward declaration's signature
-        // consistent with the definition that follows it later.
+        // consistent with the definition that follows it later. currentModulePath
+        // also has to track which module `decl` came from, not just its
+        // namespace - enclosingQualifications' "using namespace" fallback
+        // keys off moduleUsingNamespaces[currentModulePath], and without
+        // this a free function whose parameter type only resolves via a
+        // `using namespace` in its own module (not by namespace nesting)
+        // gets forward-declared with the bare, unqualified type name -
+        // stale from whichever module's path this was last left at -
+        // instead of the real definition's correctly-qualified one.
         foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
             foreach (decl; prog.declarations) {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
                     currentNamespaceSegments = funcDecl.namespaceSegments;
@@ -2043,6 +2064,14 @@ class CodeGenerator {
         currentClassName = sName;
         currentNamespaceSegments = structDecl.namespaceSegments;
         variableTypes["self"] = new Type(sName);
+        // See variableCNames' own comment: a `let`-shadow's renamed-C-name
+        // mapping only ever applies within the one function/method/
+        // constructor body it was recorded in, never across into the next
+        // one generated after it - reset at the start of every such
+        // independent body, the same "own params, own scope" boundary
+        // variableTypes itself already treats params/self as being.
+        variableCNames = null;
+        shadowRenameCounter = 0;
 
         foreach (i, param; constructor.params) {
             resolveType(param.type);
@@ -2134,6 +2163,9 @@ class CodeGenerator {
         currentClassName = uName;
         currentNamespaceSegments = unionDecl.namespaceSegments;
         variableTypes["self"] = new Type(uName);
+        // See generateStructConstructor's matching comment.
+        variableCNames = null;
+        shadowRenameCounter = 0;
 
         foreach (i, param; constructor.params) {
             resolveType(param.type);
@@ -2374,6 +2406,9 @@ class CodeGenerator {
         currentClassName = cName;
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
+        // See generateStructConstructor's matching comment.
+        variableCNames = null;
+        shadowRenameCounter = 0;
 
         foreach (i, param; constructor.params) {
             resolveType(param.type);
@@ -2441,6 +2476,9 @@ class CodeGenerator {
         // not generics-specific; just never previously exercised by any
         // hand-written destructor.
         variableTypes["self"] = new Type(cName);
+        // See generateStructConstructor's matching comment.
+        variableCNames = null;
+        shadowRenameCounter = 0;
 
         code ~= format("void %s_destroy(void* ptr) {\n", cName);
         indentLevel++;
@@ -2506,6 +2544,9 @@ class CodeGenerator {
         if (!method.isStatic) {
             variableTypes["self"] = new Type(cName);
         }
+        // See generateStructConstructor's matching comment.
+        variableCNames = null;
+        shadowRenameCounter = 0;
 
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
         currentReturnTypeAsWritten = cloneType(method.returnType);
@@ -2587,6 +2628,9 @@ class CodeGenerator {
         resolveType(funcDecl.returnType);
         Type prevReturnType = currentReturnType;
         currentReturnType = funcDecl.returnType;
+        // See generateStructConstructor's matching comment.
+        variableCNames = null;
+        shadowRenameCounter = 0;
 
         foreach (i, param; funcDecl.params) {
             resolveType(param.type);
@@ -2688,6 +2732,9 @@ class CodeGenerator {
         }
 
         currentNamespaceSegments = funcDecl.namespaceSegments;
+        // See generateStructConstructor's matching comment.
+        variableCNames = null;
+        shadowRenameCounter = 0;
 
         string params = "void* __frame";
         if (funcDecl.params.length == 1) {
@@ -3278,6 +3325,22 @@ class CodeGenerator {
             resolveType(varDecl.type);
             checkArrayLiteralInit(varDecl);
 
+            // A `let name = ...` re-declaring a name already `let` earlier
+            // in this function body shadows it - see variableCNames' own
+            // comment for why the *emitted* C identifier gets a fresh
+            // unique suffix instead of colliding. Checked against
+            // variableCNames, not variableTypes - unlike variableCNames,
+            // variableTypes is never cleared for a plain local (only for
+            // params, at the end of each function/method/constructor), so
+            // it can still hold a stale entry left over from an earlier,
+            // unrelated function's own local of the same name.
+            string emitName = varDecl.name;
+            if (varDecl.name in variableCNames) {
+                shadowRenameCounter++;
+                emitName = format("%s__shadow%d", varDecl.name, shadowRenameCounter);
+            }
+            variableCNames[varDecl.name] = emitName;
+
             // Track the variable type
             variableTypes[varDecl.name] = varDecl.type;
             if (varDecl.isConst) {
@@ -3289,9 +3352,9 @@ class CodeGenerator {
             if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
                 string baseType = primitiveToC(varDecl.type.name);
                 baseType ~= pointerStars(varDecl.type);
-                code ~= indent() ~ format("%s%s %s[%d]", constPrefix, baseType, varDecl.name, varDecl.type.arraySize);
+                code ~= indent() ~ format("%s%s %s[%d]", constPrefix, baseType, emitName, varDecl.type.arraySize);
             } else {
-                code ~= indent() ~ format("%s%s %s", constPrefix, typeToC(varDecl.type), varDecl.name);
+                code ~= indent() ~ format("%s%s %s", constPrefix, typeToC(varDecl.type), emitName);
             }
 
             if (varDecl.initializer) {
@@ -3302,7 +3365,12 @@ class CodeGenerator {
                 } else if (auto structLit = cast(StructLiteral)varDecl.initializer) {
                     code ~= " = " ~ generateStructLiteralValue(structLit, declaredTypeAsWritten);
                 } else {
-                    code ~= " = " ~ generateExpression(varDecl.initializer);
+                    // See tryImplicitConversionCall's own comment - e.g.
+                    // `let s: string = someYamlValue` calling
+                    // YamlValue.as_string() automatically, the same way
+                    // `let s: string = someYamlValue as string` does below.
+                    string converted = tryImplicitConversionCall(varDecl.initializer, varDecl.type);
+                    code ~= " = " ~ (converted.length > 0 ? converted : generateExpression(varDecl.initializer));
                 }
             } else if (varDecl.type.isNullableSugar) {
                 // No initializer at all (`let x: int?`) - default to an
@@ -5887,23 +5955,55 @@ class CodeGenerator {
         return code;
     }
 
-    // Shared by the `.stringof` property (see generateExpression's
-    // MemberExpr case) and casting a class/struct value `as string`/`as
-    // char*` (see its CastExpr case): a class defining a no-argument
-    // `stringof()` method has it called; everything else (a struct, which
-    // can't have methods at all, or a class that doesn't define one) falls
-    // back to a compile-time string literal of the type's own name -
-    // there's always *something* meaningful to produce either way.
-    private string generateStringofValue(Type objType, ASTNode objectExpr, int line, int column) {
+    // Shared by the `.as_string` property (see generateExpression's
+    // MemberExpr case), casting a class/struct value `as string`/`as
+    // char*` and `let s: string = value`/plain assignment (see
+    // tryImplicitConversionCall - both go through this for kind ==
+    // "string"), and string interpolation's implicit conversion
+    // (generateInterpolatedString): a class defining a no-argument
+    // `as_string()` method has it called (bridged through String's own
+    // c_str() if it returns this codebase's String class rather than a
+    // bare char*/string directly - see bridgeStringReturnToCharPtr);
+    // everything else (a struct, which can't have methods at all, or a
+    // class that doesn't define one) falls back to a compile-time string
+    // literal of the type's own name - there's always *something*
+    // meaningful to produce either way.
+    private string generateAsStringValue(Type objType, ASTNode objectExpr, int line, int column) {
         if (auto classDecl = objType.name in classRegistry) {
             foreach (m; classDecl.methods) {
-                if (m.name == "stringof" && m.params.length == 0) {
-                    recordUsage(objType.name ~ ".stringof", line, column);
-                    return format("%s_stringof(%s)", objType.name, generateExpression(objectExpr));
+                if (m.name == "as_string" && m.params.length == 0) {
+                    recordUsage(objType.name ~ ".as_string", line, column);
+                    string call = format("%s_as_string(%s)", objType.name, generateExpression(objectExpr));
+                    return bridgeStringReturnToCharPtr(m.returnType, call);
                 }
             }
         }
         return format("\"%s\"", escapeCString(objType.toString()));
+    }
+
+    // `as_string()` conventionally returns this codebase's own String
+    // class (e.g. YamlValue.as_string()), not a bare char*/string
+    // directly (e.g. testy.llpl's own Klass.as_string()) - if `call`
+    // (already-generated code for calling it) has the former return
+    // type, bridges it through String's own (always-present) c_str()
+    // method, the same extra step a caller manually chaining
+    // `.as_string().c_str()` would take. Returns `call` unchanged
+    // otherwise (including when the method already returns a bare
+    // char*/string, needing no bridge at all).
+    private string bridgeStringReturnToCharPtr(Type returnType, string call) {
+        Type retType = cloneType(returnType);
+        resolveType(retType);
+        if (retType.pointerDepth == 0 && !retType.isArray && retType.name == "String") {
+            if (auto stringClass = "String" in classRegistry) {
+                foreach (m; stringClass.methods) {
+                    if (m.name == "c_str" && m.params.length == 0) {
+                        return format("%s(%s)",
+                            mangleMethodName(*stringClass, mangledClass(*stringClass), m), call);
+                    }
+                }
+            }
+        }
+        return call;
     }
 
     // Decides whether member access on `object` should use "." (a value
@@ -5913,6 +6013,30 @@ class CodeGenerator {
     // whenever the type can't be determined, so existing class-based code
     // is unaffected.
     private string memberAccessor(ASTNode object) {
+        // A direct dereference of a single-starred pointer (`(*p).field`)
+        // always yields a genuine C value with zero stars remaining -
+        // true for struct/union pointers (handled below via the ordinary
+        // type check) and, thanks to ast.d's "classes are always
+        // pointers" collapse (see typeToC's own comment: an explicit `*`
+        // on a class type never stacks a second star on top of the
+        // class's own implicit one), also true for a class used as a
+        // raw, manually-managed pointer - stdlib/collections' convention
+        // (`ListNode<T>*`, `TrieNode*`, ...). A bare `ListNode<T>` class
+        // reference and a fully-dereferenced `*node` both type-infer to
+        // the identical Type("ListNode", pointerDepth: 0), so the type
+        // alone can't distinguish "needs ->" from "needs ." here - only
+        // the syntax (was this an explicit single-level `*`?) can.
+        if (auto unary = cast(UnaryExpr)object) {
+            if (unary.op == "*") {
+                try {
+                    if (inferType(unary.operand).pointerDepth == 1) {
+                        return ".";
+                    }
+                } catch (Exception e) {
+                    // Fall through to the general type-based check below.
+                }
+            }
+        }
         try {
             Type t = inferType(object);
             if (!t.isPointer && (isStructTypeName(t.name) || isUnionTypeName(t.name))) {
@@ -5922,6 +6046,83 @@ class CodeGenerator {
         } catch (Exception e) {
             return "->";
         }
+    }
+
+    // Maps a resolved target Type to the "as_<kind>" conversion method name
+    // a class can define to support being cast/assigned to it (see
+    // tryImplicitConversionCall) - "" if the target isn't one of the
+    // supported conversion kinds. Only ever called with an already-
+    // resolveType'd target, so `string` has already been canonicalized to
+    // name "char", pointerDepth 1 (see resolveType's own comment on that).
+    private string implicitConversionKind(Type target) {
+        if (target.isArray || target.pointerDepth > 1) return "";
+        if (target.name == "char" && target.pointerDepth == 1) return "string";
+        if (target.pointerDepth != 0) return "";
+        switch (target.name) {
+            case "int": case "uint": case "int8": case "uint8":
+            case "int16": case "uint16": case "int32": case "uint32":
+            case "int64": case "uint64":
+                return "int";
+            case "float": return "float";
+            case "bool": return "bool";
+            default: return "";
+        }
+    }
+
+    // If `expr`'s inferred type is a class defining a zero-param
+    // `as_<kind>()` method matching `targetType` (see
+    // implicitConversionKind - e.g. a `YamlValue`'s `as_string()`/
+    // `as_int()`/`as_float()`/`as_bool()`), generates a call to it; ""
+    // if no such conversion applies, meaning the caller should fall back
+    // to its own ordinary codegen for `expr`. This is how a class opts
+    // into "converts like a string/int/float/bool" - purely by naming a
+    // method `as_<kind>`, the same unintrusive convention operator
+    // overloading already uses (ast.operatorMethodName), rather than
+    // this compiler needing a real trait/interface mechanism for it.
+    // Deliberately narrow: only a bare class value (not a pointer/array)
+    // converts, and only for an exact, zero-param `as_<kind>` match -
+    // never partial/fuzzy, so this can't silently paper over a real type
+    // error the way a looser rule might.
+    private string tryImplicitConversionCall(ASTNode expr, Type targetType) {
+        string kind = implicitConversionKind(targetType);
+        if (kind.length == 0) return "";
+        Type sourceType;
+        try {
+            sourceType = inferType(expr);
+            resolveType(sourceType);
+        } catch (Exception e) {
+            return "";
+        }
+        if (sourceType.pointerDepth != 0 || sourceType.isArray) return "";
+
+        // "string" always converts, the same as the explicit `.as_string`
+        // property/`as string` cast already do - see generateAsStringValue's
+        // own comment (a class defining as_string() has it called; a
+        // struct, or a class without one, falls back to the type's own
+        // name). Only for an actual class/struct value, though - unlike
+        // those explicit forms, a plain assignment silently "succeeding"
+        // for any *other* type (falling back to a meaningless literal)
+        // would be a real footgun, not a feature.
+        if (kind == "string") {
+            if ((sourceType.name in classRegistry) is null && (sourceType.name in structRegistry) is null) {
+                return "";
+            }
+            return generateAsStringValue(sourceType, expr, expr.line, expr.column);
+        }
+
+        // "int"/"float"/"bool" have no such generic fallback (there's no
+        // equivalent "there's always something to produce" for those) -
+        // only an actual matching as_int()/as_float()/as_bool() converts.
+        auto classDecl = sourceType.name in classRegistry;
+        if (classDecl is null) return "";
+        string methodName = "as_" ~ kind;
+        foreach (method; classDecl.methods) {
+            if (method.name == methodName && method.params.length == 0) {
+                return format("%s(%s)", mangleMethodName(*classDecl, mangledClass(*classDecl), method),
+                    generateExpression(expr));
+            }
+        }
+        return "";
     }
 
     // Finds the operator-overload method (see ast.operatorMethodName) `op`'s
@@ -6476,6 +6677,13 @@ class CodeGenerator {
                         return generateExpression(binExpr.left) ~ " = " ~
                             generateTupleLiteral(tupleLit, leftType);
                     }
+                    // See tryImplicitConversionCall's own comment - e.g.
+                    // `s = someYamlValue` (s already declared `string`)
+                    // calling YamlValue.as_string() automatically.
+                    string converted = tryImplicitConversionCall(binExpr.right, leftType);
+                    if (converted.length > 0) {
+                        return generateExpression(binExpr.left) ~ " = " ~ converted;
+                    }
                 }
                 return generateExpression(binExpr.left) ~ " = " ~ generateExpression(binExpr.right);
             }
@@ -6495,7 +6703,15 @@ class CodeGenerator {
             return generateLambdaExpr(lambdaExpr);
         } else if (auto sizeofExpr = cast(SizeofExpr)node) {
             resolveType(sizeofExpr.type);
-            return format("sizeof(%s)", typeToC(sizeofExpr.type));
+            // Not typeToC: that auto-adds a `*` for a bare class type
+            // (classes are always accessed by pointer), but `sizeof(Foo)`
+            // here is a real type reference used for manual allocation
+            // sizing (e.g. `llpl_alloc(sizeof(ListNode<T>))`) - callers
+            // want the underlying struct's size, not a pointer's. An
+            // explicit `sizeof(Foo*)` still gets its stars via
+            // pointerStars below.
+            string sizeofCType = primitiveToC(sizeofExpr.type.name) ~ pointerStars(sizeofExpr.type);
+            return format("sizeof(%s)", sizeofCType);
         } else if (auto structLit = cast(StructLiteral)node) {
             // No expected-type context available here (this is the
             // standalone path, reached whenever a struct literal isn't
@@ -6825,22 +7041,22 @@ class CodeGenerator {
                 return format("%s(%s)", callee, args);
             }
         } else if (auto memberExpr = cast(MemberExpr)node) {
-            // `.stringof` (no call parens - `x.stringof()` already works
-            // as an ordinary method call without any special-casing here)
-            // - see generateStringofValue's own comment.
-            if (memberExpr.member == "stringof") {
+            // `.as_string` (no call parens - `x.as_string()` already
+            // works as an ordinary method call without any special-casing
+            // here) - see generateAsStringValue's own comment.
+            if (memberExpr.member == "as_string") {
                 Type objType;
                 try {
                     objType = inferType(memberExpr.object);
                 } catch (Exception e) {
-                    throw new CompileError("'.stringof' needs a typed value",
+                    throw new CompileError("'.as_string' needs a typed value",
                         currentModulePath, memberExpr.line, memberExpr.column);
                 }
-                return generateStringofValue(objType, memberExpr.object, memberExpr.line, memberExpr.column);
+                return generateAsStringValue(objType, memberExpr.object, memberExpr.line, memberExpr.column);
             }
             // `.sizeof` - unlike the existing `sizeof(TypeName)` (a real
             // type reference only), this works on any typed *value*
-            // (`x.sizeof`), inferring its type the same way `.stringof`
+            // (`x.sizeof`), inferring its type the same way `.as_string`
             // does. For a bare type name, `sizeof(TypeName)` is still the
             // spelling to use.
             if (memberExpr.member == "sizeof") {
@@ -6968,6 +7184,15 @@ class CodeGenerator {
             if (auto ctx = ident.name in currentLambdaCaptures) {
                 return ctx.useExpr;
             }
+            // A `let`-declared local (see variableCNames' own comment) -
+            // checked ahead of resolveName/namespace resolution, which
+            // never applies to a plain local variable anyway, so this
+            // never changes behavior for a name that was never shadowed
+            // (variableCNames[name] == name in that case).
+            if (auto cName = ident.name in variableCNames) {
+                recordUsage(*cName, ident.line, ident.column);
+                return *cName;
+            }
             string resolved = resolveName(ident.name,
                 (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null);
             recordUsage(resolved, ident.line, ident.column);
@@ -7032,36 +7257,22 @@ class CodeGenerator {
             return format("%s(%s)", ctorSymbol, args);
         } else if (auto castExpr = cast(CastExpr)node) {
             resolveType(castExpr.type);
-            // Casting a class/struct value `as string`/`as char*` resolves
-            // the same way `.stringof` does (custom method, or the type's
-            // own name) instead of reinterpreting the object as a raw
-            // char* - see generateStringofValue. Only when the source is
-            // actually a known class/struct and the target is exactly
-            // `char*` (not `char**` or deeper - that isn't "cast to
-            // string"); every other cast (including an already-char*
-            // value) is unaffected.
-            if (castExpr.type.name == "char" && castExpr.type.pointerDepth == 1) {
-                try {
-                    Type srcType = inferType(castExpr.expression);
-                    // pointerDepth == 0 and not an array only - an
-                    // already-explicit pointer to a class/struct (Foo*,
-                    // Foo**, ...) is unambiguously a raw-reinterpret
-                    // request (matching how a generic T* field must keep
-                    // working when T is a class - see Weak<T>/Vector<T>
-                    // in prelude.llpl), not "stringify this value" the
-                    // way a plain Foo value's cast is - and so is a
-                    // dynamic array (`T[]` - Vector<T>.data/Slice<T>.ptr,
-                    // see typeToC's own isDynamicArray comment), which is
-                    // just as much a real pointer under the hood despite
-                    // pointerDepth alone reading 0 for it too.
-                    if (srcType.pointerDepth == 0 && !srcType.isArray &&
-                            ((srcType.name in classRegistry) !is null || (srcType.name in structRegistry) !is null)) {
-                        return generateStringofValue(srcType, castExpr.expression, castExpr.line, castExpr.column);
-                    }
-                } catch (Exception e) {
-                    // Not a typed value inferType can see through - fall
-                    // through to the ordinary reinterpret cast below.
-                }
+            // Casting a class/struct value `as string`/`as int`/`as
+            // float`/`as bool` resolves the same way `.as_string`/`let s:
+            // string = value` do (a custom as_string()/as_int()/etc.
+            // method, or - for "string" specifically - the type's own
+            // name) instead of reinterpreting the object as a raw
+            // pointer/int - see tryImplicitConversionCall. An already-
+            // explicit pointer to a class/struct (Foo*, Foo**, ...) is
+            // unambiguously a raw-reinterpret request instead (matching
+            // how a generic T* field must keep working when T is a class -
+            // see Weak<T>/Vector<T> in prelude.llpl), not "convert this
+            // value" the way a plain Foo value's cast is - every other
+            // cast (including one already of the target type) is
+            // unaffected either way.
+            string converted = tryImplicitConversionCall(castExpr.expression, castExpr.type);
+            if (converted.length > 0) {
+                return converted;
             }
             return format("((%s)%s)", typeToC(castExpr.type), generateExpression(castExpr.expression));
         } else if (auto macroInvocation = cast(MacroInvocation)node) {
@@ -7149,7 +7360,7 @@ class CodeGenerator {
             }
             throw inferError(expr, format("Cannot infer type: unknown variable '%s'", ident.name));
         } else if (auto memberExpr = cast(MemberExpr)expr) {
-            if (memberExpr.member == "stringof") {
+            if (memberExpr.member == "as_string") {
                 return new Type("char", true);
             }
             if (memberExpr.member == "sizeof") {
