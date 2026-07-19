@@ -1,0 +1,5 @@
+{
+  "server": "LLPL HTTP Server",
+  "version": "1.0",
+  "features": ["file-io", "networking", "string-utils"]
+}

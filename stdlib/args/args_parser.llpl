@@ -1,0 +1,355 @@
+// Standard library: Command-line argument parsing
+// Namespace: std::args
+//
+// Works with either of the two ways to receive command-line arguments:
+//
+//   - `func main(args: string[]) -> int` - real main-specific codegen (see
+//     codegen.d's isMainArgsFunction/generateMainWrapper) generates the
+//     actual C `int main(int argc, char** argv)` entry point separately
+//     and hands this function `argv + 1` (still null-terminated, program's
+//     own path already excluded) - the nicer of the two forms, and the
+//     one every new caller should reach for. Pair it with parse_args().
+//   - `func main(argc: i32, argv: char**) -> int` - this compiler doesn't
+//     special-case an *ordinary*-shaped `main` at all (see source/main.d),
+//     so declaring it with the real C signature (int32_t argc, matching
+//     what the C runtime actually calls main with - the language's own
+//     default `int` is 64-bit and would be a real ABI mismatch here)
+//     already just works, no runtime support needed. Pair it with parse().
+//
+// Usage:
+//
+//   import "stdlib/args/args_parser.llpl"
+//   using namespace std.args
+//
+//   func main(args: string[]) -> int {
+//       let parser: ArgParser = new ArgParser(new String("mytool"))
+//       parser.add_flag(new String("verbose"), new String("v"), new String("Enable verbose output"))
+//       parser.add_option_default(new String("output"), new String("o"), new String("a.out"), new String("Output file"))
+//       parser.add_required(new String("input"), new String("i"), new String("Input file"))
+//
+//       if !parser.parse_args(args) {
+//           parser.print_errors()
+//           parser.print_help()
+//           return 1
+//       }
+//
+//       let verbose: bool = parser.has_flag(new String("verbose"))
+//       let output: String = parser.get_value_or(new String("output"), new String("a.out"))
+//       let input: String = parser.get_value_or(new String("input"), new String(""))
+//       let rest: Vector<String> = parser.get_positional()
+//       return 0
+//   }
+
+extern func puts(s: char*) -> int
+
+namespace std {
+namespace args {
+
+// One registered `--name`/`-short` option's static definition (not its
+// parsed value - see ArgParser.values/flags for that).
+class ArgOption {
+    let name: String          // long form, without the leading "--" (e.g. "verbose")
+    let short_name: String    // short form, without the leading "-" (e.g. "v"); "" if none
+    let takes_value: bool     // false: a bare boolean flag; true: needs "--name VALUE"/"--name=VALUE"
+    let required: bool        // only meaningful when takes_value is true
+    let has_default: bool
+    let default_value: String
+    let description: String   // shown by print_help()
+
+    constructor(name: String, short_name: String, takes_value: bool, required: bool, description: String) {
+        self.name = name
+        self.short_name = short_name
+        self.takes_value = takes_value
+        self.required = required
+        self.has_default = false
+        self.default_value = new String("")
+        self.description = description
+    }
+
+    // A class needs an explicit destructor - even an empty one - for any
+    // *other* class's auto-generated cleanup to be able to release a field
+    // of this type (see Optional<T>'s own empty destructor, which exists
+    // for exactly this reason): ArgParser.find_by_long/find_by_short return
+    // Optional<ArgOption>, whose auto-generated destructor releases its
+    // `value: ArgOption` field by calling ArgOption_destroy - which only
+    // exists at all once this is declared.
+    destructor() {}
+}
+
+// A simple GNU-style command-line argument parser: `--long-name VALUE`,
+// `--long-name=VALUE`, `-s VALUE`, and bare boolean flags (`--verbose`/
+// `-v`), plus positional (non-flag) arguments. `--` on its own stops
+// option parsing - everything after it is positional even if it starts
+// with `-`, the same convention `ls`/`grep`/etc. use.
+class ArgParser {
+    let program_name: String
+    let options: Vector<ArgOption>
+    let values: HashMap<String, String>   // long name -> value, for options that take one
+    let flags: HashMap<String, bool>      // long name -> present, for boolean flags
+    let positional: Vector<String>
+    let errors: Vector<String>
+
+    constructor(program_name: String) {
+        self.program_name = program_name
+        self.options = new Vector<ArgOption>()
+        self.values = new HashMap<String, String>()
+        self.flags = new HashMap<String, bool>()
+        self.positional = new Vector<String>()
+        self.errors = new Vector<String>()
+    }
+
+    // Registers a boolean flag with no value, e.g. `--verbose`/`-v`.
+    // `short_name` may be `new String("")` to skip a short form.
+    func add_flag(name: String, short_name: String, description: String) {
+        self.options.push(new ArgOption(name, short_name, false, false, description))
+    }
+
+    // Registers an option that requires a value but is optional to pass
+    // at all (get_value()/get_value_or() report its absence, not a parse
+    // error).
+    func add_option(name: String, short_name: String, description: String) {
+        self.options.push(new ArgOption(name, short_name, true, false, description))
+    }
+
+    // Same as add_option, but get_value_or() falls back to `default_value`
+    // (instead of its own `fallback` argument) when the caller never
+    // passes this option at all.
+    func add_option_default(name: String, short_name: String, default_value: String, description: String) {
+        let opt: ArgOption = new ArgOption(name, short_name, true, false, description)
+        opt.has_default = true
+        opt.default_value = default_value
+        self.options.push(opt)
+    }
+
+    // Registers an option that requires a value *and* must be passed -
+    // parse() returns false (see get_errors()) if it's missing.
+    func add_required(name: String, short_name: String, description: String) {
+        self.options.push(new ArgOption(name, short_name, true, true, description))
+    }
+
+    func find_by_long(name: String) -> Optional<ArgOption> {
+        let result: Optional<ArgOption> = new Optional<ArgOption>()
+        let i: int = 0
+        while i < self.options.len() {
+            let opt: ArgOption = self.options.get(i)
+            if opt.name == name {
+                result.set(opt)
+                return result
+            }
+            i = i + 1
+        }
+        return result
+    }
+
+    func find_by_short(short_name: String) -> Optional<ArgOption> {
+        let result: Optional<ArgOption> = new Optional<ArgOption>()
+        let i: int = 0
+        while i < self.options.len() {
+            let opt: ArgOption = self.options.get(i)
+            if opt.short_name.len() > 0 && opt.short_name == short_name {
+                result.set(opt)
+                return result
+            }
+            i = i + 1
+        }
+        return result
+    }
+
+    // Parses argc/argv exactly as `func main(argc: i32, argv: char**)`
+    // receives them - argv[0] (the program's own path) is skipped. Returns
+    // true if every recognized option that takes a value got one, no
+    // unrecognized `--`/`-` option was seen, and every add_required()
+    // option was supplied; false otherwise, with the specific problems
+    // recorded in get_errors() (see print_errors()).
+    func parse(argc: i32, argv: char**) -> bool {
+        return self.parse_from(argv, 1, argc as int)
+    }
+
+    // Same as parse(), for `func main(args: string[])` instead (see this
+    // compiler's main-specific codegen) - `args` is already argv with the
+    // program's own path stripped and is still null-terminated, so this
+    // just counts up to that terminator and starts from index 0, rather
+    // than index 1 into the raw, unfiltered argv parse() expects.
+    func parse_args(args: string[]) -> bool {
+        let count: int = 0
+        while args[count] != null {
+            count = count + 1
+        }
+        return self.parse_from(args, 0, count)
+    }
+
+    // Shared core of parse()/parse_args() - `argv[start .. count)` are the
+    // actual arguments to parse (the program's own path, if any, already
+    // excluded by the caller).
+    func parse_from(argv: char**, start: int, count: int) -> bool {
+        let only_positional: bool = false
+        let i: int = start
+
+        while i < count {
+            let raw: String = new String(argv[i])
+
+            if !only_positional && raw == "--" {
+                only_positional = true
+                i = i + 1
+            } else if !only_positional && raw.starts_with("--") {
+                let rest: String = raw.substring(2, raw.len())
+                let eq_pos: int = rest.find("=")
+                let has_inline_value: bool = eq_pos >= 0
+                let opt_name: String = if has_inline_value { rest.substring(0, eq_pos) } else { rest }
+
+                let found: Optional<ArgOption> = self.find_by_long(opt_name)
+                if found.is_none() {
+                    let buf: char[256]
+                    ksnprintf(buf as char*, 256, "Unknown option: --%s", opt_name.c_str())
+                    self.errors.push(new String(buf as char*))
+                    i = i + 1
+                } else {
+                    let opt: ArgOption = found.get()
+                    if opt.takes_value {
+                        if has_inline_value {
+                            self.values.insert(opt.name, rest.substring(eq_pos + 1, rest.len()))
+                            i = i + 1
+                        } else if i + 1 < count {
+                            self.values.insert(opt.name, new String(argv[i + 1]))
+                            i = i + 2
+                        } else {
+                            let buf: char[256]
+                            ksnprintf(buf as char*, 256, "Option --%s requires a value", opt.name.c_str())
+                            self.errors.push(new String(buf as char*))
+                            i = i + 1
+                        }
+                    } else {
+                        if has_inline_value {
+                            let buf: char[256]
+                            ksnprintf(buf as char*, 256, "Option --%s does not take a value", opt.name.c_str())
+                            self.errors.push(new String(buf as char*))
+                        }
+                        self.flags.insert(opt.name, true)
+                        i = i + 1
+                    }
+                }
+            } else if !only_positional && raw.starts_with("-") && raw.len() > 1 {
+                let short_name: String = raw.substring(1, raw.len())
+                let found: Optional<ArgOption> = self.find_by_short(short_name)
+                if found.is_none() {
+                    let buf: char[256]
+                    ksnprintf(buf as char*, 256, "Unknown option: -%s", short_name.c_str())
+                    self.errors.push(new String(buf as char*))
+                    i = i + 1
+                } else {
+                    let opt: ArgOption = found.get()
+                    if opt.takes_value {
+                        if i + 1 < count {
+                            self.values.insert(opt.name, new String(argv[i + 1]))
+                            i = i + 2
+                        } else {
+                            let buf: char[256]
+                            ksnprintf(buf as char*, 256, "Option -%s requires a value", short_name.c_str())
+                            self.errors.push(new String(buf as char*))
+                            i = i + 1
+                        }
+                    } else {
+                        self.flags.insert(opt.name, true)
+                        i = i + 1
+                    }
+                }
+            } else {
+                self.positional.push(raw)
+                i = i + 1
+            }
+        }
+
+        let j: int = 0
+        while j < self.options.len() {
+            let opt: ArgOption = self.options.get(j)
+            if opt.required {
+                let has_val: Optional<String> = self.values.get(opt.name)
+                if has_val.is_none() {
+                    let buf: char[256]
+                    ksnprintf(buf as char*, 256, "Missing required option: --%s", opt.name.c_str())
+                    self.errors.push(new String(buf as char*))
+                }
+            }
+            j = j + 1
+        }
+
+        return self.errors.len() == 0
+    }
+
+    func has_flag(name: String) -> bool {
+        let result: Optional<bool> = self.flags.get(name)
+        if result.is_some() {
+            return result.get()
+        }
+        return false
+    }
+
+    func get_value(name: String) -> Optional<String> {
+        return self.values.get(name)
+    }
+
+    // The parsed value for `name`, or its registered default (see
+    // add_option_default) if it wasn't passed, or `fallback` if neither
+    // applies.
+    func get_value_or(name: String, fallback: String) -> String {
+        let result: Optional<String> = self.values.get(name)
+        if result.is_some() {
+            return result.get()
+        }
+        let i: int = 0
+        while i < self.options.len() {
+            let opt: ArgOption = self.options.get(i)
+            if opt.has_default && opt.name == name {
+                return opt.default_value
+            }
+            i = i + 1
+        }
+        return fallback
+    }
+
+    func get_positional() -> Vector<String> {
+        return self.positional
+    }
+
+    func get_errors() -> Vector<String> {
+        return self.errors
+    }
+
+    func has_errors() -> bool {
+        return self.errors.len() > 0
+    }
+
+    func print_errors() {
+        let i: int = 0
+        while i < self.errors.len() {
+            puts(self.errors.get(i).c_str())
+            i = i + 1
+        }
+    }
+
+    func print_help() {
+        let header: char[256]
+        ksnprintf(header as char*, 256, "Usage: %s [options]", self.program_name.c_str())
+        puts(header as char*)
+
+        let i: int = 0
+        while i < self.options.len() {
+            let opt: ArgOption = self.options.get(i)
+            let line: char[512]
+            if opt.short_name.len() > 0 {
+                ksnprintf(line as char*, 512, "  --%s, -%s%s  %s",
+                    opt.name.c_str(), opt.short_name.c_str(),
+                    if opt.takes_value { " <value>" } else { "" }, opt.description.c_str())
+            } else {
+                ksnprintf(line as char*, 512, "  --%s%s  %s",
+                    opt.name.c_str(),
+                    if opt.takes_value { " <value>" } else { "" }, opt.description.c_str())
+            }
+            puts(line as char*)
+            i = i + 1
+        }
+    }
+}
+
+}
+}
