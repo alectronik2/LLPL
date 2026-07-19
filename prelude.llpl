@@ -553,6 +553,29 @@ class String {
         return llpl_strcmp(self.buf, other) > 0
     }
 
+    // String == String et al. - without these, `a == b` between two
+    // String *instances* still compiles (this class has no other
+    // exact-matching `operator==` overload to reject it against), but
+    // silently compares the two heap pointers instead of their content,
+    // since a bare `==` with no matching operator overload falls back to
+    // that. Delegating to the `string` (char*) overloads just above via
+    // c_str() gives the same content comparison those already do.
+    func operator==(other: String) -> bool {
+        return self == other.c_str()
+    }
+
+    func operator!=(other: String) -> bool {
+        return self != other.c_str()
+    }
+
+    func operator<(other: String) -> bool {
+        return self < other.c_str()
+    }
+
+    func operator>(other: String) -> bool {
+        return self > other.c_str()
+    }
+
     // Concatenation always allocates a fresh String (values, not shared
     // mutable buffers) - `other`'s bytes are copied into a temporary
     // buffer alongside `self`'s before handing it to `new String(...)`,
@@ -743,7 +766,12 @@ class String {
 // with a struct literal (`Slice<int> { ptr: buf, len: 10 }`) over a fixed
 // array, a raw `llpl_alloc`'d buffer, or see Vector<T>.as_slice() below.
 struct Slice<T> {
-    let ptr: T*
+    // `T[]`, not `T*` - see Vector<T>.data's own comment (typeToC's
+    // isDynamicArray) for why: identical C type for a value-type T
+    // (`int*` either way), but correctly `String**` rather than a
+    // collapsed single `String*` for a class-type T, matching what
+    // Vector<String>.as_slice() actually hands this struct's `ptr` field.
+    let ptr: T[]
     let len: uint
 }
 
@@ -949,14 +977,24 @@ class Weak<T> {
 // in a one-field struct if you need this (see HashBucket's use of exactly
 // that trick for HashMap's own bucket array).
 class Vector<T> {
-    let data: T*
+    // `T[]` (no fixed size), not `T*` - a dynamic/growable array, unlike
+    // an ordinary explicit pointer (see typeToC's own isDynamicArray
+    // comment for the full reasoning): for a value-type T this compiles
+    // the same either way (`int*`), but for a class-type T (Vector<String>)
+    // it correctly gives `String**` - a real array of separately
+    // heap-allocated String instances - instead of collapsing onto
+    // String's own single implicit pointer star and trying to store
+    // String *values* inline, which every method below (`sizeof`-based
+    // allocation, `self.data[i] = item` where `item` is itself always a
+    // pointer for a class) already assumes doesn't happen.
+    let data: T[]
     let length: int
     let capacity: int
 
     constructor() {
         self.length = 0
         self.capacity = 4
-        self.data = llpl_alloc((self.capacity as uint) * sizeof(T)) as T*
+        self.data = llpl_alloc((self.capacity as uint) * sizeof(T)) as T[]
     }
 
     destructor() {
@@ -977,7 +1015,7 @@ class Vector<T> {
 
     func grow() {
         let new_capacity: int = self.capacity * 2
-        let new_data: T* = llpl_alloc((new_capacity as uint) * sizeof(T)) as T*
+        let new_data: T[] = llpl_alloc((new_capacity as uint) * sizeof(T)) as T[]
         llpl_memcpy(new_data as char*, self.data as char*, (self.length as uint) * sizeof(T))
         llpl_free(self.data as char*)
         self.data = new_data

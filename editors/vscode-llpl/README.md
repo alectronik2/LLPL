@@ -6,28 +6,34 @@ find-references) for [LLPL](../../README.md) (`.llpl`) files.
 
 ## Features
 
-- Syntax highlighting for the full language: `namespace`, `class`, `struct`
-  (with `packed`), `enum`, `macro` (with `NAME!(args)` invocations),
-  `constructor`/`destructor`, `func` (including `interrupt func` and
-  operator overloads like `func operator+`), `let`/`const`, `alias`,
+- Syntax highlighting for the full language: `namespace`, `using namespace`,
+  `class`, `struct` (with `packed`), `union`, `enum`, `macro` (with
+  `NAME!(args)` invocations), `constructor`/`destructor`, `func` (including
+  `static func`, `interrupt func`, and operator overloads like
+  `func operator+`), `let`/`const`, `alias`,
   control flow (`if`/`else`/`while`/`for`/`foreach`/`return`/`defer`/`try`/
   `catch`/`finally`/`throw`/`delete`/`match`/`case`/`default`/`unless`),
   range-based `for i in 0..5 { }`, `import`/`from`, `extern`,
   `new`/`as` casts, inline
-  `asm(...)`, and the built-in types (`int`, `uint`, `int16`/`uint16`/
-  `int32`/`uint32`, `char`, `bool`, `void`).
+  `asm(...)`, `#link "NAME"`/`#flags "..."` compiler directives, and the
+  built-in types (`int`/`uint` and their `8`/`16`/`32`/`64`-bit forms,
+  including the `i8`/`u8`/`i16`/`u16`/`i32`/`u32`/`i64`/`u64` short names,
+  `char`, `bool`, `void`, `float`, `string`).
 - Type-annotation aware highlighting, including pointers/pointers-to-pointers
   (`char*`, `int**`), fixed arrays (`char[17]`), and bit-fields
   (`let flags: uint32 : 3`).
 - Numeric literals with `_` digit-group separators (`0x100_0000_0000`,
-  `1_000_000`).
+  `1_000_000`), float literals (`1.5`, `1.5e-5`, `1.0f`), and char literals
+  (`'x'`, `'\n'`, `'\x1b'`).
 - String interpolation (`"total = \(a + b)"`) highlighted as embedded code
   inside the string, including nested calls/parens.
-- Comment toggling (`//` and `/* */`), bracket matching/auto-closing.
-- Snippets for common constructs (`func`, `class`, `struct`, `namespace`,
-  `enum`, `macro`, `match`, `alias`, `unless`, `if`, `while`, `for`,
-  range-based `for`, `defer`, `delete`, `try`/`catch`/`finally`, `extern`,
-  `import`, `asm`, `bitfield`).
+- Comment toggling (`//` and `/* */`), bracket matching/auto-closing
+  (including for char literals' `'...'`).
+- Snippets for common constructs (`func`, `class`, `struct`, `union`,
+  `namespace`, `using namespace`, `enum`, `macro`, `match`, `alias`,
+  `unless`, `if`, `while`, `for`, range-based `for`, `defer`, `delete`,
+  `try`/`catch`/`finally`, `extern`, `import`, `#link`, `#flags`, `asm`,
+  `bitfield`).
 - **Language server** (`server/`): diagnostics, completion, hover,
   go-to-definition and find-references, backed directly by the `llpl`
   compiler's own name resolution (`llpl --lsp-symbols <file>` - see
@@ -61,7 +67,7 @@ npm install
 npm run compile
 npm install -g @vscode/vsce   # once, if you don't have vsce
 vsce package
-code --install-extension llpl-language-0.5.0.vsix
+code --install-extension llpl-language-0.6.0.vsix
 ```
 
 Or symlink the extension folder straight into your VS Code extensions

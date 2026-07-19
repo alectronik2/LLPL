@@ -2,7 +2,7 @@
     "name": "llpl-language",
     "displayName": "LLPL Language Support",
     "description": "Syntax highlighting and language configuration for LLPL (Low Level Programming Language)",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "publisher": "llpl-team",
     "license": "MIT",
     "engines": {

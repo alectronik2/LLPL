@@ -45,7 +45,7 @@ func build_response(status: String, content_type: String, body: String) -> Strin
     sb.append(new String("\r\n"))
 
     sb.append(new String("Content-Length: "))
-    sb.append_int(body.length())
+    sb.append_int(body.len())
     sb.append(new String("\r\n"))
 
     sb.append(new String("Connection: close\r\n"))
@@ -61,13 +61,13 @@ func build_response(status: String, content_type: String, body: String) -> Strin
 func handle_get(path: String) -> String {
     // Remove leading slash
     let file_path: String = if StringUtils.starts_with(path, new String("/")) {
-        path.substring(1, path.length())
+        path.substring(1, path.len())
     } else {
         path
     }
 
     // Default to index.html
-    if StringUtils.is_whitespace(file_path) || file_path.length() == 0 {
+    if StringUtils.is_whitespace(file_path) || file_path.len() == 0 {
         file_path = new String("index.html")
     }
 
@@ -111,7 +111,8 @@ func handle_client(client: Socket) {
     let (method, path) = parse_request(request)
 
     // Generate response
-    let response: String = if StringUtils.to_upper(method) == StringUtils.to_upper(new String("GET")) {
+    let upper_method: String = StringUtils.to_upper(method)
+    let response: String = if llpl_strcmp(upper_method.c_str(), "GET") == 0 {
         handle_get(path)
     } else {
         // Method not supported
@@ -147,7 +148,7 @@ func main() -> int {
     // Create HTTP server on port 8080
     let server: TcpServer = new TcpServer(8080)
 
-    let start_result: Result<bool, char*> = server.start_server(10)
+    let start_result = server.start_server(10)
 
     if !start_result.is_ok() {
         return 1
@@ -158,10 +159,10 @@ func main() -> int {
 
     // Main server loop
     while true {
-        let client_result: Result<Socket, char*> = server.accept_client()
+        let client_result = server.accept_client()
 
         if client_result.is_ok() {
-            let client: Socket = client_result.unwrap()
+            let client = client_result.unwrap()
             handle_client(client)
         }
     }

@@ -21,6 +21,7 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 - [String Utilities](#string-utilities)
 - [Data Structures](#data-structures)
 - [SDL3 Graphics & Audio](#sdl3-graphics--audio)
+- [Command-line Arguments](#command-line-arguments)
 - [API Reference](#api-reference)
 
 ## Installation
@@ -642,6 +643,53 @@ For complete documentation and examples, see:
 - [`examples/sdl/`](../examples/sdl/) - Complete game examples
 
 **Note:** Requires SDL3 library installed on system. Link with `-lSDL3` when compiling.
+
+## Command-line Arguments
+
+`std::args::ArgParser` works with either shape of `main` this compiler
+supports:
+
+- `func main(args: string[]) -> int` - real main-specific codegen generates
+  the actual C `int main(int argc, char** argv)` entry point and hands this
+  function `argv + 1` (still null-terminated, the program's own path
+  already excluded). The nicer of the two - reach for this one, paired
+  with `parse_args()`.
+- `func main(argc: i32, argv: char**) -> int` - this compiler doesn't
+  special-case an *ordinary*-shaped `main` at all, so declaring it with the
+  real C signature (`i32`, matching the actual 32-bit `argc` the C runtime
+  passes; the language's own default `int` is 64-bit and would be a real
+  ABI mismatch here) already just works. Pair it with `parse()`.
+
+```swift
+import "stdlib/args/args_parser.llpl"
+using namespace std.args
+
+func main(args: string[]) -> int {
+    let parser: ArgParser = new ArgParser(new String("mytool"))
+    parser.add_flag(new String("verbose"), new String("v"), new String("Enable verbose output"))
+    parser.add_option_default(new String("output"), new String("o"), new String("a.out"), new String("Output file"))
+    parser.add_required(new String("input"), new String("i"), new String("Input file"))
+
+    if !parser.parse_args(args) {
+        parser.print_errors()
+        parser.print_help()
+        return 1
+    }
+
+    let verbose: bool = parser.has_flag(new String("verbose"))
+    let output: String = parser.get_value_or(new String("output"), new String("a.out"))
+    let input: String = parser.get_value_or(new String("input"), new String(""))
+    let rest: Vector<String> = parser.get_positional()  // non-flag arguments
+    return 0
+}
+```
+
+Supports `--name value`, `--name=value`, `-n value` (short form), bare
+boolean flags (`--verbose`/`-v`), positional arguments, and a `--` on its
+own to treat everything after it as positional even if it starts with
+`-`. `parse()`/`parse_args()` return `false` if an unknown option was
+seen, a value-taking option was missing its value, or a required option
+(`add_required`) was never supplied - see `get_errors()`/`print_errors()`.
 
 ## Examples
 

@@ -62,6 +62,11 @@
         ],
         "description": "Namespace block"
     },
+    "Using Namespace": {
+        "prefix": "using",
+        "body": "using namespace ${1:Name}",
+        "description": "Bring a namespace's declarations into unqualified scope"
+    },
     "Enum": {
         "prefix": "enum",
         "body": [
@@ -85,6 +90,19 @@
         "prefix": "structlit",
         "body": "${1:Name} { ${2:field}: ${3:value} }",
         "description": "Struct literal - constructs a struct value directly, every field given by name"
+    },
+    "Union": {
+        "prefix": "union",
+        "body": [
+            "union ${1:Name} {",
+            "\tlet ${2:field}: ${3:int}",
+            "",
+            "\tconstructor(${2:field}: ${3:int}) {",
+            "\t\tself.${2:field} = ${2:field}",
+            "\t}",
+            "}"
+        ],
+        "description": "Union (C-style, overlapping storage) declaration with a constructor"
     },
     "Trait": {
         "prefix": "trait",
@@ -261,6 +279,16 @@
         "prefix": "import",
         "body": "import \"${1:module}.llpl\"",
         "description": "Import a module"
+    },
+    "Link Directive": {
+        "prefix": "#link",
+        "body": "#link \"${1:SDL3}\"",
+        "description": "Requests the final binary be linked against a shared/static library (-l<name> in --binary mode)"
+    },
+    "Flags Directive": {
+        "prefix": "#flags",
+        "body": "#flags \"${1:-O2}\"",
+        "description": "Passes extra flags to the system C compiler in --binary mode"
     },
     "Inline Asm": {
         "prefix": "asm",

@@ -8,9 +8,7 @@ using namespace std.sdl
 
 func main() -> int {
     // Initialize SDL3
-    let init_result: Result<bool, char*> = SDL.init(
-        SDL_INIT_VIDEO | SDL_INIT_EVENTS
-    )
+    let init_result = SDL.init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)
 
     if !init_result.is_ok() {
         return 1
@@ -30,7 +28,7 @@ func main() -> int {
     }
 
     // Create renderer
-    let renderer: Renderer = new Renderer(window)
+    let renderer = new Renderer(window)
 
     if !renderer.is_valid() {
         SDL.quit()
@@ -38,7 +36,7 @@ func main() -> int {
     }
 
     // Event handler
-    let event_handler: EventHandler = new EventHandler()
+    let event_handler = new EventHandler()
 
     // Main loop
     let running: bool = true
@@ -51,7 +49,7 @@ func main() -> int {
             }
 
             if event_handler.is_key_down() {
-                let key_event: SDL_KeyboardEvent* = event_handler.get_key_event()
+                let key_event = event_handler.get_key_event()
                 if (*key_event).key == SDLK_ESCAPE {
                     running = false
                 }

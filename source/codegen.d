@@ -1421,13 +1421,34 @@ class CodeGenerator {
         string structDeclCode = "";
         string classDeclCode = "";
 
+        // Every plain struct/union/class's *layout* only (struct/union
+        // header + fields, no constructors/destructor/methods) - see
+        // generateClassLayout/generateStructLayout/generateUnionLayout's
+        // own comments. Emitted before any generic instantiation (this
+        // file's own "1. Generic struct instances" comment below), since
+        // a generic instantiated with a plain type used by value - e.g.
+        // Vector<String>, whose methods do `sizeof(String)`-style pointer
+        // arithmetic over a `String*` buffer - needs that plain type's
+        // layout complete first. structDeclCode/classDeclCode (just below)
+        // hold the *rest* (constructors/destructor/methods) instead, kept
+        // at their original position after generic instantiations, since
+        // those bodies just as often need a generic instance complete
+        // first (a method that constructs/unwraps a Result<T,E>) - see
+        // this file's own git history for the "invalid use of incomplete
+        // typedef 'Result_int_char_ptr'" regression an earlier ordering
+        // caused, and the "invalid use of incomplete typedef 'String'"
+        // one this layoutCode split fixes.
+        string layoutCode = "";
+
         // First pass: generate all structs (and unions - same "plain
         // value type, no dependency on classes" shape)
         foreach (prog; programs) {
             currentModulePath = prog.modulePath;
             bool hasStructs = false;
             foreach (decl; prog.declarations) {
-                if (cast(StructDecl)decl || cast(UnionDecl)decl) {
+                auto structDecl = cast(StructDecl)decl;
+                auto unionDecl = cast(UnionDecl)decl;
+                if (structDecl !is null || unionDecl !is null) {
                     if (!hasStructs) {
                         if (prog.modulePath.length > 0) {
                             structDeclCode ~= format("// Module: %s (structs)\n", prog.modulePath);
@@ -1435,7 +1456,11 @@ class CodeGenerator {
                         hasStructs = true;
                     }
                     try {
-                        structDeclCode ~= generateDeclaration(decl);
+                        layoutCode ~= structDecl !is null ?
+                            generateStructLayout(structDecl) : generateUnionLayout(unionDecl);
+                        layoutCode ~= "\n";
+                        structDeclCode ~= structDecl !is null ?
+                            generateStructMethods(structDecl) : generateUnionMethods(unionDecl);
                         structDeclCode ~= "\n";
                     } catch (CompileError e) {
                         collectedErrors ~= e;
@@ -1479,7 +1504,14 @@ class CodeGenerator {
                     hasNonStructs = true;
                 }
                 try {
-                    classDeclCode ~= generateDeclaration(decl);
+                    auto classDecl = cast(ClassDecl)decl;
+                    if (classDecl !is null) {
+                        layoutCode ~= generateClassLayout(classDecl);
+                        layoutCode ~= "\n";
+                        classDeclCode ~= generateClassMethods(classDecl);
+                    } else {
+                        classDeclCode ~= generateDeclaration(decl);
+                    }
                     classDeclCode ~= "\n";
                 } catch (CompileError e) {
                     collectedErrors ~= e;
@@ -1531,19 +1563,24 @@ class CodeGenerator {
             code ~= "\n";
         }
 
-        // Output in dependency order. Generic instantiations (Result<T,E>,
-        // Optional<T>, ...) go first, matching this codebase's own prior,
-        // long-proven-correct ordering (genericInstanceDecls used to be
-        // emitted before earlyDeclCode entirely) - plain top-level
-        // functions in classDeclCode routinely propagate/unwrap a
-        // Result<T,E>/Optional<T> (via `?`, match, etc.), so those
-        // monomorphized class bodies must be *fully* defined before
-        // classDeclCode, not after it: emitting genericClassInstances
-        // after classDeclCode (as a struct-vs-class split first did)
-        // left every such call site referencing an incomplete typedef -
-        // see this file's own git history for the "invalid use of
-        // incomplete typedef 'Result_int_char_ptr'" regression this
-        // fixed.
+        // Output in dependency order.
+        // 0. Every plain struct/union/class's layout (see layoutCode's
+        // own comment) - before anything that might need one of them
+        // complete, including the generic instantiations just below.
+        code ~= layoutCode;
+
+        // Generic instantiations (Result<T,E>, Optional<T>, ...) go next,
+        // matching this codebase's own prior, long-proven-correct
+        // ordering (genericInstanceDecls used to be emitted before
+        // earlyDeclCode entirely) - plain top-level functions in
+        // classDeclCode routinely propagate/unwrap a Result<T,E>/
+        // Optional<T> (via `?`, match, etc.), so those monomorphized
+        // class bodies must be *fully* defined before classDeclCode, not
+        // after it: emitting genericClassInstances after classDeclCode
+        // (as a struct-vs-class split first did) left every such call
+        // site referencing an incomplete typedef - see this file's own
+        // git history for the "invalid use of incomplete typedef
+        // 'Result_int_char_ptr'" regression this fixed.
         // 1. Generic struct instances (e.g., Slice<char>)
         if (genericStructInstances.length > 0) {
             code ~= "// Monomorphized struct instantiations\n";
@@ -1933,7 +1970,17 @@ class CodeGenerator {
         return format("    %s %s;\n", typeToC(type), name);
     }
 
-    private string generateStruct(StructDecl structDecl) {
+    // Just the `struct Name { ... };` header/fields - no constructors -
+    // see generateStructMethods for those. Split out so generateMultiple
+    // can emit every plain struct/union/class's *layout* before any
+    // generic instantiation (Vector<T>, Result<T,E>, ...), while still
+    // emitting their constructors/methods after (see generateMultiple's
+    // own "layoutCode" comment for the full explanation - in short, a
+    // generic instantiated with a plain type argument used by value,
+    // e.g. Vector<String>, needs String's complete layout to do pointer
+    // arithmetic over it, but only in Vector_String's *methods*, not its
+    // own layout).
+    private string generateStructLayout(StructDecl structDecl) {
         string sName = mangledStruct(structDecl);
         currentNamespaceSegments = structDecl.namespaceSegments;
 
@@ -1947,8 +1994,9 @@ class CodeGenerator {
         // body twice is a hard "redefinition" error). This struct's own
         // fields are only needed by LLPL's own type-checking (structRegistry
         // already has them from parsing); constructors, if any, are still
-        // generated below - they're just ordinary LLPL-side convenience
-        // functions over the type, real SDL3 has no notion of them at all.
+        // generated separately (see generateStructMethods) - they're just
+        // ordinary LLPL-side convenience functions over the type, real
+        // SDL3 has no notion of them at all.
         if (!structDecl.name.startsWith("SDL_")) {
             string attr = structDecl.packed ? " __attribute__((packed))" : "";
             code ~= format("struct%s %s {\n", attr, sName);
@@ -1957,11 +2005,23 @@ class CodeGenerator {
             }
             code ~= "};\n";
         }
+        return code;
+    }
 
+    // This struct's constructors only - see generateStructLayout's own
+    // comment for why these are split apart and emitted at a different
+    // point in the final output.
+    private string generateStructMethods(StructDecl structDecl) {
+        currentNamespaceSegments = structDecl.namespaceSegments;
+        string code = "";
         foreach (ctor; structDecl.constructors) {
             code ~= generateStructConstructor(structDecl, ctor);
         }
         return code;
+    }
+
+    private string generateStruct(StructDecl structDecl) {
+        return generateStructLayout(structDecl) ~ generateStructMethods(structDecl);
     }
 
     // A struct constructor's body-generation twin to generateConstructor
@@ -2028,7 +2088,9 @@ class CodeGenerator {
     // 'SDL_'-named one, the real header already defines it" exception
     // (see mangledUnion/mangledStruct's own comments), just emitting
     // `union` instead of `struct`.
-    private string generateUnion(UnionDecl unionDecl) {
+    // Split the same way generateStructLayout/generateStructMethods are -
+    // see generateStructLayout's own comment.
+    private string generateUnionLayout(UnionDecl unionDecl) {
         string uName = mangledUnion(unionDecl);
         currentNamespaceSegments = unionDecl.namespaceSegments;
 
@@ -2040,11 +2102,20 @@ class CodeGenerator {
             }
             code ~= "};\n";
         }
+        return code;
+    }
 
+    private string generateUnionMethods(UnionDecl unionDecl) {
+        currentNamespaceSegments = unionDecl.namespaceSegments;
+        string code = "";
         foreach (ctor; unionDecl.constructors) {
             code ~= generateUnionConstructor(unionDecl, ctor);
         }
         return code;
+    }
+
+    private string generateUnion(UnionDecl unionDecl) {
+        return generateUnionLayout(unionDecl) ~ generateUnionMethods(unionDecl);
     }
 
     // generateStructConstructor's twin for `union` - see its own comment
@@ -2197,37 +2268,52 @@ class CodeGenerator {
         return "__attribute__((" ~ attrs.join(", ") ~ ")) ";
     }
 
-    private string generateClass(ClassDecl classDecl) {
+    // Just the `struct Name { RefCount ref_count; ... };` header/fields -
+    // no constructors/destructor/methods - see generateStructLayout's own
+    // comment for why this is split from generateClassMethods below (the
+    // class equivalent of the same struct/generic ordering problem: a
+    // `Vector<String>`'s own methods do `sizeof(String)`-style pointer
+    // arithmetic and need String's layout complete first, even though
+    // Vector_String's *own* layout - just a `String*` field - never did).
+    private string generateClassLayout(ClassDecl classDecl) {
         string cName = mangledClass(classDecl);
-        currentClassName = cName;
         currentNamespaceSegments = classDecl.namespaceSegments;
         string code = "";
-
-        // Generate struct definition
         code ~= format("struct %s {\n", cName);
         code ~= "    RefCount ref_count;\n";
         foreach (field; classDecl.fields) {
             code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
         }
         code ~= "};\n\n";
+        return code;
+    }
 
-        // Generate constructor(s)
+    // This class's constructor(s)/destructor/methods only - see
+    // generateClassLayout's own comment.
+    private string generateClassMethods(ClassDecl classDecl) {
+        string cName = mangledClass(classDecl);
+        currentClassName = cName;
+        currentNamespaceSegments = classDecl.namespaceSegments;
+        string code = "";
+
         foreach (ctor; classDecl.constructors) {
             code ~= generateConstructor(classDecl, ctor);
         }
 
-        // Generate destructor
         if (classDecl.destructor) {
             code ~= generateDestructor(classDecl, classDecl.destructor);
         }
 
-        // Generate methods
         foreach (method; classDecl.methods) {
             code ~= generateMethod(classDecl, method);
         }
 
         currentClassName = "";
         return code;
+    }
+
+    private string generateClass(ClassDecl classDecl) {
+        return generateClassLayout(classDecl) ~ generateClassMethods(classDecl);
     }
 
     // Generates one *top-level* statement of a function/method/constructor/
@@ -2379,8 +2465,14 @@ class CodeGenerator {
         // value types, not heap-allocated class instances, so they're
         // never reference-counted and must be excluded here the same way
         // typeToC/isStructTypeName already exclude them from auto-pointering.
+        // A dynamic array field (Vector<T>/Slice<T>'s own raw backing
+        // buffer - see typeToC's isDynamicArray comment) is excluded the
+        // same way a plain pointer field already is: it's raw storage the
+        // container frees by hand (see Vector<T>'s own destructor in
+        // prelude.llpl), not a single ref-counted instance rc_release
+        // could even correctly operate on.
         foreach (field; classDecl.fields) {
-            if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer &&
+            if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer && !field.type.isArray &&
                     !isStructTypeName(field.type.name) && !isUnionTypeName(field.type.name)) {
                 code ~= indent() ~ format("if (self->%s) rc_release(self->%s, %s_destroy);\n",
                     field.name, field.name, field.type.name);
@@ -2553,7 +2645,31 @@ class CodeGenerator {
             variableTypes.remove(param.name);
         }
 
+        if (isMainArgsFunction(funcDecl)) {
+            code ~= generateMainWrapper(funcDecl);
+        }
+
         return code;
+    }
+
+    // The real C `int main(int argc, char** argv)` entry point for a
+    // `func main(args: string[]) -> ...` - the one shape that can't just be
+    // an ordinary function the way `func main(argc: i32, argv: char**)`
+    // or plain `func main()` already are (see isMainArgsFunction's own
+    // comment): the C runtime always calls main with (argc, argv[, envp]),
+    // never a single char** - a real int32_t-argc, char** parameter list
+    // is the only one that's ABI-correct to *be* main, regardless of how
+    // this language would rather let a program spell "give me my args".
+    // `args` itself skips argv[0] (the program's own path, never something
+    // callers of this shape want to see) - argv + 1 is still a valid,
+    // null-terminated char** since the C runtime always null-terminates
+    // argv at argv[argc], and adding 1 doesn't undo that.
+    private string generateMainWrapper(FunctionDecl funcDecl) {
+        string call = format("%s(argv + 1)", mainArgsImplName);
+        string body = funcDecl.returnType.name == "void" ?
+            format("%s;\n    return 0;\n", call) :
+            format("return (int)%s;\n", call);
+        return format("\nint main(int argc, char** argv) {\n    %s}\n", body);
     }
 
     // `interrupt func handler(...)` compiles to a GCC hardware-interrupt
@@ -5489,12 +5605,41 @@ class CodeGenerator {
     // name; see mangleFreeFunctionName and every free-function call site.
     private FunctionDecl[][string] functionCandidates;
 
+    // True for exactly one shape: a top-level, unnamespaced `func main(args:
+    // string[])`, in either its as-parsed form (name "string", pointerDepth
+    // 0 - resolveType hasn't run yet) or its post-resolveType one (`string`
+    // canonicalized to name "char", pointerDepth bumped to 1 - see
+    // resolveType's own "Built-in lowercase `string`..." comment). Checked
+    // both ways since callers reach this at different points in the
+    // pipeline (before/after that function's own params are resolved) -
+    // see generateMainWrapper's own comment for why this shape specifically
+    // needs real main-specific codegen, unlike `func main(argc: i32, argv:
+    // char**)` or plain `func main()`, which already just work as ordinary
+    // functions with no special-casing at all.
+    private bool isMainArgsFunction(FunctionDecl fn) {
+        if (fn.name != "main" || fn.namespaceSegments.length != 0) return false;
+        if (fn.params.length != 1) return false;
+        Type t = fn.params[0].type;
+        if (!t.isArray || t.arraySize != 0) return false;
+        if (t.name == "string" && t.pointerDepth == 0) return true;
+        if (t.name == "char" && t.pointerDepth == 1) return true;
+        return false;
+    }
+
+    // The internal C symbol a `func main(args: string[])`'s own body is
+    // emitted under - never "main" itself, since real main-specific codegen
+    // (generateMainWrapper) generates the actual `int main(int argc, char**
+    // argv)` C entry point separately and calls this.
+    private static immutable string mainArgsImplName = "__llpl_main_args_impl";
+
     // `mangledFunc(fn)` (today's plain namespace_name) if `fn` is the only
     // function registered under that name, else suffixed per its own
     // parameter types. Extern functions are never suffixed - their C
     // symbol is a real, fixed external name that can't be invented a
-    // second spelling for.
+    // second spelling for. A `func main(args: string[])` is named
+    // mainArgsImplName instead of either scheme - see its own comment.
     private string mangleFreeFunctionName(FunctionDecl fn) {
+        if (isMainArgsFunction(fn)) return mainArgsImplName;
         string plain = mangledFunc(fn);
         if (fn.isExtern) return plain;
         auto candidates = plain in functionCandidates;
@@ -5563,10 +5708,32 @@ class CodeGenerator {
 
         if (iterType.isArray) {
             if (iterType.arraySize <= 0) {
-                throw new CompileError(
-                    "foreach needs a fixed-size array (e.g. 'T[8]') - this array's size isn't known " ~
-                    "at compile time (it's an unsized 'T[]', typically a function parameter)",
-                    currentModulePath, foreachStmt.line, foreachStmt.column);
+                // An unsized `T[]` (see typeToC's isDynamicArray comment -
+                // Vector<T>.data/Slice<T>.ptr's own backing storage, or a
+                // `func main(args: string[])`-style parameter) has no
+                // compile-time length to count up to the way a fixed-size
+                // `T[N]` does - but if its elements are themselves
+                // pointer-shaped (an explicit pointer, or a class - always
+                // a pointer under the hood, see typeToC's own "classes are
+                // always pointers" rule), NULL is a real, well-defined
+                // stopping sentinel (this is exactly what makes `args` in
+                // `func main(args: string[])` safely walkable at all: the
+                // C runtime's own argv is NULL-terminated, and main-
+                // specific codegen's `argv + 1` preserves that - see
+                // generateMainWrapper). A dynamic array of plain values
+                // (hypothetically `int[]`) has no such sentinel and stays
+                // unsupported.
+                Type elemType = new Type(iterType.name, iterType.pointerDepth, false, 0);
+                bool elementIsPointerLike = elemType.pointerDepth >= 1 ||
+                    (elemType.name in classRegistry) !is null;
+                if (!elementIsPointerLike) {
+                    throw new CompileError(
+                        "foreach needs a fixed-size array (e.g. 'T[8]') - this array's size isn't known " ~
+                        "at compile time (it's an unsized 'T[]', typically a function parameter), and " ~
+                        format("'%s' has no NULL sentinel to stop at", elemType.toString()),
+                        currentModulePath, foreachStmt.line, foreachStmt.column);
+                }
+                return generateDynamicArrayForeach(foreachStmt, iterType, elemType, isDeferred);
             }
             return generateArrayForeach(foreachStmt, iterType, isDeferred);
         }
@@ -5629,6 +5796,44 @@ class CodeGenerator {
         indentLevel++;
         code ~= indent() ~ format("%s %s = %s[%s];\n",
             typeToC(elemType), foreachStmt.varName, generateExpression(foreachStmt.iterable), idxName);
+
+        variableTypes[foreachStmt.varName] = elemType;
+        foreach (stmt; foreachStmt.body_.statements) {
+            code ~= generateStatement(stmt, isDeferred);
+        }
+        variableTypes.remove(foreachStmt.varName);
+
+        code ~= indent() ~ format("%s = %s + 1;\n", idxName, idxName);
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+        return code;
+    }
+
+    // `foreach x in dynArray { ... }` for an unsized `T[]` whose elements
+    // are pointer-shaped (see the caller's own comment on why that's
+    // required) - counts up from 0 like generateArrayForeach, but stops at
+    // the first NULL element instead of a compile-time-known length, the
+    // same way walking a real C argv (or any other NULL-terminated
+    // pointer array) already works.
+    private string generateDynamicArrayForeach(ForeachStmt foreachStmt, Type arrType, Type elemType,
+            bool isDeferred) {
+        tempVarCounter++;
+        // Evaluated into a local once, not re-evaluated every iteration -
+        // same reasoning as generateClassForeach's objName.
+        string arrName = format("__foreach_arr%d", tempVarCounter);
+        string idxName = format("__foreach_i%d", tempVarCounter);
+
+        string code = indent() ~ "{\n";
+        indentLevel++;
+        code ~= indent() ~ format("%s %s = %s;\n",
+            typeToC(arrType), arrName, generateExpression(foreachStmt.iterable));
+        code ~= indent() ~ format("int64_t %s = 0;\n", idxName);
+        code ~= indent() ~ format("while (%s[%s] != NULL) {\n", arrName, idxName);
+        indentLevel++;
+        code ~= indent() ~ format("%s %s = %s[%s];\n",
+            typeToC(elemType), foreachStmt.varName, arrName, idxName);
 
         variableTypes[foreachStmt.varName] = elemType;
         foreach (stmt; foreachStmt.body_.statements) {
@@ -5731,7 +5936,19 @@ class CodeGenerator {
     // class can use either form, so both are checked. Used both to generate
     // the overload call (see findOperatorMethodCallName) and, by inferType,
     // to get the overload's return type for `a + b`-shaped expressions.
-    private FunctionDecl findOperatorMethodDecl(ASTNode selfOperand, string op, bool isUnary) {
+    //
+    // `rightOperand` disambiguates when the class defines more than one
+    // inline overload of the same operator (e.g. String's `operator==
+    // (other: string)` and `operator==(other: String)`) - picked the same
+    // way an ordinary overloaded method call is (see resolveOverload), by
+    // matching its inferred type against each candidate's single param.
+    // Always null for a unary op (nothing to disambiguate by - a unary
+    // operator method takes zero params) and safe to omit for a binary one
+    // when the class only ever defines a single overload of it, the case
+    // every call site but tryBinaryOperatorOverloadCall was written against
+    // before this could happen at all.
+    private FunctionDecl findOperatorMethodDecl(ASTNode selfOperand, string op, bool isUnary,
+            ASTNode rightOperand = null) {
         string methodName = operatorMethodName(op, isUnary);
         if (methodName.length == 0) return null;
         try {
@@ -5740,8 +5957,20 @@ class CodeGenerator {
             // Only look for operator overloads on non-pointer, non-array types
             if (selfType.pointerDepth == 0 && !selfType.isArray) {
                 if (auto classDecl = selfType.name in classRegistry) {
-                    foreach (method; classDecl.methods) {
-                        if (method.name == methodName) return method;
+                    auto candidates = methodCandidatesNamed(*classDecl, methodName);
+                    if (candidates.length == 1) return candidates[0];
+                    if (candidates.length > 1 && rightOperand !is null) {
+                        try {
+                            return resolveOverload(candidates, [rightOperand], [],
+                                format("operator '%s'", op), selfOperand.line, selfOperand.column);
+                        } catch (CompileError e) {
+                            // Ambiguous/no exact match among the class's own
+                            // overloads - fall through to the functionRegistry
+                            // check below (won't find anything either, since
+                            // an impl-block operator is never *also* an
+                            // inline class method), then to "no overload"
+                            // entirely, same as any other lookup failure here.
+                        }
                     }
                 }
                 if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
@@ -5754,19 +5983,33 @@ class CodeGenerator {
         return null;
     }
 
-    // The mangled C call name for findOperatorMethodDecl's match - always
-    // `<mangleTypeArg(selfType)>_<methodName>`. Built from the bare
-    // operatorMethodName result, not the matched FunctionDecl's own .name -
-    // a class's inline method's .name is bare ("op_add"), but an impl
-    // block's desugared method is registered in functionRegistry under the
-    // already-fully-mangled name ("Vec2_op_add" - see processImplBlock), so
-    // using .name here would double the prefix for that second case.
-    private string findOperatorMethodCallName(ASTNode selfOperand, string op, bool isUnary) {
-        if (findOperatorMethodDecl(selfOperand, op, isUnary) is null) return "";
+    // The mangled C call name for findOperatorMethodDecl's match. Usually
+    // `<mangleTypeArg(selfType)>_<methodName>`, built from the bare
+    // operatorMethodName result rather than the matched FunctionDecl's own
+    // .name - a class's inline method's .name is bare ("op_add"), but an
+    // impl block's desugared method is registered in functionRegistry under
+    // the already-fully-mangled name ("Vec2_op_add" - see processImplBlock),
+    // so using .name here would double the prefix for that second case.
+    // When the class defines more than one overload of `op` (only possible
+    // for the inline-method source, never the impl-block one - see
+    // findOperatorMethodDecl), the same overloadSuffix mangleMethodName
+    // itself would use is appended, so the call actually reaches the
+    // specific overload findOperatorMethodDecl picked instead of the bare,
+    // ambiguous name (which only ever exists unsuffixed for a single-
+    // overload operator).
+    private string findOperatorMethodCallName(ASTNode selfOperand, string op, bool isUnary,
+            ASTNode rightOperand = null) {
+        auto matched = findOperatorMethodDecl(selfOperand, op, isUnary, rightOperand);
+        if (matched is null) return "";
         string methodName = operatorMethodName(op, isUnary);
         try {
             Type selfType = inferType(selfOperand);
             resolveType(selfType);
+            if (auto classDecl = selfType.name in classRegistry) {
+                if (methodCandidatesNamed(*classDecl, methodName).length > 1) {
+                    return format("%s_%s%s", mangleTypeArg(selfType), methodName, overloadSuffix(matched.params));
+                }
+            }
             return format("%s_%s", mangleTypeArg(selfType), methodName);
         } catch (Exception e) {
             return "";
@@ -5774,7 +6017,7 @@ class CodeGenerator {
     }
 
     private string tryBinaryOperatorOverloadCall(BinaryExpr binExpr) {
-        string callName = findOperatorMethodCallName(binExpr.left, binExpr.op, false);
+        string callName = findOperatorMethodCallName(binExpr.left, binExpr.op, false, binExpr.right);
         if (callName.length == 0) return "";
         return format("%s(%s, %s)", callName,
             generateExpression(binExpr.left), generateExpression(binExpr.right));
@@ -5792,7 +6035,7 @@ class CodeGenerator {
     // assignment in a way that would need an lvalue - see
     // ast.operatorMethodName's doc comment.
     private string tryIndexOperatorOverloadCall(IndexExpr indexExpr) {
-        string callName = findOperatorMethodCallName(indexExpr.array, "[]", false);
+        string callName = findOperatorMethodCallName(indexExpr.array, "[]", false, indexExpr.index);
         if (callName.length == 0) return "";
         return format("%s(%s, %s)", callName,
             generateExpression(indexExpr.array), generateExpression(indexExpr.index));
@@ -6800,13 +7043,18 @@ class CodeGenerator {
             if (castExpr.type.name == "char" && castExpr.type.pointerDepth == 1) {
                 try {
                     Type srcType = inferType(castExpr.expression);
-                    // pointerDepth == 0 only - an already-explicit pointer
-                    // to a class/struct (Foo*, Foo**, ...) is unambiguously
-                    // a raw-reinterpret request (matching how a generic
-                    // T* field must keep working when T is a class - see
-                    // Weak<T>/Vector<T> in prelude.llpl), not "stringify
-                    // this value" the way a plain Foo value's cast is.
-                    if (srcType.pointerDepth == 0 &&
+                    // pointerDepth == 0 and not an array only - an
+                    // already-explicit pointer to a class/struct (Foo*,
+                    // Foo**, ...) is unambiguously a raw-reinterpret
+                    // request (matching how a generic T* field must keep
+                    // working when T is a class - see Weak<T>/Vector<T>
+                    // in prelude.llpl), not "stringify this value" the
+                    // way a plain Foo value's cast is - and so is a
+                    // dynamic array (`T[]` - Vector<T>.data/Slice<T>.ptr,
+                    // see typeToC's own isDynamicArray comment), which is
+                    // just as much a real pointer under the hood despite
+                    // pointerDepth alone reading 0 for it too.
+                    if (srcType.pointerDepth == 0 && !srcType.isArray &&
                             ((srcType.name in classRegistry) !is null || (srcType.name in structRegistry) !is null)) {
                         return generateStringofValue(srcType, castExpr.expression, castExpr.line, castExpr.column);
                     }
@@ -6997,7 +7245,7 @@ class CodeGenerator {
             }
             throw inferError(expr, "Cannot infer type of call expression");
         } else if (auto binExpr = cast(BinaryExpr)expr) {
-            FunctionDecl binOpMethod = findOperatorMethodDecl(binExpr.left, binExpr.op, false);
+            FunctionDecl binOpMethod = findOperatorMethodDecl(binExpr.left, binExpr.op, false, binExpr.right);
             if (binOpMethod !is null) {
                 return binOpMethod.returnType;
             }
@@ -7116,12 +7364,35 @@ class CodeGenerator {
     private string typeToC(Type type) {
         string cType = primitiveToC(type.name);
 
+        // A "dynamic array" (`T[]`, isArray with no fixed arraySize - see
+        // Type's own field comments) is the growable-buffer shape Vector<T>
+        // and Slice<T> use for their raw backing storage: unlike a
+        // fixed-size `T[N]` field (handled entirely differently, in
+        // fieldDeclaration, and never reaching here), a dynamic array has
+        // no size to declare inline in C, so it's always a genuine
+        // pointer - and unlike an ordinary `T*` (ast.d's own "classes are
+        // always pointers" rule collapses a class's implicit pointer and
+        // an explicit `*` into the same single star - see e.g. trie.llpl's
+        // `TrieNode*`, which relies on exactly that collapse to manage its
+        // own memory by hand), a dynamic array of a class T genuinely
+        // needs *two* levels: one for the array itself, one because each
+        // element is its own separate heap object (`String**`, not
+        // `String*`) - so the class-pointer rule below must NOT be
+        // suppressed for it the way it is for a fixed-size array.
+        bool isDynamicArray = type.isArray && type.arraySize == 0;
+
         // Classes are always heap-allocated and accessed by pointer; structs
         // and unions are plain value types with no such auto-pointering.
         if (!isPrimitiveTypeName(type.name) && !isStructTypeName(type.name) && !isUnionTypeName(type.name)) {
-            if (!type.isPointer && !type.isArray) {
+            if ((!type.isPointer && !type.isArray) || isDynamicArray) {
                 cType ~= "*"; // Classes are always pointers
             }
+        }
+
+        // The dynamic array itself is a raw, growable C pointer - one
+        // more star on top of whatever the element type just contributed.
+        if (isDynamicArray) {
+            cType ~= "*";
         }
 
         cType ~= pointerStars(type);

@@ -91,14 +91,15 @@ interface AnalysisResult {
 const EMPTY_RESULT: AnalysisResult = { diagnostics: [], symbols: [], usages: [] };
 
 const KEYWORDS = [
-    'import', 'from', 'namespace', 'class', 'struct', 'packed', 'enum', 'macro',
-    'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'private', 'if',
+    'import', 'from', 'namespace', 'using', 'class', 'struct', 'union', 'packed', 'enum', 'macro',
+    'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'private', 'static', 'if',
     'else', 'while', 'for', 'foreach', 'in', 'return', 'continue', 'break', 'defer', 'unless',
     'try', 'catch', 'finally', 'throw', 'delete', 'asm', 'new', 'true', 'false', 'null',
     'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait',
     'impl', 'quote', 'unquote', 'interrupt',
-    'sizeof', 'self', 'int', 'uint', 'int16', 'uint16', 'int32', 'uint32',
-    'char', 'bool', 'void',
+    'sizeof', 'self', 'int', 'uint', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32',
+    'int64', 'uint64', 'u8', 'u16', 'u32', 'u64', 'i8', 'i16', 'i32', 'i64',
+    'char', 'bool', 'void', 'float', 'string',
 ];
 
 const connection = createConnection(ProposedFeatures.all);
@@ -271,6 +272,7 @@ function kindToCompletionKind(kind: string): CompletionItemKind {
         case 'method': return CompletionItemKind.Method;
         case 'class': return CompletionItemKind.Class;
         case 'struct': return CompletionItemKind.Struct;
+        case 'union': return CompletionItemKind.Struct;
         case 'macro': return CompletionItemKind.Snippet;
         case 'field': return CompletionItemKind.Field;
         case 'variable': return CompletionItemKind.Variable;

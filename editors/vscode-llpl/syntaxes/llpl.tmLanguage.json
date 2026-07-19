@@ -5,12 +5,16 @@
     "fileTypes": ["llpl"],
     "patterns": [
         { "include": "#comments" },
+        { "include": "#compiler-directive" },
         { "include": "#strings" },
+        { "include": "#char-literal" },
         { "include": "#numbers" },
         { "include": "#operator-declaration" },
         { "include": "#namespace-declaration" },
+        { "include": "#using-declaration" },
         { "include": "#enum-declaration" },
         { "include": "#struct-declaration" },
+        { "include": "#union-declaration" },
         { "include": "#class-declaration" },
         { "include": "#trait-declaration" },
         { "include": "#impl-declaration" },
@@ -63,6 +67,22 @@
                     "match": "\\\\(x[0-9a-fA-F]{1,2}|[nrt0\\\\\"ex])"
                 }
             ]
+        },
+        "char-literal": {
+            "comment": "'x', '\\n', '\\xHH', ... - see lexer.d's char_().",
+            "name": "string.quoted.single.llpl",
+            "match": "'(\\\\(x[0-9a-fA-F]{1,2}|[nrt0\\\\'e])|[^'\\\\])'",
+            "captures": {
+                "1": { "name": "constant.character.escape.llpl" }
+            }
+        },
+        "compiler-directive": {
+            "comment": "#link \"NAME\" / #flags \"...\" - top-level compiler directives (see ast.d's LinkDecl/FlagsDecl), not attached to any declaration.",
+            "match": "^\\s*(#)(link|flags)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.directive.llpl" },
+                "2": { "name": "keyword.other.directive.llpl" }
+            }
         },
         "string-interpolation": {
             "comment": "\\(expr) inside a string literal - LLPL's string interpolation. The delimiter's own '\\(' / ')' consume one level of nesting; #interp-parens (mirroring #asm-parens below) recurses for any further '(...)' inside the embedded expression, e.g. \\(foo(1, 2)).",
@@ -124,6 +144,11 @@
                     "match": "\\b0[oO][0-7_]+\\b"
                 },
                 {
+                    "comment": "1.5, 1.5e-5, 1e10, 1.0f, 5f - see lexer.d's number() (decimal point and/or exponent and/or a trailing f/F/d/D suffix, in any combination, all make it a Float token rather than an Integer one). Tried before the plain decimal-integer pattern below so a qualifying number is tagged float, not decimal.",
+                    "name": "constant.numeric.float.llpl",
+                    "match": "\\b[0-9][0-9_]*(?:\\.[0-9_]+(?:[eE][+-]?[0-9_]+)?|[eE][+-]?[0-9_]+)[fFdD]?\\b|\\b[0-9][0-9_]*[fFdD]\\b"
+                },
+                {
                     "name": "constant.numeric.decimal.llpl",
                     "match": "\\b[0-9_]+\\b"
                 }
@@ -134,6 +159,14 @@
             "captures": {
                 "1": { "name": "keyword.other.namespace.llpl" },
                 "2": { "name": "entity.name.namespace.llpl" }
+            }
+        },
+        "using-declaration": {
+            "match": "\\b(using)\\s+(namespace)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.using.llpl" },
+                "2": { "name": "keyword.other.namespace.llpl" },
+                "3": { "name": "entity.name.namespace.llpl" }
             }
         },
         "enum-declaration": {
@@ -147,6 +180,13 @@
             "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
             "captures": {
                 "1": { "name": "keyword.other.struct.llpl" },
+                "2": { "name": "entity.name.type.llpl" }
+            }
+        },
+        "union-declaration": {
+            "match": "\\b(union)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "keyword.other.union.llpl" },
                 "2": { "name": "entity.name.type.llpl" }
             }
         },
@@ -204,7 +244,7 @@
             "name": "keyword.other.llpl"
         },
         "modifier-keywords": {
-            "match": "\\b(packed|interrupt|volatile|private)\\b",
+            "match": "\\b(packed|interrupt|volatile|private|static)\\b",
             "name": "storage.modifier.llpl"
         },
         "sizeof-keyword": {
@@ -285,7 +325,7 @@
             "name": "variable.language.self.llpl"
         },
         "primitive-types": {
-            "match": "\\b(int|uint|int16|uint16|int32|uint32|char|bool|void)\\b",
+            "match": "\\b(int|uint|int8|uint8|int16|uint16|int32|uint32|int64|uint64|u8|u16|u32|u64|i8|i16|i32|i64|char|bool|void|float|string)\\b",
             "name": "storage.type.primitive.llpl"
         },
         "type-name": {
@@ -293,7 +333,7 @@
                 { "include": "#generic-type-args" },
                 { "include": "#closure-type-parens" },
                 {
-                    "match": "\\b(int|uint|int16|uint16|int32|uint32|char|bool|void)\\b",
+                    "match": "\\b(int|uint|int8|uint8|int16|uint16|int32|uint32|int64|uint64|u8|u16|u32|u64|i8|i16|i32|i64|char|bool|void|float|string)\\b",
                     "name": "storage.type.primitive.llpl"
                 },
                 {

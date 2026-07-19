@@ -73,7 +73,7 @@ namespace Foo {
     }
 }
 
-func main() -> uint32 {
+func main( args: string[] ) -> uint32 {
     "123" |> puts() unless false
 
     let x = if true {
@@ -116,7 +116,7 @@ func main() -> uint32 {
 
     let to = 5
     for i in 0..to {
-        puts("i = \(i)")
+        "i = \(i)" |> puts()
     }
 
     let kl = new Klass("With a string")
@@ -124,7 +124,7 @@ func main() -> uint32 {
     puts("kl.foo = \(kl.foo() as uint)")
 
     for x in kl {
-        puts("x = \(x)")
+        "x = \(x)" |> puts()
     }
 
     let ss = "Hello, world!"
@@ -135,6 +135,10 @@ func main() -> uint32 {
 
     let sug = 88 as uint
     //puts( "Sug.foo is \(sug.foo)" )
+
+    for arg in args {
+        "arg = \(arg)" |> puts()
+    }
 
     result
 }

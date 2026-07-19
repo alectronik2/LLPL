@@ -30,8 +30,20 @@ const SHUT_RD: int = 0
 const SHUT_WR: int = 1
 const SHUT_RDWR: int = 2
 
-// sockaddr_in structure (IPv4)
-class SockAddrIn {
+// sockaddr_in structure (IPv4) - `struct`, not `class`: this is passed
+// *directly* (by address) into the real C `bind`/`connect`/`accept`/
+// `sendto`/`recvfrom` syscalls below, which all expect the real, exact
+// `struct sockaddr_in { sin_family; sin_port; sin_addr; sin_zero[8]; }`
+// layout. A class in this compiler always prepends a hidden `RefCount
+// ref_count` field to its real C struct (see codegen.d's generateClass) -
+// every field here would sit 16+ bytes further into memory than the
+// kernel expects, so `bind()` would read `sin_family`/`sin_port` out of
+// what's actually still `ref_count`'s bytes. Same ABI reasoning as the
+// SDL3 struct bindings (SDL_Rect/SDL_Color/...) elsewhere in this
+// codebase. Since a struct can't declare methods (only constructors -
+// see StructDecl in ast.d), `set_port`/`set_addr`/`set_addr_any`/
+// `get_port` are free functions taking a `SockAddrIn*` below instead.
+struct SockAddrIn {
     let sin_family: uint16
     let sin_port: uint16
     let sin_addr: uint32
@@ -45,23 +57,29 @@ class SockAddrIn {
             self.sin_zero[i] = '\0'
         }
     }
+}
 
-    func set_port(port: uint16) {
-        self.sin_port = htons(port)
-    }
+func sockaddr_in_set_port(addr: SockAddrIn*, port: uint16) {
+    (*addr).sin_port = htons(port)
+}
 
-    func set_addr(a: uint8, b: uint8, c: uint8, d: uint8) {
-        let addr: uint32 = (a as uint32) | ((b as uint32) << 8) | ((c as uint32) << 16) | ((d as uint32) << 24)
-        self.sin_addr = addr
-    }
+func sockaddr_in_set_addr(addr: SockAddrIn*, a: uint8, b: uint8, c: uint8, d: uint8) {
+    // A separate `let value = ...` statement followed by `(*addr).sin_addr
+    // = value` on the next line would parse as one continued expression -
+    // this language's newline-sensitivity for a line starting with a
+    // "could-be-binary" token only covers `*`/`-`/`&` (see parser.d's own
+    // comment on it), not a plain `(`, so the previous line's trailing
+    // `)` and this one's leading `(*addr...` would otherwise glue
+    // together as a bogus call expression. One statement sidesteps it.
+    (*addr).sin_addr = (a as uint32) | ((b as uint32) << 8) | ((c as uint32) << 16) | ((d as uint32) << 24)
+}
 
-    func set_addr_any() {
-        self.sin_addr = 0  // INADDR_ANY
-    }
+func sockaddr_in_set_addr_any(addr: SockAddrIn*) {
+    (*addr).sin_addr = 0  // INADDR_ANY
+}
 
-    func get_port() -> uint16 {
-        return ntohs(self.sin_port)
-    }
+func sockaddr_in_get_port(addr: SockAddrIn*) -> uint16 {
+    return ntohs((*addr).sin_port)
 }
 
 // Forward declarations for C runtime
@@ -295,8 +313,8 @@ class TcpServer {
     constructor(port: uint16) {
         self.sock = new Socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
         self.addr = new SockAddrIn()
-        self.addr.set_port(port)
-        self.addr.set_addr_any()
+        sockaddr_in_set_port(&self.addr, port)
+        sockaddr_in_set_addr_any(&self.addr)
     }
 
     func start_server(backlog: int) -> Result<bool, char*> {
@@ -329,8 +347,8 @@ class TcpClient {
 
     func connect_to_host(host_a: uint8, host_b: uint8, host_c: uint8, host_d: uint8, port: uint16) -> Result<bool, char*> {
         let addr: SockAddrIn = new SockAddrIn()
-        addr.set_port(port)
-        addr.set_addr(host_a, host_b, host_c, host_d)
+        sockaddr_in_set_port(&addr, port)
+        sockaddr_in_set_addr(&addr, host_a, host_b, host_c, host_d)
         return self.sock.connect_to(addr)
     }
 
@@ -359,8 +377,8 @@ class UdpSocket {
     constructor(port: uint16) {
         self.sock = new Socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         self.addr = new SockAddrIn()
-        self.addr.set_port(port)
-        self.addr.set_addr_any()
+        sockaddr_in_set_port(&self.addr, port)
+        sockaddr_in_set_addr_any(&self.addr)
     }
 
     func bind_socket() -> Result<bool, char*> {

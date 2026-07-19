@@ -7,6 +7,7 @@ import "net/socket.llpl"
 import "text/string_utils.llpl"
 import "collections/collections.llpl"
 import "sdl/sdl.llpl"
+import "args/args_parser.llpl"
 
 // Re-export commonly used aliass and functions for convenience
 namespace std {
@@ -21,6 +22,8 @@ namespace std {
     alias StringUtils = text.StringUtils
     alias CharUtils = text.CharUtils
     alias Format = text.Format
+    alias ArgParser = args.ArgParser
+    alias ArgOption = args.ArgOption
 
     // Collection alias aliases
     alias LinkedList = collections.LinkedList

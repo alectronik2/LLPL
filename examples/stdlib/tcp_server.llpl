@@ -16,7 +16,7 @@ func handle_client(client: Socket) {
         let message: String = recv_result.unwrap()
 
         // Echo back to client with prefix
-        let response: String = new String("Echo: ") + message
+        let response: String = new String("Echo: ") + message.c_str()
         client.send_string(response)
     }
 }

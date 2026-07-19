@@ -165,7 +165,7 @@ func demo_hashset() {
     set2.insert(6)
 
     // Set operations
-    let union_set: HashSet<int> = set1.union(set2)  // {1, 2, 3, 4, 5, 6}
+    let union_set: HashSet<int> = set1.union_with(set2)  // {1, 2, 3, 4, 5, 6}
     let intersection: HashSet<int> = set1.intersection(set2)  // {3, 4}
     let difference: HashSet<int> = set1.difference(set2)  // {1, 2}
 

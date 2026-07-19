@@ -311,7 +311,9 @@ class HashSet<T: Hashable> {
     }
 
     // Set operations
-    func union(other: HashSet<T>) -> HashSet<T> {
+    // Named union_with, not union - `union` is a reserved keyword (see
+    // ast.d's UnionDecl/the `union` type feature).
+    func union_with(other: HashSet<T>) -> HashSet<T> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
