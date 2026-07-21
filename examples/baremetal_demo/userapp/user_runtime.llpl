@@ -2,21 +2,21 @@
 
 const RT_SYS_ERR = 0xFFFFFFFFFFFFFFFF
 
-func rt_print_digit(n: uint) {
+func rt_print_digit(n: u64) {
     let buf: char[2]
     buf[0] = (48 + n) as char
     buf[1] = 0
     sys_puts(buf as char*)
 }
 
-func rt_print_uint(n: uint) {
+func rt_print_uint(n: u64) {
     if n >= 10 {
         rt_print_uint(n / 10)
     }
     rt_print_digit(n % 10)
 }
 
-func rt_put_uint_line(label: char*, n: uint) {
+func rt_put_uint_line(label: char*, n: u64) {
     sys_puts(label)
     rt_print_uint(n)
     sys_puts("\n")
@@ -27,7 +27,7 @@ const RT_HEX_DIGITS = "0123456789abcdef"
 // Prints exactly two lowercase hex digits for the low byte of `n` -
 // used for MAC-address octets (netd.llpl et al) where a byte can be
 // e.g. 0x0A and must print as "0a", not "a".
-func rt_print_hex_byte(n: uint) {
+func rt_print_hex_byte(n: u64) {
     let buf: char[3]
     buf[0] = RT_HEX_DIGITS[(n >> 4) & 0xF]
     buf[1] = RT_HEX_DIGITS[n & 0xF]
@@ -35,7 +35,7 @@ func rt_print_hex_byte(n: uint) {
     sys_puts(buf as char*)
 }
 
-func rt_arg(argc: uint, argv: uint*, index: uint, fallback: char*) -> char* {
+func rt_arg(argc: u64, argv: u64*, index: u64, fallback: char*) -> char* {
     if index < argc {
         return argv[index] as char*
     }
@@ -43,22 +43,22 @@ func rt_arg(argc: uint, argv: uint*, index: uint, fallback: char*) -> char* {
 }
 
 // Parses a dotted-decimal IPv4 address ("10.0.2.2") into a single
-// packed uint (a<<24|b<<16|c<<8|d, host order - matches netd.llpl's own
+// packed u64 (a<<24|b<<16|c<<8|d, host order - matches netd.llpl's own
 // make_ip). 0xFFFFFFFF (never a real unicast target) on any parse
 // failure - not 0, since 0.0.0.0 has its own (different) reserved
 // meaning and shouldn't be confused with "couldn't parse this".
 const RT_IP_INVALID = 0xFFFFFFFF
 
-func rt_parse_ip(s: char*) -> uint {
-    let octets: uint[4]
-    let oct: int = 0
-    let val: uint = 0
+func rt_parse_ip(s: char*) -> u64 {
+    let octets: u64[4]
+    let oct: i64 = 0
+    let val: u64 = 0
     let have_digit: bool = false
-    let i: int = 0
+    let i: i64 = 0
     while true {
         let ch: char = s[i]
         if ch >= 48 && ch <= 57 {
-            val = val * 10 + ((ch as uint) - 48)
+            val = val * 10 + ((ch as u64) - 48)
             have_digit = true
             if val > 255 {
                 return RT_IP_INVALID
@@ -85,7 +85,7 @@ func rt_parse_ip(s: char*) -> uint {
     return RT_IP_INVALID
 }
 
-func rt_print_ip(ip: uint) {
+func rt_print_ip(ip: u64) {
     rt_print_uint((ip >> 24) & 0xFF)
     sys_puts(".")
     rt_print_uint((ip >> 16) & 0xFF)
@@ -95,7 +95,7 @@ func rt_print_ip(ip: uint) {
     rt_print_uint(ip & 0xFF)
 }
 
-func rt_exit(code: uint) {
+func rt_exit(code: u64) {
     sys_exit(code)
     while true {
     }

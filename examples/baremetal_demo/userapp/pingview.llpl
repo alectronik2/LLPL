@@ -1,0 +1,332 @@
+// pingview - a windowed ping monitor: pings a target IPv4 address in a
+// loop like ping.llpl, but renders a live scrolling bar graph of each
+// reply's round-trip time (in the same "poll iterations" unit netd.llpl
+// already measures RTT in - there's no wall-clock timer syscall in this
+// kernel, see netd.llpl's own header comment on why everything here is
+// an iteration bound, not a real timeout) instead of just printing lines
+// of text. All the actual protocol work is netd.llpl's, exactly like
+// ping.llpl/traceroute.llpl - this is only a different, graphical client
+// of its one OP_PING operation.
+//
+// Usage: run /bin/pingview.elf [ip]  (default: 10.0.2.2, QEMU SLIRP's own
+// virtual gateway - always present under the default network setup this
+// demo assumes, and reachable whether or not DHCP configured our own
+// address, see netd.llpl's dhcp_configure).
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+import "wm_client"
+import "font"
+
+const OP_PING = 1
+const PING_STATUS_ECHO_REPLY = 0
+const PING_STATUS_TIME_EXCEEDED = 1
+const PING_STATUS_TIMEOUT = 2
+const PING_STATUS_ERROR = 3
+
+const DEFAULT_TTL = 64
+const TIMEOUT_ITERS = 500000
+
+const BG_COLOR: u32 = 0x101010
+const GRID_COLOR: u32 = 0x282828
+const BORDER_COLOR: u32 = 0x505050
+const TEXT_COLOR: u32 = 0xC8C8C8
+const LABEL_COLOR: u32 = 0x808080
+const REPLY_COLOR: u32 = 0x00CC66
+const TIME_EXCEEDED_COLOR: u32 = 0xFFAA00
+const FAIL_COLOR: u32 = 0xCC3333
+
+const GRAPH_X: u64 = 8
+const GRAPH_Y: u64 = 22
+const GRAPH_W: u64 = 304
+const GRAPH_H: u64 = 122
+const BAR_W: u64 = 4
+// One history slot per bar column the graph can show at once - older
+// samples fall off the left as new ones are pushed on the right, a
+// fixed-size ring buffer rather than an ever-growing array.
+const HISTORY = 76
+
+let rtt_history: u64[76]
+let status_history: char[76]
+let history_count: i64 = 0
+let history_head: i64 = 0
+
+let sent: u64 = 0
+let received: u64 = 0
+
+func status_color(status: u64) -> u32 {
+    if status == PING_STATUS_ECHO_REPLY {
+        return REPLY_COLOR
+    }
+    if status == PING_STATUS_TIME_EXCEEDED {
+        return TIME_EXCEEDED_COLOR
+    }
+    return FAIL_COLOR
+}
+
+// Writes n's decimal digits into buf and null-terminates, returning the
+// digit count - no shared itoa-into-buffer helper exists in
+// user_runtime.llpl (rt_print_uint only ever writes straight to serial).
+func format_uint(buf: char*, n: u64) -> i64 {
+    if n == 0 {
+        buf[0] = 48
+        buf[1] = 0
+        return 1
+    }
+    let tmp: char[20]
+    let len: i64 = 0
+    let v: u64 = n
+    while v > 0 {
+        tmp[len] = (48 + (v % 10)) as char
+        len = len + 1
+        v = v / 10
+    }
+    let i: i64 = 0
+    while i < len {
+        buf[i] = tmp[len - 1 - i]
+        i = i + 1
+    }
+    buf[len] = 0
+    return len
+}
+
+func format_ip_octet(buf: char*, pos: i64, octet: u64) -> i64 {
+    let part: char[20]
+    let n: i64 = format_uint(part as char*, octet)
+    let i: i64 = 0
+    let p: i64 = pos
+    while i < n {
+        buf[p] = part[i]
+        p = p + 1
+        i = i + 1
+    }
+    return p
+}
+
+func format_ip(buf: char*, ip: u64) -> i64 {
+    let pos: i64 = format_ip_octet(buf, 0, (ip >> 24) & 0xFF)
+    buf[pos] = 46 // '.'
+    pos = format_ip_octet(buf, pos + 1, (ip >> 16) & 0xFF)
+    buf[pos] = 46
+    pos = format_ip_octet(buf, pos + 1, (ip >> 8) & 0xFF)
+    buf[pos] = 46
+    pos = format_ip_octet(buf, pos + 1, ip & 0xFF)
+    buf[pos] = 0
+    return pos
+}
+
+func fill_rect(x0: u64, y0: u64, w: u64, h: u64, color: u32) {
+    let dy: u64 = 0
+    while dy < h {
+        let dx: u64 = 0
+        while dx < w {
+            wm_put_pixel(x0 + dx, y0 + dy, color)
+            dx = dx + 1
+        }
+        dy = dy + 1
+    }
+}
+
+func draw_graph_border() {
+    let x: u64 = GRAPH_X - 1
+    while x <= GRAPH_X + GRAPH_W {
+        wm_put_pixel(x, GRAPH_Y - 1, BORDER_COLOR)
+        wm_put_pixel(x, GRAPH_Y + GRAPH_H, BORDER_COLOR)
+        x = x + 1
+    }
+    let y: u64 = GRAPH_Y - 1
+    while y <= GRAPH_Y + GRAPH_H {
+        wm_put_pixel(GRAPH_X - 1, y, BORDER_COLOR)
+        wm_put_pixel(GRAPH_X + GRAPH_W, y, BORDER_COLOR)
+        y = y + 1
+    }
+}
+
+// Horizontal reference lines at the quarter-marks of the graph's height,
+// drawn first so every bar (and the flat zero-marker for a timeout)
+// paints on top of them - just a visual ruler, no numeric axis labels
+// (there's no real-time unit to label them with anyway, see this file's
+// own header comment on RTT being an iteration count, not milliseconds).
+func draw_graph_grid() {
+    let q: i64 = 1
+    while q < 4 {
+        let y: u64 = GRAPH_Y + (GRAPH_H * (q as u64)) / 4
+        let x: u64 = GRAPH_X
+        while x < GRAPH_X + GRAPH_W {
+            wm_put_pixel(x, y, GRID_COLOR)
+            x = x + 2
+        }
+        q = q + 1
+    }
+}
+
+func draw_graph() {
+    draw_graph_grid()
+
+    // Auto-scale to the largest *real* RTT currently visible (status ==
+    // ECHO_REPLY or TIME_EXCEEDED) - a timeout/error stores a 0 sentinel
+    // (see the main loop below) specifically so it can't dominate the
+    // scale: do_ping's own out_rtt for a timeout is however many
+    // thousands of iterations the bound happens to be, an artifact of
+    // that bound, not a real latency figure, and would otherwise squash
+    // every genuine reply's bar down to a sliver the moment a single
+    // timeout entered the history.
+    let max_rtt: u64 = 1
+    let i: i64 = 0
+    while i < history_count {
+        let idx: i64 = (history_head - history_count + i + HISTORY) % HISTORY
+        if rtt_history[idx] > max_rtt {
+            max_rtt = rtt_history[idx]
+        }
+        i = i + 1
+    }
+
+    i = 0
+    while i < history_count {
+        let idx: i64 = (history_head - history_count + i + HISTORY) % HISTORY
+        let rtt: u64 = rtt_history[idx]
+        let st: char = status_history[idx]
+        let bar_h: u64 = 2
+        if rtt > 0 {
+            bar_h = (rtt * GRAPH_H) / max_rtt
+            if bar_h > GRAPH_H {
+                bar_h = GRAPH_H
+            }
+            if bar_h < 2 {
+                bar_h = 2
+            }
+        }
+        let bx: u64 = GRAPH_X + (i as u64) * BAR_W
+        let by: u64 = GRAPH_Y + GRAPH_H - bar_h
+        fill_rect(bx, by, BAR_W - 1, bar_h, status_color(st as u64))
+        i = i + 1
+    }
+}
+
+func draw_stats(target_ip_str: char*, last_rtt: u64, last_status: u64) {
+    let buf: u32* = wm_buffer()
+    let win_w: u64 = Wm.WIN_W as u64
+    let win_h: u64 = Wm.WIN_H as u64
+
+    Font.draw_string(buf, win_w, win_h, 8, 4, "PING", 0x00CCFF, BG_COLOR)
+    Font.draw_string(buf, win_w, win_h, 56, 4, target_ip_str, TEXT_COLOR, BG_COLOR)
+
+    let numbuf: char[24]
+
+    Font.draw_string(buf, win_w, win_h, 8, 156, "SENT", LABEL_COLOR, BG_COLOR)
+    format_uint(numbuf as char*, sent)
+    Font.draw_string(buf, win_w, win_h, 48, 156, numbuf as char*, TEXT_COLOR, BG_COLOR)
+
+    Font.draw_string(buf, win_w, win_h, 96, 156, "RECV", LABEL_COLOR, BG_COLOR)
+    format_uint(numbuf as char*, received)
+    Font.draw_string(buf, win_w, win_h, 136, 156, numbuf as char*, TEXT_COLOR, BG_COLOR)
+
+    let loss_pct: u64 = 0
+    if sent > 0 {
+        loss_pct = ((sent - received) * 100) / sent
+    }
+    Font.draw_string(buf, win_w, win_h, 184, 156, "LOSS", LABEL_COLOR, BG_COLOR)
+    let n: i64 = format_uint(numbuf as char*, loss_pct)
+    Font.draw_string(buf, win_w, win_h, 224, 156, numbuf as char*, TEXT_COLOR, BG_COLOR)
+    Font.draw_string(buf, win_w, win_h, 224 + (n as u64) * 8, 156, "%", TEXT_COLOR, BG_COLOR)
+
+    Font.draw_string(buf, win_w, win_h, 8, 176, "LAST", LABEL_COLOR, BG_COLOR)
+    if last_status == PING_STATUS_ECHO_REPLY {
+        format_uint(numbuf as char*, last_rtt)
+        Font.draw_string(buf, win_w, win_h, 48, 176, numbuf as char*, REPLY_COLOR, BG_COLOR)
+        Font.draw_string(buf, win_w, win_h, 48 + (n as u64) * 8 + 80, 176, "iters", LABEL_COLOR, BG_COLOR)
+    } else if last_status == PING_STATUS_TIME_EXCEEDED {
+        Font.draw_string(buf, win_w, win_h, 48, 176, "TTL EXCEEDED", TIME_EXCEEDED_COLOR, BG_COLOR)
+    } else if last_status == PING_STATUS_TIMEOUT {
+        Font.draw_string(buf, win_w, win_h, 48, 176, "TIMEOUT", FAIL_COLOR, BG_COLOR)
+    } else {
+        Font.draw_string(buf, win_w, win_h, 48, 176, "NO ROUTE", FAIL_COLOR, BG_COLOR)
+    }
+}
+
+func record_sample(rtt: u64, status: u64) {
+    rtt_history[history_head] = rtt
+    status_history[history_head] = status as char
+    history_head = (history_head + 1) % HISTORY
+    if history_count < HISTORY {
+        history_count = history_count + 1
+    }
+}
+
+func _start(argc: u64, argv: u64*) {
+    let ip_str: char* = rt_arg(argc, argv, 1, "10.0.2.2")
+    let dest_ip: u64 = rt_parse_ip(ip_str)
+    if dest_ip == RT_IP_INVALID {
+        sys_puts("pingview: bad address: ")
+        sys_putln(ip_str)
+        rt_exit(1)
+    }
+
+    let handle: u64 = sys_lookup("netd")
+    if handle == RT_SYS_ERR {
+        sys_putln("pingview: netd not running")
+        rt_exit(1)
+    }
+
+    if !wm_connect() {
+        sys_putln("pingview: wm_connect failed")
+        rt_exit(1)
+    }
+    if !wm_create_window() {
+        sys_putln("pingview: create_window failed")
+        rt_exit(1)
+    }
+
+    let target_ip_str: char[20]
+    format_ip(target_ip_str as char*, dest_ip)
+
+    let seq: u64 = 1
+    let last_rtt: u64 = 0
+    let last_status: u64 = PING_STATUS_TIMEOUT
+
+    while true {
+        let input: WmInput = wm_poll_input()
+        if (input.key as u64) == (KEY_CLOSE_REQ as u64) {
+            wm_close()
+            rt_exit(0)
+        }
+
+        let req: char[48]
+        let req_word: u64* = (req as char*) as u64*
+        req_word[0] = OP_PING
+        req_word[1] = dest_ip
+        req_word[2] = DEFAULT_TTL
+        req_word[3] = 1
+        req_word[4] = seq
+        req_word[5] = TIMEOUT_ITERS
+
+        sent = sent + 1
+        if sys_msg_send(handle, req as char*, 48) == RT_SYS_ERR {
+            last_status = PING_STATUS_ERROR
+            last_rtt = 0
+            record_sample(0, last_status)
+        } else {
+            let reply_word: u64* = (req as char*) as u64*
+            last_status = reply_word[0]
+            last_rtt = reply_word[2]
+            if last_status == PING_STATUS_ECHO_REPLY {
+                received = received + 1
+                record_sample(last_rtt, last_status)
+            } else if last_status == PING_STATUS_TIME_EXCEEDED {
+                record_sample(last_rtt, last_status)
+            } else {
+                record_sample(0, last_status)
+            }
+        }
+
+        wm_fill(BG_COLOR)
+        draw_graph_border()
+        draw_graph()
+        draw_stats(target_ip_str as char*, last_rtt, last_status)
+        wm_present()
+
+        seq = seq + 1
+        sys_sleep(200)
+    }
+}

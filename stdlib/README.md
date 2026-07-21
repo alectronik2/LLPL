@@ -12,6 +12,7 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 - **Command-line Arguments**: `--name value`/`-n value` flags, positional arguments, `func main(args: string[])` support
 - **YAML Parsing**: Block/flow mappings and sequences, typed scalars
 - **JSON Parsing**: RFC 8259 parser and serializer, typed values
+- **Grammar Parser Generator**: ANTLR-like `grammar { }` blocks compiled to real recursive-descent parsers, with left-recursion support
 - **Namespace Organization**: Clean separation of concerns with `std::io`, `std::net`, `std::text`, `std::collections`, `std::sdl`, `std::args`, `std::yaml`, `std::json`
 - **Error Handling**: Comprehensive use of `Result<T, E>` types for safe error propagation
 - **Modern OOP**: Classes with constructors, destructors, and static methods
@@ -27,11 +28,21 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 - [Command-line Arguments](#command-line-arguments)
 - [YAML Parsing](#yaml-parsing)
 - [JSON Parsing](#json-parsing)
+- [Grammar Parser Generator](#grammar-parser-generator)
 - [API Reference](#api-reference)
 
 ## Installation
 
-Import the entire standard library:
+Set `LLPL_HOME` to the directory containing this repository's `stdlib/`
+folder (its own checkout root), so `stdlib/...` imports resolve the same
+way regardless of where the importing file lives - no relative `../../`
+path needed:
+
+```sh
+export LLPL_HOME=/path/to/LLPL
+```
+
+Then import the entire standard library:
 
 ```swift
 import "stdlib/stdlib.llpl"
@@ -44,6 +55,11 @@ import "stdlib/io/file.llpl"
 import "stdlib/net/socket.llpl"
 import "stdlib/text/string_utils.llpl"
 ```
+
+(Compiling from within the repo's own root directory works even without
+`LLPL_HOME` set, since the compiler also falls back to resolving imports
+relative to the current working directory - but any other location needs
+`LLPL_HOME`.)
 
 ## File I/O
 
@@ -806,6 +822,59 @@ unwrapping), `has_key()`, or `keys()`; read an array with
 `len()`/`get_index()`/`push()`; write an object's fields with `set()`.
 `stringify()` serializes any `JsonValue` back to compact JSON text.
 
+## Grammar Parser Generator
+
+Unlike everything else in this section, `grammar { }` isn't a stdlib
+module - it's a language feature (a real keyword, no `import` needed) that
+compiles an ANTLR-like grammar DSL, at LLPL-compile time, into a real
+recursive-descent parser class. Documented here anyway since it's the
+same kind of tool for the same kind of job.
+
+```swift
+grammar Calc {
+    expr   : expr '+' term
+           | expr '-' term
+           | term
+           ;
+    term   : term '*' factor
+           | term '/' factor
+           | factor
+           ;
+    factor : '(' expr ')'
+           | NUMBER
+           ;
+    NUMBER : [0-9]+ ;
+}
+
+func main() -> int {
+    // Direct-call sugar for `(new Calc(text)).parse_expr()` - `expr` is
+    // Calc's first-declared rule, so it's the start rule.
+    let tree: ParseNode = Calc(new String("1 + 2 * 3"))
+
+    // .name()/.text() and .child(i)/.child_count() walk the resulting
+    // parse tree - see prelude.llpl's ParseNode.
+    return 0
+}
+```
+
+Terminals are quoted literals (`'+'`, `"hello"`) or bracket character
+classes (`[0-9]`, `[a-zA-Z_]`, negated `[^\n]`), combinable with postfix
+`*`/`+`/`?` like any other element; `(...)` groups a sub-choice. A rule
+name with no lowercase letters (`NUMBER`) is "lexer-style" - matched with
+no whitespace skipped between its own elements; anything else (`expr`)
+is "parser-style" - whitespace is skipped automatically before every
+element it matches.
+
+Parsing is fully predictive (lookahead-only, never backtracking): FIRST/
+FOLLOW sets are computed for the whole grammar at compile time, and any
+ambiguity (two alternatives that could both start with the same
+character) is a **compile-time error**, not a runtime misparse. Direct
+left recursion (`expr : expr '+' term | ... | term ;`) is automatically
+rewritten into a standard precedence-climbing loop - alternatives listed
+first bind tighter, and every operator is left-associative. See
+`examples/stdlib/grammar_demo.llpl` for a complete worked example,
+including a small tree-walking evaluator.
+
 ## Examples
 
 See the example programs in the `examples/` directory:
@@ -823,6 +892,7 @@ See the example programs in the `examples/` directory:
 **parsing examples:**
 - `yaml_demo.llpl` - YAML config file round-trip and in-memory parsing
 - `json_demo.llpl` - JSON config file round-trip, in-memory parsing, and serialization
+- `grammar_demo.llpl` - `grammar { }` parser generator: left-recursive arithmetic expressions plus a tree-walking evaluator
 
 **sdl examples:**
 - `basic_window.llpl` - Window creation and basic rendering

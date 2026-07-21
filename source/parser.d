@@ -246,6 +246,8 @@ class Parser {
             return structDecl(attrs);
         } else if (check(TokenType.Union)) {
             return unionDecl();
+        } else if (check(TokenType.Grammar)) {
+            return grammarDecl();
         } else if (check(TokenType.Extern)) {
             return externDecl();
         } else if (check(TokenType.Trait)) {
@@ -371,7 +373,7 @@ class Parser {
         expect(TokenType.Enum);
         string name = expect(TokenType.Identifier).value;
 
-        Type backingType = new Type("int");
+        Type backingType = new Type("i64");
         bool hasExplicitBackingType = false;
         if (match(TokenType.Colon)) {
             backingType = parseType();
@@ -763,6 +765,17 @@ class Parser {
         string name = expect(TokenType.Identifier).value;
         string[] typeParamBounds;
         string[] typeParams = typeParamList(typeParamBounds);
+
+        // `class Derived : Base { ... }` / `class Derived : Ns.Base { ... }` -
+        // single inheritance; see ast.d's ClassDecl.baseClassName comment.
+        string baseClassName = "";
+        if (match(TokenType.Colon)) {
+            baseClassName = expectName("Expected base class name after ':'").value;
+            while (match(TokenType.Dot)) {
+                baseClassName ~= "." ~ expectName("Expected identifier after '.'").value;
+            }
+        }
+
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
@@ -777,6 +790,11 @@ class Parser {
             // `new`/automatic cleanup, so `private` isn't offered there.
             bool isPrivateMember = match(TokenType.Private);
             bool isStaticMember = match(TokenType.Static);
+            // `virtual func`/`override func` - see FunctionDecl.isVirtual/
+            // isOverride's own comment. Order-independent relative to
+            // private/static (e.g. `private override func` is fine).
+            bool isVirtualMember = match(TokenType.Virtual);
+            bool isOverrideMember = match(TokenType.Override);
             if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
             } else if (check(TokenType.Destructor)) {
@@ -785,6 +803,8 @@ class Parser {
                 auto method = functionDecl();
                 method.isPrivate = isPrivateMember;
                 method.isStatic = isStaticMember;
+                method.isVirtual = isVirtualMember;
+                method.isOverride = isOverrideMember;
                 methods ~= method;
             } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 auto field = varDecl();
@@ -802,8 +822,10 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
-        return new ClassDecl(name, fields, constructors, destructor, methods, startLine, startColumn,
+        auto decl = new ClassDecl(name, fields, constructors, destructor, methods, startLine, startColumn,
             typeParams, typeParamBounds, attrs);
+        decl.baseClassName = baseClassName;
+        return decl;
     }
 
     private StructDecl structDecl(VarAttribute[] attrs = []) {
@@ -859,6 +881,159 @@ class Parser {
 
         expect(TokenType.RightBrace);
         return new UnionDecl(name, fields, startLine, startColumn, constructors);
+    }
+
+    // `grammar Name { rule : alt | alt ; ... }` - see ast.d's GrammarDecl
+    // comment for why this is a dedicated recursive-descent parser over
+    // the same token stream, rather than reusing expression()/block(): the
+    // rule-body syntax (`'+' | '-'`, `[0-9]`, postfix `* + ?`) is a
+    // genuinely different concrete syntax from ordinary LLPL. The lexer
+    // (see Lexer.insideGrammar) already switched `[...]`/`'...'` into raw
+    // CharClass/multi-char-String tokens for the whole body by the time
+    // any of this runs.
+    private GrammarDecl grammarDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Grammar);
+        string name = expect(TokenType.Identifier).value;
+        expect(TokenType.LeftBrace);
+
+        GrammarRule[] rules;
+        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            rules ~= grammarRule();
+        }
+
+        expect(TokenType.RightBrace);
+        return new GrammarDecl(name, rules, startLine, startColumn);
+    }
+
+    private GrammarRule grammarRule() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        string name = expectName("Expected grammar rule name").value;
+        expect(TokenType.Colon, "Expected ':' after grammar rule name");
+        GrammarAlt[] alternatives = grammarAlternativeList();
+        expect(TokenType.Semicolon, "Expected ';' to terminate grammar rule");
+        return new GrammarRule(name, alternatives, startLine, startColumn);
+    }
+
+    // `alt | alt | ...` - shared by a top-level rule body and a
+    // parenthesized `( ... )` group, both of which are terminated by
+    // whatever the caller expects next (`;` for a rule, `)` for a group) -
+    // grammarAlternative() itself stops at any of those, plus `|` and EOF,
+    // without consuming the terminator.
+    private GrammarAlt[] grammarAlternativeList() {
+        GrammarAlt[] alts;
+        alts ~= grammarAlternative();
+        while (match(TokenType.BitwiseOr)) {
+            alts ~= grammarAlternative();
+        }
+        return alts;
+    }
+
+    private bool isGrammarAltTerminator() {
+        return check(TokenType.BitwiseOr) || check(TokenType.Semicolon) ||
+            check(TokenType.RightParen) || check(TokenType.EOF);
+    }
+
+    private GrammarAlt grammarAlternative() {
+        GrammarElement[] elements;
+        while (!isGrammarAltTerminator()) {
+            elements ~= grammarElement();
+        }
+        return new GrammarAlt(elements);
+    }
+
+    private GrammarElement grammarElement() {
+        GrammarAtom atom = grammarAtom();
+        GrammarQuantifier quantifier = GrammarQuantifier.None;
+        if (match(TokenType.Star)) {
+            quantifier = GrammarQuantifier.Star;
+        } else if (match(TokenType.Plus)) {
+            quantifier = GrammarQuantifier.Plus;
+        } else if (match(TokenType.Question)) {
+            quantifier = GrammarQuantifier.Question;
+        }
+        return new GrammarElement(atom, quantifier);
+    }
+
+    private GrammarAtom grammarAtom() {
+        // Single- and double-quoted terminal literals both lex to plain
+        // TokenType.String while insideGrammar (see Lexer.grammarLiteral_'s
+        // own comment) - no need to distinguish quote style here.
+        if (check(TokenType.String)) {
+            string lit = current.value;
+            advance();
+            return GrammarAtom.makeLiteral(lit);
+        }
+        if (check(TokenType.CharClass)) {
+            string raw = current.value;
+            advance();
+            CharRange[] ranges;
+            bool negated;
+            parseCharClassBody(raw, ranges, negated);
+            return GrammarAtom.makeCharClass(ranges, negated);
+        }
+        if (match(TokenType.Dot)) {
+            return GrammarAtom.makeWildcard();
+        }
+        if (match(TokenType.LeftParen)) {
+            GrammarAlt[] alts = grammarAlternativeList();
+            expect(TokenType.RightParen, "Expected ')' to close grammar group");
+            return GrammarAtom.makeGroup(alts);
+        }
+        if (check(TokenType.Identifier)) {
+            string name = current.value;
+            advance();
+            return GrammarAtom.makeRuleRef(name);
+        }
+        error("Expected a grammar terminal, character class, '(', or rule reference");
+        return GrammarAtom.makeWildcard(); // unreachable - error() always throws
+    }
+
+    // Parses a `[...]` class's raw interior text (as captured verbatim by
+    // Lexer.charClass_ - escapes still present as literal `\` + char
+    // pairs) into an optional leading `^` (negation) plus a list of
+    // ranges, where a bare character `c` not part of a `c1-c2` range is
+    // just CharRange(c, c). A `-` only starts a range when both a
+    // preceding and following character exist around it - a trailing `-`
+    // (e.g. `[a-]`) is a literal dash instead, the common bracket-
+    // expression convention.
+    private void parseCharClassBody(string raw, out CharRange[] ranges, out bool negated) {
+        size_t i = 0;
+        negated = false;
+        if (i < raw.length && raw[i] == '^') {
+            negated = true;
+            i++;
+        }
+
+        char readOne() {
+            char c = raw[i];
+            if (c == '\\' && i + 1 < raw.length) {
+                i++;
+                char e = raw[i];
+                i++;
+                switch (e) {
+                    case 'n': return '\n';
+                    case 't': return '\t';
+                    case 'r': return '\r';
+                    default: return e; // \\, \], \-, \^, or any other escaped char -> itself
+                }
+            }
+            i++;
+            return c;
+        }
+
+        while (i < raw.length) {
+            char lo = readOne();
+            if (i < raw.length && raw[i] == '-' && i + 1 < raw.length) {
+                i++; // consume '-'
+                char hi = readOne();
+                ranges ~= CharRange(lo, hi);
+            } else {
+                ranges ~= CharRange(lo, lo);
+            }
+        }
     }
 
     // `trait Name { func sig(...) -> T  func sig2(...) -> T  ... }` -
@@ -1238,22 +1413,20 @@ class Parser {
     }
 
     // Short Rust-style spellings for the fixed-width integer types, resolved
-    // to their existing canonical internal names right here so every other
-    // type-name check in the parser and code generator (isPrimitiveTypeName,
-    // primitiveToC, interpFormatSpecifier, ...) only ever has to know about
-    // one spelling per width. u64/i64 alias the pre-existing "uint"/"int"
-    // (already 64-bit); u8/i8 are the one genuinely new width, added
-    // alongside them in the code generator as "uint8"/"int8".
+    // to their canonical internal names right here so every other type-name
+    // check in the parser and code generator only ever has to know about one
+    // spelling per width. i64/u64 are canonical now; legacy int/uint are no
+    // longer accepted as LLPL type names.
     private static string canonicalIntTypeName(string name) {
         switch (name) {
             case "u8": return "uint8";
             case "u16": return "uint16";
             case "u32": return "uint32";
-            case "u64": return "uint";
+            case "u64": return "u64";
             case "i8": return "int8";
             case "i16": return "int16";
             case "i32": return "int32";
-            case "i64": return "int";
+            case "i64": return "i64";
             default: return name;
         }
     }
@@ -1262,7 +1435,13 @@ class Parser {
         if (check(TokenType.LeftParen)) {
             return parseParenType();
         }
-        string name = canonicalIntTypeName(expect(TokenType.Identifier).value);
+        auto nameTok = expect(TokenType.Identifier);
+        if (nameTok.value == "int" || nameTok.value == "uint") {
+            errorAt(nameTok.line, nameTok.column,
+                format("'%s' is no longer a type; use '%s' instead",
+                    nameTok.value, nameTok.value == "int" ? "i64" : "u64"));
+        }
+        string name = canonicalIntTypeName(nameTok.value);
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
         // Graphics_Point, matching how the code generator mangles namespaced
         // class declarations.
@@ -1370,6 +1549,8 @@ class Parser {
             return throwStmt();
         } else if (check(TokenType.Delete)) {
             return deleteStmt();
+        } else if (check(TokenType.Assert)) {
+            return assertStmt();
         } else if (check(TokenType.Asm)) {
             return asmStmt();
         } else if (check(TokenType.Match)) {
@@ -1742,6 +1923,20 @@ class Parser {
             errorAt(startLine, startColumn, "'delete' requires a value");
         }
         return new DeleteStmt(expression(), startLine, startColumn);
+    }
+
+    private AssertStmt assertStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Assert);
+        expect(TokenType.LeftParen, "Expected '(' after 'assert'");
+        ASTNode condition = expression();
+        ASTNode message = null;
+        if (match(TokenType.Comma)) {
+            message = expression();
+        }
+        expect(TokenType.RightParen, "Expected ')' after assert condition");
+        return new AssertStmt(condition, message, startLine, startColumn);
     }
 
     private DeferStmt deferStmt() {

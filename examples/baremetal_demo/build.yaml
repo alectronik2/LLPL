@@ -44,47 +44,49 @@ configurations:
 
 asm_sources:
   - src: boot64.asm
-    output: boot.o
+    output: build/boot.o
 
 c_sources:
   - path: kernel.c
+    output: build/kernel.o
     include_dirs: [../../runtime]
   - path: ../../runtime/runtime.c
+    output: build/runtime.o
     include_dirs: [../../runtime]
 
 link:
-  output: kernel.bin
+  output: build/kernel.bin
   script: linker64.ld
   ldflags: [-m, elf_x86_64, -nostdlib]
-  objects: [boot.o, kernel.o, runtime.o]
+  objects: [build/boot.o, build/kernel.o, build/runtime.o]
 
 extra_links:
   - name: userapp
     asm_sources:
       - src: userapp/tests/userapp.asm
-        output: userapp.o
+        output: build/userapp.o
     link:
-      output: userapp.elf
+      output: build/userapp.elf
       script: userapp/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [userapp.o]
+      objects: [build/userapp.o]
   - name: llpl_userapp
     llpl_sources:
       - src: userapp/tests/llpl_userapp.llpl
-        c_output: userapp/tests/llpl_userapp.c
-        output: userapp/tests/llpl_userapp.o
+        c_output: build/llpl_userapp.c
+        output: build/llpl_userapp.o
         include_dirs: [., ../../runtime]
         cflags: [-mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: llpl_userapp.elf
+      output: build/llpl_userapp.elf
       script: userapp/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static, --gc-sections]
-      objects: [userapp/tests/llpl_userapp.o]
+      objects: [build/llpl_userapp.o]
   - name: libsys
     llpl_sources:
       - src: libsys/libsys.llpl
-        c_output: libsys/libsys.c
-        output: libsys/libsys.o
+        c_output: build/libsys.c
+        output: build/libsys.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=default, -mcmodel=large, -ffunction-sections, -fdata-sections]
     c_sources:
@@ -102,277 +104,301 @@ extra_links:
       # made libsys.so balloon past the VFS's 32KB max file size (see
       # vfs.llpl's MAX_DIRECT_BLOCKS).
       - path: libsys/runtime_shim.c
-        output: libsys/runtime_shim.o
+        output: build/runtime_shim.o
         cflags: [-fPIC, -mcmodel=large]
     link:
-      output: libsys.so
+      output: build/libsys.so
       script: libsys/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -soname, libsys.so, --hash-style=sysv, --gc-sections, --version-script, libsys/exports.map]
-      objects: [libsys/libsys.o, libsys/runtime_shim.o]
+      objects: [build/libsys.o, build/runtime_shim.o]
   - name: dyn_userapp
     llpl_sources:
       - src: userapp/tests/dyn_userapp.llpl
-        c_output: userapp/tests/dyn_userapp.c
-        output: userapp/tests/dyn_userapp.o
+        c_output: build/dyn_userapp.c
+        output: build/dyn_userapp.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: dyn_userapp.elf
+      output: build/dyn_userapp.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/dyn_userapp.o, libsys.so]
+      objects: [build/dyn_userapp.o, build/libsys.so]
   - name: memtest
     llpl_sources:
       - src: userapp/tests/memtest.llpl
-        c_output: userapp/tests/memtest.c
-        output: userapp/tests/memtest.o
+        c_output: build/memtest.c
+        output: build/memtest.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: memtest.elf
+      output: build/memtest.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/memtest.o, libsys.so]
+      objects: [build/memtest.o, build/libsys.so]
   - name: cat
     llpl_sources:
       - src: userapp/tests/cat.llpl
-        c_output: userapp/tests/cat.c
-        output: userapp/tests/cat.o
+        c_output: build/cat.c
+        output: build/cat.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: cat.elf
+      output: build/cat.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/cat.o, libsys.so]
+      objects: [build/cat.o, build/libsys.so]
   - name: spawnwait
     llpl_sources:
       - src: userapp/tests/spawnwait.llpl
-        c_output: userapp/tests/spawnwait.c
-        output: userapp/tests/spawnwait.o
+        c_output: build/spawnwait.c
+        output: build/spawnwait.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: spawnwait.elf
+      output: build/spawnwait.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/spawnwait.o, libsys.so]
+      objects: [build/spawnwait.o, build/libsys.so]
   - name: execchain
     llpl_sources:
       - src: userapp/tests/execchain.llpl
-        c_output: userapp/tests/execchain.c
-        output: userapp/tests/execchain.o
+        c_output: build/execchain.c
+        output: build/execchain.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: execchain.elf
+      output: build/execchain.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/execchain.o, libsys.so]
+      objects: [build/execchain.o, build/libsys.so]
   - name: echoserver
     llpl_sources:
       - src: userapp/tests/echoserver.llpl
-        c_output: userapp/tests/echoserver.c
-        output: userapp/tests/echoserver.o
+        c_output: build/echoserver.c
+        output: build/echoserver.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: echoserver.elf
+      output: build/echoserver.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/echoserver.o, libsys.so]
+      objects: [build/echoserver.o, build/libsys.so]
   - name: ipcdemo
     llpl_sources:
       - src: userapp/tests/ipcdemo.llpl
-        c_output: userapp/tests/ipcdemo.c
-        output: userapp/tests/ipcdemo.o
+        c_output: build/ipcdemo.c
+        output: build/ipcdemo.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: ipcdemo.elf
+      output: build/ipcdemo.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/ipcdemo.o, libsys.so]
+      objects: [build/ipcdemo.o, build/libsys.so]
   - name: echod
     llpl_sources:
       - src: userapp/tests/echod.llpl
-        c_output: userapp/tests/echod.c
-        output: userapp/tests/echod.o
+        c_output: build/echod.c
+        output: build/echod.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: echod.elf
+      output: build/echod.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/echod.o, libsys.so]
+      objects: [build/echod.o, build/libsys.so]
   - name: echoclient
     llpl_sources:
       - src: userapp/tests/echoclient.llpl
-        c_output: userapp/tests/echoclient.c
-        output: userapp/tests/echoclient.o
+        c_output: build/echoclient.c
+        output: build/echoclient.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: echoclient.elf
+      output: build/echoclient.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/echoclient.o, libsys.so]
+      objects: [build/echoclient.o, build/libsys.so]
   - name: shmserver
     llpl_sources:
       - src: userapp/tests/shmserver.llpl
-        c_output: userapp/tests/shmserver.c
-        output: userapp/tests/shmserver.o
+        c_output: build/shmserver.c
+        output: build/shmserver.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: shmserver.elf
+      output: build/shmserver.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/shmserver.o, libsys.so]
+      objects: [build/shmserver.o, build/libsys.so]
   - name: shmclient
     llpl_sources:
       - src: userapp/tests/shmclient.llpl
-        c_output: userapp/tests/shmclient.c
-        output: userapp/tests/shmclient.o
+        c_output: build/shmclient.c
+        output: build/shmclient.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: shmclient.elf
+      output: build/shmclient.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/shmclient.o, libsys.so]
+      objects: [build/shmclient.o, build/libsys.so]
   - name: atad
     llpl_sources:
       - src: userapp/atad.llpl
-        c_output: userapp/atad.c
-        output: userapp/atad.o
+        c_output: build/atad.c
+        output: build/atad.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: atad.elf
+      output: build/atad.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/atad.o, libsys.so]
+      objects: [build/atad.o, build/libsys.so]
   - name: netd
     llpl_sources:
       - src: userapp/netd.llpl
-        c_output: userapp/netd.c
-        output: userapp/netd.o
+        c_output: build/netd.c
+        output: build/netd.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: netd.elf
+      output: build/netd.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/netd.o, libsys.so]
+      objects: [build/netd.o, build/libsys.so]
   - name: ping
     llpl_sources:
       - src: userapp/ping.llpl
-        c_output: userapp/ping.c
-        output: userapp/ping.o
+        c_output: build/ping.c
+        output: build/ping.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: ping.elf
+      output: build/ping.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/ping.o, libsys.so]
+      objects: [build/ping.o, build/libsys.so]
   - name: traceroute
     llpl_sources:
       - src: userapp/traceroute.llpl
-        c_output: userapp/traceroute.c
-        output: userapp/traceroute.o
+        c_output: build/traceroute.c
+        output: build/traceroute.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: traceroute.elf
+      output: build/traceroute.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/traceroute.o, libsys.so]
+      objects: [build/traceroute.o, build/libsys.so]
+  - name: pingview
+    llpl_sources:
+      - src: userapp/pingview.llpl
+        c_output: build/pingview.c
+        output: build/pingview.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: build/pingview.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [build/pingview.o, build/libsys.so]
   - name: tetris
     llpl_sources:
       - src: userapp/tetris.llpl
-        c_output: userapp/tetris.c
-        output: userapp/tetris.o
+        c_output: build/tetris.c
+        output: build/tetris.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: tetris.elf
+      output: build/tetris.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tetris.o, libsys.so]
+      objects: [build/tetris.o, build/libsys.so]
   - name: wm
     llpl_sources:
       - src: userapp/wm.llpl
-        c_output: userapp/wm.c
-        output: userapp/wm.o
+        c_output: build/wm.c
+        output: build/wm.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: wm.elf
+      output: build/wm.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/wm.o, libsys.so]
+      objects: [build/wm.o, build/libsys.so]
   - name: winball1
     llpl_sources:
       - src: userapp/tests/winball1.llpl
-        c_output: userapp/tests/winball1.c
-        output: userapp/tests/winball1.o
+        c_output: build/winball1.c
+        output: build/winball1.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: winball1.elf
+      output: build/winball1.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/winball1.o, libsys.so]
+      objects: [build/winball1.o, build/libsys.so]
   - name: winball2
     llpl_sources:
       - src: userapp/tests/winball2.llpl
-        c_output: userapp/tests/winball2.c
-        output: userapp/tests/winball2.o
+        c_output: build/winball2.c
+        output: build/winball2.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: winball2.elf
+      output: build/winball2.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/tests/winball2.o, libsys.so]
+      objects: [build/winball2.o, build/libsys.so]
   - name: filebrowser
     llpl_sources:
       - src: userapp/filebrowser.llpl
-        c_output: userapp/filebrowser.c
-        output: userapp/filebrowser.o
+        c_output: build/filebrowser.c
+        output: build/filebrowser.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: filebrowser.elf
+      output: build/filebrowser.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/filebrowser.o, libsys.so]
+      objects: [build/filebrowser.o, build/libsys.so]
   - name: editor
     llpl_sources:
       - src: userapp/editor.llpl
-        c_output: userapp/editor.c
-        output: userapp/editor.o
+        c_output: build/editor.c
+        output: build/editor.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: editor.elf
+      output: build/editor.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/editor.o, libsys.so]
+      objects: [build/editor.o, build/libsys.so]
   - name: terminal
     llpl_sources:
       - src: userapp/terminal.llpl
-        c_output: userapp/terminal.c
-        output: userapp/terminal.o
+        c_output: build/terminal.c
+        output: build/terminal.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
-      output: terminal.elf
+      output: build/terminal.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [userapp/terminal.o, libsys.so]
+      objects: [build/terminal.o, build/libsys.so]
+  - name: ui_demo
+    llpl_sources:
+      - src: userapp/ui_demo.llpl
+        c_output: build/ui_demo.c
+        output: build/ui_demo.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: build/ui_demo.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [build/ui_demo.o, build/libsys.so]
 
 # Includes two small files loaded as multiboot2 modules (grub.cfg's
 # `module2` directive) purely to give tmpfs.llpl something real to
@@ -381,32 +407,34 @@ package:
   output: kernel.iso
   actions:
     - mkdir: isodir/boot/grub
-    - copy: {from: kernel.bin, to: isodir/boot/kernel.bin}
-    - copy: {from: userapp.elf, to: isodir/boot/userapp.elf}
-    - copy: {from: llpl_userapp.elf, to: isodir/boot/llpl_userapp.elf}
-    - copy: {from: libsys.so, to: isodir/boot/libsys.so}
-    - copy: {from: dyn_userapp.elf, to: isodir/boot/dyn_userapp.elf}
-    - copy: {from: memtest.elf, to: isodir/boot/memtest.elf}
-    - copy: {from: cat.elf, to: isodir/boot/cat.elf}
-    - copy: {from: spawnwait.elf, to: isodir/boot/spawnwait.elf}
-    - copy: {from: execchain.elf, to: isodir/boot/execchain.elf}
-    - copy: {from: echoserver.elf, to: isodir/boot/echoserver.elf}
-    - copy: {from: ipcdemo.elf, to: isodir/boot/ipcdemo.elf}
-    - copy: {from: echod.elf, to: isodir/boot/echod.elf}
-    - copy: {from: echoclient.elf, to: isodir/boot/echoclient.elf}
-    - copy: {from: shmserver.elf, to: isodir/boot/shmserver.elf}
-    - copy: {from: shmclient.elf, to: isodir/boot/shmclient.elf}
-    - copy: {from: atad.elf, to: isodir/boot/atad.elf}
-    - copy: {from: netd.elf, to: isodir/boot/netd.elf}
-    - copy: {from: ping.elf, to: isodir/boot/ping.elf}
-    - copy: {from: traceroute.elf, to: isodir/boot/traceroute.elf}
-    - copy: {from: tetris.elf, to: isodir/boot/tetris.elf}
-    - copy: {from: wm.elf, to: isodir/boot/wm.elf}
-    - copy: {from: winball1.elf, to: isodir/boot/winball1.elf}
-    - copy: {from: winball2.elf, to: isodir/boot/winball2.elf}
-    - copy: {from: filebrowser.elf, to: isodir/boot/filebrowser.elf}
-    - copy: {from: editor.elf, to: isodir/boot/editor.elf}
-    - copy: {from: terminal.elf, to: isodir/boot/terminal.elf}
+    - copy: {from: build/kernel.bin, to: isodir/boot/kernel.bin}
+    - copy: {from: build/userapp.elf, to: isodir/boot/userapp.elf}
+    - copy: {from: build/llpl_userapp.elf, to: isodir/boot/llpl_userapp.elf}
+    - copy: {from: build/libsys.so, to: isodir/boot/libsys.so}
+    - copy: {from: build/dyn_userapp.elf, to: isodir/boot/dyn_userapp.elf}
+    - copy: {from: build/memtest.elf, to: isodir/boot/memtest.elf}
+    - copy: {from: build/cat.elf, to: isodir/boot/cat.elf}
+    - copy: {from: build/spawnwait.elf, to: isodir/boot/spawnwait.elf}
+    - copy: {from: build/execchain.elf, to: isodir/boot/execchain.elf}
+    - copy: {from: build/echoserver.elf, to: isodir/boot/echoserver.elf}
+    - copy: {from: build/ipcdemo.elf, to: isodir/boot/ipcdemo.elf}
+    - copy: {from: build/echod.elf, to: isodir/boot/echod.elf}
+    - copy: {from: build/echoclient.elf, to: isodir/boot/echoclient.elf}
+    - copy: {from: build/shmserver.elf, to: isodir/boot/shmserver.elf}
+    - copy: {from: build/shmclient.elf, to: isodir/boot/shmclient.elf}
+    - copy: {from: build/atad.elf, to: isodir/boot/atad.elf}
+    - copy: {from: build/netd.elf, to: isodir/boot/netd.elf}
+    - copy: {from: build/ping.elf, to: isodir/boot/ping.elf}
+    - copy: {from: build/traceroute.elf, to: isodir/boot/traceroute.elf}
+    - copy: {from: build/pingview.elf, to: isodir/boot/pingview.elf}
+    - copy: {from: build/tetris.elf, to: isodir/boot/tetris.elf}
+    - copy: {from: build/wm.elf, to: isodir/boot/wm.elf}
+    - copy: {from: build/winball1.elf, to: isodir/boot/winball1.elf}
+    - copy: {from: build/winball2.elf, to: isodir/boot/winball2.elf}
+    - copy: {from: build/filebrowser.elf, to: isodir/boot/filebrowser.elf}
+    - copy: {from: build/editor.elf, to: isodir/boot/editor.elf}
+    - copy: {from: build/terminal.elf, to: isodir/boot/terminal.elf}
+    - copy: {from: build/ui_demo.elf, to: isodir/boot/ui_demo.elf}
     - write:
         to: isodir/boot/hello.txt
         content: "Hello from a GRUB module!"
@@ -440,6 +468,7 @@ package:
               module2 /boot/netd.elf netd.elf
               module2 /boot/ping.elf ping.elf
               module2 /boot/traceroute.elf traceroute.elf
+              module2 /boot/pingview.elf pingview.elf
               module2 /boot/tetris.elf tetris.elf
               module2 /boot/wm.elf wm.elf
               module2 /boot/winball1.elf winball1.elf
@@ -447,6 +476,7 @@ package:
               module2 /boot/filebrowser.elf filebrowser.elf
               module2 /boot/editor.elf editor.elf
               module2 /boot/terminal.elf terminal.elf
+              module2 /boot/ui_demo.elf ui_demo.elf
           }
     - run: "grub-mkrescue -o kernel.iso isodir"
       allow_failure: true
@@ -454,10 +484,12 @@ package:
 # The VFS's (vfs.llpl) backing store - built only if missing, so it
 # persists across ordinary builds the same way real disk state should
 # (only `clean` wipes it). Must match vfs.llpl's DISK_SECTORS constant
-# (16MB / 512-byte sectors).
+# (64MB / 512-byte sectors - bumped from 16MB alongside real indirect-
+# block support, so files no longer capped at 32KB actually have room to
+# grow into on disk too).
 persistent_files:
   - path: disk.img
-    create: "dd if=/dev/zero of=disk.img bs=1M count=16"
+    create: "dd if=/dev/zero of=disk.img bs=1M count=64"
 
 # QEMU assigns the extra `-drive ...,if=ide` (with no explicit index) as
 # the primary IDE master alongside `-cdrom` - verified, not merely

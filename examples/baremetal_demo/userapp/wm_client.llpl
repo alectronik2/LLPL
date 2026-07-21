@@ -18,7 +18,7 @@ import "user_runtime"
 import "wm_protocol"
 
 let wm_handle: u64 = 0xFFFFFFFFFFFFFFFF
-let wm_slot: int = -1
+let wm_slot: i64 = -1
 let wm_arena: u8* = null
 let wm_win_x: u64 = 0
 let wm_win_y: u64 = 0
@@ -54,7 +54,7 @@ func wm_create_window() -> bool {
     if r[0] != (Wm.STATUS_OK as u64) {
         return false
     }
-    wm_slot = r[1] as int
+    wm_slot = r[1] as i64
     wm_win_x = r[3]
     wm_win_y = r[4]
     return true
@@ -113,18 +113,38 @@ func wm_present() -> bool {
 // for this window right now (also 0 if it isn't the focused window - see
 // wm.llpl's own doc comment on why an unfocused poll can't steal a
 // keystroke meant for someone else).
+// Input state structure
+struct WmInput {
+    let key: u64
+    let wheel: i64
+    let mouse_x: i64
+    let mouse_y: i64
+    let mouse_left: bool
+    let mouse_right: bool
+}
+
 // Set as a side effect of every wm_poll_input() call below - read it
 // with wm_wheel_delta() right after, before the next poll overwrites it.
-let wm_last_wheel: int = 0
+let wm_last_wheel: i64 = 0
+let wm_last_input: WmInput
 
-func wm_poll_input() -> u64 {
-    let req: u8[24]
+func wm_poll_input() -> WmInput {
+    let req: u8[48]
     let r: u64* = (req as u8*) as u64*
     r[0] = Wm.OP_POLL_INPUT as u64
     r[1] = wm_slot as u64
-    let n: u64 = sys_msg_send(wm_handle, req as u8*, 24)
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 48)
+
+    // Initialize with defaults
+    wm_last_input.key = 0
+    wm_last_input.wheel = 0
+    wm_last_input.mouse_x = 0
+    wm_last_input.mouse_y = 0
+    wm_last_input.mouse_left = false
+    wm_last_input.mouse_right = false
+
     if n == RT_SYS_ERR {
-        return 0
+        return wm_last_input
     }
     if r[0] != (Wm.STATUS_OK as u64) {
         // See wm_present's own comment just above - same force-close
@@ -132,15 +152,24 @@ func wm_poll_input() -> u64 {
         // which call a client's main loop happens to make next.
         rt_exit(0)
     }
-    wm_last_wheel = r[2] as int
-    return r[1]
+
+    wm_last_input.key = r[1]
+    wm_last_input.wheel = r[2] as i64
+    wm_last_input.mouse_x = r[3] as i64
+    wm_last_input.mouse_y = r[4] as i64
+    let mouse_flags: u64 = r[5]
+    wm_last_input.mouse_left = (mouse_flags & 1) != 0
+    wm_last_input.mouse_right = (mouse_flags & 2) != 0
+
+    wm_last_wheel = wm_last_input.wheel
+    return wm_last_input
 }
 
 // Wheel notches since the last poll (positive = scrolled up/away from
 // the user, negative = down/toward, matching the raw PS/2 convention -
 // see mouse.llpl) - only ever nonzero right after a wm_poll_input() call
 // on the currently focused window (wm.llpl's own doc comment on why).
-func wm_wheel_delta() -> int {
+func wm_wheel_delta() -> i64 {
     return wm_last_wheel
 }
 
@@ -150,4 +179,24 @@ func wm_close() {
     r[0] = Wm.OP_CLOSE as u64
     r[1] = wm_slot as u64
     sys_msg_send(wm_handle, req as u8*, 16)
+}
+
+// Convenience functions
+func wm_init() {
+    if !wm_connect() {
+        sys_putln("Failed to connect to wm")
+        rt_exit(1)
+    }
+    if !wm_create_window() {
+        sys_putln("Failed to create window")
+        rt_exit(1)
+    }
+}
+
+func wm_get_buffer() -> u32* {
+    return wm_buffer()
+}
+
+func wm_clear(color: u32) {
+    wm_fill(color)
 }

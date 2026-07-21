@@ -1,0 +1,110 @@
+// TrueType Font Rendering Demo
+// Showcases vector font rendering with smooth edges
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_client"
+import "ui_widgets"
+import "embedded_font"
+import "font"
+
+let demo_size: i16 = 24
+let demo_text: u8[128]
+
+// ui_widgets.llpl's static UI chrome (title, captions, the panel behind
+// the sample glyph) - built once in _start() and drawn each frame through
+// Widget's virtual draw(), the same pattern ui_demo.llpl uses. Only the
+// font-size slider and its numeric label actually change frame to frame.
+let widgets: Vector<Widget>
+let size_slider: Slider
+let size_str: u8[16]
+
+func render_demo() {
+    wm_clear(0xF8F8F8)
+
+    let buf: u32* = wm_get_buffer()
+    let buf_w: i64 = Wm.WIN_W
+    let buf_h: i64 = Wm.WIN_H
+
+    size_slider.value = (demo_size - 12) * 100 / 48
+
+    // Show current size
+    let size_val: i64 = demo_size as i64
+    let idx: i64 = 0
+    if size_val >= 10 {
+        size_str[idx] = (48 + size_val / 10) as u8
+        idx = idx + 1
+    }
+    size_str[idx] = (48 + size_val % 10) as u8
+    idx = idx + 1
+    size_str[idx] = 0
+
+    let i: i64 = 0
+    while i < widgets.len() {
+        widgets.get(i).draw(buf, buf_w, buf_h)
+        i = i + 1
+    }
+
+    // Demo of smooth rendering (vector font, not part of the Widget
+    // hierarchy - drawn directly on top of the panel/labels above).
+    render_smooth_text("A" as u8*, demo_size, buf, buf_w as i16, buf_h as i16,
+                      20, 110, 0x0066CC, 0xFAFAFA)
+    render_smooth_text("A" as u8*, 48, buf, buf_w as i16, buf_h as i16,
+                      20, 320, 0x0066CC, 0xF8F8F8)
+
+    wm_present()
+}
+
+func handle_input() {
+    let input: WmInput = wm_poll_input()
+
+    if input.key == KEY_CLOSE_REQ {
+        wm_close()
+        rt_exit(0)
+    }
+
+    // Handle size slider interaction
+    if input.mouse_left && input.mouse_y >= 27 && input.mouse_y <= 59 &&
+       input.mouse_x >= 100 && input.mouse_x <= 250 {
+        let slider_val: i64 = (input.mouse_x - 100) * 100 / 150
+        if slider_val < 0 { slider_val = 0 }
+        if slider_val > 100 { slider_val = 100 }
+        demo_size = (12 + slider_val * 48 / 100) as i16
+    }
+}
+
+func _start(argc: u64, argv: u64*) {
+    wm_init()
+
+    // Initialize demo text
+    let sample: u8* = "Hello TrueType!" as u8*
+    let i: i64 = 0
+    while sample[i] != 0 && i < 127 {
+        demo_text[i] = sample[i]
+        i = i + 1
+    }
+    demo_text[i] = 0
+
+    widgets = new Vector<Widget>()
+    widgets.push(new Label(10, 10, "TrueType Font Demo" as u8*, 0x000000))
+    widgets.push(new Label(10, 40, "Font Size:" as u8*, 0x333333))
+    size_slider = new Slider(100, 35, 150, (demo_size - 12) * 100 / 48)
+    widgets.push(size_slider)
+    widgets.push(new Label(260, 40, size_str as u8*, 0x000000))
+    widgets.push(new Panel(10, 80, 300, 100))
+    widgets.push(new Label(20, 90, "Sample:" as u8*, 0x666666))
+    widgets.push(new Label(10, 190, "Features:" as u8*, 0x333333))
+    widgets.push(new Label(20, 210, "- Vector glyph outlines" as u8*, 0x666666))
+    widgets.push(new Label(20, 225, "- Scalable rendering" as u8*, 0x666666))
+    widgets.push(new Label(20, 240, "- Anti-aliased edges" as u8*, 0x666666))
+    widgets.push(new Label(20, 255, "- Smooth text rendering" as u8*, 0x666666))
+    widgets.push(new Label(10, 280, "Bitmap vs TrueType:" as u8*, 0x333333))
+    widgets.push(new Label(20, 300, "Bitmap: Fixed size" as u8*, 0x666666))
+    widgets.push(new Label(80, 340, "<- Vector: Scalable" as u8*, 0x666666))
+
+    while true {
+        handle_input()
+        render_demo()
+        sys_sleep(16)
+    }
+}

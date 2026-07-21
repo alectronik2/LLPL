@@ -64,6 +64,13 @@ or `--cc=<path>` - and links against `runtime/runtime.c` automatically):
 ./hello
 ```
 
+Add `--safe` to enable runtime bounds checks on fixed-size array indexing
+(`T[N]` locals, globals, and class fields):
+
+```bash
+./llpl --safe hello.llpl -b -o hello
+```
+
 This only targets ordinary hosted programs; a freestanding/kernel target
 like `examples/baremetal_demo` still needs its own Makefile (custom linker
 script, boot assembly, `-ffreestanding` flags) rather than `-b`.
@@ -319,6 +326,13 @@ func must_be_positive(n: int) {
     if n <= 0 {
         llpl_panic("expected positive value")
     }
+}
+```
+
+### Assert
+```swift
+func must_be_positive(n: int) {
+    assert(n > 0, "expected positive value")
 }
 ```
 

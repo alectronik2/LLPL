@@ -1,6 +1,6 @@
 // Example: String manipulation using the standard library
 
-import "../../stdlib/text/string_utils.llpl"
+import stdlib.text.string_utils
 
 using namespace std.text
 
@@ -34,8 +34,8 @@ func demo_string_search() {
     let has_fox: bool = StringUtils.contains(text, new String("fox"))
 
     // Find index
-    let idx: int = StringUtils.index_of(text, new String("fox"))
-    let last_idx: int = StringUtils.last_index_of(text, new String("the"))
+    let idx: i64 = StringUtils.index_of(text, new String("fox"))
+    let last_idx: i64 = StringUtils.last_index_of(text, new String("the"))
 
     // Prefix/suffix checks
     let starts: bool = StringUtils.starts_with(text, new String("The"))
@@ -103,7 +103,7 @@ func demo_string_builder() {
     // "Name: Alice\nAge: 30\nRole: Engineer\n"
 
     // Get length without building
-    let len: int = sb.length()
+    let len: i64 = sb.length()
 
     // Clear for reuse
     sb.clear()
@@ -142,15 +142,15 @@ func demo_csv_parser() {
     let csv_data: String = new String("Name,Age,City\nAlice,30,NYC\nBob,25,LA\nCharlie,35,SF")
 
     let lines: Vector<String> = StringUtils.split(csv_data, '\n')
-    let num_lines: int = lines.len()
+    let num_lines: i64 = lines.len()
 
-    for let i: int = 0, i < num_lines, i = i + 1 {
+    for let i: i64 = 0, i < num_lines, i = i + 1 {
         let line: String = lines.get(i)
         let fields: Vector<String> = StringUtils.split(line, ',')
 
         // Process each field
-        let num_fields: int = fields.len()
-        for let j: int = 0, j < num_fields, j = j + 1 {
+        let num_fields: i64 = fields.len()
+        for let j: i64 = 0, j < num_fields, j = j + 1 {
             let field: String = fields.get(j)
             // In a real app, you would process the field
         }
@@ -177,7 +177,7 @@ func demo_log_formatter() {
     let log: String = sb.to_string()
 }
 
-func main() -> int {
+func main() -> i64 {
     demo_string_basics()
     demo_string_search()
     demo_string_splitting()

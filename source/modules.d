@@ -6,6 +6,7 @@ import std.path;
 import std.array;
 import std.algorithm;
 import std.format;
+import std.process : environment;
 import ast;
 import lexer;
 import parser;
@@ -159,8 +160,21 @@ string findPreludePath() {
 // resolved first and unconditionally, so its declarations are visible
 // everywhere without needing an explicit `import` - regardless of whether
 // the entry file, or anything it imports, ever mentions it.
+//
+// Also adds $LLPL_HOME (if set) as a module search path, so a stdlib
+// import like `import "stdlib/yaml/yaml_parser.llpl"` resolves the same
+// way from any file, at any depth, instead of needing a "../../stdlib/..."
+// relative path that depends on how deeply nested the importing file
+// happens to be. Read here (not threaded in from main.d/lspquery.d
+// separately) so both the CLI compiler and editor-tooling entry points
+// (lspquery.d) automatically get identical resolution behavior.
 Program[] resolveWithPrelude(string entryPath) {
-    auto resolver = new ModuleResolver();
+    string[] extraSearchPaths;
+    string llplHome = environment.get("LLPL_HOME", "");
+    if (llplHome.length > 0) {
+        extraSearchPaths ~= llplHome;
+    }
+    auto resolver = new ModuleResolver(extraSearchPaths);
     string preludePath = findPreludePath();
     if (preludePath.length > 0) {
         resolver.resolveAll(preludePath);

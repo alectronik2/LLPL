@@ -12,26 +12,26 @@ const SYS_OPEN = 6
 const SYS_READ = 7
 const SYS_CLOSE = 9
 
-func syscall1(number: uint, a: uint) -> uint {
-    let ret: uint = 0
-    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
+func syscall1(number: u64, a: u64) -> u64 {
+    let ret: u64 = 0
+    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
     return ret
 }
 
-func syscall2(number: uint, a: uint, b: uint) -> uint {
-    let ret: uint = 0
-    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
+func syscall2(number: u64, a: u64, b: u64) -> u64 {
+    let ret: u64 = 0
+    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
     return ret
 }
 
-func syscall3(number: uint, a: uint, b: uint, c: uint) -> uint {
-    let ret: uint = 0
-    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
+func syscall3(number: u64, a: u64, b: u64, c: u64) -> u64 {
+    let ret: u64 = 0
+    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
     return ret
 }
 
-func user_strlen(s: char*) -> uint {
-    let n: uint = 0
+func user_strlen(s: char*) -> u64 {
+    let n: u64 = 0
     while s[n] != 0 {
         n = n + 1
     }
@@ -39,18 +39,18 @@ func user_strlen(s: char*) -> uint {
 }
 
 func print(s: char*) {
-    syscall2(SYS_PRINT, s as uint, user_strlen(s))
+    syscall2(SYS_PRINT, s as u64, user_strlen(s))
 }
 
-func print_bytes(s: char*, len: uint) {
-    syscall2(SYS_PRINT, s as uint, len)
+func print_bytes(s: char*, len: u64) {
+    syscall2(SYS_PRINT, s as u64, len)
 }
 
-func main(argc: uint, argv: uint*) {
+func main(argc: u64, argv: u64*) {
     print("Hello from LLPL user-space!\n")
     print("argv:")
 
-    let i: uint = 0
+    let i: u64 = 0
     while i < argc {
         print(" ")
         print(argv[i] as char*)
@@ -60,10 +60,10 @@ func main(argc: uint, argv: uint*) {
 
     syscall1(SYS_SLEEP, 3)
 
-    let fd: uint = syscall2(SYS_OPEN, "/boot/readme.txt" as uint, 0)
+    let fd: u64 = syscall2(SYS_OPEN, "/boot/readme.txt" as u64, 0)
     if fd != 0xFFFFFFFFFFFFFFFF {
         let buf: char[160]
-        let n: uint = syscall3(SYS_READ, fd, buf as uint, 159)
+        let n: u64 = syscall3(SYS_READ, fd, buf as u64, 159)
         if n != 0xFFFFFFFFFFFFFFFF {
             print("readme: ")
             print_bytes(buf as char*, n)
@@ -73,7 +73,7 @@ func main(argc: uint, argv: uint*) {
     }
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     main(argc, argv)
     syscall1(SYS_EXIT, 0)
     while true {

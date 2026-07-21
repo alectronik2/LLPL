@@ -11,7 +11,7 @@ import "../user_runtime"
 import "../wm_protocol"
 import "../wm_client"
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("winball1: starting")
     if !wm_connect() {
         sys_putln("winball1: wm_connect failed")
@@ -22,29 +22,30 @@ func _start(argc: uint, argv: uint*) {
         rt_exit(1)
     }
 
-    let ball_size: int = 8
-    let bx: int = 4
-    let by: int = 4
-    let dx: int = 2
-    let dy: int = 1
-    let win_w: int = Wm.WIN_W
-    let win_h: int = Wm.WIN_H
+    let ball_size: i64 = 8
+    let bx: i64 = 4
+    let by: i64 = 4
+    let dx: i64 = 2
+    let dy: i64 = 1
+    let win_w: i64 = Wm.WIN_W
+    let win_h: i64 = Wm.WIN_H
 
     while true {
-        let key: uint = wm_poll_input()
-        if key == (KEY_CLOSE_REQ as uint) {
+        let input: WmInput = wm_poll_input()
+        let key: u64 = input.key as u64
+        if key == (KEY_CLOSE_REQ as u64) {
             // Nothing here worth keeping around to ask about - close
             // immediately, unlike editor.llpl's own handling of this
             // same key.
             wm_close()
             rt_exit(0)
-        } else if key == (KEY_LEFT as uint) {
+        } else if key == (KEY_LEFT as u64) {
             dx = -2
-        } else if key == (KEY_RIGHT as uint) {
+        } else if key == (KEY_RIGHT as u64) {
             dx = 2
-        } else if key == (KEY_UP as uint) {
+        } else if key == (KEY_UP as u64) {
             dy = -2
-        } else if key == (KEY_DOWN as uint) {
+        } else if key == (KEY_DOWN as u64) {
             dy = 2
         }
 
@@ -68,11 +69,11 @@ func _start(argc: uint, argv: uint*) {
         }
 
         wm_fill(0x202060)
-        let yy: int = 0
+        let yy: i64 = 0
         while yy < ball_size {
-            let xx: int = 0
+            let xx: i64 = 0
             while xx < ball_size {
-                wm_put_pixel((bx + xx) as uint, (by + yy) as uint, 0xFFAA00)
+                wm_put_pixel((bx + xx) as u64, (by + yy) as u64, 0xFFAA00)
                 xx = xx + 1
             }
             yy = yy + 1

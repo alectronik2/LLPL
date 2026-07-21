@@ -111,9 +111,27 @@ The compiler will automatically:
 The compiler searches for imported files in this order:
 
 1. **Relative to importing file**: If you `import utils` from `/project/src/main.llpl`, it checks `/project/src/utils.llpl`
-2. **Current directory**: `./utils.llpl`
-3. **lib directory**: `lib/utils.llpl`
-4. **modules directory**: `modules/utils.llpl`
+2. **`$LLPL_HOME`**, if set: e.g. `import "stdlib/io/file.llpl"` checks `$LLPL_HOME/stdlib/io/file.llpl`
+3. **Current directory**: `./utils.llpl`
+4. **lib directory**: `lib/utils.llpl`
+5. **modules directory**: `modules/utils.llpl`
+
+`$LLPL_HOME` is what lets every standard library module (and anything
+that imports one) write `import "stdlib/..."` instead of a relative path
+like `"../../stdlib/..."` whose correctness depends on how deeply nested
+the importing file happens to be. Set it once to this repository's own
+root:
+
+```sh
+export LLPL_HOME=/path/to/LLPL
+```
+
+Compiling from within the repo's own root directory works even without
+`LLPL_HOME` set (the current-directory search path already covers it),
+but any project living elsewhere needs `LLPL_HOME` for its `stdlib/...`
+imports - including transitively, since `stdlib/yaml/yaml_parser.llpl`
+and `stdlib/json/json_parser.llpl` themselves import
+`stdlib/text/string_utils.llpl` this same way.
 
 ### Best Practices
 

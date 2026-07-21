@@ -6,14 +6,14 @@ namespace std {
 namespace collections {
 
 // Red-Black tree node colors
-const RB_RED: int = 0
-const RB_BLACK: int = 1
+const RB_RED: i64 = 0
+const RB_BLACK: i64 = 1
 
 // Red-Black tree node
 class RBNode<K, V> {
     let key: K
     let value: V
-    let color: int
+    let color: i64
     let left: RBNode<K, V>*
     let right: RBNode<K, V>*
     let parent: RBNode<K, V>*
@@ -32,7 +32,7 @@ class RBNode<K, V> {
 // Requires K to be comparable (have <, >, == operators)
 class RBTree<K, V> {
     let root: RBNode<K, V>*
-    let count: int
+    let count: i64
 
     constructor() {
         self.root = null
@@ -43,7 +43,7 @@ class RBTree<K, V> {
         self.clear()
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.count
     }
 
@@ -52,7 +52,7 @@ class RBTree<K, V> {
     }
 
     // Helper: get node color (null nodes are black)
-    func get_color(node: RBNode<K, V>*) -> int {
+    func get_color(node: RBNode<K, V>*) -> i64 {
         if node == null {
             return RB_BLACK
         }
@@ -60,7 +60,7 @@ class RBTree<K, V> {
     }
 
     // Helper: set node color
-    func set_color(node: RBNode<K, V>*, color: int) {
+    func set_color(node: RBNode<K, V>*, color: i64) {
         if node != null {
             (*node).color = color
         }
@@ -355,13 +355,13 @@ class RBTree<K, V> {
     }
 
     // Get tree height (for debugging/analysis)
-    func height_helper(node: RBNode<K, V>*) -> int {
+    func height_helper(node: RBNode<K, V>*) -> i64 {
         if node == null {
             return 0
         }
 
-        let left_height: int = self.height_helper((*node).left)
-        let right_height: int = self.height_helper((*node).right)
+        let left_height: i64 = self.height_helper((*node).left)
+        let right_height: i64 = self.height_helper((*node).right)
 
         if left_height > right_height {
             return left_height + 1
@@ -370,7 +370,7 @@ class RBTree<K, V> {
         }
     }
 
-    func height() -> int {
+    func height() -> i64 {
         return self.height_helper(self.root)
     }
 }

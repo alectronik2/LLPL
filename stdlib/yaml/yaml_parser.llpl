@@ -5,7 +5,7 @@
 // and sequences (indentation-driven, including "- key: value" sequences
 // of mappings), flow-style collections (`[a, b, c]`, `{k: v}`), single-
 // and double-quoted scalars (with backslash escapes in double-quoted
-// ones), plain (unquoted) scalars auto-typed as null/bool/int/float/
+// ones), plain (unquoted) scalars auto-typed as null/bool/i64/float/
 // string, and `#` comments. Deliberately not supported: anchors/aliases
 // (&x/*x), multi-line block scalars (|/>), tags (!!foo), and multiple
 // documents in one text (a leading "---"/trailing "..." marker is
@@ -28,23 +28,23 @@
 //   )
 //   let doc: YamlValue = parse(text)
 //   let name: String = doc.get_or(new String("name"), YamlValue.make_string(new String(""))).as_string()
-//   let port: int = doc.get_or(new String("server"), YamlValue.make_mapping())
+//   let port: i64 = doc.get_or(new String("server"), YamlValue.make_mapping())
 //       .get_or(new String("port"), YamlValue.make_int(0)).as_int()
 
-import "../text/string_utils.llpl"
+import "stdlib/text/string_utils.llpl"
 
 using namespace std.text
 
 namespace std {
 namespace yaml {
 
-const YAML_NULL: int = 0
-const YAML_BOOL: int = 1
-const YAML_INT: int = 2
-const YAML_FLOAT: int = 3
-const YAML_STRING: int = 4
-const YAML_SEQUENCE: int = 5
-const YAML_MAPPING: int = 6
+const YAML_NULL: i64 = 0
+const YAML_BOOL: i64 = 1
+const YAML_INT: i64 = 2
+const YAML_FLOAT: i64 = 3
+const YAML_STRING: i64 = 4
+const YAML_SEQUENCE: i64 = 5
+const YAML_MAPPING: i64 = 6
 
 // A parsed YAML value - a manual tagged union (`kind` plus one field per
 // possible payload, only the relevant one ever populated) rather than
@@ -55,9 +55,9 @@ const YAML_MAPPING: int = 6
 // own doc comment on class type arguments), so the recursion is no
 // different from any other tree of class instances.
 class YamlValue {
-    let kind: int
+    let kind: i64
     let bool_val: bool
-    let int_val: int
+    let int_val: i64
     let float_val: float
     let string_val: String
     let seq_val: Vector<YamlValue>
@@ -93,7 +93,7 @@ class YamlValue {
         return val
     }
 
-    static func make_int(v: int) -> YamlValue {
+    static func make_int(v: i64) -> YamlValue {
         let val: YamlValue = new YamlValue()
         val.kind = YAML_INT
         val.int_val = v
@@ -135,9 +135,9 @@ class YamlValue {
     func is_mapping() -> bool { return self.kind == YAML_MAPPING }
 
     func as_bool() -> bool { return self.bool_val }
-    func as_int() -> int { return self.int_val }
+    func as_int() -> i64 { return self.int_val }
 
-    // Widens an int value too, so a field that's usually written "1.0"
+    // Widens an i64 value too, so a field that's usually written "1.0"
     // but occasionally shows up as the plain integer "1" doesn't need
     // special-casing at every call site.
     func as_float() -> float {
@@ -151,7 +151,7 @@ class YamlValue {
     func as_sequence() -> Vector<YamlValue> { return self.seq_val }
 
     // Number of sequence elements or mapping entries; 0 for any scalar kind.
-    func len() -> int {
+    func len() -> i64 {
         if self.kind == YAML_SEQUENCE {
             return self.seq_val.len()
         }
@@ -165,7 +165,7 @@ class YamlValue {
         self.seq_val.push(item)
     }
 
-    func get_index(index: int) -> YamlValue {
+    func get_index(index: i64) -> YamlValue {
         return self.seq_val.get(index)
     }
 
@@ -173,7 +173,7 @@ class YamlValue {
     // operator== compares content, see prelude.llpl).
     func get(key: String) -> Optional<YamlValue> {
         let result: Optional<YamlValue> = new Optional<YamlValue>()
-        let i: int = 0
+        let i: i64 = 0
         while i < self.map_keys.len() {
             if self.map_keys.get(i) == key {
                 result.set(self.map_values.get(i))
@@ -203,7 +203,7 @@ class YamlValue {
     // distinct keys is preserved (map_keys/map_values are always
     // extended in parallel, never reordered).
     func set(key: String, value: YamlValue) {
-        let i: int = 0
+        let i: i64 = 0
         while i < self.map_keys.len() {
             if self.map_keys.get(i) == key {
                 self.map_values.set(i, value)
@@ -221,11 +221,11 @@ class YamlValue {
 }
 
 func looks_like_number(s: String) -> bool {
-    let len: int = s.byte_len()
+    let len: i64 = s.byte_len()
     if len == 0 {
         return false
     }
-    let i: int = 0
+    let i: i64 = 0
     if s.byte_at(0) == '-' || s.byte_at(0) == '+' {
         i = 1
     }
@@ -248,8 +248,8 @@ func looks_like_number(s: String) -> bool {
 }
 
 func is_integer_literal(s: String) -> bool {
-    let len: int = s.byte_len()
-    let i: int = 0
+    let len: i64 = s.byte_len()
+    let i: i64 = 0
     while i < len {
         let c: char = s.byte_at(i)
         if c == '.' || c == 'e' || c == 'E' {
@@ -260,19 +260,19 @@ func is_integer_literal(s: String) -> bool {
     return true
 }
 
-func parse_int_from_string(s: String) -> int {
-    let len: int = s.byte_len()
-    let i: int = 0
+func parse_int_from_string(s: String) -> i64 {
+    let len: i64 = s.byte_len()
+    let i: i64 = 0
     let negative: bool = false
     if len > 0 && (s.byte_at(0) == '-' || s.byte_at(0) == '+') {
         negative = s.byte_at(0) == '-'
         i = 1
     }
-    let value: int = 0
+    let value: i64 = 0
     while i < len {
         let c: char = s.byte_at(i)
         if c >= '0' && c <= '9' {
-            value = value * 10 + ((c as int) - ('0' as int))
+            value = value * 10 + ((c as i64) - ('0' as i64))
         }
         i = i + 1
     }
@@ -283,8 +283,8 @@ func parse_int_from_string(s: String) -> int {
 }
 
 func parse_float_from_string(s: String) -> float {
-    let len: int = s.byte_len()
-    let i: int = 0
+    let len: i64 = s.byte_len()
+    let i: i64 = 0
     let negative: bool = false
     if len > 0 && (s.byte_at(0) == '-' || s.byte_at(0) == '+') {
         negative = s.byte_at(0) == '-'
@@ -292,7 +292,7 @@ func parse_float_from_string(s: String) -> float {
     }
     let int_part: float = 0.0
     while i < len && s.byte_at(i) >= '0' && s.byte_at(i) <= '9' {
-        int_part = int_part * 10.0 + (((s.byte_at(i) as int) - ('0' as int)) as float)
+        int_part = int_part * 10.0 + (((s.byte_at(i) as i64) - ('0' as i64)) as float)
         i = i + 1
     }
     let frac_part: float = 0.0
@@ -301,7 +301,7 @@ func parse_float_from_string(s: String) -> float {
         i = i + 1
         while i < len && s.byte_at(i) >= '0' && s.byte_at(i) <= '9' {
             frac_scale = frac_scale / 10.0
-            frac_part = frac_part + (((s.byte_at(i) as int) - ('0' as int)) as float) * frac_scale
+            frac_part = frac_part + (((s.byte_at(i) as i64) - ('0' as i64)) as float) * frac_scale
             i = i + 1
         }
     }
@@ -313,12 +313,12 @@ func parse_float_from_string(s: String) -> float {
             exp_negative = s.byte_at(i) == '-'
             i = i + 1
         }
-        let exp_val: int = 0
+        let exp_val: i64 = 0
         while i < len && s.byte_at(i) >= '0' && s.byte_at(i) <= '9' {
-            exp_val = exp_val * 10 + ((s.byte_at(i) as int) - ('0' as int))
+            exp_val = exp_val * 10 + ((s.byte_at(i) as i64) - ('0' as i64))
             i = i + 1
         }
-        let j: int = 0
+        let j: i64 = 0
         while j < exp_val {
             if exp_negative {
                 result = result / 10.0
@@ -336,9 +336,9 @@ func parse_float_from_string(s: String) -> float {
 
 // `raw` includes the surrounding double quotes.
 func unescape_double_quoted(raw: String) -> String {
-    let len: int = raw.byte_len()
+    let len: i64 = raw.byte_len()
     let sb: StringBuilder = new StringBuilder()
-    let i: int = 1
+    let i: i64 = 1
     while i < len - 1 {
         let c: char = raw.byte_at(i)
         if c == '\\' && i + 1 < len - 1 {
@@ -367,9 +367,9 @@ func unescape_double_quoted(raw: String) -> String {
 // `raw` includes the surrounding single quotes; the only escape in
 // single-quoted YAML is a doubled quote ('') meaning one literal '.
 func unescape_single_quoted(raw: String) -> String {
-    let len: int = raw.byte_len()
+    let len: i64 = raw.byte_len()
     let sb: StringBuilder = new StringBuilder()
-    let i: int = 1
+    let i: i64 = 1
     while i < len - 1 {
         let c: char = raw.byte_at(i)
         if c == '\'' && i + 1 < len - 1 && raw.byte_at(i + 1) == '\'' {
@@ -442,8 +442,8 @@ func parse_scalar(raw: String) -> YamlValue {
 // indentation-driven, since flow style is explicitly delimited instead.
 class YamlFlowParser {
     let text: String
-    let pos: int
-    let len: int
+    let pos: i64
+    let len: i64
 
     constructor(text: String) {
         self.text = text
@@ -539,7 +539,7 @@ class YamlFlowParser {
     }
 
     func parse_double_quoted() -> String {
-        let start: int = self.pos
+        let start: i64 = self.pos
         self.pos = self.pos + 1
         while self.pos < self.len && self.text.byte_at(self.pos) != '"' {
             if self.text.byte_at(self.pos) == '\\' && self.pos + 1 < self.len {
@@ -548,7 +548,7 @@ class YamlFlowParser {
                 self.pos = self.pos + 1
             }
         }
-        let end: int = self.pos
+        let end: i64 = self.pos
         if self.pos < self.len {
             self.pos = self.pos + 1
         }
@@ -556,7 +556,7 @@ class YamlFlowParser {
     }
 
     func parse_single_quoted() -> String {
-        let start: int = self.pos
+        let start: i64 = self.pos
         self.pos = self.pos + 1
         while self.pos < self.len {
             if self.text.byte_at(self.pos) == '\'' {
@@ -569,7 +569,7 @@ class YamlFlowParser {
                 self.pos = self.pos + 1
             }
         }
-        let end: int = self.pos
+        let end: i64 = self.pos
         if self.pos < self.len {
             self.pos = self.pos + 1
         }
@@ -579,7 +579,7 @@ class YamlFlowParser {
     // A bare (unquoted) mapping key - stops at ':' as well as the
     // delimiters parse_bare_value stops at.
     func parse_bare_key() -> String {
-        let start: int = self.pos
+        let start: i64 = self.pos
         while self.pos < self.len {
             let c: char = self.text.byte_at(self.pos)
             if c == ':' || c == ',' || c == ']' || c == '}' {
@@ -591,7 +591,7 @@ class YamlFlowParser {
     }
 
     func parse_bare_value() -> String {
-        let start: int = self.pos
+        let start: i64 = self.pos
         while self.pos < self.len {
             let c: char = self.text.byte_at(self.pos)
             if c == ',' || c == ']' || c == '}' {
@@ -613,17 +613,17 @@ class YamlFlowParser {
 // following line is indented further.
 class YamlParser {
     let lines: Vector<String>
-    let indents: Vector<int>
+    let indents: Vector<i64>
 
     constructor(text: String) {
         self.lines = new Vector<String>()
-        self.indents = new Vector<int>()
+        self.indents = new Vector<i64>()
 
         let raw_lines: Vector<String> = StringUtils.split(text, '\n')
-        let i: int = 0
+        let i: i64 = 0
         while i < raw_lines.len() {
             let stripped: String = self.strip_comment(raw_lines.get(i))
-            let indent: int = self.compute_indent(stripped)
+            let indent: i64 = self.compute_indent(stripped)
             let content: String = StringUtils.trim_end(
                 stripped.byte_substring(indent, stripped.byte_len() - indent))
             if content.byte_len() > 0 && content != "---" && content != "..." {
@@ -641,8 +641,8 @@ class YamlParser {
     // inside a scalar would be misread as a comment), and never one
     // inside a quoted string.
     func strip_comment(line: String) -> String {
-        let len: int = line.byte_len()
-        let i: int = 0
+        let len: i64 = line.byte_len()
+        let i: i64 = 0
         let in_single: bool = false
         let in_double: bool = false
         while i < len {
@@ -671,9 +671,9 @@ class YamlParser {
         return line
     }
 
-    func compute_indent(line: String) -> int {
-        let len: int = line.byte_len()
-        let i: int = 0
+    func compute_indent(line: String) -> i64 {
+        let len: i64 = line.byte_len()
+        let i: i64 = 0
         while i < len && line.byte_at(i) == ' ' {
             i = i + 1
         }
@@ -689,12 +689,12 @@ class YamlParser {
     // that's either the last character or followed by a space - the
     // standard "mapping key indicator" rule, which is also what keeps a
     // plain scalar like a URL or a timestamp from being misread as a key.
-    func find_key_colon(line: String) -> int {
-        let len: int = line.byte_len()
-        let i: int = 0
+    func find_key_colon(line: String) -> i64 {
+        let len: i64 = line.byte_len()
+        let i: i64 = 0
         let in_single: bool = false
         let in_double: bool = false
-        let depth: int = 0
+        let depth: i64 = 0
         while i < len {
             let c: char = line.byte_at(i)
             if in_double {
@@ -729,14 +729,14 @@ class YamlParser {
     // its first real mapping colon - the caller is expected to have
     // already checked find_key_colon found one.
     func split_key_value(line: String) -> (String, String) {
-        let colon_pos: int = self.find_key_colon(line)
+        let colon_pos: i64 = self.find_key_colon(line)
         let key_raw: String = StringUtils.trim(line.byte_substring(0, colon_pos))
         let value_raw: String = StringUtils.trim(
             line.byte_substring(colon_pos + 1, line.byte_len() - colon_pos - 1))
         return (unquote_if_quoted(key_raw), value_raw)
     }
 
-    func parse_block(start: int, indent: int) -> (YamlValue, int) {
+    func parse_block(start: i64, indent: i64) -> (YamlValue, i64) {
         if start >= self.lines.len() {
             return (YamlValue.make_null(), start)
         }
@@ -751,23 +751,23 @@ class YamlParser {
     // and isn't a sequence item. Shared by parse_mapping's own loop and
     // parse_sequence's "- key: value" handling (a sequence of mappings),
     // so both parse a mapping entry identically.
-    func parse_one_mapping_line(start: int, indent: int) -> (String, YamlValue, int) {
+    func parse_one_mapping_line(start: i64, indent: i64) -> (String, YamlValue, i64) {
         let (key, inline_value) = self.split_key_value(self.lines.get(start))
-        let i: int = start + 1
+        let i: i64 = start + 1
         if inline_value.byte_len() > 0 {
             return (key, parse_scalar(inline_value), i)
         }
         if i < self.lines.len() && self.indents.get(i) > indent {
-            let child_indent: int = self.indents.get(i)
+            let child_indent: i64 = self.indents.get(i)
             let (child_value, next_i) = self.parse_block(i, child_indent)
             return (key, child_value, next_i)
         }
         return (key, YamlValue.make_null(), i)
     }
 
-    func parse_mapping(start: int, indent: int) -> (YamlValue, int) {
+    func parse_mapping(start: i64, indent: i64) -> (YamlValue, i64) {
         let result: YamlValue = YamlValue.make_mapping()
-        let i: int = start
+        let i: i64 = start
         while i < self.lines.len() && self.indents.get(i) == indent &&
                 !self.is_sequence_item(self.lines.get(i)) {
             let (key, value, next_i) = self.parse_one_mapping_line(i, indent)
@@ -777,14 +777,14 @@ class YamlParser {
         return (result, i)
     }
 
-    func parse_sequence(start: int, indent: int) -> (YamlValue, int) {
+    func parse_sequence(start: i64, indent: i64) -> (YamlValue, i64) {
         let result: YamlValue = YamlValue.make_sequence()
-        let i: int = start
+        let i: i64 = start
         while i < self.lines.len() && self.indents.get(i) == indent &&
                 self.is_sequence_item(self.lines.get(i)) {
             let line: String = self.lines.get(i)
-            let line_len: int = line.byte_len()
-            let content_start: int = 1
+            let line_len: i64 = line.byte_len()
+            let content_start: i64 = 1
             while content_start < line_len && line.byte_at(content_start) == ' ' {
                 content_start = content_start + 1
             }
@@ -793,12 +793,12 @@ class YamlParser {
             // Absolute column `rest` starts at - what a mapping entry
             // continuing on later, more-indented lines has to align to
             // (see the "- key: value" branch below).
-            let virtual_indent: int = indent + content_start
+            let virtual_indent: i64 = indent + content_start
             i = i + 1
 
             if rest.byte_len() == 0 {
                 if i < self.lines.len() && self.indents.get(i) > indent {
-                    let child_indent: int = self.indents.get(i)
+                    let child_indent: i64 = self.indents.get(i)
                     let (child_value, next_i) = self.parse_block(i, child_indent)
                     result.push(child_value)
                     i = next_i
@@ -810,14 +810,14 @@ class YamlParser {
                 // entries (if any) are plain "key2: value2" lines
                 // indented to exactly virtual_indent.
                 let map_result: YamlValue = YamlValue.make_mapping()
-                let colon_pos: int = self.find_key_colon(rest)
+                let colon_pos: i64 = self.find_key_colon(rest)
                 let first_key: String = unquote_if_quoted(StringUtils.trim(rest.byte_substring(0, colon_pos)))
                 let first_value: String = StringUtils.trim(
                     rest.byte_substring(colon_pos + 1, rest.byte_len() - colon_pos - 1))
                 if first_value.byte_len() > 0 {
                     map_result.set(first_key, parse_scalar(first_value))
                 } else if i < self.lines.len() && self.indents.get(i) > virtual_indent {
-                    let child_indent: int = self.indents.get(i)
+                    let child_indent: i64 = self.indents.get(i)
                     let (child_value, next_i) = self.parse_block(i, child_indent)
                     map_result.set(first_key, child_value)
                     i = next_i

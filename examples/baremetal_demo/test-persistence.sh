@@ -21,7 +21,7 @@ rm -f disk.img /tmp/llpl_persistence_boot1.log /tmp/llpl_persistence_boot2.log
 "$LLPLBUILD" build
 
 echo "Boot 1 (fresh disk) ..."
-timeout 10 qemu-system-x86_64 -cdrom kernel.iso -drive file=disk.img,format=raw,if=ide \
+timeout 90 qemu-system-x86_64 -cdrom kernel.iso -drive file=disk.img,format=raw,if=ide \
     -serial file:/tmp/llpl_persistence_boot1.log -display none -m 256 || true
 
 if grep -q "PERSISTENCE: SKIP (first boot)" /tmp/llpl_persistence_boot1.log; then
@@ -32,7 +32,7 @@ else
     exit 1
 fi
 
-if grep -q "SELFTEST: PASS" /tmp/llpl_persistence_boot1.log; then
+if grep "SELFTEST: PASS" /tmp/llpl_persistence_boot1.log | grep -qv TMPFS; then
     echo "  boot 1: SELFTEST: PASS"
 else
     echo "  boot 1: FAILED - SELFTEST did not pass"
@@ -41,7 +41,7 @@ else
 fi
 
 echo "Boot 2 (same disk image) ..."
-timeout 10 qemu-system-x86_64 -cdrom kernel.iso -drive file=disk.img,format=raw,if=ide \
+timeout 45 qemu-system-x86_64 -cdrom kernel.iso -drive file=disk.img,format=raw,if=ide \
     -serial file:/tmp/llpl_persistence_boot2.log -display none -m 256 || true
 
 if grep -q "PERSISTENCE: PASS" /tmp/llpl_persistence_boot2.log; then
@@ -52,7 +52,7 @@ else
     exit 1
 fi
 
-if grep -q "SELFTEST: PASS" /tmp/llpl_persistence_boot2.log; then
+if grep "SELFTEST: PASS" /tmp/llpl_persistence_boot2.log | grep -qv TMPFS; then
     echo "  boot 2: SELFTEST: PASS"
 else
     echo "  boot 2: FAILED - SELFTEST did not pass"

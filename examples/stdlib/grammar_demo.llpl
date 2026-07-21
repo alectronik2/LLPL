@@ -1,0 +1,101 @@
+// Example: the `grammar { ... }` parser generator
+//
+// An ANTLR-like grammar DSL, compiled by the LLPL compiler itself into a
+// real recursive-descent parser class - no runtime interpreter involved.
+// This demo builds a small arithmetic expression grammar with the usual
+// +/-/*  precedence levels and left-associativity, both handled
+// automatically via direct-left-recursion elimination (see `expr`/`term`
+// below, each written the natural, ANTLR-style way: `expr : expr '+' term
+// | ... | term ;` rather than needing to be manually rewritten into a
+// non-left-recursive form).
+
+grammar Calc {
+    expr   : expr '+' term
+           | expr '-' term
+           | term
+           ;
+    term   : term '*' factor
+           | term '/' factor
+           | factor
+           ;
+    factor : '(' expr ')'
+           | NUMBER
+           ;
+    // ALL-CAPS rule name -> "lexer-style": no whitespace is skipped
+    // between its own elements, so a number's digits must be contiguous.
+    // Lowercase rule names above are "parser-style": whitespace is
+    // skipped automatically before every element they match.
+    NUMBER : [0-9]+ ;
+}
+
+extern func puts(s: char*) -> i64
+extern func atoi(s: char*) -> i64
+
+// Every rule match becomes one ParseNode (see prelude.llpl): `.name()` is
+// the rule (or terminal) name, `.text()` the exact substring it matched,
+// and `.child(i)`/`.child_count()` walk its sub-matches - a real,
+// walkable parse tree, not just a yes/no recognizer.
+func eval(node: ParseNode) -> i64 {
+    if node.name() == "NUMBER" {
+        return atoi(node.text().c_str())
+    }
+    if node.name() == "factor" {
+        if node.child_count() == 1 {
+            return eval(node.child(0)) // NUMBER
+        }
+        return eval(node.child(1)) // '(' expr ')' - child(1) is expr
+    }
+    if node.name() == "term" || node.name() == "expr" {
+        if node.child_count() == 1 {
+            return eval(node.child(0)) // no operator - just falls through
+        }
+        // Left-recursive alternatives always produce exactly 3 children:
+        // the left operand, the operator terminal, the right operand.
+        let left: i64 = eval(node.child(0))
+        let right: i64 = eval(node.child(2))
+        let op: char = node.child(1).text().byte_at(0)
+        if op == '+' { return left + right }
+        if op == '-' { return left - right }
+        if op == '*' { return left * right }
+        return left / right
+    }
+    return 0
+}
+
+func print_result(expression: char*, result: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", expression, result)
+    puts(buf as char*)
+}
+
+func demo_arithmetic() {
+    // `Calc(text)` is direct-call sugar for `(new Calc(text)).parse_expr()`
+    // - `expr` is Calc's first-declared rule, so it's the start rule.
+    let a: ParseNode = Calc(new String("1 + 2 * 3"))
+    print_result("1 + 2 * 3", eval(a)) // precedence: 2*3 binds tighter -> 7
+
+    let b: ParseNode = Calc(new String("(1 + 2) * 3"))
+    print_result("(1 + 2) * 3", eval(b)) // parens override precedence -> 9
+
+    let c: ParseNode = Calc(new String("10 - 2 - 3"))
+    print_result("10 - 2 - 3", eval(c)) // left-associative: (10-2)-3 -> 5
+}
+
+// A second, much simpler non-left-recursive grammar, to show the more
+// common case: no precedence chain needed, just a straight sequence.
+grammar Greeting {
+    greeting : "hello" NAME ;
+    NAME     : [a-zA-Z]+ ;
+}
+
+func demo_greeting() {
+    let g: ParseNode = Greeting(new String("helloWorld"))
+    puts(g.text().c_str())         // the whole match: "helloWorld"
+    puts(g.child(1).text().c_str()) // just the NAME child: "World"
+}
+
+func main() -> i64 {
+    demo_arithmetic()
+    demo_greeting()
+    return 0
+}

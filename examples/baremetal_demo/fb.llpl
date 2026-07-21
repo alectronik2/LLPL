@@ -50,6 +50,18 @@ namespace Framebuffer {
     let height: u32 = 0
     let bpp: u8 = 0
     let ready: bool = false
+    let wc_enabled: bool = false
+
+    const IA32_MTRRCAP: u64 = 0xFE
+    const IA32_MTRR_DEF_TYPE: u64 = 0x2FF
+    const IA32_MTRR_PHYSBASE0: u64 = 0x200
+    const IA32_MTRR_PHYSMASK0: u64 = 0x201
+    const MTRR_TYPE_WC: u64 = 1
+    const MTRR_TYPE_MASK: u64 = 0xFF
+    const MTRR_ENABLE: u64 = 1 << 11
+    const CR0_CD: u64 = 1 << 30
+    const CR0_NW: u64 = 1 << 29
+    const MAX_VARIABLE_MTRRS: i64 = 16
 
     func align8(n: u64) -> u64 {
         return (n + 7) & ~7
@@ -72,7 +84,7 @@ namespace Framebuffer {
             }
             if header.tag_type == 8 {
                 let fb: FramebufferTag* = ptr as FramebufferTag*
-                if fb.bpp as int != 32 {
+                if fb.bpp as i64 != 32 {
                     return false // only 32bpp direct-color is supported
                 }
                 addr = fb.addr
@@ -88,6 +100,205 @@ namespace Framebuffer {
         return false
     }
 
+    func highest_power2_leq(n: u64) -> u64 {
+        let p: u64 = 1
+        while p <= n / 2 {
+            p = p * 2
+        }
+        return p
+    }
+
+    func physical_address_bits() -> u64 {
+        let max_ext: u64 = HAL.cpuid_eax(0x80000000) & 0xFFFFFFFF
+        if max_ext >= 0x80000008 {
+            let leaf: u64 = HAL.cpuid_eax(0x80000008)
+            let bits: u64 = leaf & 0xFF
+            if bits >= 32 && bits <= 52 {
+                return bits
+            }
+        }
+        return 36
+    }
+
+    func split_mtrr_chunk(base: u64, remaining: u64) -> u64 {
+        let size: u64 = highest_power2_leq(remaining)
+        while size > 0 && (base & (size - 1)) != 0 {
+            size = size / 2
+        }
+        return size
+    }
+
+    func set_variable_mtrr(slot: u64, base: u64, size: u64, phys_mask: u64) {
+        let base_msr: u64 = IA32_MTRR_PHYSBASE0 + slot * 2
+        let mask_msr: u64 = IA32_MTRR_PHYSMASK0 + slot * 2
+        HAL.wrmsr(base_msr, (base & phys_mask & ~0xFFF) | MTRR_TYPE_WC)
+        HAL.wrmsr(mask_msr, ((~(size - 1)) & phys_mask & ~0xFFF) | MTRR_ENABLE)
+    }
+
+    func variable_mtrr_base_msr(slot: u64) -> u64 {
+        return IA32_MTRR_PHYSBASE0 + slot * 2
+    }
+
+    func variable_mtrr_mask_msr(slot: u64) -> u64 {
+        return IA32_MTRR_PHYSMASK0 + slot * 2
+    }
+
+    func variable_mtrr_enabled(slot: u64) -> bool {
+        let mask: u64 = HAL.rdmsr(variable_mtrr_mask_msr(slot))
+        return (mask & MTRR_ENABLE) != 0
+    }
+
+    func variable_mtrr_type(slot: u64) -> u64 {
+        let base_reg: u64 = HAL.rdmsr(variable_mtrr_base_msr(slot))
+        return base_reg & MTRR_TYPE_MASK
+    }
+
+    func variable_mtrr_base(slot: u64, phys_mask: u64) -> u64 {
+        let base_reg: u64 = HAL.rdmsr(variable_mtrr_base_msr(slot))
+        return base_reg & phys_mask & ~0xFFF
+    }
+
+    func variable_mtrr_size(slot: u64, phys_mask: u64) -> u64 {
+        let mask_reg: u64 = HAL.rdmsr(variable_mtrr_mask_msr(slot))
+        let mask: u64 = mask_reg & phys_mask & ~0xFFF
+        return ((~mask) & phys_mask) + 1
+    }
+
+    func ranges_overlap(a_base: u64, a_end: u64, b_base: u64, b_end: u64) -> bool {
+        return a_base < b_end && b_base < a_end
+    }
+
+    func existing_wc_covers(base: u64, end: u64, phys_mask: u64, slots: u64) -> bool {
+        let cur: u64 = base
+        while cur < end {
+            let advanced: bool = false
+            let slot: u64 = 0
+            while slot < slots && slot < (MAX_VARIABLE_MTRRS as u64) {
+                if variable_mtrr_enabled(slot) && variable_mtrr_type(slot) == MTRR_TYPE_WC {
+                    let mbase: u64 = variable_mtrr_base(slot, phys_mask)
+                    let msize: u64 = variable_mtrr_size(slot, phys_mask)
+                    let mend: u64 = mbase + msize
+                    if mbase <= cur && mend > cur {
+                        cur = mend
+                        if cur > end {
+                            cur = end
+                        }
+                        advanced = true
+                    }
+                }
+                slot = slot + 1
+            }
+            if !advanced {
+                return false
+            }
+        }
+        return true
+    }
+
+    func existing_mtrr_overlaps(base: u64, end: u64, phys_mask: u64, slots: u64) -> bool {
+        let slot: u64 = 0
+        while slot < slots && slot < (MAX_VARIABLE_MTRRS as u64) {
+            if variable_mtrr_enabled(slot) {
+                let mbase: u64 = variable_mtrr_base(slot, phys_mask)
+                let msize: u64 = variable_mtrr_size(slot, phys_mask)
+                if ranges_overlap(base, end, mbase, mbase + msize) {
+                    return true
+                }
+            }
+            slot = slot + 1
+        }
+        return false
+    }
+
+    // Mark the linear framebuffer write-combining via variable MTRRs. The WM
+    // composites into normal RAM, then streams one large copy into the real
+    // framebuffer every frame; WC avoids treating those writes as cacheable
+    // ordinary RAM and is the classic speedup for VBE/linear-framebuffer GUIs.
+    func enable_write_combining() -> bool {
+        if !ready || addr == 0 || pitch == 0 || height == 0 {
+            return false
+        }
+        let feature_edx: u64 = HAL.cpuid_edx(1)
+        if (feature_edx & (1 << 12)) == 0 {
+            return false
+        }
+
+        let cap: u64 = HAL.rdmsr(IA32_MTRRCAP)
+        let slots: u64 = cap & 0xFF
+        if slots == 0 {
+            return false
+        }
+
+        let total: u64 = (pitch as u64) * (height as u64)
+        let phys_bits: u64 = physical_address_bits()
+        let phys_mask: u64 = (1 << phys_bits) - 1
+        let base: u64 = addr & ~0xFFF
+        let end: u64 = (addr + total + 0xFFF) & ~0xFFF
+        let cur: u64 = base
+        let chunk_count: i64 = 0
+        let chunk_bases: u64[16]
+        let chunk_sizes: u64[16]
+
+        if existing_wc_covers(base, end, phys_mask, slots) {
+            wc_enabled = true
+            return true
+        }
+        if existing_mtrr_overlaps(base, end, phys_mask, slots) {
+            return false
+        }
+
+        while cur < end {
+            if chunk_count >= MAX_VARIABLE_MTRRS {
+                return false
+            }
+            let chunk: u64 = split_mtrr_chunk(cur, end - cur)
+            if chunk < 0x1000 {
+                return false
+            }
+            chunk_bases[chunk_count] = cur
+            chunk_sizes[chunk_count] = chunk
+            cur = cur + chunk
+            chunk_count = chunk_count + 1
+        }
+
+        let free_slots: u64[16]
+        let free_count: i64 = 0
+        let scan_slot: u64 = 0
+        while scan_slot < slots && scan_slot < (MAX_VARIABLE_MTRRS as u64) {
+            if !variable_mtrr_enabled(scan_slot) {
+                free_slots[free_count] = scan_slot
+                free_count = free_count + 1
+            }
+            scan_slot = scan_slot + 1
+        }
+        if free_count < chunk_count {
+            return false
+        }
+
+        let flags: u64 = HAL.read_flags()
+        let old_cr0: u64 = HAL.read_cr0()
+        let old_def_type: u64 = HAL.rdmsr(IA32_MTRR_DEF_TYPE)
+        HAL.disable_interrupts()
+        HAL.write_cr0((old_cr0 | CR0_CD) & ~CR0_NW)
+        HAL.flush_caches()
+        HAL.wrmsr(IA32_MTRR_DEF_TYPE, old_def_type & ~MTRR_ENABLE)
+        HAL.flush_caches()
+
+        let i: i64 = 0
+        while i < chunk_count {
+            set_variable_mtrr(free_slots[i], chunk_bases[i], chunk_sizes[i], phys_mask)
+            i = i + 1
+        }
+
+        HAL.flush_caches()
+        HAL.wrmsr(IA32_MTRR_DEF_TYPE, old_def_type)
+        HAL.flush_caches()
+        HAL.write_cr0(old_cr0)
+        HAL.write_flags(flags)
+        wc_enabled = true
+        return true
+    }
+
     func put_pixel(x: u32, y: u32, color: u32) {
         let offset: u64 = (y as u64) * (pitch as u64) + (x as u64) * 4
         let p: u32* = (addr + offset) as u32*
@@ -101,14 +312,12 @@ namespace Framebuffer {
     }
 
     func clear(color: u32) {
-        let y: u32 = 0
-        while y < height {
-            let x: u32 = 0
-            while x < width {
-                put_pixel(x, y, color)
-                x = x + 1
-            }
-            y = y + 1
+        let pixels: u64 = ((pitch as u64) * (height as u64)) / 4
+        let p: u32* = addr as u32*
+        let i: u64 = 0
+        while i < pixels {
+            p[i] = color
+            i = i + 1
         }
     }
 
@@ -137,14 +346,11 @@ namespace Framebuffer {
             i = i + 1
         }
 
-        let y: u32 = height - (GLYPH_HEIGHT as u32)
-        while y < height {
-            let x: u32 = 0
-            while x < width {
-                put_pixel(x, y, 0x000000)
-                x = x + 1
-            }
-            y = y + 1
+        let blank: u32* = (addr + (copy_words * 4)) as u32*
+        let j: u64 = 0
+        while j < row_words {
+            blank[j] = 0x000000
+            j = j + 1
         }
     }
 
@@ -258,21 +464,21 @@ namespace Framebuffer {
     // printable ASCII range (32-126) draws as a blank cell rather than
     // garbage - there's no glyph data for it.
     func draw_u8(x: u32, y: u32, c: u8, fg: u32, bg: u32) {
-        let code: int = c as int
+        let code: i64 = c as i64
         if code < 32 || code > 126 {
             code = 32
         }
-        let glyph_offset: int = (code - 32) * GLYPH_HEIGHT
+        let glyph_offset: i64 = (code - 32) * GLYPH_HEIGHT
 
-        let row: int = 0
+        let row: i64 = 0
         while row < GLYPH_HEIGHT {
             // `& 255` undoes u8's signedness before testing bits - a
             // glyph row byte like 254 would otherwise read back negative
             // and corrupt every bit test below.
-            let bits: int = (font_data[glyph_offset + row] as int) & 255
-            let col: int = 0
+            let bits: i64 = (font_data[glyph_offset + row] as i64) & 255
+            let col: i64 = 0
             while col < GLYPH_WIDTH {
-                let mask: int = 128 >> col
+                let mask: i64 = 128 >> col
                 if (bits & mask) != 0 {
                     put_pixel(x + (col as u32), y + (row as u32), fg)
                 } else {
@@ -285,8 +491,8 @@ namespace Framebuffer {
     }
 
     func draw_string(x: u32, y: u32, str: u8*, fg: u32, bg: u32) {
-        let i: int = 0
         let cur_x: u32 = x
+        let i: i64 = 0
         while str[i] != 0 {
             draw_u8(cur_x, y, str[i], fg, bg)
             cur_x = cur_x + (GLYPH_WIDTH as u32)

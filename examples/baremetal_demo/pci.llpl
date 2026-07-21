@@ -16,19 +16,19 @@
 import hal
 
 namespace PCI {
-    const CONFIG_ADDRESS: uint = 0xCF8
-    const CONFIG_DATA: uint = 0xCFC
+    const CONFIG_ADDRESS: u64 = 0xCF8
+    const CONFIG_DATA: u64 = 0xCFC
 
-    const CLASS_MASS_STORAGE: uint = 0x01
-    const SUBCLASS_IDE: uint = 0x01
+    const CLASS_MASS_STORAGE: u64 = 0x01
+    const SUBCLASS_IDE: u64 = 0x01
 
     // BAR4 - the 5th base address register (BAR0 is offset 0x10, one
     // dword each) - is where the IDE class spec puts a controller's Bus
     // Master register block.
-    const OFFSET_BAR4: uint = 0x20
-    const OFFSET_BAR0: uint = 0x10
-    const OFFSET_CLASS: uint = 0x08 // revision/prog_if/subclass/class, one dword
-    const OFFSET_VENDOR_DEVICE: uint = 0x00 // vendor(low16)/device(high16), one dword
+    const OFFSET_BAR4: u64 = 0x20
+    const OFFSET_BAR0: u64 = 0x10
+    const OFFSET_CLASS: u64 = 0x08 // revision/prog_if/subclass/class, one dword
+    const OFFSET_VENDOR_DEVICE: u64 = 0x00 // vendor(low16)/device(high16), one dword
 
     // QEMU's default NIC model (added automatically whenever the run
     // command doesn't say "-nic none" - confirmed present via `info pci`
@@ -36,19 +36,19 @@ namespace PCI {
     // device 8086:100e"). Matched by exact vendor:device rather than by
     // class/subclass (0x02/0x00, Ethernet) - simpler, and precise enough
     // for a demo that only ever targets this one emulated chip.
-    const VENDOR_INTEL: uint = 0x8086
-    const DEVICE_E1000: uint = 0x100E
+    const VENDOR_INTEL: u64 = 0x8086
+    const DEVICE_E1000: u64 = 0x100E
 
-    func config_address(bus: uint, slot: uint, func_: uint, offset: uint) -> uint {
+    func config_address(bus: u64, slot: u64, func_: u64, offset: u64) -> u64 {
         return 0x80000000 | (bus << 16) | (slot << 11) | (func_ << 8) | (offset & 0xFC)
     }
 
-    func config_read32(bus: uint, slot: uint, func_: uint, offset: uint) -> uint {
+    func config_read32(bus: u64, slot: u64, func_: u64, offset: u64) -> u64 {
         HAL.outl(CONFIG_ADDRESS, config_address(bus, slot, func_, offset))
         return HAL.inl(CONFIG_DATA)
     }
 
-    func config_write32(bus: uint, slot: uint, func_: uint, offset: uint, value: uint) {
+    func config_write32(bus: u64, slot: u64, func_: u64, offset: u64, value: u64) {
         HAL.outl(CONFIG_ADDRESS, config_address(bus, slot, func_, offset))
         HAL.outl(CONFIG_DATA, value)
     }
@@ -61,7 +61,7 @@ namespace PCI {
     // `pci_set_master()` step, easy to forget when everything else
     // (register reads/writes through the mapped MMIO BAR, which don't
     // need it) already appears to work.
-    const OFFSET_COMMAND: uint = 0x04
+    const OFFSET_COMMAND: u64 = 0x04
     const CMD_MEMORY_SPACE = 0x02
     const CMD_BUS_MASTER   = 0x04
 
@@ -69,20 +69,20 @@ namespace PCI {
     // nothing answers at this bus/slot/function - the standard "probe"
     // convention every PCI scanner uses, since a floating/empty slot's
     // config space reads back all-ones instead of erroring.
-    func vendor_id_at(bus: uint, slot: uint, func_: uint) -> uint {
+    func vendor_id_at(bus: u64, slot: u64, func_: u64) -> u64 {
         return config_read32(bus, slot, func_, 0) & 0xFFFF
     }
 
     // -1 if no IDE controller was found on bus 0 in any slot/function -
     // callers treat that as "DMA unavailable", falling back to PIO
     // (see atad.llpl).
-    let bmide_base_cache: uint = 0
+    let bmide_base_cache: u64 = 0
     let bmide_scanned: bool = false
 
-    func scan_for_bmide_base() -> uint {
-        let slot: uint = 0
+    func scan_for_bmide_base() -> u64 {
+        let slot: u64 = 0
         while slot < 32 {
-            let func_: uint = 0
+            let func_: u64 = 0
             while func_ < 8 {
                 if vendor_id_at(0, slot, func_) != 0xFFFF {
                     // Dword at offset 0x08 packs, little-endian low-to-high
@@ -94,11 +94,11 @@ namespace PCI {
                     // real Prog IF/Subclass pair for an IDE controller
                     // never happens to equal Mass-Storage/IDE's own
                     // class/subclass values).
-                    let class_dword: uint = config_read32(0, slot, func_, OFFSET_CLASS)
-                    let subclass: uint = (class_dword >> 16) & 0xFF
-                    let class_code: uint = (class_dword >> 24) & 0xFF
+                    let class_dword: u64 = config_read32(0, slot, func_, OFFSET_CLASS)
+                    let subclass: u64 = (class_dword >> 16) & 0xFF
+                    let class_code: u64 = (class_dword >> 24) & 0xFF
                     if class_code == CLASS_MASS_STORAGE && subclass == SUBCLASS_IDE {
-                        let bar4: uint = config_read32(0, slot, func_, OFFSET_BAR4)
+                        let bar4: u64 = config_read32(0, slot, func_, OFFSET_BAR4)
                         // Bit 0 set marks an I/O-space BAR (always true for
                         // a Bus Master IDE BAR4 per spec) - bits 0-1 are
                         // flags, not part of the address, and must be
@@ -119,7 +119,7 @@ namespace PCI {
     // I/O for something that can't change at runtime would just be
     // wasted boot time on every later caller (atad.llpl asks once at
     // startup, but there's no reason a second caller should re-scan).
-    func bmide_base() -> uint {
+    func bmide_base() -> u64 {
         if !bmide_scanned {
             bmide_base_cache = scan_for_bmide_base()
             bmide_scanned = true
@@ -132,23 +132,23 @@ namespace PCI {
     // BAR (bit 0 clear), unlike the IDE controller's I/O-space BAR4.
     // Returns the masked 32-bit physical MMIO base, or 0 if no e1000 is
     // present on bus 0.
-    let e1000_bar0_cache: uint = 0
-    let e1000_slot_cache: uint = 0
-    let e1000_func_cache: uint = 0
+    let e1000_bar0_cache: u64 = 0
+    let e1000_slot_cache: u64 = 0
+    let e1000_func_cache: u64 = 0
     let e1000_scanned: bool = false
     let e1000_found: bool = false
 
-    func scan_for_e1000_bar0() -> uint {
-        let slot: uint = 0
+    func scan_for_e1000_bar0() -> u64 {
+        let slot: u64 = 0
         while slot < 32 {
-            let func_: uint = 0
+            let func_: u64 = 0
             while func_ < 8 {
                 if vendor_id_at(0, slot, func_) != 0xFFFF {
-                    let vd: uint = config_read32(0, slot, func_, OFFSET_VENDOR_DEVICE)
-                    let vendor: uint = vd & 0xFFFF
-                    let device: uint = (vd >> 16) & 0xFFFF
+                    let vd: u64 = config_read32(0, slot, func_, OFFSET_VENDOR_DEVICE)
+                    let vendor: u64 = vd & 0xFFFF
+                    let device: u64 = (vd >> 16) & 0xFFFF
                     if vendor == VENDOR_INTEL && device == DEVICE_E1000 {
-                        let bar0: uint = config_read32(0, slot, func_, OFFSET_BAR0)
+                        let bar0: u64 = config_read32(0, slot, func_, OFFSET_BAR0)
                         // Bit 0 clear = memory-space BAR (always true for
                         // e1000 BAR0); bits 1-2 encode the address width
                         // (0 = 32-bit here), bit 3 is prefetchable - none
@@ -169,7 +169,7 @@ namespace PCI {
         return 0
     }
 
-    func e1000_bar0() -> uint {
+    func e1000_bar0() -> u64 {
         if !e1000_scanned {
             e1000_bar0_cache = scan_for_e1000_bar0()
             e1000_scanned = true
@@ -199,7 +199,7 @@ namespace PCI {
         // write-1-to-clear) - masking to the low 16 before OR-ing in the
         // enable bits and writing back avoids accidentally clearing any
         // pending status bit this same read just happened to observe.
-        let cmd: uint = config_read32(0, e1000_slot_cache, e1000_func_cache, OFFSET_COMMAND) & 0xFFFF
+        let cmd: u64 = config_read32(0, e1000_slot_cache, e1000_func_cache, OFFSET_COMMAND) & 0xFFFF
         config_write32(0, e1000_slot_cache, e1000_func_cache, OFFSET_COMMAND,
                        cmd | CMD_BUS_MASTER | CMD_MEMORY_SPACE)
         return true

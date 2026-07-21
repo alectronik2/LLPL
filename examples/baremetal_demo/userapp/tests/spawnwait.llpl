@@ -3,15 +3,15 @@
 import "../../libsys/imports"
 import "../user_runtime"
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("spawnwait")
-    let pid: uint = sys_spawn("/bin/memtest.elf", "from-spawnwait")
+    let pid: u64 = sys_spawn("/bin/memtest.elf", "from-spawnwait")
     if pid == RT_SYS_ERR {
         sys_putln("spawnwait pid=fail")
         rt_exit(1)
     }
 
-    let status: uint = sys_wait(pid)
+    let status: u64 = sys_wait(pid)
     if status == RT_SYS_ERR {
         sys_putln("wait=fail")
         rt_exit(1)

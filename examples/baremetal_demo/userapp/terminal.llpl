@@ -37,22 +37,66 @@ const CARET_COLOR: uint32 = 0xFFD000
 const VFS_KIND_DIR = 2
 const MAX_LS_ENTRIES = 48
 const ENTRY_SIZE = 48
+const PATH_MAX = 128
 
 let buf: char[8192] // SCROLLBACK_CAP
-let buf_len: uint = 0
-let top_line: uint = 0
+let buf_len: u64 = 0
+let top_line: u64 = 0
 // Offset into `buf` where the line currently being typed starts (right
 // after the freshest prompt) - typing appends past this; backspace
 // refuses to erase anything before it, so a command's own already-
 // printed prompt can never be clobbered by an eager backspace.
-let input_start: uint = 0
+let input_start: u64 = 0
 let cur_dir: char[96]
+let term_path: char[128]
+let exec_probe: char[1]
 
-func path_len(p: char*) -> uint {
-    let i: uint = 0
+func path_len(p: char*) -> u64 {
+    let i: u64 = 0
     while p[i] != 0 {
         i = i + 1
     }
+    return i
+}
+
+func str_copy(dst: char*, src: char*) {
+    let i: u64 = 0
+    while src[i] != 0 {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
+}
+
+func str_copy_limit(dst: char*, src: char*, max_len: u64) {
+    let i: u64 = 0
+    while src[i] != 0 && i + 1 < max_len {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
+}
+
+func starts_with(s: char*, prefix: char*) -> bool {
+    let i: u64 = 0
+    while prefix[i] != 0 {
+        if s[i] != prefix[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+func str_append(dst: char*, dst_len: u64, src: char*) -> u64 {
+    let i: u64 = dst_len
+    let j: u64 = 0
+    while src[j] != 0 && i + 1 < PATH_MAX {
+        dst[i] = src[j]
+        i = i + 1
+        j = j + 1
+    }
+    dst[i] = 0
     return i
 }
 
@@ -60,18 +104,18 @@ func path_len(p: char*) -> uint {
 // join_path uses - see that copy's doc comment for why writing through
 // dst == base is safe here too.
 func join_path(dst: char*, base: char*, name: char*) {
-    let base_len: uint = path_len(base)
-    let i: uint = 0
+    let base_len: u64 = path_len(base)
+    let i: u64 = 0
     while i < base_len {
         dst[i] = base[i]
         i = i + 1
     }
-    let pos: uint = base_len
+    let pos: u64 = base_len
     if base_len == 0 || base[base_len - 1] != 47 {
         dst[pos] = 47
         pos = pos + 1
     }
-    let j: uint = 0
+    let j: u64 = 0
     while name[j] != 0 {
         dst[pos] = name[j]
         pos = pos + 1
@@ -81,11 +125,11 @@ func join_path(dst: char*, base: char*, name: char*) {
 }
 
 func go_up_dir() {
-    let len: uint = path_len(cur_dir as char*)
+    let len: u64 = path_len(cur_dir as char*)
     if len <= 1 {
         return
     }
-    let i: int = (len as int) - 1
+    let i: i64 = (len as i64) - 1
     while i > 0 && cur_dir[i] == 47 {
         i = i - 1
     }
@@ -105,14 +149,14 @@ func go_up_dir() {
 // filebrowser.llpl resolves a selected entry's name.
 func resolve_path(dst: char*, arg: char*) {
     if arg[0] == 0 {
-        let i: uint = 0
+        let i: u64 = 0
         while cur_dir[i] != 0 {
             dst[i] = cur_dir[i]
             i = i + 1
         }
         dst[i] = 0
     } else if arg[0] == 47 {
-        let i: uint = 0
+        let i: u64 = 0
         while arg[i] != 0 {
             dst[i] = arg[i]
             i = i + 1
@@ -123,20 +167,114 @@ func resolve_path(dst: char*, arg: char*) {
     }
 }
 
+func cmd_path(arg: char*) {
+    if arg[0] == 0 {
+        append_str(term_path as char*)
+        append_char(10)
+        return
+    }
+    str_copy_limit(term_path as char*, arg, PATH_MAX as u64)
+}
+
+func file_exists(path: char*) -> bool {
+    let n: u64 = sys_read_all(path, exec_probe as char*, 1)
+    return n != RT_SYS_ERR
+}
+
+func append_elf(dst: char*) {
+    let n: u64 = path_len(dst)
+    if n >= 4 && dst[n - 4] == 46 && dst[n - 3] == 101 && dst[n - 2] == 108 && dst[n - 1] == 102 {
+        return
+    }
+    if n + 5 < PATH_MAX {
+        dst[n] = 46
+        dst[n + 1] = 101
+        dst[n + 2] = 108
+        dst[n + 3] = 102
+        dst[n + 4] = 0
+    }
+}
+
+func build_path_candidate(dst: char*, dir: char*, dir_len: u64, name: char*) {
+    let n: u64 = 0
+    if dir_len == 1 && dir[0] == 46 {
+        n = str_append(dst, 0, cur_dir as char*)
+    } else {
+        let i: u64 = 0
+        while i < dir_len && n + 1 < PATH_MAX {
+            dst[n] = dir[i]
+            n = n + 1
+            i = i + 1
+        }
+        dst[n] = 0
+    }
+    if n == 0 || dst[n - 1] != 47 {
+        n = str_append(dst, n, "/" as char*)
+    }
+    str_append(dst, n, name)
+}
+
+func path_lookup(name: char*, out: char*) -> bool {
+    if name[0] == 47 {
+        str_copy_limit(out, name, PATH_MAX as u64)
+        if file_exists(out) {
+            return true
+        }
+        append_elf(out)
+        return file_exists(out)
+    }
+
+    if starts_with(name, "./") {
+        resolve_path(out, name + 2)
+        if file_exists(out) {
+            return true
+        }
+        append_elf(out)
+        return file_exists(out)
+    }
+
+    let path: char* = term_path as char*
+    let i: u64 = 0
+    while path[i] != 0 {
+        let start: u64 = i
+        while path[i] != 0 && path[i] != 58 {
+            i = i + 1
+        }
+        let seg_len: u64 = i - start
+        if seg_len > 0 {
+            let candidate: char[128]
+            build_path_candidate(candidate as char*, path + start, seg_len, name)
+            if file_exists(candidate as char*) {
+                str_copy(out, candidate as char*)
+                return true
+            }
+            append_elf(candidate as char*)
+            if file_exists(candidate as char*) {
+                str_copy(out, candidate as char*)
+                return true
+            }
+        }
+        if path[i] == 58 {
+            i = i + 1
+        }
+    }
+    return false
+}
+
 // Drops the whole scrollback rather than trying to make room piecemeal -
 // simplest safe behavior once history fills the fixed buffer, same
 // tradeoff EventLog.llpl's own fixed-capacity ring makes, just without
 // the ring (a terminal's whole point is reading back what's on screen
 // *now*, not perfect infinite history).
-func ensure_space(extra: uint) {
-    if buf_len + extra >= (SCROLLBACK_CAP as uint) {
+func ensure_space(extra: u64) {
+    if buf_len + extra >= (SCROLLBACK_CAP as u64) {
         buf_len = 0
         top_line = 0
     }
 }
 
 func append_str(s: char*) {
-    let i: uint = 0
+    let i: u64 = 0
     while s[i] != 0 {
         ensure_space(1)
         buf[buf_len] = s[i]
@@ -151,7 +289,7 @@ func append_char(c: char) {
     buf_len = buf_len + 1
 }
 
-func append_uint(n: uint) {
+func append_uint(n: u64) {
     if n >= 10 {
         append_uint(n / 10)
     }
@@ -168,7 +306,7 @@ func print_prompt() {
 // points just past that space (or at line's own NUL if there was no
 // space, i.e. no arguments at all).
 func split_first_word(line: char*) -> char* {
-    let i: uint = 0
+    let i: u64 = 0
     while line[i] != 0 && line[i] != 32 {
         i = i + 1
     }
@@ -182,18 +320,18 @@ func split_first_word(line: char*) -> char* {
 func cmd_ls(arg: char*) {
     let target: char[96]
     resolve_path(target as char*, arg)
-    let i: uint = 0
+    let i: u64 = 0
     let done: bool = false
     let any: bool = false
-    while (i as int) < MAX_LS_ENTRIES && !done {
+    while (i as i64) < MAX_LS_ENTRIES && !done {
         let rec: char[48]
-        let ok: uint = sys_readdir(target as char*, i, rec as char*)
+        let ok: u64 = sys_readdir(target as char*, i, rec as char*)
         if ok == RT_SYS_ERR {
             done = true
         } else {
             any = true
-            let fields: uint* = (rec as char* + 32) as uint*
-            let kind: uint = fields[0]
+            let fields: u64* = (rec as char* + 32) as u64*
+            let kind: u64 = fields[0]
             if kind == VFS_KIND_DIR {
                 append_char(100) // 'd'
             } else {
@@ -226,7 +364,7 @@ func cmd_cat(arg: char*) {
     let target: char[96]
     resolve_path(target as char*, arg)
     let filebuf: char* = cat_filebuf as char*
-    let n: uint = sys_read_all(target as char*, filebuf, 4095)
+    let n: u64 = sys_read_all(target as char*, filebuf, 4095)
     if n == RT_SYS_ERR {
         append_str("cat: cannot read '")
         append_str(target as char*)
@@ -247,7 +385,7 @@ func cmd_cd(arg: char*) {
     } else if sys_streq(arg, "..") {
         go_up_dir()
     } else if arg[0] == 47 {
-        let i: uint = 0
+        let i: u64 = 0
         while arg[i] != 0 {
             cur_dir[i] = arg[i]
             i = i + 1
@@ -259,43 +397,14 @@ func cmd_cd(arg: char*) {
 }
 
 func cmd_run(word: char*, arg: char*) {
-    let path: char[96]
-    if word[0] == 47 {
-        let i: uint = 0
-        while word[i] != 0 {
-            path[i] = word[i]
-            i = i + 1
-        }
-        path[i] = 0
-    } else {
-        // Bare name (e.g. "editor") resolves the same way the always-on
-        // taskbar's own tiles do - /bin/<name>.elf - so a command typed
-        // here matches whatever's already visible as a taskbar button.
-        let prefix: char[6]
-        prefix[0] = 47
-        prefix[1] = 98
-        prefix[2] = 105
-        prefix[3] = 110
-        prefix[4] = 47
-        prefix[5] = 0
-        let pi: uint = 0
-        while prefix[pi] != 0 {
-            path[pi] = prefix[pi]
-            pi = pi + 1
-        }
-        let wi: uint = 0
-        while word[wi] != 0 {
-            path[pi] = word[wi]
-            pi = pi + 1
-            wi = wi + 1
-        }
-        path[pi] = 46
-        path[pi + 1] = 101
-        path[pi + 2] = 108
-        path[pi + 3] = 102
-        path[pi + 4] = 0
+    let path: char[128]
+    if !path_lookup(word, path as char*) {
+        append_str("command not found: ")
+        append_str(word)
+        append_char(10)
+        return
     }
-    let handle: uint = sys_spawn(path as char*, arg)
+    let handle: u64 = sys_spawn(path as char*, arg)
     if handle == RT_SYS_ERR {
         append_str("spawn failed: ")
         append_str(path as char*)
@@ -315,10 +424,9 @@ func run_command(line: char*) {
     if sys_streq(line, "help") {
         append_str("ls [path]   cat <path>\n")
         append_str("cd <path>   pwd\n")
+        append_str("run <path>  path\n")
         append_str("clear       help\n")
-        append_str("anything else: spawns\n")
-        append_str("/bin/<name>.elf, or an\n")
-        append_str("absolute /path\n")
+        append_str("NAME [args] uses PATH\n")
     } else if sys_streq(line, "clear") {
         buf_len = 0
         top_line = 0
@@ -331,22 +439,33 @@ func run_command(line: char*) {
         cmd_cat(arg)
     } else if sys_streq(line, "cd") {
         cmd_cd(arg)
+    } else if sys_streq(line, "path") {
+        cmd_path(arg)
+    } else if sys_streq(line, "export") && starts_with(arg, "PATH=") {
+        cmd_path(arg + 5)
+    } else if sys_streq(line, "run") {
+        let run_arg: char* = split_first_word(arg)
+        if arg[0] == 0 {
+            append_str("usage: run <path> [args...]\n")
+        } else {
+            cmd_run(arg, run_arg)
+        }
     } else {
         cmd_run(line, arg)
     }
 }
 
-func line_start_at_or_before(pos: uint) -> uint {
-    let i: uint = pos
+func line_start_at_or_before(pos: u64) -> u64 {
+    let i: u64 = pos
     while i > 0 && buf[i - 1] != 10 {
         i = i - 1
     }
     return i
 }
 
-func line_number_of(pos: uint) -> uint {
-    let i: uint = 0
-    let line: uint = 0
+func line_number_of(pos: u64) -> u64 {
+    let i: u64 = 0
+    let line: u64 = 0
     while i < pos {
         if buf[i] == 10 {
             line = line + 1
@@ -356,9 +475,9 @@ func line_number_of(pos: uint) -> uint {
     return line
 }
 
-func offset_of_line(line: uint) -> uint {
-    let i: uint = 0
-    let cur_line: uint = 0
+func offset_of_line(line: u64) -> u64 {
+    let i: u64 = 0
+    let cur_line: u64 = 0
     while cur_line < line && i < buf_len {
         if buf[i] == 10 {
             cur_line = cur_line + 1
@@ -368,43 +487,43 @@ func offset_of_line(line: uint) -> uint {
     return i
 }
 
-func draw_scrollbar(fb: uint32*, win_w: uint) {
-    let total: uint = line_number_of(buf_len) + 1
-    if total <= (VISIBLE_ROWS as uint) {
+func draw_scrollbar(fb: uint32*, win_w: u64) {
+    let total: u64 = line_number_of(buf_len) + 1
+    if total <= (VISIBLE_ROWS as u64) {
         return
     }
-    let track_top: int = TOP
-    let track_h: int = VISIBLE_ROWS * ROW_H
-    let sb_x: int = (win_w as int) - SCROLLBAR_W - 2
+    let track_top: i64 = TOP
+    let track_h: i64 = VISIBLE_ROWS * ROW_H
+    let sb_x: i64 = (win_w as i64) - SCROLLBAR_W - 2
 
-    let ty: int = 0
+    let ty: i64 = 0
     while ty < track_h {
-        let tx: int = 0
+        let tx: i64 = 0
         while tx < SCROLLBAR_W {
-            fb[((track_top + ty) as uint) * win_w + ((sb_x + tx) as uint)] = SCROLLBAR_TRACK
+            fb[((track_top + ty) as u64) * win_w + ((sb_x + tx) as u64)] = SCROLLBAR_TRACK
             tx = tx + 1
         }
         ty = ty + 1
     }
 
-    let thumb_h: int = (track_h * (VISIBLE_ROWS as int)) / (total as int)
+    let thumb_h: i64 = (track_h * (VISIBLE_ROWS as i64)) / (total as i64)
     if thumb_h < 8 {
         thumb_h = 8
     }
     if thumb_h > track_h {
         thumb_h = track_h
     }
-    let max_scroll: int = (total as int) - (VISIBLE_ROWS as int)
-    let thumb_y: int = track_top
+    let max_scroll: i64 = (total as i64) - (VISIBLE_ROWS as i64)
+    let thumb_y: i64 = track_top
     if max_scroll > 0 {
-        thumb_y = track_top + ((track_h - thumb_h) * (top_line as int)) / max_scroll
+        thumb_y = track_top + ((track_h - thumb_h) * (top_line as i64)) / max_scroll
     }
 
-    let ty2: int = 0
+    let ty2: i64 = 0
     while ty2 < thumb_h {
-        let tx2: int = 0
+        let tx2: i64 = 0
         while tx2 < SCROLLBAR_W {
-            fb[((thumb_y + ty2) as uint) * win_w + ((sb_x + tx2) as uint)] = SCROLLBAR_THUMB
+            fb[((thumb_y + ty2) as u64) * win_w + ((sb_x + tx2) as u64)] = SCROLLBAR_THUMB
             tx2 = tx2 + 1
         }
         ty2 = ty2 + 1
@@ -418,8 +537,8 @@ func scroll_up_one() {
 }
 
 func scroll_down_one() {
-    let total: uint = line_number_of(buf_len) + 1
-    if top_line + (VISIBLE_ROWS as uint) < total {
+    let total: u64 = line_number_of(buf_len) + 1
+    if top_line + (VISIBLE_ROWS as u64) < total {
         top_line = top_line + 1
     }
 }
@@ -427,33 +546,33 @@ func scroll_down_one() {
 func render() {
     wm_fill(BG_COLOR)
     let win_buf: uint32* = wm_buffer()
-    let win_w: uint = Wm.WIN_W as uint
-    let win_h: uint = Wm.WIN_H as uint
+    let win_w: u64 = Wm.WIN_W as u64
+    let win_h: u64 = Wm.WIN_H as u64
 
     // Auto-scroll so the line currently being typed always stays on
     // screen, the same rule editor.llpl's own render() applies to its
     // cursor line.
-    let cur_line: uint = line_number_of(buf_len)
+    let cur_line: u64 = line_number_of(buf_len)
     if cur_line < top_line {
         top_line = cur_line
     }
-    if cur_line >= top_line + (VISIBLE_ROWS as uint) {
-        top_line = cur_line - (VISIBLE_ROWS as uint) + 1
+    if cur_line >= top_line + (VISIBLE_ROWS as u64) {
+        top_line = cur_line - (VISIBLE_ROWS as u64) + 1
     }
 
-    let offset: uint = offset_of_line(top_line)
-    let row: uint = 0
-    while row < (VISIBLE_ROWS as uint) {
+    let offset: u64 = offset_of_line(top_line)
+    let row: u64 = 0
+    while row < (VISIBLE_ROWS as u64) {
         if offset <= buf_len {
-            let line_end: uint = offset
+            let line_end: u64 = offset
             while line_end < buf_len && buf[line_end] != 10 {
                 line_end = line_end + 1
             }
-            let y: uint = (TOP as uint) + row * ROW_H
+            let y: u64 = (TOP as u64) + row * ROW_H
             let linebuf: char[40]
-            let col: uint = 0
-            let p: uint = offset
-            while p < line_end && col < (MAX_COLS as uint) {
+            let col: u64 = 0
+            let p: u64 = offset
+            while p < line_end && col < (MAX_COLS as u64) {
                 linebuf[col] = buf[p]
                 col = col + 1
                 p = p + 1
@@ -477,17 +596,17 @@ func render() {
     // Caret at the end of the buffer (always the live input point - see
     // this file's own header comment on why there's no other cursor).
     if cur_line >= top_line {
-        let row_of_end: uint = cur_line - top_line
-        if row_of_end < (VISIBLE_ROWS as uint) {
-            let line_start: uint = line_start_at_or_before(buf_len)
-            let col: uint = buf_len - line_start
-            if col > (MAX_COLS as uint) {
-                col = MAX_COLS as uint
+        let row_of_end: u64 = cur_line - top_line
+        if row_of_end < (VISIBLE_ROWS as u64) {
+            let line_start: u64 = line_start_at_or_before(buf_len)
+            let col: u64 = buf_len - line_start
+            if col > (MAX_COLS as u64) {
+                col = MAX_COLS as u64
             }
-            let cx: uint = 4 + col * 8
-            let cy: uint = (TOP as uint) + row_of_end * ROW_H
+            let cx: u64 = 4 + col * 8
+            let cy: u64 = (TOP as u64) + row_of_end * ROW_H
             if cx + 1 < win_w {
-                let dy: uint = 0
+                let dy: u64 = 0
                 while dy < ROW_H {
                     win_buf[(cy + dy) * win_w + cx] = CARET_COLOR
                     win_buf[(cy + dy) * win_w + cx + 1] = CARET_COLOR
@@ -501,10 +620,11 @@ func render() {
     wm_present()
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("terminal: starting")
     cur_dir[0] = 47
     cur_dir[1] = 0
+    str_copy(term_path as char*, "/boot:/bin:.")
 
     if !wm_connect() {
         sys_putln("terminal: wm_connect failed")
@@ -519,17 +639,18 @@ func _start(argc: uint, argv: uint*) {
     print_prompt()
 
     while true {
-        let key: uint = wm_poll_input()
-        if key == (KEY_CLOSE_REQ as uint) {
+        let input: WmInput = wm_poll_input()
+        let key: u64 = input.key as u64
+        if key == (KEY_CLOSE_REQ as u64) {
             wm_close()
             rt_exit(0)
         } else if key == 10 {
             let line: char[128]
-            let n: uint = buf_len - input_start
+            let n: u64 = buf_len - input_start
             if n > 127 {
                 n = 127
             }
-            let i: uint = 0
+            let i: u64 = 0
             while i < n {
                 line[i] = buf[input_start + i]
                 i = i + 1
@@ -542,15 +663,15 @@ func _start(argc: uint, argv: uint*) {
             if buf_len > input_start {
                 buf_len = buf_len - 1
             }
-        } else if key == (KEY_UP as uint) {
+        } else if key == (KEY_UP as u64) {
             scroll_up_one()
-        } else if key == (KEY_DOWN as uint) {
+        } else if key == (KEY_DOWN as u64) {
             scroll_down_one()
         } else if key != 0 && key >= 32 && key < 127 {
             append_char(key as char)
         }
 
-        let wheel: int = wm_wheel_delta()
+        let wheel: i64 = wm_wheel_delta()
         if wheel > 3 {
             wheel = 3
         } else if wheel < -3 {

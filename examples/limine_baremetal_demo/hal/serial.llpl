@@ -21,7 +21,7 @@ namespace HAL.Serial {
     }
 
     func write(s: string) {
-        let i: int = 0
+        let i: i64 = 0
         while s[i] != 0 {
             write_char(s[i])
             i = i + 1

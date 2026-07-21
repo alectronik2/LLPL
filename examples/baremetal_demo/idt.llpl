@@ -15,7 +15,7 @@ import eventlog
 
 alias hsw = HAL.Serial.write
 
-let timer_ticks: uint = 0
+let timer_ticks: u64 = 0
 
 // The three fault handlers below all do the same thing: report what
 // happened, then halt for good (there's no recovering from a fault this
@@ -54,13 +54,13 @@ interrupt func isr_invalid_opcode() {
     haltWithFault!("FAULT: invalid opcode (#UD) - halting\n")
 }
 
-interrupt func isr_general_protection(error_code: uint) {
+interrupt func isr_general_protection(error_code: u64) {
     EventLog.add1("fault", "general protection", error_code)
     haltWithFault!("FAULT: general protection (#GP) - halting\n")
 }
 
-interrupt func isr_page_fault(error_code: uint) {
-    let addr: uint = HAL.read_cr2()
+interrupt func isr_page_fault(error_code: u64) {
+    let addr: u64 = HAL.read_cr2()
     EventLog.add2("fault", "page fault", addr, error_code)
     hsw("FAULT: page fault (#PF) - halting\n")
     HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
@@ -118,7 +118,7 @@ namespace IDT {
 
     packed struct Pointer {
         let limit: uint16
-        let base: uint
+        let base: u64
     }
 
     let entries: Entry[256]
@@ -127,7 +127,7 @@ namespace IDT {
     extern func syscall_isr_entry() -> void
 
     // flags: 0x8E = present, ring 0, 64-bit interrupt gate.
-    func set_gate_ist(vector: int, handler_addr: uint, selector: uint, flags: char, ist: char) {
+    func set_gate_ist(vector: i64, handler_addr: u64, selector: u64, flags: char, ist: char) {
         entries[vector].offset_low = (handler_addr & 0xFFFF) as uint16
         entries[vector].selector = selector as uint16
         entries[vector].ist = ist
@@ -137,32 +137,32 @@ namespace IDT {
         entries[vector].zero = 0
     }
 
-    func set_gate(vector: int, handler_addr: uint, selector: uint, flags: char) {
+    func set_gate(vector: i64, handler_addr: u64, selector: u64, flags: char) {
         set_gate_ist(vector, handler_addr, selector, flags, 0)
     }
 
     func init() {
-        for let i: int = 0, i < 256, i = i + 1 {
+        for let i: i64 = 0, i < 256, i = i + 1 {
             set_gate(i, 0, 0, 0)
         }
 
-        set_gate(0, isr_divide_by_zero as uint, 0x08, 0x8E)
-        set_gate(3, isr_breakpoint as uint, 0x08, 0x8E)
-        set_gate(6, isr_invalid_opcode as uint, 0x08, 0x8E)
-        set_gate(13, isr_general_protection as uint, 0x08, 0x8E)
-        set_gate(14, isr_page_fault as uint, 0x08, 0x8E)
+        set_gate(0, isr_divide_by_zero as u64, 0x08, 0x8E)
+        set_gate(3, isr_breakpoint as u64, 0x08, 0x8E)
+        set_gate(6, isr_invalid_opcode as u64, 0x08, 0x8E)
+        set_gate(13, isr_general_protection as u64, 0x08, 0x8E)
+        set_gate(14, isr_page_fault as u64, 0x08, 0x8E)
         // IRQ0 after PIC remap - hand-written asm entry point. Ring-3 entries
         // use the per-task RSP0 kernel stack set by the scheduler.
-        set_gate(32, Task.timer_isr_entry as uint, 0x08, 0x8E)
-        set_gate(33, isr_keyboard as uint, 0x08, 0x8E) // IRQ1 after PIC remap
-        set_gate(44, isr_mouse as uint, 0x08, 0x8E) // IRQ12 after PIC remap
+        set_gate(32, Task.timer_isr_entry as u64, 0x08, 0x8E)
+        set_gate(33, isr_keyboard as u64, 0x08, 0x8E) // IRQ1 after PIC remap
+        set_gate(44, isr_mouse as u64, 0x08, 0x8E) // IRQ12 after PIC remap
 
-        // System call vector: DPL=3 so user `int 0x80` can use it. It runs on
+        // System call vector: DPL=3 so user `i64 0x80` can use it. It runs on
         // the current task's RSP0 kernel stack.
-        set_gate(0x80, syscall_isr_entry as uint, 0x08, 0xEE)
+        set_gate(0x80, syscall_isr_entry as u64, 0x08, 0xEE)
 
         pointer.limit = (256 * 16) - 1
-        pointer.base = entries as uint
+        pointer.base = entries as u64
 
         asm("lidt (%0)" : : "r"(&pointer))
     }

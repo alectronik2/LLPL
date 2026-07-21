@@ -36,7 +36,13 @@ for src in test/*.llpl; do
     expected="test/$base.expected"
     expected_fail="test/$base.expected_fail"
 
-    if ! "$COMPILER" "$src" -o "$TMP_C" >/dev/null 2>&1; then
+    # Optional per-test compiler flags (e.g. --safe for bounds-check tests)
+    extra_flags=()
+    if [ -f "test/$base.flags" ]; then
+        extra_flags=($(<"test/$base.flags"))
+    fi
+
+    if ! "$COMPILER" "${extra_flags[@]}" "$src" -o "$TMP_C" >/dev/null 2>&1; then
         echo "[FAIL] $src  (compiler error)"
         FAILED=$((FAILED + 1))
         continue

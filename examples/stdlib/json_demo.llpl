@@ -1,7 +1,7 @@
 // Example: JSON parsing and serialization using the standard library
 
-import "../../stdlib/json/json_parser.llpl"
-import "../../stdlib/io/file.llpl"
+import stdlib.json.json_parser
+import stdlib.io.file
 
 using namespace std.json
 using namespace std.io
@@ -22,17 +22,17 @@ func demo_config_roundtrip() {
 
     // Top-level scalars
     let name: String = doc.get_or(new String("name"), JsonValue.make_string(new String(""))).as_string()
-    let version: int = doc.get_or(new String("version"), JsonValue.make_int(0)).as_int()
+    let version: i64 = doc.get_or(new String("version"), JsonValue.make_int(0)).as_int()
     let debug: bool = doc.get_or(new String("debug"), JsonValue.make_bool(true)).as_bool()
 
     // Nested object
     let server: JsonValue = doc.get_or(new String("server"), JsonValue.make_object())
     let host: String = server.get_or(new String("host"), JsonValue.make_string(new String(""))).as_string()
-    let port: int = server.get_or(new String("port"), JsonValue.make_int(0)).as_int()
+    let port: i64 = server.get_or(new String("port"), JsonValue.make_int(0)).as_int()
 
     // Array
     let tags: JsonValue = doc.get_or(new String("tags"), JsonValue.make_array())
-    let i: int = 0
+    let i: i64 = 0
     while i < tags.len() {
         let tag: String = tags.get_index(i).as_string()
         i = i + 1
@@ -53,7 +53,7 @@ func demo_config_roundtrip() {
 func demo_parse_from_string() {
     let doc: JsonValue = parse(new String("{\"count\": 5, \"ratio\": 0.75, \"label\": \"hello world\"}"))
 
-    let count: int = doc.get_or(new String("count"), JsonValue.make_int(0)).as_int()
+    let count: i64 = doc.get_or(new String("count"), JsonValue.make_int(0)).as_int()
     let ratio: float = doc.get_or(new String("ratio"), JsonValue.make_float(0.0)).as_float()
     let label: String = doc.get_or(new String("label"), JsonValue.make_string(new String(""))).as_string()
 
@@ -83,10 +83,10 @@ func demo_build_and_stringify() {
     // Round-trips back through parse() the same way any JSON received
     // from a real API response would.
     let reparsed: JsonValue = parse(text)
-    let id: int = reparsed.get_or(new String("id"), JsonValue.make_int(-1)).as_int()
+    let id: i64 = reparsed.get_or(new String("id"), JsonValue.make_int(-1)).as_int()
 }
 
-func main() -> int {
+func main() -> i64 {
     demo_config_roundtrip()
     demo_parse_from_string()
     demo_build_and_stringify()

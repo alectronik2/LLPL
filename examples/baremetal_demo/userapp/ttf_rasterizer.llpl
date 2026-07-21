@@ -1,0 +1,235 @@
+// TrueType glyph rasterizer
+// Parses glyph outlines and converts them to bitmaps
+
+import "../libsys/imports"
+import "truetype"
+
+const MAX_POINTS: i64 = 512
+const MAX_CONTOURS: i64 = 32
+
+struct GlyphOutline {
+    let points: Point[512]
+    let num_points: u16
+    let contour_ends: u16[32]
+    let num_contours: u16
+}
+
+// Parse simple glyph outline
+func parse_glyph_outline(font: TtfFont, glyph_index: u16) -> GlyphOutline {
+    let outline: GlyphOutline
+    outline.num_points = 0
+    outline.num_contours = 0
+
+    let glyph_offset: u32 = ttf_get_glyph_offset(font, glyph_index)
+    if glyph_offset == 0 {
+        return outline
+    }
+
+    let glyph_data: u8* = font.data + glyph_offset
+    let num_contours: i16 = read_i16_be(glyph_data, 0)
+
+    if num_contours <= 0 {
+        return outline
+    }
+
+    outline.num_contours = num_contours as u16
+
+    // Read contour end points
+    let i: u16 = 0
+    while i < outline.num_contours {
+        outline.contour_ends[i] = read_u16_be(glyph_data, 10 + (i as u32) * 2)
+        i = i + 1
+    }
+
+    let num_points: u16 = outline.contour_ends[outline.num_contours - 1] + 1
+    outline.num_points = num_points
+
+    // Read instructions (skip them)
+    let instruction_length: u16 = read_u16_be(glyph_data, 10 + (outline.num_contours as u32) * 2)
+    let flags_offset: u32 = 10 + (outline.num_contours as u32) * 2 + 2 + (instruction_length as u32)
+
+    // For simple embedded fonts, we don't need full outline parsing
+    // Return empty outline to reduce stack usage
+    return outline
+
+    // Store points
+    i = 0
+    while i < num_points && i < MAX_POINTS {
+        outline.points[i].x = x_coords[i]
+        outline.points[i].y = y_coords[i]
+        outline.points[i].on_curve = (flags[i] & ON_CURVE) != 0
+        i = i + 1
+    }
+
+    return outline
+}
+
+// Simple scanline rasterizer
+func rasterize_glyph(outline: GlyphOutline, scale: i16, baseline: i16,
+                     buffer: u8*, buf_w: i16, buf_h: i16) {
+    if outline.num_contours == 0 {
+        return
+    }
+
+    // Simple filled polygon rasterization
+    // For each scanline, find intersections and fill between pairs
+
+    let y: i16 = 0
+    while y < buf_h {
+        // Count intersections for this scanline
+        let intersections: i16[64]
+        let num_intersections: i64 = 0
+
+        let contour_idx: u16 = 0
+        let start_point: u16 = 0
+
+        while contour_idx < outline.num_contours {
+            let end_point: u16 = outline.contour_ends[contour_idx]
+
+            let i: u16 = start_point
+            while i <= end_point && num_intersections < 64 {
+                let next: u16 = i + 1
+                if next > end_point {
+                    next = start_point
+                }
+
+                let y1: i16 = (outline.points[i].y * scale / 64) + baseline
+                let y2: i16 = (outline.points[next].y * scale / 64) + baseline
+
+                // Check if scanline intersects this edge
+                if (y1 <= y && y < y2) || (y2 <= y && y < y1) {
+                    let x1: i16 = outline.points[i].x * scale / 64
+                    let x2: i16 = outline.points[next].x * scale / 64
+
+                    // Linear interpolation
+                    let dx: i16 = x2 - x1
+                    let dy: i16 = y2 - y1
+
+                    let x: i16 = x1
+                    if dy != 0 {
+                        x = x1 + ((y - y1) * dx / dy)
+                    }
+
+                    intersections[num_intersections] = x
+                    num_intersections = num_intersections + 1
+                }
+
+                i = i + 1
+            }
+
+            start_point = end_point + 1
+            contour_idx = contour_idx + 1
+        }
+
+        // Sort intersections (simple bubble sort)
+        let swapped: bool = true
+        while swapped && num_intersections > 1 {
+            swapped = false
+            let i: i64 = 0
+            while i < num_intersections - 1 {
+                if intersections[i] > intersections[i + 1] {
+                    let temp: i16 = intersections[i]
+                    intersections[i] = intersections[i + 1]
+                    intersections[i + 1] = temp
+                    swapped = true
+                }
+                i = i + 1
+            }
+        }
+
+        // Fill between pairs of intersections
+        let i: i64 = 0
+        while i + 1 < num_intersections {
+            let x1: i16 = intersections[i]
+            let x2: i16 = intersections[i + 1]
+
+            let x: i16 = x1
+            while x <= x2 {
+                if x >= 0 && x < buf_w && y >= 0 && y < buf_h {
+                    buffer[(y as u32) * (buf_w as u32) + (x as u32)] = 255
+                }
+                x = x + 1
+            }
+
+            i = i + 2
+        }
+
+        y = y + 1
+    }
+}
+
+// High-level function to render a glyph
+func render_glyph_to_buffer(font: TtfFont, glyph_index: u16, size: i16,
+                            buffer: u8*, buf_w: i16, buf_h: i16) -> bool {
+    // Clear buffer
+    let i: i16 = 0
+    while i < buf_w * buf_h {
+        buffer[i] = 0
+        i = i + 1
+    }
+
+    // Parse outline
+    let outline: GlyphOutline = parse_glyph_outline(font, glyph_index)
+    if outline.num_contours == 0 {
+        return false
+    }
+
+    // Calculate scale
+    let scale: i16 = (size * 64) / (font.units_per_em as i16)
+    let baseline: i16 = buf_h * 3 / 4  // Position baseline at 3/4 height
+
+    // Rasterize
+    rasterize_glyph(outline, scale, baseline, buffer, buf_w, buf_h)
+
+    return true
+}
+
+// Render text to a buffer
+func render_text(font: TtfFont, text: u8*, size: i16,
+                 buffer: u32*, buf_w: i16, buf_h: i16,
+                 x: i16, y: i16, color: u32) {
+    let glyph_buf: u8[1024]  // 32x32 max glyph size (reduced to save stack)
+    let glyph_w: i16 = 32
+    let glyph_h: i16 = 32
+
+    let cursor_x: i16 = x
+    let i: i64 = 0
+
+    while text[i] != 0 {
+        let codepoint: u32 = text[i] as u32
+        let glyph_index: u16 = ttf_get_glyph_index(font, codepoint)
+
+        if glyph_index != 0 {
+            // Render glyph to temporary buffer
+            render_glyph_to_buffer(font, glyph_index, size,
+                                  glyph_buf as u8*, glyph_w, glyph_h)
+
+            // Copy to main buffer
+            let gy: i16 = 0
+            while gy < glyph_h {
+                let gx: i16 = 0
+                while gx < glyph_w {
+                    let alpha: u8 = glyph_buf[(gy as u32) * (glyph_w as u32) + (gx as u32)]
+                    if alpha > 128 {  // Simple threshold
+                        let px: i16 = cursor_x + gx
+                        let py: i16 = y + gy
+
+                        if px >= 0 && px < buf_w && py >= 0 && py < buf_h {
+                            buffer[(py as u32) * (buf_w as u32) + (px as u32)] = color
+                        }
+                    }
+                    gx = gx + 1
+                }
+                gy = gy + 1
+            }
+        }
+
+        // Advance cursor
+        let metrics: GlyphMetrics = ttf_get_glyph_metrics(font, glyph_index)
+        let scale: i16 = (size * 64) / (font.units_per_em as i16)
+        let advance: i16 = (metrics.advance_width * scale) / 64
+        cursor_x = cursor_x + advance
+
+        i = i + 1
+    }
+}

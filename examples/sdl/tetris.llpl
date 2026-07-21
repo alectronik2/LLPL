@@ -10,21 +10,21 @@
 //     while the cleared row(s) flash, then Game.finish_clear() compacts
 //     the board - see Game.update's `self.clearing` branch.
 
-import "../../stdlib/sdl/sdl.llpl"
+import stdlib.sdl.sdl
 
 using namespace std.sdl
 
 extern func rand() -> i32
 extern func srand(seed: u32)
 
-const BOARD_WIDTH: int = 10
-const BOARD_HEIGHT: int = 20
-const CELL_SIZE: int = 28
-const BOARD_PIXEL_WIDTH: int = 280   // BOARD_WIDTH * CELL_SIZE
-const BOARD_PIXEL_HEIGHT: int = 560  // BOARD_HEIGHT * CELL_SIZE
-const SIDEBAR_WIDTH: int = 160
-const WINDOW_WIDTH: int = 440        // BOARD_PIXEL_WIDTH + SIDEBAR_WIDTH
-const WINDOW_HEIGHT: int = 560       // BOARD_PIXEL_HEIGHT
+const BOARD_WIDTH: i64 = 10
+const BOARD_HEIGHT: i64 = 20
+const CELL_SIZE: i64 = 28
+const BOARD_PIXEL_WIDTH: i64 = 280   // BOARD_WIDTH * CELL_SIZE
+const BOARD_PIXEL_HEIGHT: i64 = 560  // BOARD_HEIGHT * CELL_SIZE
+const SIDEBAR_WIDTH: i64 = 160
+const WINDOW_WIDTH: i64 = 440        // BOARD_PIXEL_WIDTH + SIDEBAR_WIDTH
+const WINDOW_HEIGHT: i64 = 560       // BOARD_PIXEL_HEIGHT
 
 const INITIAL_DROP_INTERVAL: float = 0.8
 const LINE_CLEAR_DURATION: float = 0.3
@@ -36,7 +36,7 @@ const SOFT_DROP_MULTIPLIER: float = 12.0
 // variants aren't stored - piece_cell() below derives them on the fly by
 // rotating these coordinates, so adding a piece only ever means adding
 // one more 16-entry spawn shape here.
-let SHAPES: int[112] = [
+let SHAPES: i64[112] = [
     // 0: I
     0, 0, 0, 0,
     1, 1, 1, 1,
@@ -78,9 +78,9 @@ let SHAPES: int[112] = [
 // clockwise `rotation` times (0-3) around the 4x4 box - the standard
 // "read from the inverse-rotated source coordinate" trick, so no rotated
 // copies ever need to be stored or kept in sync with SHAPES above.
-func piece_cell(piece: int, rotation: int, r: int, c: int) -> int {
-    let orow: int = r
-    let ocol: int = c
+func piece_cell(piece: i64, rotation: i64, r: i64, c: i64) -> i64 {
+    let orow: i64 = r
+    let ocol: i64 = c
     match rotation {
         case 1 => {
             orow = 3 - c
@@ -99,7 +99,7 @@ func piece_cell(piece: int, rotation: int, r: int, c: int) -> int {
     return SHAPES[piece * 16 + orow * 4 + ocol]
 }
 
-func set_piece_color(renderer: Renderer, piece: int) {
+func set_piece_color(renderer: Renderer, piece: i64) {
     match piece {
         case 0 => { renderer.set_draw_color(0, 240, 240, 255) }   // I - cyan
         case 1 => { renderer.set_draw_color(240, 240, 0, 255) }   // O - yellow
@@ -112,13 +112,13 @@ func set_piece_color(renderer: Renderer, piece: int) {
 }
 
 class Game {
-    let board: int[200]  // BOARD_WIDTH * BOARD_HEIGHT, flat: board[y * BOARD_WIDTH + x]. 0 = empty, else (piece type + 1).
+    let board: i64[200]  // BOARD_WIDTH * BOARD_HEIGHT, flat: board[y * BOARD_WIDTH + x]. 0 = empty, else (piece type + 1).
 
-    let piece_type: int
-    let rotation: int
-    let px: int // falling piece's 4x4 box, top-left column
-    let py: int // falling piece's 4x4 box, top-left row
-    let next_type: int
+    let piece_type: i64
+    let rotation: i64
+    let px: i64 // falling piece's 4x4 box, top-left column
+    let py: i64 // falling piece's 4x4 box, top-left row
+    let next_type: i64
 
     let drop_timer: float
     let drop_interval: float
@@ -127,20 +127,20 @@ class Game {
 
     let clearing: bool
     let clearing_timer: float
-    let clear_row0: int
-    let clear_row1: int
-    let clear_row2: int
-    let clear_row3: int
-    let clear_count: int
+    let clear_row0: i64
+    let clear_row1: i64
+    let clear_row2: i64
+    let clear_row3: i64
+    let clear_count: i64
 
-    let score: int
-    let level: int
-    let lines_cleared_total: int
+    let score: i64
+    let level: i64
+    let lines_cleared_total: i64
     let game_over: bool
     let game_over_timer: float
 
     constructor() {
-        for let i: int = 0, i < 200, i++ {
+        for let i: i64 = 0, i < 200, i++ {
             self.board[i] = 0
         }
 
@@ -159,13 +159,13 @@ class Game {
         self.game_over = false
         self.game_over_timer = 0.0
 
-        self.next_type = (rand() % 7) as int
+        self.next_type = (rand() % 7) as i64
         self.spawn_piece()
     }
 
     func spawn_piece() {
         self.piece_type = self.next_type
-        self.next_type = (rand() % 7) as int
+        self.next_type = (rand() % 7) as i64
         self.rotation = 0
         self.px = 3
         self.py = 0
@@ -175,12 +175,12 @@ class Game {
         }
     }
 
-    func check_collision(piece: int, rotation: int, test_x: int, test_y: int) -> bool {
-        for let r: int = 0, r < 4, r++ {
-            for let c: int = 0, c < 4, c++ {
+    func check_collision(piece: i64, rotation: i64, test_x: i64, test_y: i64) -> bool {
+        for let r: i64 = 0, r < 4, r++ {
+            for let c: i64 = 0, c < 4, c++ {
                 if piece_cell(piece, rotation, r, c) != 0 {
-                    let bx: int = test_x + c
-                    let by: int = test_y + r
+                    let bx: i64 = test_x + c
+                    let by: i64 = test_y + r
                     if bx < 0 || bx >= BOARD_WIDTH || by >= BOARD_HEIGHT {
                         return true
                     }
@@ -193,7 +193,7 @@ class Game {
         return false
     }
 
-    func try_move(dx: int, dy: int) -> bool {
+    func try_move(dx: i64, dy: i64) -> bool {
         if self.check_collision(self.piece_type, self.rotation, self.px + dx, self.py + dy) {
             return false
         }
@@ -206,7 +206,7 @@ class Game {
     // attempts if the straight rotation doesn't fit - not the full SRS
     // kick table, just enough that rotating near a wall usually works.
     func try_rotate() {
-        let new_rotation: int = (self.rotation + 1) % 4
+        let new_rotation: i64 = (self.rotation + 1) % 4
         if !self.check_collision(self.piece_type, new_rotation, self.px, self.py) {
             self.rotation = new_rotation
             return
@@ -224,11 +224,11 @@ class Game {
     }
 
     func lock_piece() {
-        for let r: int = 0, r < 4, r++ {
-            for let c: int = 0, c < 4, c++ {
+        for let r: i64 = 0, r < 4, r++ {
+            for let c: i64 = 0, c < 4, c++ {
                 if piece_cell(self.piece_type, self.rotation, r, c) != 0 {
-                    let bx: int = self.px + c
-                    let by: int = self.py + r
+                    let bx: i64 = self.px + c
+                    let by: i64 = self.py + r
                     if by >= 0 && by < BOARD_HEIGHT && bx >= 0 && bx < BOARD_WIDTH {
                         self.board[by * BOARD_WIDTH + bx] = self.piece_type + 1
                     }
@@ -247,9 +247,9 @@ class Game {
 
     func find_cleared_rows() {
         self.clear_count = 0
-        for let y: int = 0, y < BOARD_HEIGHT, y++ {
+        for let y: i64 = 0, y < BOARD_HEIGHT, y++ {
             let full: bool = true
-            for let x: int = 0, x < BOARD_WIDTH, x++ {
+            for let x: i64 = 0, x < BOARD_WIDTH, x++ {
                 if self.board[y * BOARD_WIDTH + x] == 0 {
                     full = false
                 }
@@ -264,7 +264,7 @@ class Game {
         }
     }
 
-    func is_clearing_row(y: int) -> bool {
+    func is_clearing_row(y: i64) -> bool {
         if self.clear_count > 0 && y == self.clear_row0 { return true }
         if self.clear_count > 1 && y == self.clear_row1 { return true }
         if self.clear_count > 2 && y == self.clear_row2 { return true }
@@ -277,19 +277,19 @@ class Game {
     // left uncopied at the top is zeroed - handles any combination of
     // 1-4 cleared rows, contiguous or not.
     func finish_clear() {
-        let write_y: int = BOARD_HEIGHT - 1
-        for let read_y: int = BOARD_HEIGHT - 1, read_y >= 0, read_y = read_y - 1 {
+        let write_y: i64 = BOARD_HEIGHT - 1
+        for let read_y: i64 = BOARD_HEIGHT - 1, read_y >= 0, read_y = read_y - 1 {
             if !self.is_clearing_row(read_y) {
                 if write_y != read_y {
-                    for let x: int = 0, x < BOARD_WIDTH, x++ {
+                    for let x: i64 = 0, x < BOARD_WIDTH, x++ {
                         self.board[write_y * BOARD_WIDTH + x] = self.board[read_y * BOARD_WIDTH + x]
                     }
                 }
                 write_y = write_y - 1
             }
         }
-        for let y: int = 0, y <= write_y, y++ {
-            for let x: int = 0, x < BOARD_WIDTH, x++ {
+        for let y: i64 = 0, y <= write_y, y++ {
+            for let x: i64 = 0, x < BOARD_WIDTH, x++ {
                 self.board[y * BOARD_WIDTH + x] = 0
             }
         }
@@ -327,16 +327,16 @@ class Game {
 
         self.move_timer = self.move_timer - dt
         if self.move_timer <= 0.0 {
-            if keys[SDL_SCANCODE_LEFT as int] {
+            if keys[SDL_SCANCODE_LEFT as i64] {
                 self.try_move(-1, 0)
                 self.move_timer = MOVE_REPEAT_DELAY
-            } else if keys[SDL_SCANCODE_RIGHT as int] {
+            } else if keys[SDL_SCANCODE_RIGHT as i64] {
                 self.try_move(1, 0)
                 self.move_timer = MOVE_REPEAT_DELAY
             }
         }
 
-        self.soft_dropping = keys[SDL_SCANCODE_DOWN as int]
+        self.soft_dropping = keys[SDL_SCANCODE_DOWN as i64]
         let effective_interval: float = if self.soft_dropping {
             self.drop_interval / SOFT_DROP_MULTIPLIER
         } else {
@@ -358,7 +358,7 @@ class Game {
         if self.game_over || self.clearing {
             return
         }
-        let dropped: int = 0
+        let dropped: i64 = 0
         while self.try_move(0, 1) {
             dropped = dropped + 1
         }
@@ -371,7 +371,7 @@ class Game {
         // over, so there's still something visibly animated even though
         // gameplay itself has stopped.
         if self.game_over {
-            let flash: bool = ((self.game_over_timer * 2.0) as int) % 2 == 0
+            let flash: bool = ((self.game_over_timer * 2.0) as i64) % 2 == 0
             if flash {
                 renderer.set_draw_color(60, 10, 10, 255)
             } else {
@@ -384,13 +384,13 @@ class Game {
         renderer.fill_rect(bg)
 
         // Locked cells, flashing white/gray while their row is clearing.
-        for let y: int = 0, y < BOARD_HEIGHT, y++ {
+        for let y: i64 = 0, y < BOARD_HEIGHT, y++ {
             let flashing: bool = self.clearing && self.is_clearing_row(y)
-            for let x: int = 0, x < BOARD_WIDTH, x++ {
-                let cell: int = self.board[y * BOARD_WIDTH + x]
+            for let x: i64 = 0, x < BOARD_WIDTH, x++ {
+                let cell: i64 = self.board[y * BOARD_WIDTH + x]
                 if cell != 0 {
                     if flashing {
-                        let bright: bool = ((self.clearing_timer * 16.0) as int) % 2 == 0
+                        let bright: bool = ((self.clearing_timer * 16.0) as i64) % 2 == 0
                         if bright {
                             renderer.set_draw_color(255, 255, 255, 255)
                         } else {
@@ -420,8 +420,8 @@ class Game {
             let fall_progress: float = self.drop_timer / effective_interval
 
             set_piece_color(renderer, self.piece_type)
-            for let r: int = 0, r < 4, r++ {
-                for let c: int = 0, c < 4, c++ {
+            for let r: i64 = 0, r < 4, r++ {
+                for let c: i64 = 0, c < 4, c++ {
                     if piece_cell(self.piece_type, self.rotation, r, c) != 0 {
                         let cell_x: float = ((self.px + c) * CELL_SIZE) as float
                         let cell_y: float = (((self.py + r) as float) + fall_progress) * (CELL_SIZE as float)
@@ -441,11 +441,11 @@ class Game {
         renderer.fill_rect(sidebar)
 
         set_piece_color(renderer, self.next_type)
-        let preview_cell: int = 20
-        let preview_x: int = BOARD_PIXEL_WIDTH + 30
-        let preview_y: int = 40
-        for let r: int = 0, r < 4, r++ {
-            for let c: int = 0, c < 4, c++ {
+        let preview_cell: i64 = 20
+        let preview_x: i64 = BOARD_PIXEL_WIDTH + 30
+        let preview_y: i64 = 40
+        for let r: i64 = 0, r < 4, r++ {
+            for let c: i64 = 0, c < 4, c++ {
                 if piece_cell(self.next_type, 0, r, c) != 0 {
                     let rect: SDL_Rect = new SDL_Rect(
                         preview_x + c * preview_cell, preview_y + r * preview_cell,
@@ -458,7 +458,7 @@ class Game {
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     srand(SDL.get_ticks() as u32)
 
     let init_result: Result<bool, char*> = SDL.init(SDL_INIT_VIDEO)
@@ -483,8 +483,8 @@ func main() -> int {
 
     let last_time: uint64 = SDL.get_ticks()
     let running: bool = true
-    let last_shown_score: int = -1
-    let last_shown_level: int = -1
+    let last_shown_score: i64 = -1
+    let last_shown_level: i64 = -1
     let shown_game_over: bool = false
 
     while running {

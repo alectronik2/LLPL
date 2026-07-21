@@ -1,0 +1,293 @@
+// Simplified TrueType font renderer for baremetal
+// Supports basic TTF parsing and glyph rasterization
+// Focused on simple, clear rendering without complex hinting
+
+import "../libsys/imports"
+
+// TTF table tags (big-endian)
+const TAG_HEAD: u32 = 0x68656164  // 'head'
+const TAG_CMAP: u32 = 0x636D6170  // 'cmap'
+const TAG_GLYF: u32 = 0x676C7966  // 'glyf'
+const TAG_LOCA: u32 = 0x6C6F6361  // 'loca'
+const TAG_HHEA: u32 = 0x68686561  // 'hhea'
+const TAG_HMTX: u32 = 0x686D7478  // 'hmtx'
+const TAG_MAXP: u32 = 0x6D617870  // 'maxp'
+
+// Glyph outline flags
+const ON_CURVE: u8 = 0x01
+const X_SHORT: u8 = 0x02
+const Y_SHORT: u8 = 0x04
+const REPEAT: u8 = 0x08
+const X_SAME_OR_POSITIVE: u8 = 0x10
+const Y_SAME_OR_POSITIVE: u8 = 0x20
+
+struct TtfTable {
+    let tag: u32
+    let checksum: u32
+    let offset: u32
+    let length: u32
+}
+
+struct TtfFont {
+    let data: u8*
+    let num_glyphs: u16
+    let units_per_em: u16
+    let index_to_loc_format: i16
+    let head_offset: u32
+    let cmap_offset: u32
+    let glyf_offset: u32
+    let loca_offset: u32
+    let hhea_offset: u32
+    let hmtx_offset: u32
+}
+
+struct GlyphMetrics {
+    let advance_width: i16
+    let left_side_bearing: i16
+    let x_min: i16
+    let y_min: i16
+    let x_max: i16
+    let y_max: i16
+}
+
+struct Point {
+    let x: i16
+    let y: i16
+    let on_curve: bool
+}
+
+// Read big-endian u16
+func read_u16_be(data: u8*, offset: u32) -> u16 {
+    let b0: u16 = data[offset] as u16
+    let b1: u16 = data[offset + 1] as u16
+    return (b0 << 8) | b1
+}
+
+// Read big-endian i16
+func read_i16_be(data: u8*, offset: u32) -> i16 {
+    let val: u16 = read_u16_be(data, offset)
+    return val as i16
+}
+
+// Read big-endian u32
+func read_u32_be(data: u8*, offset: u32) -> u32 {
+    let b0: u32 = data[offset] as u32
+    let b1: u32 = data[offset + 1] as u32
+    let b2: u32 = data[offset + 2] as u32
+    let b3: u32 = data[offset + 3] as u32
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+}
+
+// Find a table in the TTF file
+func find_table(data: u8*, tag: u32) -> u32 {
+    let num_tables: u16 = read_u16_be(data, 4)
+    let i: u16 = 0
+    while i < num_tables {
+        let table_offset: u32 = 12 + (i as u32) * 16
+        let table_tag: u32 = read_u32_be(data, table_offset)
+        if table_tag == tag {
+            return read_u32_be(data, table_offset + 8)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Initialize a TrueType font from data
+func ttf_init(data: u8*) -> TtfFont {
+    let font: TtfFont
+    font.data = data
+
+    // Find required tables
+    font.head_offset = find_table(data, TAG_HEAD)
+    font.cmap_offset = find_table(data, TAG_CMAP)
+    font.glyf_offset = find_table(data, TAG_GLYF)
+    font.loca_offset = find_table(data, TAG_LOCA)
+    font.hhea_offset = find_table(data, TAG_HHEA)
+    font.hmtx_offset = find_table(data, TAG_HMTX)
+
+    // Read head table
+    if font.head_offset != 0 {
+        font.units_per_em = read_u16_be(data, font.head_offset + 18)
+        font.index_to_loc_format = read_i16_be(data, font.head_offset + 50)
+    }
+
+    // Read maxp table for number of glyphs
+    let maxp_offset: u32 = find_table(data, TAG_MAXP)
+    if maxp_offset != 0 {
+        font.num_glyphs = read_u16_be(data, maxp_offset + 4)
+    }
+
+    return font
+}
+
+// Get glyph index for a Unicode character
+func ttf_get_glyph_index(font: TtfFont, codepoint: u32) -> u16 {
+    if font.cmap_offset == 0 {
+        return 0
+    }
+
+    let cmap: u8* = font.data + font.cmap_offset
+    let num_tables: u16 = read_u16_be(cmap, 2)
+
+    // Look for a Unicode cmap (platform 0 or platform 3)
+    let i: u16 = 0
+    while i < num_tables {
+        let encoding_offset: u32 = 4 + (i as u32) * 8
+        let platform_id: u16 = read_u16_be(cmap, encoding_offset)
+        let encoding_id: u16 = read_u16_be(cmap, encoding_offset + 2)
+        let subtable_offset: u32 = read_u32_be(cmap, encoding_offset + 4)
+
+        // Format 4 subtable (most common for Unicode)
+        if platform_id == 3 && encoding_id == 1 {
+            let subtable: u8* = cmap + subtable_offset
+            let format: u16 = read_u16_be(subtable, 0)
+
+            if format == 4 {
+                let seg_count: u16 = read_u16_be(subtable, 6) / 2
+                let j: u16 = 0
+                while j < seg_count {
+                    let end_code: u16 = read_u16_be(subtable, 14 + j * 2)
+                    let start_code: u16 = read_u16_be(subtable, 16 + seg_count * 2 + j * 2)
+
+                    if codepoint >= (start_code as u32) && codepoint <= (end_code as u32) {
+                        let id_delta: i16 = read_i16_be(subtable, 16 + seg_count * 4 + j * 2)
+                        let id_range_offset: u16 = read_u16_be(subtable, 16 + seg_count * 6 + j * 2)
+
+                        if id_range_offset == 0 {
+                            return ((codepoint as i16) + id_delta) as u16
+                        }
+                    }
+                    j = j + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    return 0
+}
+
+// Get glyph offset in glyf table
+func ttf_get_glyph_offset(font: TtfFont, glyph_index: u16) -> u32 {
+    if font.loca_offset == 0 || glyph_index >= font.num_glyphs {
+        return 0
+    }
+
+    let loca: u8* = font.data + font.loca_offset
+    let offset: u32 = 0
+
+    if font.index_to_loc_format == 0 {
+        // Short format (offset / 2)
+        offset = (read_u16_be(loca, (glyph_index as u32) * 2) as u32) * 2
+    } else {
+        // Long format
+        offset = read_u32_be(loca, (glyph_index as u32) * 4)
+    }
+
+    return font.glyf_offset + offset
+}
+
+// Get glyph metrics
+func ttf_get_glyph_metrics(font: TtfFont, glyph_index: u16) -> GlyphMetrics {
+    let metrics: GlyphMetrics
+    metrics.advance_width = 0
+    metrics.left_side_bearing = 0
+    metrics.x_min = 0
+    metrics.y_min = 0
+    metrics.x_max = 0
+    metrics.y_max = 0
+
+    // Get horizontal metrics
+    if font.hmtx_offset != 0 {
+        let hmtx: u8* = font.data + font.hmtx_offset
+        metrics.advance_width = read_i16_be(hmtx, (glyph_index as u32) * 4)
+        metrics.left_side_bearing = read_i16_be(hmtx, (glyph_index as u32) * 4 + 2)
+    }
+
+    // Get bounding box from glyph data
+    let glyph_offset: u32 = ttf_get_glyph_offset(font, glyph_index)
+    if glyph_offset != 0 {
+        let glyph_data: u8* = font.data + glyph_offset
+        let num_contours: i16 = read_i16_be(glyph_data, 0)
+
+        if num_contours >= 0 {
+            metrics.x_min = read_i16_be(glyph_data, 2)
+            metrics.y_min = read_i16_be(glyph_data, 4)
+            metrics.x_max = read_i16_be(glyph_data, 6)
+            metrics.y_max = read_i16_be(glyph_data, 8)
+        }
+    }
+
+    return metrics
+}
+
+// Simple rasterizer: render a glyph to a bitmap
+// For now, we'll use a simple fill algorithm for demonstration
+func ttf_render_glyph(font: TtfFont, glyph_index: u16, size: i16,
+                      buffer: u8*, buf_w: i16, buf_h: i16) -> bool {
+    let glyph_offset: u32 = ttf_get_glyph_offset(font, glyph_index)
+    if glyph_offset == 0 {
+        return false
+    }
+
+    let glyph_data: u8* = font.data + glyph_offset
+    let num_contours: i16 = read_i16_be(glyph_data, 0)
+
+    if num_contours < 0 {
+        // Composite glyph - not implemented yet
+        return false
+    }
+
+    if num_contours == 0 {
+        // Empty glyph (space character)
+        return true
+    }
+
+    let metrics: GlyphMetrics = ttf_get_glyph_metrics(font, glyph_index)
+
+    // Calculate scale factor
+    let scale: i16 = (size * 64) / (font.units_per_em as i16)
+
+    // Simple rasterization: draw a box for now as a placeholder
+    // A full implementation would parse the glyph outline and rasterize it
+    let x_min: i16 = (metrics.x_min * scale) / 64
+    let y_min: i16 = (metrics.y_min * scale) / 64
+    let x_max: i16 = (metrics.x_max * scale) / 64
+    let y_max: i16 = (metrics.y_max * scale) / 64
+
+    // Draw simple representation
+    let y: i16 = y_min
+    while y <= y_max {
+        let x: i16 = x_min
+        while x <= x_max {
+            if x >= 0 && x < buf_w && y >= 0 && y < buf_h {
+                buffer[(y as u32) * (buf_w as u32) + (x as u32)] = 255
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+
+    return true
+}
+
+// Calculate text width
+func ttf_measure_text(font: TtfFont, text: u8*, size: i16) -> i16 {
+    let width: i16 = 0
+    let i: i64 = 0
+
+    while text[i] != 0 {
+        let codepoint: u32 = text[i] as u32
+        let glyph_index: u16 = ttf_get_glyph_index(font, codepoint)
+        let metrics: GlyphMetrics = ttf_get_glyph_metrics(font, glyph_index)
+
+        let scale: i16 = (size * 64) / (font.units_per_em as i16)
+        let advance: i16 = (metrics.advance_width * scale) / 64
+
+        width = width + advance
+        i = i + 1
+    }
+
+    return width
+}

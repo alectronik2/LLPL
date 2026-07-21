@@ -23,6 +23,7 @@ import ata
 import vfs
 import tmpfs
 import task
+import syscall
 import eventlog
 import vmm
 import ldso
@@ -37,18 +38,18 @@ namespace Shell {
     const HISTORY_SIZE = 10
 
     let history: char[1280]
-    let history_head: int = 0  // next slot history_push() will write
-    let history_count: int = 0 // how many slots are populated (caps at HISTORY_SIZE)
+    let history_head: i64 = 0  // next slot history_push() will write
+    let history_count: i64 = 0 // how many slots are populated (caps at HISTORY_SIZE)
 
     // The shell's own PATH, colon-separated directories searched (in
     // order) when a command line's first word isn't one of the builtins
     // above and doesn't resolve as a path on its own - "ping 10.0.2.2"
     // works the same way "run /boot/ping.elf 10.0.2.2" already did,
     // without spelling out where ping.elf actually lives. Mirrors
-    // kernel.llpl's own PATH=/bin:/boot:. (the environment variable
+    // kernel.llpl's own PATH=/boot:/bin:. (the environment variable
     // pushed onto every *spawned ELF's* own stack) - same default, same
-    // two directories user executables actually get installed into
-    // (/bin by vfs_boot_task_entry, /boot being every GRUB module) -
+    // two directories user executables actually live in (/boot being the
+    // fresh GRUB modules for this boot, /bin the persistent installed copy) -
     // but this is a separate copy the shell consults directly, since the
     // shell itself is kernel-side code, not a ring-3 process with an
     // envp of its own to read. Settable at runtime via "export PATH=...".
@@ -56,7 +57,7 @@ namespace Shell {
     let shell_path: char[128]
 
     func str_copy(dst: char*, src: char*) {
-        let i: int = 0
+        let i: i64 = 0
         while src[i] != 0 {
             dst[i] = src[i]
             i = i + 1
@@ -76,7 +77,7 @@ namespace Shell {
         log("<LIGHT_GREEN>llpl</> <WHITE>$</> ")
     }
 
-    func history_slot(index: int) -> char* {
+    func history_slot(index: i64) -> char* {
         return (history as char*) + (index * LINE_MAX)
     }
 
@@ -85,7 +86,7 @@ namespace Shell {
             return // don't clutter history with blank lines
         }
         let slot: char* = history_slot(history_head)
-        let i: int = 0
+        let i: i64 = 0
         while line[i] != 0 && i < LINE_MAX - 1 {
             slot[i] = line[i]
             i = i + 1
@@ -98,8 +99,8 @@ namespace Shell {
     }
 
     // Backspaces over `len` already-echoed characters, on both outputs.
-    func clear_visible_line(len: int) {
-        let i: int = 0
+    func clear_visible_line(len: i64) {
+        let i: i64 = 0
         while i < len {
             echo_char(8)
             i = i + 1
@@ -111,17 +112,17 @@ namespace Shell {
     // returns its length. `offset` outside [1, history_count] clears buf
     // instead - used for "past the oldest entry" and for returning to a
     // blank line at offset 0.
-    func load_history_into(buf: char*, offset: int) -> int {
+    func load_history_into(buf: char*, offset: i64) -> i64 {
         if offset < 1 || offset > history_count {
             buf[0] = 0
             return 0
         }
-        let idx: int = history_head - offset
+        let idx: i64 = history_head - offset
         if idx < 0 {
             idx = idx + HISTORY_SIZE
         }
         let src: char* = history_slot(idx)
-        let i: int = 0
+        let i: i64 = 0
         while src[i] != 0 {
             buf[i] = src[i]
             echo_char(src[i])
@@ -137,8 +138,8 @@ namespace Shell {
     // framebuffer and serial sides directly rather than going through
     // emit(), since it's drawing *content that already exists in `buf`*,
     // not a single freshly-typed character.
-    func redraw_tail(buf: char*, start: int, len: int) {
-        let i: int = start
+    func redraw_tail(buf: char*, start: i64, len: i64) {
+        let i: i64 = start
         while i < len {
             screen.putchar(buf[i])
             HAL.Serial.write_char(buf[i])
@@ -150,8 +151,8 @@ namespace Shell {
     // bare backspace byte (0x08) is genuine "move left" on a real
     // terminal, not "move left and erase", so this is exact on both
     // outputs (unlike move_cursor_forward_silent below).
-    func move_cursor_back(n: int) {
-        let i: int = 0
+    func move_cursor_back(n: i64) {
+        let i: i64 = 0
         while i < n {
             screen.cursor_left()
             HAL.Serial.write_char(8)
@@ -164,8 +165,8 @@ namespace Shell {
     // mirror to a raw serial stream, so serial just doesn't track this
     // one (a documented gap, not a crash risk: it only affects where
     // *echoed* text lands in a serial capture, nothing about correctness).
-    func move_cursor_forward_silent(n: int) {
-        let i: int = 0
+    func move_cursor_forward_silent(n: i64) {
+        let i: i64 = 0
         while i < n {
             screen.cursor_right()
             i = i + 1
@@ -179,10 +180,10 @@ namespace Shell {
     // redrawing it), not just at the end. Up/down arrows recall previous
     // lines from history (see load_history_into); Enter finishes the line
     // and records it.
-    func read_line(buf: char*, max_len: int) {
-        let len: int = 0
-        let cursor: int = 0
-        let nav_offset: int = 0 // 0 = live typing; 1+ = browsing history
+    func read_line(buf: char*, max_len: i64) {
+        let len: i64 = 0
+        let cursor: i64 = 0
+        let nav_offset: i64 = 0 // 0 = live typing; 1+ = browsing history
         while true {
             let c: char = Keyboard.read_char()
             if c == 10 {
@@ -200,7 +201,7 @@ namespace Shell {
                         cursor = cursor - 1
                         echo_char(8)
                     } else {
-                        let j: int = cursor - 1
+                        let j: i64 = cursor - 1
                         while j < len - 1 {
                             buf[j] = buf[j + 1]
                             j = j + 1
@@ -252,7 +253,7 @@ namespace Shell {
                         cursor = cursor + 1
                         echo_char(c)
                     } else {
-                        let j: int = len
+                        let j: i64 = len
                         while j > cursor {
                             buf[j] = buf[j - 1]
                             j = j - 1
@@ -269,7 +270,7 @@ namespace Shell {
     }
 
     func starts_with(s: char*, prefix: char*) -> bool {
-        let i: int = 0
+        let i: i64 = 0
         while prefix[i] != 0 {
             if s[i] != prefix[i] {
                 return false
@@ -285,35 +286,35 @@ namespace Shell {
     // just get address/value 0 for garbage input, same as a bad address
     // that faults: this is a raw memory-inspection tool, not a validated
     // one.
-    func parse_hex(s: char*) -> uint {
-        let i: int = 0
+    func parse_hex(s: char*) -> u64 {
+        let i: i64 = 0
         if s[0] == 48 && (s[1] == 120 || s[1] == 88) { // "0x" or "0X"
             i = 2
         }
-        let value: uint = 0
+        let value: u64 = 0
         let done: bool = false
         while s[i] != 0 && !done {
             let c: char = s[i]
-            let digit: int = -1
+            let digit: i64 = -1
             if c >= 48 && c <= 57 {
-                digit = (c as int) - 48
+                digit = (c as i64) - 48
             } else if c >= 97 && c <= 102 {
-                digit = (c as int) - 97 + 10
+                digit = (c as i64) - 97 + 10
             } else if c >= 65 && c <= 70 {
-                digit = (c as int) - 65 + 10
+                digit = (c as i64) - 65 + 10
             }
             if digit < 0 {
                 done = true
             } else {
-                value = value * 16 + (digit as uint)
+                value = value * 16 + (digit as u64)
                 i = i + 1
             }
         }
         return value
     }
 
-    func find_space(s: char*) -> int {
-        let i: int = 0
+    func find_space(s: char*) -> i64 {
+        let i: i64 = 0
         while s[i] != 0 && s[i] != 32 {
             i = i + 1
         }
@@ -325,9 +326,9 @@ namespace Shell {
     // in this kernel's single ring-0 address space (there's no MMU
     // protection between "the shell" and "everything else" here).
     func cmd_peek(args: char*) {
-        let addr: uint = parse_hex(args)
+        let addr: u64 = parse_hex(args)
         let p: char* = addr as char*
-        let value: int = (p[0] as int) & 255
+        let value: i64 = (p[0] as i64) & 255
         log("<WHITE>[\(addr:016:hex)] = \(value:02:hex)\n</>")
     }
 
@@ -335,21 +336,21 @@ namespace Shell {
     // space (safe: it's a pointer into Shell.run()'s line buffer, which
     // gets overwritten on the next read_line anyway).
     func cmd_poke(args: char*) {
-        let sep: int = find_space(args)
+        let sep: i64 = find_space(args)
         if args[sep] == 0 {
             log("<LIGHT_RED>usage: poke <addr> <value>\n</>")
             return
         }
         args[sep] = 0
-        let addr: uint = parse_hex(args)
-        let value: uint = parse_hex(args + sep + 1)
+        let addr: u64 = parse_hex(args)
+        let value: u64 = parse_hex(args + sep + 1)
         let p: char* = addr as char*
         p[0] = (value & 255) as char
         log("<WHITE>[\(addr:016:hex)] = \(value:02:hex)\n</>")
     }
 
     func is_printable(c: char) -> bool {
-        let v: int = (c as int) & 255
+        let v: i64 = (c as i64) & 255
         return v >= 32 && v <= 126
     }
 
@@ -357,9 +358,9 @@ namespace Shell {
     // left, the same bytes as ASCII (non-printable ones shown as '.') on
     // the right. LEN defaults to 16 (one row) if omitted or zero.
     func cmd_dump(args: char*) {
-        let sep: int = find_space(args)
-        let addr: uint = parse_hex(args)
-        let len: uint = 16
+        let sep: i64 = find_space(args)
+        let addr: u64 = parse_hex(args)
+        let len: u64 = 16
         if args[sep] != 0 {
             len = parse_hex(args + sep + 1)
         }
@@ -368,18 +369,18 @@ namespace Shell {
         }
 
         let p: char* = addr as char*
-        let offset: uint = 0
+        let offset: u64 = 0
         while offset < len {
             log("<WHITE>\(addr + offset:016:hex): </>")
 
-            let row_len: uint = len - offset
+            let row_len: u64 = len - offset
             if row_len > 16 {
                 row_len = 16
             }
 
-            let i: uint = 0
+            let i: u64 = 0
             while i < row_len {
-                let b: int = (p[offset + i] as int) & 255
+                let b: i64 = (p[offset + i] as i64) & 255
                 log("\(b:02:hex) ")
                 i = i + 1
             }
@@ -431,6 +432,7 @@ namespace Shell {
         print("  kfree ADDR    - free a kernel heap block\n")
         print("  kheap         - show kernel heap stats\n")
         print("  tasks         - show scheduler/task stats\n")
+        print("  perf          - show kernel performance counters\n")
         print("  ipc           - show message-passing state\n")
         print("  ldso          - show loaded user shared libraries\n")
         print("  stacks        - check kernel stack canaries and user guards\n")
@@ -450,7 +452,7 @@ namespace Shell {
         print("  ./PATH        - spawn an ELF executable from the current directory\n")
         print("  NAME [args]   - spawn NAME.elf found on PATH (like 'run', without the path)\n")
         print("  path          - print the current PATH\n")
-        print("  export PATH=DIRS - set PATH (colon-separated, default /bin:/boot:.)\n")
+        print("  export PATH=DIRS - set PATH (colon-separated, default /boot:/bin:.)\n")
         print("\n")
         print("\"boot\" (shown by plain ls at the root) is the read-only tmpfs\n")
         print("of multiboot2 modules GRUB loaded alongside the kernel - \"cd\n")
@@ -492,25 +494,25 @@ namespace Shell {
             return
         }
 
-        let dropped: uint = EventLog.dropped()
+        let dropped: u64 = EventLog.dropped()
         if dropped > 0 {
             log("<YELLOW>\(dropped) older event(s) overwritten\n</>")
         }
 
-        let n: int = EventLog.size()
+        let n: i64 = EventLog.size()
         if n == 0 {
             print("(empty)\n")
             return
         }
 
-        let i: int = 0
+        let i: i64 = 0
         while i < n {
             log("<WHITE>[\(EventLog.seq_at(i)) t=\(EventLog.tick_at(i))] </>")
             log("<CYAN>")
             print(EventLog.source_at(i))
             log("</> ")
             print(EventLog.message_at(i))
-            let argc: int = EventLog.arg_count_at(i)
+            let argc: i64 = EventLog.arg_count_at(i)
             if argc >= 1 {
                 log(" a=\(EventLog.arg_a_at(i):016:hex)")
             }
@@ -529,7 +531,7 @@ namespace Shell {
     // This never returns.
     func cmd_panic() {
         EventLog.add0("fault", "panic command")
-        let v: Vector<int> = new Vector<int>()
+        let v: Vector<i64> = new Vector<i64>()
         v.push(1)
         v.get(5) // out of bounds - panics
     }
@@ -545,8 +547,8 @@ namespace Shell {
         if starts_with(args, "div0") {
             EventLog.add0("fault", "divide by zero command")
             log("<YELLOW>triggering divide-by-zero; kernel will halt\n</>")
-            let zero: uint = 0
-            let value: uint = 1 / zero
+            let zero: u64 = 0
+            let value: u64 = 1 / zero
             log("<WHITE>unreachable \(value)\n</>")
             return
         }
@@ -554,7 +556,7 @@ namespace Shell {
             EventLog.add0("fault", "page fault command")
             log("<YELLOW>reading unmapped memory; kernel will halt\n</>")
             let p: char* = 0x400000000 as char*
-            let value: int = (p[0] as int) & 255
+            let value: i64 = (p[0] as i64) & 255
             log("<WHITE>unreachable \(value)\n</>")
             return
         }
@@ -584,7 +586,7 @@ namespace Shell {
     // from PageAlloc.alloc() - never a valid page, since page 0 is always
     // reserved as part of the low-1MB region).
     func cmd_alloc() {
-        let addr: uint = PageAlloc.alloc()
+        let addr: u64 = PageAlloc.alloc()
         if addr == 0 {
             log("<LIGHT_RED>out of memory\n</>")
         } else {
@@ -596,7 +598,7 @@ namespace Shell {
     // any page-aligned physical address, no bookkeeping of who owns what
     // pages is done here - same "trust the caller" spirit as peek/poke).
     func cmd_free(args: char*) {
-        let addr: uint = parse_hex(args)
+        let addr: u64 = parse_hex(args)
         PageAlloc.free(addr)
         log("<WHITE>freed page at \(addr:016:hex)\n</>")
     }
@@ -604,7 +606,7 @@ namespace Shell {
     func cmd_meminfo() {
         log("<WHITE>total: \(PageAlloc.total_pages) pages (\(PageAlloc.total_pages * 4) KB)\n</>")
         log("<WHITE>free:  \(PageAlloc.free_pages) pages (\(PageAlloc.free_pages * 4) KB)\n</>")
-        let used: uint = PageAlloc.total_pages - PageAlloc.free_pages
+        let used: u64 = PageAlloc.total_pages - PageAlloc.free_pages
         log("<WHITE>used:  \(used) pages (\(used * 4) KB)\n</>")
     }
 
@@ -614,8 +616,8 @@ namespace Shell {
     // contiguous pages from PageAlloc as needed - so SIZE isn't capped at
     // one page, only by how much contiguous physical memory is still free.
     func cmd_kmalloc(args: char*) {
-        let size: uint = parse_hex(args)
-        let addr: uint = KHeap.kmalloc(size)
+        let size: u64 = parse_hex(args)
+        let addr: u64 = KHeap.kmalloc(size)
         if addr == 0 {
             log("<LIGHT_RED>out of heap memory (no free block or contiguous physical run big enough)\n</>")
         } else {
@@ -628,7 +630,7 @@ namespace Shell {
     // of who owns what, so freeing a bogus address corrupts the heap just
     // like it would in C.
     func cmd_kfree(args: char*) {
-        let addr: uint = parse_hex(args)
+        let addr: u64 = parse_hex(args)
         KHeap.kfree(addr)
         log("<WHITE>kfree(\(addr:016:hex))\n</>")
     }
@@ -650,7 +652,7 @@ namespace Shell {
         log("<WHITE>bg_counter:   \(bg_counter)\n</>")
         log("<WHITE>timer_ticks:  \(timer_ticks)\n</>")
 
-        let i: int = 0
+        let i: i64 = 0
         while i < Task.task_count {
             log("<CYAN>task \(Task.id_at(i))</> ")
             print(Task.name_at(i))
@@ -675,10 +677,35 @@ namespace Shell {
         }
     }
 
+    func cmd_perf() {
+        log("<WHITE>perf counters\n</>")
+        log("<CYAN>scheduler</>\n")
+        log("  timer ticks:       \(timer_ticks)\n")
+        log("  schedule entries:  \(Task.schedule_ticks)\n")
+        log("  context switches:  \(Task.context_switches_total)\n")
+        log("  bg counter:        \(bg_counter)\n")
+
+        log("<CYAN>syscalls/ipc</>\n")
+        log("  syscalls:          \(Syscall.dispatch_count)\n")
+        log("  msg send:          \(Syscall.msg_send_count)\n")
+        log("  msg recv:          \(Syscall.msg_recv_count)\n")
+        log("  msg try_recv:      \(Syscall.msg_try_recv_count)\n")
+        log("  msg reply:         \(Syscall.msg_reply_count)\n")
+
+        log("<CYAN>ata</>\n")
+        log("  ipc calls:         \(ATA.ipc_calls)\n")
+        log("  read ops:          \(ATA.read_ops)\n")
+        log("  read sectors:      \(ATA.read_sectors_total)\n")
+        log("  write ops:         \(ATA.write_ops)\n")
+        log("  write sectors:     \(ATA.write_sectors_total)\n")
+        log("  cache hits:        \(ATA.cache_hits)\n")
+        log("  cache misses:      \(ATA.cache_misses)\n")
+    }
+
     func cmd_ipc() {
-        let i: int = 0
+        let i: i64 = 0
         while i < Task.task_count {
-            let state: int = Task.state_at(i)
+            let state: i64 = Task.state_at(i)
             if state == Task.STATE_SEND_BLOCKED || state == Task.STATE_RECV_BLOCKED || state == Task.STATE_REPLY_BLOCKED {
                 log("<CYAN>task \(Task.id_at(i))</> ")
                 print(Task.name_at(i))
@@ -691,14 +718,14 @@ namespace Shell {
     }
 
     func cmd_stacks() {
-        let bad: int = Task.check_all_stacks()
+        let bad: i64 = Task.check_all_stacks()
         if bad == 0 {
             log("<GREEN>all kernel stack canaries intact\n</>")
         } else {
             log("<LIGHT_RED>\(bad) kernel stack canary failure(s)\n</>")
         }
 
-        let i: int = 0
+        let i: i64 = 0
         while i < Task.task_count {
             log("<CYAN>task \(Task.id_at(i))</> ")
             print(Task.name_at(i))
@@ -721,7 +748,7 @@ namespace Shell {
     }
 
     func cmd_sleep(args: char*) {
-        let ticks: uint = parse_hex(args)
+        let ticks: u64 = parse_hex(args)
         if ticks == 0 {
             ticks = 1
         }
@@ -734,7 +761,7 @@ namespace Shell {
     // fails when the heap itself runs out, so this can be called far more
     // than 16 times in a row and keep succeeding.
     func cmd_spawn() {
-        let id: int = Task.spawn_named(idle_task_entry as uint, "idle")
+        let id: i64 = Task.spawn_named(idle_task_entry as u64, "idle")
         if id < 0 {
             log("<LIGHT_RED>spawn failed (out of heap memory)\n</>")
         } else {
@@ -746,12 +773,12 @@ namespace Shell {
     // when VFS.resolve() says the path landed on the /boot mount. "m" (not
     // "d"/"f") marks these as neither an ordinary file nor a directory.
     func cmd_ls_boot() {
-        let n: int = TmpFS.count()
+        let n: i64 = TmpFS.count()
         if n == 0 {
             print("(empty)\n")
             return
         }
-        let i: int = 0
+        let i: i64 = 0
         while i < n {
             let namebuf: char[32]
             TmpFS.name_at(i, namebuf as char*)
@@ -790,14 +817,14 @@ namespace Shell {
                 // actually discoverable without already knowing to type
                 // "ls /boot" or "cd /boot" blind.
                 let is_root: bool = idx == VFS.ROOT_INODE
-                let child: int = VFS.first_child(idx)
+                let child: i64 = VFS.first_child(idx)
                 if child == -1 && !is_root {
                     print("(empty)\n")
                 }
                 while child != -1 {
                     let namebuf: char[32]
                     VFS.inode_name(child, namebuf as char*)
-                    let size: uint = VFS.inode_size(child)
+                    let size: u64 = VFS.inode_size(child)
                     if VFS.inode_kind(child) == VFS.KIND_DIR {
                         log("<LIGHT_BLUE>d</> <WHITE>-</> ")
                     } else {
@@ -884,7 +911,7 @@ namespace Shell {
         match VFS.resolve(args) {
             case VFS.Node.TmpfsFile(idx) => {
                 let buf: char[4096]
-                let n: int = TmpFS.read(idx, buf as char*, CAT_MAX - 1)
+                let n: i64 = TmpFS.read(idx, buf as char*, CAT_MAX - 1)
                 buf[n] = 0
                 print(buf as char*)
                 print("\n")
@@ -895,7 +922,7 @@ namespace Shell {
                     return
                 }
                 let buf: char[4096]
-                let n: int = VFS.read(args, buf as char*, CAT_MAX - 1)
+                let n: i64 = VFS.read(args, buf as char*, CAT_MAX - 1)
                 buf[n] = 0
                 print(buf as char*)
                 print("\n")
@@ -914,7 +941,7 @@ namespace Shell {
     // contain spaces. Always replaces the whole file's content, creating
     // it first if needed.
     func cmd_write(args: char*) {
-        let sep: int = find_space(args)
+        let sep: i64 = find_space(args)
         if args[sep] == 0 {
             log("<LIGHT_RED>usage: write <path> <text>\n</>")
             return
@@ -922,7 +949,7 @@ namespace Shell {
         args[sep] = 0
         let path: char* = args
         let text: char* = args + sep + 1
-        let len: uint = 0
+        let len: u64 = 0
         while text[len] != 0 {
             len = len + 1
         }
@@ -936,7 +963,7 @@ namespace Shell {
             log("<LIGHT_RED>usage: run <path> [args...]\n</>")
             return
         }
-        let sep: int = find_space(args)
+        let sep: i64 = find_space(args)
         let ok: bool = false
         if args[sep] == 0 {
             ok = run_user_executable_with_args(args, "")
@@ -969,9 +996,9 @@ namespace Shell {
         }
     }
 
-    func str_append(dst: char*, dst_len: int, src: char*) -> int {
-        let i: int = dst_len
-        let j: int = 0
+    func str_append(dst: char*, dst_len: i64, src: char*) -> i64 {
+        let i: i64 = dst_len
+        let j: i64 = 0
         while src[j] != 0 {
             dst[i] = src[j]
             i = i + 1
@@ -989,16 +1016,16 @@ namespace Shell {
     // false if `name` isn't found anywhere on the path.
     func path_lookup(name: char*, out: char*) -> bool {
         let path: char* = shell_path as char*
-        let i: int = 0
+        let i: i64 = 0
         while path[i] != 0 {
-            let start: int = i
+            let start: i64 = i
             while path[i] != 0 && path[i] != 58 { // ':'
                 i = i + 1
             }
-            let seg_len: int = i - start
+            let seg_len: i64 = i - start
             if seg_len > 0 {
                 let dir: char[128]
-                let k: int = 0
+                let k: i64 = 0
                 while k < seg_len {
                     dir[k] = path[start + k]
                     k = k + 1
@@ -1006,10 +1033,10 @@ namespace Shell {
                 dir[seg_len] = 0
 
                 let candidate: char[128]
-                let n: int = 0
+                let n: i64 = 0
                 n = str_append(candidate as char*, 0, dir as char*)
                 n = str_append(candidate as char*, n, "/")
-                let name_end: int = str_append(candidate as char*, n, name)
+                let name_end: i64 = str_append(candidate as char*, n, name)
                 if vfs_is_runnable(candidate as char*) {
                     str_copy(out, candidate as char*)
                     return true
@@ -1037,9 +1064,9 @@ namespace Shell {
     // the line, so "ping 10.0.2.2" behaves like "run /boot/ping.elf
     // 10.0.2.2" without spelling out where ping.elf lives.
     func try_run_by_name(line: char*) -> bool {
-        let sep: int = find_space(line)
+        let sep: i64 = find_space(line)
         let name: char[128]
-        let k: int = 0
+        let k: i64 = 0
         while k < sep {
             name[k] = line[k]
             k = k + 1
@@ -1071,9 +1098,9 @@ namespace Shell {
     }
 
     func cmd_wait(args: char*) {
-        let pid: int = parse_hex(args) as int
-        let status: uint = 0
-        let child_state: int = Task.child_status(pid, &status)
+        let pid: i64 = parse_hex(args) as i64
+        let status: u64 = 0
+        let child_state: i64 = Task.child_status(pid, &status)
         if child_state < 0 {
             log("<LIGHT_RED>no such child\n</>")
             return
@@ -1090,7 +1117,7 @@ namespace Shell {
     }
 
     func cmd_kill(args: char*) {
-        let pid: int = parse_hex(args) as int
+        let pid: i64 = parse_hex(args) as i64
         let aspace: VMM.AddressSpace* = Task.aspace_by_id(pid)
         if aspace != null {
             LdSo.cleanup_aspace(aspace)
@@ -1142,6 +1169,9 @@ namespace Shell {
             }
             case "tasks" => {
                 cmd_tasks()
+            }
+            case "perf" => {
+                cmd_perf()
             }
             case "ipc" => {
                 cmd_ipc()
@@ -1225,7 +1255,7 @@ namespace Shell {
     }
 
     func run() {
-        str_copy(shell_path as char*, "/bin:/boot:.")
+        str_copy(shell_path as char*, "/boot:/bin:.")
         log("<CYAN>Starting the shell. Type 'help' for a list of commands.\n</>")
         let buf: char[128]
         while true {

@@ -1,0 +1,664 @@
+// Modern UI widget library for windowed applications
+// Provides polished controls: buttons, checkboxes, radio buttons, text inputs, etc.
+// Uses gradients and modern styling similar to macOS/modern UIs
+//
+// Built around a `Widget` base class (x/y/w/h + hover/active/disabled) with
+// a `virtual draw()` and a handful of other virtual event hooks
+// (click/drag/release/unfocus/key_input) - every concrete control
+// (Button, Checkbox, RadioButton, TextBox, Slider, ProgressBar, Panel,
+// Label) overrides just the hooks it actually cares about, and the app
+// (ui_demo.llpl) drives the whole UI through one `Vector<Widget>`,
+// dispatching each frame's draw/input entirely through virtual calls
+// instead of switching on a widget-type tag by hand.
+
+import "../libsys/imports"
+import "font"
+
+// Color scheme for modern UI widgets
+const UI_BG_LIGHT: u32 = 0xF5F5F5
+const UI_BG_MEDIUM: u32 = 0xE0E0E0
+const UI_BG_DARK: u32 = 0xC0C0C0
+const UI_ACCENT_BLUE: u32 = 0x007AFF
+const UI_ACCENT_BLUE_HOVER: u32 = 0x0051D5
+const UI_ACCENT_BLUE_ACTIVE: u32 = 0x003D9E
+const UI_TEXT_PRIMARY: u32 = 0x000000
+const UI_TEXT_SECONDARY: u32 = 0x666666
+const UI_TEXT_ON_ACCENT: u32 = 0xFFFFFF
+const UI_BORDER: u32 = 0xC0C0C0
+const UI_BORDER_FOCUS: u32 = 0x007AFF
+const UI_SHADOW: u32 = 0x00000040
+
+// Helper: blend two colors by a factor (0-255)
+func blend_colors(c1: u32, c2: u32, factor: i64) -> u32 {
+    let r1: i64 = (c1 >> 16) & 0xFF
+    let g1: i64 = (c1 >> 8) & 0xFF
+    let b1: i64 = c1 & 0xFF
+    let r2: i64 = (c2 >> 16) & 0xFF
+    let g2: i64 = (c2 >> 8) & 0xFF
+    let b2: i64 = c2 & 0xFF
+
+    let r: i64 = (r1 * (255 - factor) + r2 * factor) / 255
+    let g: i64 = (g1 * (255 - factor) + g2 * factor) / 255
+    let b: i64 = (b1 * (255 - factor) + b2 * factor) / 255
+
+    return ((r << 16) | (g << 8) | b) as u32
+}
+
+// Helper: draw a pixel to a buffer with bounds checking
+func draw_pixel(buf: u32*, buf_w: i64, buf_h: i64, x: i64, y: i64, color: u32) {
+    if x >= 0 && x < buf_w && y >= 0 && y < buf_h {
+        buf[y * buf_w + x] = color
+    }
+}
+
+// Draw a vertical gradient rectangle
+func draw_gradient_rect(buf: u32*, buf_w: i64, buf_h: i64,
+                         x: i64, y: i64, w: i64, h: i64,
+                         top_color: u32, bottom_color: u32) {
+    let row: i64 = 0
+    while row < h {
+        let factor: i64 = (row * 255) / h
+        let color: u32 = blend_colors(top_color, bottom_color, factor)
+        let col: i64 = 0
+        while col < w {
+            draw_pixel(buf, buf_w, buf_h, x + col, y + row, color)
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+// Draw a filled rectangle
+func draw_rect(buf: u32*, buf_w: i64, buf_h: i64,
+               x: i64, y: i64, w: i64, h: i64, color: u32) {
+    let row: i64 = 0
+    while row < h {
+        let col: i64 = 0
+        while col < w {
+            draw_pixel(buf, buf_w, buf_h, x + col, y + row, color)
+            col = col + 1
+        }
+        row = row + 1
+    }
+}
+
+// Draw a rectangle outline
+func draw_rect_outline(buf: u32*, buf_w: i64, buf_h: i64,
+                        x: i64, y: i64, w: i64, h: i64, color: u32) {
+    // Top and bottom
+    let col: i64 = 0
+    while col < w {
+        draw_pixel(buf, buf_w, buf_h, x + col, y, color)
+        draw_pixel(buf, buf_w, buf_h, x + col, y + h - 1, color)
+        col = col + 1
+    }
+    // Left and right
+    let row: i64 = 0
+    while row < h {
+        draw_pixel(buf, buf_w, buf_h, x, y + row, color)
+        draw_pixel(buf, buf_w, buf_h, x + w - 1, y + row, color)
+        row = row + 1
+    }
+}
+
+// Draw text with a transparent background - only "on" glyph pixels are
+// painted (no background box), the shared rendering helper every widget's
+// own draw() below uses for its label/caption text.
+func draw_text_transparent(buf: u32*, buf_w: i64, buf_h: i64,
+                            x: i64, y: i64, text: u8*, color: u32) {
+    let i: i64 = 0
+    let cur_x: i64 = x
+    while text[i] != 0 {
+        let code: i64 = text[i] as i64
+        if code < 32 || code > 126 {
+            code = 32
+        }
+        let glyph_offset: i64 = (code - 32) * Font.GLYPH_HEIGHT
+        let row: i64 = 0
+        while row < Font.GLYPH_HEIGHT {
+            let bits: i64 = (Font.font_data[glyph_offset + row] as i64) & 255
+            let col: i64 = 0
+            while col < Font.GLYPH_WIDTH {
+                let mask: i64 = 128 >> col
+                if (bits & mask) != 0 {
+                    draw_pixel(buf, buf_w, buf_h, cur_x + col, y + row, color)
+                }
+                col = col + 1
+            }
+            row = row + 1
+        }
+        cur_x = cur_x + Font.GLYPH_WIDTH
+        i = i + 1
+    }
+}
+
+// Pixel width of `text` if drawn with draw_text_transparent - used to
+// center a button's label.
+func text_width(text: u8*) -> i64 {
+    let len: i64 = 0
+    while text[len] != 0 {
+        len = len + 1
+    }
+    return len * Font.GLYPH_WIDTH
+}
+
+// Formats `value` (0-100) as a decimal string into `buf` (must have room
+// for at least 4 bytes) - used to redraw the slider's live value label.
+func format_int(buf: u8*, value: i64) {
+    if value == 100 {
+        buf[0] = 49
+        buf[1] = 48
+        buf[2] = 48
+        buf[3] = 0
+        return
+    }
+    let tens: i64 = value / 10
+    let ones: i64 = value % 10
+    let idx: i64 = 0
+    if tens > 0 {
+        buf[idx] = (48 + tens) as u8
+        idx = idx + 1
+    }
+    buf[idx] = (48 + ones) as u8
+    idx = idx + 1
+    buf[idx] = 0
+}
+
+// Every drawable/clickable UI element - x/y/w/h plus the three transient
+// visual flags (hover/active/disabled) the app drives from mouse state.
+// Every hook below is a no-op by default (matching this compiler's own
+// "no dispatch overhead unless asked for" stance: only draw() is virtual
+// enough to matter for *every* widget, but a purely decorative one like
+// Label never needs click/drag/release/unfocus/key_input to do anything).
+class Widget {
+    let x: i64
+    let y: i64
+    let w: i64
+    let h: i64
+    let hover: bool
+    let active: bool
+    let disabled: bool
+
+    constructor(x: i64, y: i64, w: i64, h: i64) {
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        self.hover = false
+        self.active = false
+        self.disabled = false
+    }
+
+    func contains(px: i64, py: i64) -> bool {
+        return px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
+    }
+
+    virtual func draw(buf: u32*, buf_w: i64, buf_h: i64) {}
+    virtual func click(px: i64, py: i64) {}
+    virtual func drag(px: i64, py: i64) {}
+    virtual func release() {}
+    virtual func unfocus() {}
+    virtual func key_input(key: i64) {}
+}
+
+// A plain, non-interactive line of text - section headings and captions.
+class Label : Widget {
+    let text: u8*
+    let color: u32
+
+    constructor(x: i64, y: i64, text: u8*, color: u32) {
+        super(x, y, 0, 0)
+        self.text = text
+        self.color = color
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        draw_text_transparent(buf, buf_w, buf_h, self.x, self.y, self.text, self.color)
+    }
+}
+
+// A modern push button with gradient fill and rounded-looking border.
+// `click()` itself is an empty override (like the original "Submit"
+// button, which never did anything besides show its own pressed state) -
+// ActionButton below overrides it further to actually do something,
+// demonstrating that a 3-level hierarchy overrides just one hook while
+// inheriting draw() unchanged from Button.
+class Button : Widget {
+    let label: u8*
+
+    constructor(x: i64, y: i64, w: i64, h: i64, label: u8*) {
+        super(x, y, w, h)
+        self.label = label
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        let top_color: u32 = UI_BG_LIGHT
+        let bottom_color: u32 = UI_BG_MEDIUM
+        let border_color: u32 = UI_BORDER
+        let text_color: u32 = UI_TEXT_PRIMARY
+
+        if self.disabled {
+            top_color = 0xE8E8E8
+            bottom_color = 0xD0D0D0
+            text_color = UI_TEXT_SECONDARY
+            border_color = 0xD0D0D0
+        } else if self.active {
+            top_color = UI_ACCENT_BLUE_ACTIVE
+            bottom_color = UI_ACCENT_BLUE_ACTIVE
+            text_color = UI_TEXT_ON_ACCENT
+            border_color = UI_ACCENT_BLUE_ACTIVE
+        } else if self.hover {
+            top_color = UI_ACCENT_BLUE
+            bottom_color = UI_ACCENT_BLUE_HOVER
+            text_color = UI_TEXT_ON_ACCENT
+            border_color = UI_ACCENT_BLUE_HOVER
+        }
+
+        draw_gradient_rect(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, top_color, bottom_color)
+        draw_rect_outline(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, border_color)
+
+        if !self.active {
+            let col: i64 = 1
+            while col < self.w - 1 {
+                draw_pixel(buf, buf_w, buf_h, self.x + col, self.y + 1, 0xFFFFFF80)
+                col = col + 1
+            }
+        }
+
+        let text_w: i64 = text_width(self.label)
+        let text_x: i64 = self.x + (self.w - text_w) / 2
+        let text_y: i64 = self.y + (self.h - Font.GLYPH_HEIGHT) / 2
+        if self.active {
+            text_y = text_y + 1
+        }
+        draw_text_transparent(buf, buf_w, buf_h, text_x, text_y, self.label, text_color)
+    }
+
+    override func click(px: i64, py: i64) {}
+}
+
+// A Button that also drives another widget - here, bumps a ProgressBar's
+// value by 10 (wrapping past 100 back to 0) every time it's clicked,
+// mirroring the original demo's "Click Me" button. Inherits Button's
+// draw() completely unchanged; only click() is new.
+class ActionButton : Button {
+    let target: ProgressBar
+
+    constructor(x: i64, y: i64, w: i64, h: i64, label: u8*, target: ProgressBar) {
+        super(x, y, w, h, label)
+        self.target = target
+    }
+
+    override func click(px: i64, py: i64) {
+        self.target.value = self.target.value + 10
+        if self.target.value > 100 {
+            self.target.value = 0
+        }
+    }
+}
+
+class Checkbox : Widget {
+    let checked: bool
+    let label: u8*
+
+    constructor(x: i64, y: i64, size: i64, label: u8*, checked: bool) {
+        super(x, y, size, size)
+        self.label = label
+        self.checked = checked
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        let bg_color: u32 = 0xFFFFFF
+        let border_color: u32 = UI_BORDER
+
+        if self.disabled {
+            bg_color = 0xF0F0F0
+            border_color = 0xD0D0D0
+        } else if self.hover {
+            border_color = UI_BORDER_FOCUS
+            bg_color = 0xF8F8FF
+        }
+
+        draw_rect(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, bg_color)
+        draw_rect_outline(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, border_color)
+
+        if self.checked {
+            let check_color: u32 = UI_ACCENT_BLUE
+            if self.disabled {
+                check_color = UI_TEXT_SECONDARY
+            }
+            let size: i64 = self.w
+            let i: i64 = 0
+            while i < size / 2 {
+                let cx: i64 = self.x + size / 4 + i / 2
+                let cy: i64 = self.y + size / 2 + i / 2
+                draw_pixel(buf, buf_w, buf_h, cx, cy, check_color)
+                draw_pixel(buf, buf_w, buf_h, cx + 1, cy, check_color)
+                i = i + 1
+            }
+            i = 0
+            while i < size * 2 / 3 {
+                let cx: i64 = self.x + size / 2 + i / 2
+                let cy: i64 = self.y + size * 3 / 4 - i / 2
+                draw_pixel(buf, buf_w, buf_h, cx, cy, check_color)
+                draw_pixel(buf, buf_w, buf_h, cx + 1, cy, check_color)
+                i = i + 1
+            }
+        }
+
+        let text_color: u32 = UI_TEXT_PRIMARY
+        if self.disabled {
+            text_color = UI_TEXT_SECONDARY
+        }
+        draw_text_transparent(buf, buf_w, buf_h, self.x + self.w + 6, self.y + 2, self.label, text_color)
+    }
+
+    override func click(px: i64, py: i64) {
+        self.checked = !self.checked
+    }
+}
+
+// Shared selection state for a set of RadioButtons - not itself a Widget
+// (nothing about "which choice is selected" is drawn or clicked on its
+// own), just a small heap-allocated cell every RadioButton in the group
+// holds a reference to.
+class RadioGroup {
+    let selected: i64
+
+    constructor(selected: i64) {
+        self.selected = selected
+    }
+}
+
+class RadioButton : Widget {
+    let label: u8*
+    let index: i64
+    let group: RadioGroup
+
+    constructor(x: i64, y: i64, size: i64, label: u8*, index: i64, group: RadioGroup) {
+        super(x, y, size, size)
+        self.label = label
+        self.index = index
+        self.group = group
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        let bg_color: u32 = 0xFFFFFF
+        let border_color: u32 = UI_BORDER
+
+        if self.disabled {
+            bg_color = 0xF0F0F0
+            border_color = 0xD0D0D0
+        } else if self.hover {
+            border_color = UI_BORDER_FOCUS
+            bg_color = 0xF8F8FF
+        }
+
+        let radius: i64 = self.w / 2
+        let cx: i64 = self.x + radius
+        let cy: i64 = self.y + radius
+
+        let dy: i64 = -radius
+        while dy <= radius {
+            let dx: i64 = -radius
+            while dx <= radius {
+                let dist_sq: i64 = dx * dx + dy * dy
+                if dist_sq <= radius * radius {
+                    draw_pixel(buf, buf_w, buf_h, cx + dx, cy + dy, bg_color)
+                }
+                dx = dx + 1
+            }
+            dy = dy + 1
+        }
+
+        dy = -radius
+        while dy <= radius {
+            let dx: i64 = -radius
+            while dx <= radius {
+                let dist_sq: i64 = dx * dx + dy * dy
+                if dist_sq >= (radius - 1) * (radius - 1) && dist_sq <= radius * radius {
+                    draw_pixel(buf, buf_w, buf_h, cx + dx, cy + dy, border_color)
+                }
+                dx = dx + 1
+            }
+            dy = dy + 1
+        }
+
+        if self.group.selected == self.index {
+            let inner_radius: i64 = radius / 2
+            let inner_color: u32 = UI_ACCENT_BLUE
+            if self.disabled {
+                inner_color = UI_TEXT_SECONDARY
+            }
+
+            dy = -inner_radius
+            while dy <= inner_radius {
+                let dx: i64 = -inner_radius
+                while dx <= inner_radius {
+                    let dist_sq: i64 = dx * dx + dy * dy
+                    if dist_sq <= inner_radius * inner_radius {
+                        draw_pixel(buf, buf_w, buf_h, cx + dx, cy + dy, inner_color)
+                    }
+                    dx = dx + 1
+                }
+                dy = dy + 1
+            }
+        }
+
+        let text_color: u32 = UI_TEXT_PRIMARY
+        if self.disabled {
+            text_color = UI_TEXT_SECONDARY
+        }
+        draw_text_transparent(buf, buf_w, buf_h, self.x + self.w + 6, self.y + 2, self.label, text_color)
+    }
+
+    override func click(px: i64, py: i64) {
+        self.group.selected = self.index
+    }
+}
+
+class TextBox : Widget {
+    let text: u8*
+    let cursor: i64
+    let focused: bool
+
+    constructor(x: i64, y: i64, w: i64, h: i64, text: u8*, cursor: i64) {
+        super(x, y, w, h)
+        self.text = text
+        self.cursor = cursor
+        self.focused = false
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        let bg_color: u32 = 0xFFFFFF
+        let border_color: u32 = UI_BORDER
+        if self.focused {
+            border_color = UI_BORDER_FOCUS
+            bg_color = 0xFFFFFE
+        }
+
+        draw_rect(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, bg_color)
+        draw_rect_outline(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, border_color)
+        if self.focused {
+            draw_rect_outline(buf, buf_w, buf_h, self.x + 1, self.y + 1, self.w - 2, self.h - 2, border_color)
+        }
+
+        let text_x: i64 = self.x + 6
+        let text_y: i64 = self.y + (self.h - Font.GLYPH_HEIGHT) / 2
+        draw_text_transparent(buf, buf_w, buf_h, text_x, text_y, self.text, UI_TEXT_PRIMARY)
+
+        if self.focused {
+            let cursor_x: i64 = text_x + self.cursor * Font.GLYPH_WIDTH
+            if cursor_x < self.x + self.w - 6 {
+                let cursor_row: i64 = 0
+                while cursor_row < Font.GLYPH_HEIGHT {
+                    draw_pixel(buf, buf_w, buf_h, cursor_x, text_y + cursor_row, UI_ACCENT_BLUE)
+                    draw_pixel(buf, buf_w, buf_h, cursor_x + 1, text_y + cursor_row, UI_ACCENT_BLUE)
+                    cursor_row = cursor_row + 1
+                }
+            }
+        }
+    }
+
+    override func click(px: i64, py: i64) {
+        self.focused = true
+    }
+
+    override func unfocus() {
+        self.focused = false
+    }
+
+    override func key_input(key: i64) {
+        if !self.focused {
+            return
+        }
+        if key == 8 {
+            if self.cursor > 0 {
+                self.cursor = self.cursor - 1
+                self.text[self.cursor] = 0
+            }
+        } else if key >= 32 && key < 127 {
+            if self.cursor < 63 {
+                self.text[self.cursor] = key as u8
+                self.cursor = self.cursor + 1
+                self.text[self.cursor] = 0
+            }
+        }
+    }
+}
+
+class Slider : Widget {
+    let value: i64
+    let dragging: bool
+
+    constructor(x: i64, y: i64, w: i64, value: i64) {
+        super(x, y, w, 32)
+        self.value = value
+        self.dragging = false
+    }
+
+    func set_value_from_x(px: i64) {
+        let rel: i64 = px - self.x
+        if rel < 0 {
+            rel = 0
+        }
+        if rel > self.w {
+            rel = self.w
+        }
+        self.value = rel * 100 / self.w
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        let track_h: i64 = 4
+        let track_y: i64 = self.y + 8
+        let thumb_size: i64 = 16
+
+        draw_rect(buf, buf_w, buf_h, self.x, track_y, self.w, track_h, 0xD0D0D0)
+        draw_rect_outline(buf, buf_w, buf_h, self.x, track_y, self.w, track_h, UI_BORDER)
+
+        let fill_w: i64 = self.w * self.value / 100
+        draw_rect(buf, buf_w, buf_h, self.x, track_y, fill_w, track_h, UI_ACCENT_BLUE)
+
+        let thumb_x: i64 = self.x + fill_w
+        let thumb_y: i64 = self.y + 10
+        let thumb_color: u32 = 0xFFFFFF
+        let thumb_border: u32 = UI_BORDER
+        if self.hover || self.active {
+            thumb_border = UI_ACCENT_BLUE
+        }
+
+        let radius: i64 = thumb_size / 2
+        let dy: i64 = -radius
+        while dy <= radius {
+            let dx: i64 = -radius
+            while dx <= radius {
+                let dist_sq: i64 = dx * dx + dy * dy
+                if dist_sq <= radius * radius {
+                    draw_pixel(buf, buf_w, buf_h, thumb_x + dx, thumb_y + dy, thumb_color)
+                }
+                if dist_sq >= (radius - 2) * (radius - 2) && dist_sq <= radius * radius {
+                    draw_pixel(buf, buf_w, buf_h, thumb_x + dx, thumb_y + dy, thumb_border)
+                }
+                dx = dx + 1
+            }
+            dy = dy + 1
+        }
+    }
+
+    override func click(px: i64, py: i64) {
+        self.dragging = true
+        self.set_value_from_x(px)
+    }
+
+    override func drag(px: i64, py: i64) {
+        if self.dragging {
+            self.set_value_from_x(px)
+        }
+    }
+
+    override func release() {
+        self.dragging = false
+    }
+}
+
+class ProgressBar : Widget {
+    let value: i64
+
+    constructor(x: i64, y: i64, w: i64, h: i64, value: i64) {
+        super(x, y, w, h)
+        self.value = value
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        let value: i64 = self.value
+        if value < 0 {
+            value = 0
+        }
+        if value > 100 {
+            value = 100
+        }
+
+        draw_rect(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, 0xE8E8E8)
+        draw_rect_outline(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, UI_BORDER)
+
+        let fill_w: i64 = (self.w - 4) * value / 100
+        if fill_w > 0 {
+            draw_gradient_rect(buf, buf_w, buf_h, self.x + 2, self.y + 2, fill_w, self.h - 4,
+                UI_ACCENT_BLUE, UI_ACCENT_BLUE_HOVER)
+        }
+    }
+}
+
+// A panel/card with a subtle drop shadow - a plain background container,
+// drawn before whatever's laid out on top of it (an ordinary Vector<Widget>
+// push-order concern, not something Panel itself needs to know about).
+class Panel : Widget {
+    constructor(x: i64, y: i64, w: i64, h: i64) {
+        super(x, y, w, h)
+    }
+
+    override func draw(buf: u32*, buf_w: i64, buf_h: i64) {
+        let shadow_offset: i64 = 2
+        let sx: i64 = 0
+        while sx < self.w {
+            let sy: i64 = 0
+            while sy < shadow_offset {
+                draw_pixel(buf, buf_w, buf_h, self.x + sx + shadow_offset, self.y + self.h + sy, 0x00000020)
+                sy = sy + 1
+            }
+            sx = sx + 1
+        }
+        let sy: i64 = 0
+        while sy < self.h {
+            let sx2: i64 = 0
+            while sx2 < shadow_offset {
+                draw_pixel(buf, buf_w, buf_h, self.x + self.w + sx2, self.y + sy + shadow_offset, 0x00000020)
+                sx2 = sx2 + 1
+            }
+            sy = sy + 1
+        }
+
+        draw_rect(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, 0xFAFAFA)
+        draw_rect_outline(buf, buf_w, buf_h, self.x, self.y, self.w, self.h, 0xE0E0E0)
+    }
+}

@@ -35,29 +35,29 @@ const SCROLLBAR_THUMB: uint32 = 0x506080
 
 let cur_path: char[96]
 let entries: char[2304] // MAX_ENTRIES(48) * ENTRY_SIZE(48)
-let entry_count: int = 0
-let selected: int = 0
-let scroll: int = 0
+let entry_count: i64 = 0
+let selected: i64 = 0
+let scroll: i64 = 0
 
-func path_len(p: char*) -> uint {
-    let i: uint = 0
+func path_len(p: char*) -> u64 {
+    let i: u64 = 0
     while p[i] != 0 {
         i = i + 1
     }
     return i
 }
 
-func entry_at(i: int) -> char* {
+func entry_at(i: i64) -> char* {
     return (entries as char*) + i * ENTRY_SIZE
 }
 
-func entry_kind(i: int) -> uint {
-    let fields: uint* = (entry_at(i) + 32) as uint*
+func entry_kind(i: i64) -> u64 {
+    let fields: u64* = (entry_at(i) + 32) as u64*
     return fields[0]
 }
 
-func entry_size(i: int) -> uint {
-    let fields: uint* = (entry_at(i) + 32) as uint*
+func entry_size(i: i64) -> u64 {
+    let fields: u64* = (entry_at(i) + 32) as u64*
     return fields[1]
 }
 
@@ -66,18 +66,18 @@ func entry_size(i: int) -> uint {
 // byte written past position path_len(base) never aliases a byte still
 // being read).
 func join_path(dst: char*, base: char*, name: char*) {
-    let base_len: uint = path_len(base)
-    let i: uint = 0
+    let base_len: u64 = path_len(base)
+    let i: u64 = 0
     while i < base_len {
         dst[i] = base[i]
         i = i + 1
     }
-    let pos: uint = base_len
+    let pos: u64 = base_len
     if base_len == 0 || base[base_len - 1] != 47 {
         dst[pos] = 47
         pos = pos + 1
     }
-    let j: uint = 0
+    let j: u64 = 0
     while name[j] != 0 {
         dst[pos] = name[j]
         pos = pos + 1
@@ -87,11 +87,11 @@ func join_path(dst: char*, base: char*, name: char*) {
 }
 
 func go_up() {
-    let len: uint = path_len(cur_path as char*)
+    let len: u64 = path_len(cur_path as char*)
     if len <= 1 {
         return
     }
-    let i: int = (len as int) - 1
+    let i: i64 = (len as i64) - 1
     while i > 0 && cur_path[i] == 47 {
         i = i - 1
     }
@@ -107,16 +107,16 @@ func go_up() {
 
 func refresh_listing() {
     entry_count = 0
-    let i: uint = 0
+    let i: u64 = 0
     let done: bool = false
-    while (i as int) < MAX_ENTRIES && !done {
+    while (i as i64) < MAX_ENTRIES && !done {
         let buf: char[48]
-        let ok: uint = sys_readdir(cur_path as char*, i, buf as char*)
+        let ok: u64 = sys_readdir(cur_path as char*, i, buf as char*)
         if ok == RT_SYS_ERR {
             done = true
         } else {
             let dst: char* = entry_at(entry_count)
-            let j: int = 0
+            let j: i64 = 0
             while j < 48 {
                 dst[j] = buf[j]
                 j = j + 1
@@ -129,12 +129,12 @@ func refresh_listing() {
     scroll = 0
 }
 
-func fill_row(buf: uint32*, y: uint, color: uint32) {
-    let ry: uint = 0
+func fill_row(buf: uint32*, y: u64, color: uint32) {
+    let ry: u64 = 0
     while ry < ROW_H {
-        let rx: uint = 0
-        while rx < (Wm.WIN_W as uint) {
-            buf[(y + ry) * (Wm.WIN_W as uint) + rx] = color
+        let rx: u64 = 0
+        while rx < (Wm.WIN_W as u64) {
+            buf[(y + ry) * (Wm.WIN_W as u64) + rx] = color
             rx = rx + 1
         }
         ry = ry + 1
@@ -151,38 +151,38 @@ func draw_scrollbar() {
     if entry_count <= ROWS_VISIBLE {
         return
     }
-    let track_top: int = LIST_TOP
-    let track_h: int = ROWS_VISIBLE * ROW_H
-    let sb_x: int = (Wm.WIN_W as int) - SCROLLBAR_W - 2
+    let track_top: i64 = LIST_TOP
+    let track_h: i64 = ROWS_VISIBLE * ROW_H
+    let sb_x: i64 = (Wm.WIN_W as i64) - SCROLLBAR_W - 2
 
-    let ty: int = 0
+    let ty: i64 = 0
     while ty < track_h {
-        let tx: int = 0
+        let tx: i64 = 0
         while tx < SCROLLBAR_W {
-            wm_put_pixel((sb_x + tx) as uint, (track_top + ty) as uint, SCROLLBAR_TRACK)
+            wm_put_pixel((sb_x + tx) as u64, (track_top + ty) as u64, SCROLLBAR_TRACK)
             tx = tx + 1
         }
         ty = ty + 1
     }
 
-    let thumb_h: int = (track_h * ROWS_VISIBLE) / entry_count
+    let thumb_h: i64 = (track_h * ROWS_VISIBLE) / entry_count
     if thumb_h < 8 {
         thumb_h = 8
     }
     if thumb_h > track_h {
         thumb_h = track_h
     }
-    let max_scroll: int = entry_count - ROWS_VISIBLE
-    let thumb_y: int = track_top
+    let max_scroll: i64 = entry_count - ROWS_VISIBLE
+    let thumb_y: i64 = track_top
     if max_scroll > 0 {
         thumb_y = track_top + ((track_h - thumb_h) * scroll) / max_scroll
     }
 
-    let ty2: int = 0
+    let ty2: i64 = 0
     while ty2 < thumb_h {
-        let tx2: int = 0
+        let tx2: i64 = 0
         while tx2 < SCROLLBAR_W {
-            wm_put_pixel((sb_x + tx2) as uint, (thumb_y + ty2) as uint, SCROLLBAR_THUMB)
+            wm_put_pixel((sb_x + tx2) as u64, (thumb_y + ty2) as u64, SCROLLBAR_THUMB)
             tx2 = tx2 + 1
         }
         ty2 = ty2 + 1
@@ -192,16 +192,16 @@ func draw_scrollbar() {
 func render() {
     wm_fill(BG_COLOR)
     let buf: uint32* = wm_buffer()
-    let win_w: uint = Wm.WIN_W as uint
-    let win_h: uint = Wm.WIN_H as uint
+    let win_w: u64 = Wm.WIN_W as u64
+    let win_h: u64 = Wm.WIN_H as u64
     Font.draw_string(buf, win_w, win_h, 4, 4, cur_path as char*, HEADER_COLOR, BG_COLOR)
 
-    let row: int = 0
+    let row: i64 = 0
     while row < ROWS_VISIBLE {
-        let idx: int = scroll + row
-        let y: uint = (LIST_TOP as uint) + (row as uint) * ROW_H
+        let idx: i64 = scroll + row
+        let y: u64 = (LIST_TOP as u64) + (row as u64) * ROW_H
         if idx < entry_count {
-            let kind: uint = entry_kind(idx)
+            let kind: u64 = entry_kind(idx)
             let fg: uint32 = FILE_COLOR
             if kind == VFS_KIND_DIR {
                 fg = DIR_COLOR
@@ -247,7 +247,7 @@ func move_selection_down() {
     }
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("filebrowser: starting")
     if !wm_connect() {
         sys_putln("filebrowser: wm_connect failed")
@@ -263,22 +263,23 @@ func _start(argc: uint, argv: uint*) {
     refresh_listing()
 
     while true {
-        let key: uint = wm_poll_input()
-        if key == (KEY_CLOSE_REQ as uint) {
+        let input: WmInput = wm_poll_input()
+        let key: u64 = input.key as u64
+        if key == (KEY_CLOSE_REQ as u64) {
             // Nothing here worth keeping around to ask about (unlike
             // editor.llpl) - close immediately. Deliberately a separate
             // branch from KEY_ESC below, which already means "go up a
             // directory" for this app, not "close".
             wm_close()
             rt_exit(0)
-        } else if key == (KEY_UP as uint) {
+        } else if key == (KEY_UP as u64) {
             move_selection_up()
-        } else if key == (KEY_DOWN as uint) {
+        } else if key == (KEY_DOWN as u64) {
             move_selection_down()
         } else if key == 10 {
             if entry_count > 0 {
                 let name: char* = entry_at(selected)
-                let kind: uint = entry_kind(selected)
+                let kind: u64 = entry_kind(selected)
                 if kind == VFS_KIND_DIR {
                     join_path(cur_path as char*, cur_path as char*, name)
                     refresh_listing()
@@ -288,7 +289,7 @@ func _start(argc: uint, argv: uint*) {
                     sys_spawn("/bin/editor.elf", full as char*)
                 }
             }
-        } else if key == (KEY_ESC as uint) {
+        } else if key == (KEY_ESC as u64) {
             go_up()
             refresh_listing()
         }
@@ -300,7 +301,7 @@ func _start(argc: uint, argv: uint*) {
         // send `selected` flying. Positive = wheel scrolled up/away, per
         // the raw PS/2 convention (see mouse.llpl) - that's "up" on
         // screen too, matching KEY_UP above.
-        let wheel: int = wm_wheel_delta()
+        let wheel: i64 = wm_wheel_delta()
         if wheel > 3 {
             wheel = 3
         } else if wheel < -3 {

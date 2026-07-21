@@ -1,0 +1,48 @@
+// Embedded image data for wallpaper, cursor, and small UI icons.
+// Images are stored in simple format: width (4), height (4), RGBA data
+
+import "../libsys/imports"
+
+// The real wallpaper photo (wallpaper.png, downscaled to 256x144 and
+// converted to raw RGBA at build time - see wallpaper_data.bin, which
+// carries the same 8-byte width/height header + RGBA layout
+// load_embedded_image already expects, so this only replaces *how* the
+// bytes are produced, not the format itself). embed() bakes the file's
+// bytes into this binary at compile time, so there's no filesystem
+// dependency and no on-target image decoding needed - see EXAMPLES.md's
+// embed() section, or test/embed_demo.llpl, for the general feature.
+// 256x144 was chosen to keep the compiled-in byte array modest (~144KB)
+// while still looking reasonable scaled up to a real screen's
+// resolution (see wm.llpl's fill_backdrop, which scales rather than
+// tiles it - a real photo's large-scale gradient/horizon would look
+// obviously repetitive tiled the way the old procedural pattern this
+// replaces was).
+func load_wallpaper_photo() -> u8* {
+    let asset = embed("wallpaper_data.bin")
+    return asset.data as u8*
+}
+
+// The real cursor image (cursor.png, a 24x24 arrow pointer with a soft
+// drop shadow, converted to raw RGBA at build time - see cursor_data.bin,
+// which carries the same 8-byte width/height header + RGBA layout
+// load_embedded_image expects). embed() bakes it into this binary at
+// compile time, same as load_wallpaper_photo above.
+func load_cursor_photo() -> u8* {
+    let asset = embed("cursor_data.bin")
+    return asset.data as u8*
+}
+
+func load_start_icon_terminal() -> u8* {
+    let asset = embed("start_icon_terminal_data.bin")
+    return asset.data as u8*
+}
+
+func load_start_icon_file() -> u8* {
+    let asset = embed("start_icon_file_data.bin")
+    return asset.data as u8*
+}
+
+func load_start_icon_app() -> u8* {
+    let asset = embed("start_icon_app_data.bin")
+    return asset.data as u8*
+}

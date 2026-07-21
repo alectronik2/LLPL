@@ -26,9 +26,9 @@ const TIMEOUT_ITERS = 500000 // see netd.llpl's own header comment on
                                // why this is an iteration bound, not a
                                // wall-clock timeout
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     let ip_str: char* = rt_arg(argc, argv, 1, "10.0.2.2")
-    let dest_ip: uint = rt_parse_ip(ip_str)
+    let dest_ip: u64 = rt_parse_ip(ip_str)
     if dest_ip == RT_IP_INVALID {
         sys_puts("ping: bad address: ")
         sys_putln(ip_str)
@@ -36,17 +36,17 @@ func _start(argc: uint, argv: uint*) {
     }
 
     let count_str: char* = rt_arg(argc, argv, 2, "4")
-    let count: uint = 0
-    let i: int = 0
+    let count: u64 = 0
+    let i: i64 = 0
     while count_str[i] != 0 {
-        count = count * 10 + ((count_str[i] as uint) - 48)
+        count = count * 10 + ((count_str[i] as u64) - 48)
         i = i + 1
     }
     if count == 0 {
         count = 4
     }
 
-    let handle: uint = sys_lookup("netd")
+    let handle: u64 = sys_lookup("netd")
     if handle == RT_SYS_ERR {
         sys_putln("ping: netd not running")
         rt_exit(1)
@@ -56,12 +56,12 @@ func _start(argc: uint, argv: uint*) {
     rt_print_ip(dest_ip)
     sys_puts("\n")
 
-    let sent: uint = 0
-    let received: uint = 0
-    let seq: uint = 1
+    let sent: u64 = 0
+    let received: u64 = 0
+    let seq: u64 = 1
     while seq <= count {
         let req: char[48]
-        let req_word: uint* = (req as char*) as uint*
+        let req_word: u64* = (req as char*) as u64*
         req_word[0] = OP_PING
         req_word[1] = dest_ip
         req_word[2] = DEFAULT_TTL
@@ -80,10 +80,10 @@ func _start(argc: uint, argv: uint*) {
         if sys_msg_send(handle, req as char*, 48) == RT_SYS_ERR {
             sys_putln("ping: send failed")
         } else {
-            let reply_word: uint* = (req as char*) as uint*
-            let status: uint = reply_word[0]
-            let from_ip: uint = reply_word[1]
-            let rtt: uint = reply_word[2]
+            let reply_word: u64* = (req as char*) as u64*
+            let status: u64 = reply_word[0]
+            let from_ip: u64 = reply_word[1]
+            let rtt: u64 = reply_word[2]
 
             if status == PING_STATUS_ECHO_REPLY {
                 received = received + 1

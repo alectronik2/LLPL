@@ -49,20 +49,20 @@ namespace std {
 
     // Commonly used constants
     namespace io_const {
-        const O_RDONLY: int = io.O_RDONLY
-        const O_WRONLY: int = io.O_WRONLY
-        const O_RDWR: int = io.O_RDWR
-        const O_CREAT: int = io.O_CREAT
-        const O_TRUNC: int = io.O_TRUNC
-        const O_APPEND: int = io.O_APPEND
+        const O_RDONLY: i64 = io.O_RDONLY
+        const O_WRONLY: i64 = io.O_WRONLY
+        const O_RDWR: i64 = io.O_RDWR
+        const O_CREAT: i64 = io.O_CREAT
+        const O_TRUNC: i64 = io.O_TRUNC
+        const O_APPEND: i64 = io.O_APPEND
     }
 
     namespace net_const {
-        const AF_INET: int = net.AF_INET
-        const SOCK_STREAM: int = net.SOCK_STREAM
-        const SOCK_DGRAM: int = net.SOCK_DGRAM
-        const IPPROTO_TCP: int = net.IPPROTO_TCP
-        const IPPROTO_UDP: int = net.IPPROTO_UDP
+        const AF_INET: i64 = net.AF_INET
+        const SOCK_STREAM: i64 = net.SOCK_STREAM
+        const SOCK_DGRAM: i64 = net.SOCK_DGRAM
+        const IPPROTO_TCP: i64 = net.IPPROTO_TCP
+        const IPPROTO_UDP: i64 = net.IPPROTO_UDP
     }
 }
 
@@ -149,7 +149,7 @@ func example_string_utils() {
     let lower: String = std.StringUtils.to_lower(upper)
 
     // Search
-    let idx: int = std.StringUtils.index_of(s, new String("World"))
+    let idx: i64 = std.StringUtils.index_of(s, new String("World"))
     let contains: bool = std.StringUtils.contains(s, new String("Hello"))
 
     // Replace

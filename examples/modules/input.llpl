@@ -2,14 +2,14 @@
 
 import graphics  // Circular import back to graphics
 
-extern func inb(port: uint) -> char
-extern func outb(port: uint, value: char)
+extern func inb(port: u64) -> char
+extern func outb(port: u64, value: char)
 
-let KEYBOARD_DATA: uint = 96
-let KEYBOARD_STATUS: uint = 100
+let KEYBOARD_DATA: u64 = 96
+let KEYBOARD_STATUS: u64 = 100
 
 class Keyboard {
-    let shift_pressed: int
+    let shift_pressed: i64
 
     constructor() {
         self.shift_pressed = 0
@@ -29,8 +29,8 @@ class Keyboard {
         return scancode
     }
 
-    func has_key() -> int {
+    func has_key() -> i64 {
         let status: char = inb(KEYBOARD_STATUS)
-        return (status & 1) as int
+        return (status & 1) as i64
     }
 }

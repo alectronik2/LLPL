@@ -1,20 +1,36 @@
-// Tetris, rendered directly into the linear framebuffer via sys_fb_map
-// (no per-pixel syscall - the mapped pointer is real, shared physical
-// memory, see Syscall.sys_fb_map) and controlled via sys_kbd_poll's
-// non-blocking key reads. Not part of the automated boot sequence (see
-// spawn_user_task() in kernel.llpl) - it's an interactive program, meant
-// to be launched from the shell with `run /bin/tetris.elf`.
+// Tetris, now a proper windowed client of the "wm" compositor (wm.llpl)
+// instead of drawing straight into the real framebuffer - see winball1.llpl
+// for the minimal version of this same wm_client.llpl pattern, and
+// editor.llpl/filebrowser.llpl for the Font-based text rendering used for
+// the side panel below. Every window is a fixed Wm.WIN_W x Wm.WIN_H
+// (320x200, see wm_protocol.llpl) slice of the shared arena, so the board
+// itself is rendered at a smaller CELL size than the old fullscreen
+// version to leave room for a score/next-piece side panel next to it.
 //
 // Controls: left/right arrows move, down arrow soft-drops, up arrow
-// rotates. Runs until the stack reaches the top, then reports the final
-// line count over serial and exits.
+// rotates. Runs until the stack reaches the top, then shows a GAME OVER
+// overlay and stays open (like editor.llpl, it doesn't just vanish) until
+// the window is closed.
 
 import "../libsys/imports"
 import "user_runtime"
+import "wm_protocol"
+import "wm_client"
+import "font"
 
 const BOARD_W = 10
 const BOARD_H = 20
-const CELL = 24
+const CELL: u64 = 8
+
+// Board's top-left corner within the window; the side panel starts at
+// PANEL_X, to the right of the board (BOARD_OX + BOARD_W*CELL = 88).
+const BOARD_OX: u64 = 8
+const BOARD_OY: u64 = 8
+const PANEL_X: u64 = 96
+
+const BG_COLOR: uint32 = 0x101010
+const EMPTY_CELL_COLOR: uint32 = 0x282828
+const BORDER_COLOR: uint32 = 0x606060
 
 // 7 pieces (I, O, T, S, Z, J, L) x 4 rotations x 4x4 cell grid, row-major,
 // 0/1 per cell - see shape_cell() below for the indexing. S and Z only
@@ -58,8 +74,8 @@ let shapes: char[448] = [
     1,1,0,0, 0,1,0,0, 0,1,0,0, 0,0,0,0
 ]
 
-func shape_cell(piece: int, rot: int, row: int, col: int) -> bool {
-    let base: int = (piece * 4 + rot) * 16
+func shape_cell(piece: i64, rot: i64, row: i64, col: i64) -> bool {
+    let base: i64 = (piece * 4 + rot) * 16
     return shapes[base + row * 4 + col] != 0
 }
 
@@ -67,40 +83,45 @@ func shape_cell(piece: int, rot: int, row: int, col: int) -> bool {
 // original color.
 let board: char[200]
 
-func board_at(row: int, col: int) -> char {
+func board_at(row: i64, col: i64) -> char {
     return board[row * BOARD_W + col]
 }
 
-func board_set(row: int, col: int, v: char) {
+func board_set(row: i64, col: i64, v: char) {
     board[row * BOARD_W + col] = v
 }
 
-let cur_piece: int = 0
-let cur_rot: int = 0
-let cur_x: int = 3
-let cur_y: int = 0
+let cur_piece: i64 = 0
+let cur_rot: i64 = 0
+let cur_x: i64 = 3
+let cur_y: i64 = 0
+let next_piece: i64 = 0
 
-let rng_state: uint = 12345
+let lines_total: i64 = 0
+let score: u64 = 0
+let game_over: bool = false
+
+let rng_state: u64 = 12345
 
 // A plain MMIX-style LCG - not cryptographic, just needs to look
 // reasonably shuffled across a play session.
-func rand_next() -> uint {
+func rand_next() -> u64 {
     rng_state = rng_state * 6364136223846793005 + 1442695040888963407
     return (rng_state >> 32) & 0x7FFFFFFF
 }
 
-func rand_piece() -> int {
-    return (rand_next() % 7) as int
+func rand_piece() -> i64 {
+    return (rand_next() % 7) as i64
 }
 
-func collides(piece: int, rot: int, x: int, y: int) -> bool {
-    let row: int = 0
+func collides(piece: i64, rot: i64, x: i64, y: i64) -> bool {
+    let row: i64 = 0
     while row < 4 {
-        let col: int = 0
+        let col: i64 = 0
         while col < 4 {
             if shape_cell(piece, rot, row, col) {
-                let bx: int = x + col
-                let by: int = y + row
+                let bx: i64 = x + col
+                let by: i64 = y + row
                 if bx < 0 || bx >= BOARD_W || by >= BOARD_H {
                     return true
                 }
@@ -115,21 +136,24 @@ func collides(piece: int, rot: int, x: int, y: int) -> bool {
     return false
 }
 
+// Pulls from next_piece (rather than rolling fresh) so the side panel's
+// preview always shows what's about to spawn next.
 func spawn_piece() {
-    cur_piece = rand_piece()
+    cur_piece = next_piece
+    next_piece = rand_piece()
     cur_rot = 0
     cur_x = 3
     cur_y = 0
 }
 
 func lock_piece() {
-    let row: int = 0
+    let row: i64 = 0
     while row < 4 {
-        let col: int = 0
+        let col: i64 = 0
         while col < 4 {
             if shape_cell(cur_piece, cur_rot, row, col) {
-                let by: int = cur_y + row
-                let bx: int = cur_x + col
+                let by: i64 = cur_y + row
+                let bx: i64 = cur_x + col
                 if by >= 0 && by < BOARD_H && bx >= 0 && bx < BOARD_W {
                     board_set(by, bx, (cur_piece + 1) as char)
                 }
@@ -143,12 +167,12 @@ func lock_piece() {
 // Clears every full row, shifting everything above it down by one - and
 // rechecks the same row index afterward, since the shifted-down content
 // might ALSO be full (matters when clearing more than one line at once).
-func clear_lines() -> int {
-    let cleared: int = 0
-    let row: int = BOARD_H - 1
+func clear_lines() -> i64 {
+    let cleared: i64 = 0
+    let row: i64 = BOARD_H - 1
     while row >= 0 {
         let full: bool = true
-        let col: int = 0
+        let col: i64 = 0
         while col < BOARD_W {
             if board_at(row, col) == 0 {
                 full = false
@@ -157,16 +181,16 @@ func clear_lines() -> int {
         }
         if full {
             cleared = cleared + 1
-            let r: int = row
+            let r: i64 = row
             while r > 0 {
-                let c: int = 0
+                let c: i64 = 0
                 while c < BOARD_W {
                     board_set(r, c, board_at(r - 1, c))
                     c = c + 1
                 }
                 r = r - 1
             }
-            let c2: int = 0
+            let c2: i64 = 0
             while c2 < BOARD_W {
                 board_set(0, c2, 0)
                 c2 = c2 + 1
@@ -178,7 +202,26 @@ func clear_lines() -> int {
     return cleared
 }
 
-func piece_color(p: int) -> uint {
+// Classic per-line-count scoring (1/2/3/4 lines = 40/100/300/1200) so a
+// tetris (4 at once) is worth much more than four separate singles -
+// this game has no level/speed curve, so there's no level multiplier.
+func score_for_clear(cleared: i64) -> u64 {
+    if cleared == 1 {
+        return 40
+    }
+    if cleared == 2 {
+        return 100
+    }
+    if cleared == 3 {
+        return 300
+    }
+    if cleared == 4 {
+        return 1200
+    }
+    return 0
+}
+
+func piece_color(p: i64) -> uint32 {
     if p == 0 {
         return 0x00FFFF // I: cyan
     }
@@ -200,60 +243,165 @@ func piece_color(p: int) -> uint {
     return 0xFFA500 // L: orange
 }
 
-func put_pixel(fb: char*, pitch: uint, x: uint, y: uint, color: uint) {
-    let offset: uint = y * pitch + x * 4
-    let p: uint* = (fb + offset) as uint*
-    p[0] = color
+// Writes n's decimal digits into buf (caller-sized, big enough for any
+// u64) and null-terminates - there's no shared itoa-into-buffer helper
+// in user_runtime.llpl (rt_print_uint only ever writes straight to
+// serial), so this does its own digit extraction, least-significant
+// first into a scratch array, then reverses into buf.
+func format_uint(buf: char*, n: u64) -> i64 {
+    if n == 0 {
+        buf[0] = 48
+        buf[1] = 0
+        return 1
+    }
+    let tmp: char[20]
+    let len: i64 = 0
+    let v: u64 = n
+    while v > 0 {
+        tmp[len] = (48 + (v % 10)) as char
+        len = len + 1
+        v = v / 10
+    }
+    let i: i64 = 0
+    while i < len {
+        buf[i] = tmp[len - 1 - i]
+        i = i + 1
+    }
+    buf[len] = 0
+    return len
 }
 
-func fill_cell(fb: char*, pitch: uint, ox: uint, oy: uint, row: int, col: int, color: uint) {
-    let base_x: uint = ox + (col as uint) * CELL
-    let base_y: uint = oy + (row as uint) * CELL
-    let dy: uint = 0
+func fill_cell(ox: u64, oy: u64, row: i64, col: i64, color: uint32) {
+    let base_x: u64 = ox + (col as u64) * CELL
+    let base_y: u64 = oy + (row as u64) * CELL
+    let dy: u64 = 0
     while dy < CELL {
-        let dx: uint = 0
+        let dx: u64 = 0
         while dx < CELL {
-            put_pixel(fb, pitch, base_x + dx, base_y + dy, color)
+            wm_put_pixel(base_x + dx, base_y + dy, color)
             dx = dx + 1
         }
         dy = dy + 1
     }
 }
 
-func render(fb: char*, pitch: uint, ox: uint, oy: uint) {
-    let row: int = 0
+// Outlines the board rectangle one pixel outside its edge so the shrunk
+// (8px/cell) board still reads as a distinct panel next to the score/next
+// side panel, rather than bleeding into the background.
+func draw_border() {
+    let bw: u64 = (BOARD_W as u64) * CELL
+    let bh: u64 = (BOARD_H as u64) * CELL
+    let x0: u64 = BOARD_OX - 1
+    let y0: u64 = BOARD_OY - 1
+    let x1: u64 = BOARD_OX + bw
+    let y1: u64 = BOARD_OY + bh
+    let x: u64 = x0
+    while x <= x1 {
+        wm_put_pixel(x, y0, BORDER_COLOR)
+        wm_put_pixel(x, y1, BORDER_COLOR)
+        x = x + 1
+    }
+    let y: u64 = y0
+    while y <= y1 {
+        wm_put_pixel(x0, y, BORDER_COLOR)
+        wm_put_pixel(x1, y, BORDER_COLOR)
+        y = y + 1
+    }
+}
+
+func draw_panel() {
+    let buf: u32* = wm_buffer()
+    let win_w: u64 = Wm.WIN_W as u64
+    let win_h: u64 = Wm.WIN_H as u64
+    let numbuf: char[20]
+
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 8, "TETRIS", 0x00FFFF, BG_COLOR)
+
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 32, "LINES", 0xFFFFFF, BG_COLOR)
+    format_uint(numbuf as char*, lines_total as u64)
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 48, numbuf as char*, 0xFFFFFF, BG_COLOR)
+
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 72, "SCORE", 0xFFFFFF, BG_COLOR)
+    format_uint(numbuf as char*, score)
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 88, numbuf as char*, 0xFFFFFF, BG_COLOR)
+
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 112, "NEXT", 0xFFFFFF, BG_COLOR)
+
+    let pv_cell: u64 = 10
+    let r: i64 = 0
+    while r < 4 {
+        let c: i64 = 0
+        while c < 4 {
+            if shape_cell(next_piece, 0, r, c) {
+                let bx: u64 = PANEL_X + (c as u64) * pv_cell
+                let by: u64 = 128 + (r as u64) * pv_cell
+                let dy: u64 = 0
+                while dy < pv_cell {
+                    let dx: u64 = 0
+                    while dx < pv_cell {
+                        wm_put_pixel(bx + dx, by + dy, piece_color(next_piece))
+                        dx = dx + 1
+                    }
+                    dy = dy + 1
+                }
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+func draw_game_over_overlay() {
+    let buf: u32* = wm_buffer()
+    let win_w: u64 = Wm.WIN_W as u64
+    let win_h: u64 = Wm.WIN_H as u64
+    Font.draw_string(buf, win_w, win_h, BOARD_OX + 24, 64, "GAME", 0xFFFFFF, 0xFF0000)
+    Font.draw_string(buf, win_w, win_h, BOARD_OX + 24, 80, "OVER", 0xFFFFFF, 0xFF0000)
+}
+
+func render() {
+    wm_fill(BG_COLOR)
+    draw_border()
+
+    let row: i64 = 0
     while row < BOARD_H {
-        let col: int = 0
+        let col: i64 = 0
         while col < BOARD_W {
             let v: char = board_at(row, col)
-            let color: uint = 0x181818
+            let color: uint32 = EMPTY_CELL_COLOR
             if v != 0 {
-                color = piece_color((v as int) - 1)
+                color = piece_color((v as i64) - 1)
             }
-            fill_cell(fb, pitch, ox, oy, row, col, color)
+            fill_cell(BOARD_OX, BOARD_OY, row, col, color)
             col = col + 1
         }
         row = row + 1
     }
 
-    let r2: int = 0
+    let r2: i64 = 0
     while r2 < 4 {
-        let c2: int = 0
+        let c2: i64 = 0
         while c2 < 4 {
             if shape_cell(cur_piece, cur_rot, r2, c2) {
-                let by: int = cur_y + r2
-                let bx: int = cur_x + c2
+                let by: i64 = cur_y + r2
+                let bx: i64 = cur_x + c2
                 if by >= 0 && by < BOARD_H && bx >= 0 && bx < BOARD_W {
-                    fill_cell(fb, pitch, ox, oy, by, bx, piece_color(cur_piece))
+                    fill_cell(BOARD_OX, BOARD_OY, by, bx, piece_color(cur_piece))
                 }
             }
             c2 = c2 + 1
         }
         r2 = r2 + 1
     }
+
+    draw_panel()
+
+    if game_over {
+        draw_game_over_overlay()
+    }
 }
 
-func try_move(dx: int, dy: int) -> bool {
+func try_move(dx: i64, dy: i64) -> bool {
     if !collides(cur_piece, cur_rot, cur_x + dx, cur_y + dy) {
         cur_x = cur_x + dx
         cur_y = cur_y + dy
@@ -263,64 +411,50 @@ func try_move(dx: int, dy: int) -> bool {
 }
 
 func try_rotate() {
-    let new_rot: int = (cur_rot + 1) % 4
+    let new_rot: i64 = (cur_rot + 1) % 4
     if !collides(cur_piece, new_rot, cur_x, cur_y) {
         cur_rot = new_rot
     }
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("tetris: starting")
 
-    let info: uint[3]
-    if sys_fb_info(info as uint*) == RT_SYS_ERR {
-        sys_putln("tetris: no framebuffer available")
+    if !wm_connect() {
+        sys_putln("tetris: wm_connect failed")
         rt_exit(1)
     }
-    let fb_width: uint = info[0]
-    let fb_height: uint = info[1]
-    let pitch: uint = info[2]
-
-    let fb: char* = sys_fb_map()
-    if fb == null {
-        sys_putln("tetris: failed to map framebuffer")
+    if !wm_create_window() {
+        sys_putln("tetris: create_window failed")
         rt_exit(1)
     }
 
-    let board_px_w: uint = (BOARD_W * CELL) as uint
-    let board_px_h: uint = (BOARD_H * CELL) as uint
-    let ox: uint = 20
-    let oy: uint = 20
-    if fb_width > board_px_w {
-        ox = (fb_width - board_px_w) / 2
-    }
-    if fb_height > board_px_h {
-        oy = (fb_height - board_px_h) / 2
-    }
-
-    let i: int = 0
+    let i: i64 = 0
     while i < BOARD_W * BOARD_H {
         board[i] = 0
         i = i + 1
     }
 
-    rng_state = (sys_getpid() as uint) ^ 0x2545F4914F6CDD1D
+    rng_state = (sys_getpid() as u64) ^ 0x2545F4914F6CDD1D
+    next_piece = rand_piece()
     spawn_piece()
 
-    let frame: uint = 0
-    let gravity_interval: uint = 25
-    let lines_total: int = 0
-    let game_over: bool = false
+    let frame: u64 = 0
+    let gravity_interval: u64 = 25
 
     while !game_over {
-        let key: uint = sys_kbd_poll()
-        if key == (KEY_LEFT as uint) {
+        let input: WmInput = wm_poll_input()
+        let key: u64 = input.key as u64
+        if key == (KEY_CLOSE_REQ as u64) {
+            wm_close()
+            rt_exit(0)
+        } else if key == (KEY_LEFT as u64) {
             try_move(-1, 0)
-        } else if key == (KEY_RIGHT as uint) {
+        } else if key == (KEY_RIGHT as u64) {
             try_move(1, 0)
-        } else if key == (KEY_DOWN as uint) {
+        } else if key == (KEY_DOWN as u64) {
             try_move(0, 1)
-        } else if key == (KEY_UP as uint) {
+        } else if key == (KEY_UP as u64) {
             try_rotate()
         }
 
@@ -329,10 +463,11 @@ func _start(argc: uint, argv: uint*) {
             frame = 0
             if !try_move(0, 1) {
                 lock_piece()
-                let cleared: int = clear_lines()
-                lines_total = lines_total + cleared
+                let cleared: i64 = clear_lines()
                 if cleared > 0 {
-                    rt_put_uint_line("lines=", lines_total as uint)
+                    lines_total = lines_total + cleared
+                    score = score + score_for_clear(cleared)
+                    rt_put_uint_line("lines=", lines_total as u64)
                 }
                 spawn_piece()
                 if collides(cur_piece, cur_rot, cur_x, cur_y) {
@@ -341,11 +476,23 @@ func _start(argc: uint, argv: uint*) {
             }
         }
 
-        render(fb, pitch, ox, oy)
+        render()
+        wm_present()
         sys_sleep(15)
     }
 
     sys_putln("tetris: game over")
-    rt_put_uint_line("final lines=", lines_total as uint)
-    rt_exit(0)
+    rt_put_uint_line("final lines=", lines_total as u64)
+
+    // Keep the window open showing the GAME OVER overlay (matches
+    // editor.llpl's own "don't just vanish" ethos) until the user closes
+    // it - still polling so the titlebar close button keeps working.
+    while true {
+        let over_input: WmInput = wm_poll_input()
+        if (over_input.key as u64) == (KEY_CLOSE_REQ as u64) {
+            wm_close()
+            rt_exit(0)
+        }
+        sys_sleep(50)
+    }
 }

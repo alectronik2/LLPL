@@ -20,9 +20,9 @@ class StringUtils {
     static func split(s: String, delimiter: char) -> Vector<String> {
         let result: Vector<String> = new Vector<String>()
         let current: String = new String("")
-        let len: int = s.len()
+        let len: i64 = s.len()
 
-        for let i: int = 0, i < len, i = i + 1 {
+        for let i: i64 = 0, i < len, i = i + 1 {
             let c: char = s[i]
             if c == delimiter {
                 if current.len() > 0 {
@@ -44,20 +44,20 @@ class StringUtils {
     // Split by string delimiter
     static func split_str(s: String, delimiter: String) -> Vector<String> {
         let result: Vector<String> = new Vector<String>()
-        let len: int = s.len()
-        let delim_len: int = delimiter.len()
+        let len: i64 = s.len()
+        let delim_len: i64 = delimiter.len()
 
         if delim_len == 0 {
             result.push(s)
             return result
         }
 
-        let start: int = 0
-        let i: int = 0
+        let start: i64 = 0
+        let i: i64 = 0
 
         for i = 0, i <= len - delim_len, i = i + 1 {
             let is_match: bool =1
-            for let j: int = 0, j < delim_len, j = j + 1 {
+            for let j: i64 = 0, j < delim_len, j = j + 1 {
                 if s[i + j] != delimiter[j] {
                     is_match = 0
                     break
@@ -81,9 +81,9 @@ class StringUtils {
     // Join strings with delimiter
     static func join(strings: Vector<String>, delimiter: String) -> String {
         let result: String = new String("")
-        let size: int = strings.len()
+        let size: i64 = strings.len()
 
-        for let i: int = 0, i < size, i = i + 1 {
+        for let i: i64 = 0, i < size, i = i + 1 {
             result = result + strings.get(i).c_str()
             if i < size - 1 {
                 result = result + delimiter.c_str()
@@ -95,8 +95,8 @@ class StringUtils {
 
     // Trim whitespace from start
     static func trim_start(s: String) -> String {
-        let len: int = s.len()
-        let start: int = 0
+        let len: i64 = s.len()
+        let start: i64 = 0
 
         for start = 0, start < len, start = start + 1 {
             let c: char = s[start]
@@ -110,8 +110,8 @@ class StringUtils {
 
     // Trim whitespace from end
     static func trim_end(s: String) -> String {
-        let len: int = s.len()
-        let end: int = len
+        let len: i64 = s.len()
+        let end: i64 = len
 
         for end = len, end > 0, end = end - 1 {
             let c: char = s[end - 1]
@@ -131,9 +131,9 @@ class StringUtils {
     // Convert to uppercase
     static func to_upper(s: String) -> String {
         let result: String = new String("")
-        let len: int = s.len()
+        let len: i64 = s.len()
 
-        for let i: int = 0, i < len, i = i + 1 {
+        for let i: i64 = 0, i < len, i = i + 1 {
             let c: char = s[i]
             if c >= 97 && c <= 122 {
                 c = c - 32
@@ -147,9 +147,9 @@ class StringUtils {
     // Convert to lowercase
     static func to_lower(s: String) -> String {
         let result: String = new String("")
-        let len: int = s.len()
+        let len: i64 = s.len()
 
-        for let i: int = 0, i < len, i = i + 1 {
+        for let i: i64 = 0, i < len, i = i + 1 {
             let c: char = s[i]
             if c >= 65 && c <= 90 {
                 c = c + 32
@@ -162,14 +162,14 @@ class StringUtils {
 
     // Check if string starts with prefix
     static func starts_with(s: String, prefix: String) -> bool {
-        let s_len: int = s.len()
-        let p_len: int = prefix.len()
+        let s_len: i64 = s.len()
+        let p_len: i64 = prefix.len()
 
         if p_len > s_len {
             return 0
         }
 
-        for let i: int = 0, i < p_len, i = i + 1 {
+        for let i: i64 = 0, i < p_len, i = i + 1 {
             if s[i] != prefix[i] {
                 return 0
             }
@@ -180,16 +180,16 @@ class StringUtils {
 
     // Check if string ends with suffix
     static func ends_with(s: String, suffix: String) -> bool {
-        let s_len: int = s.len()
-        let suf_len: int = suffix.len()
+        let s_len: i64 = s.len()
+        let suf_len: i64 = suffix.len()
 
         if suf_len > s_len {
             return 0
         }
 
-        let offset: int = s_len - suf_len
+        let offset: i64 = s_len - suf_len
 
-        for let i: int = 0, i < suf_len, i = i + 1 {
+        for let i: i64 = 0, i < suf_len, i = i + 1 {
             if s[offset + i] != suffix[i] {
                 return 0
             }
@@ -204,17 +204,17 @@ class StringUtils {
     }
 
     // Find first occurrence of substring
-    static func index_of(s: String, substr: String) -> int {
-        let s_len: int = s.len()
-        let sub_len: int = substr.len()
+    static func index_of(s: String, substr: String) -> i64 {
+        let s_len: i64 = s.len()
+        let sub_len: i64 = substr.len()
 
         if sub_len > s_len {
             return -1
         }
 
-        for let i: int = 0, i <= s_len - sub_len, i = i + 1 {
+        for let i: i64 = 0, i <= s_len - sub_len, i = i + 1 {
             let is_match: bool =1
-            for let j: int = 0, j < sub_len, j = j + 1 {
+            for let j: i64 = 0, j < sub_len, j = j + 1 {
                 if s[i + j] != substr[j] {
                     is_match = 0
                     break
@@ -229,17 +229,17 @@ class StringUtils {
     }
 
     // Find last occurrence of substring
-    static func last_index_of(s: String, substr: String) -> int {
-        let s_len: int = s.len()
-        let sub_len: int = substr.len()
+    static func last_index_of(s: String, substr: String) -> i64 {
+        let s_len: i64 = s.len()
+        let sub_len: i64 = substr.len()
 
         if sub_len > s_len {
             return -1
         }
 
-        for let i: int = s_len - sub_len, i >= 0, i = i - 1 {
+        for let i: i64 = s_len - sub_len, i >= 0, i = i - 1 {
             let is_match: bool =1
-            for let j: int = 0, j < sub_len, j = j + 1 {
+            for let j: i64 = 0, j < sub_len, j = j + 1 {
                 if s[i + j] != substr[j] {
                     is_match = 0
                     break
@@ -256,19 +256,19 @@ class StringUtils {
     // Replace all occurrences
     static func replace_all(s: String, old_substr: String, new_substr: String) -> String {
         let result: String = new String("")
-        let len: int = s.len()
-        let old_len: int = old_substr.len()
+        let len: i64 = s.len()
+        let old_len: i64 = old_substr.len()
 
         if old_len == 0 {
             return s
         }
 
-        let i: int = 0
+        let i: i64 = 0
         for i = 0, i < len, i = i + 1 {
             let is_match: bool =1
 
             if i <= len - old_len {
-                for let j: int = 0, j < old_len, j = j + 1 {
+                for let j: i64 = 0, j < old_len, j = j + 1 {
                     if s[i + j] != old_substr[j] {
                         is_match = 0
                         break
@@ -292,7 +292,7 @@ class StringUtils {
 
     // Replace first occurrence
     static func replace_first(s: String, old_substr: String, new_substr: String) -> String {
-        let idx: int = StringUtils.index_of(s, old_substr)
+        let idx: i64 = StringUtils.index_of(s, old_substr)
         if idx < 0 {
             return s
         }
@@ -304,16 +304,16 @@ class StringUtils {
     }
 
     // Pad string to length with character
-    static func pad_left(s: String, length: int, pad_char: char) -> String {
-        let current_len: int = s.len()
+    static func pad_left(s: String, length: i64, pad_char: char) -> String {
+        let current_len: i64 = s.len()
         if current_len >= length {
             return s
         }
 
         let result: String = new String("")
-        let padding_needed: int = length - current_len
+        let padding_needed: i64 = length - current_len
 
-        for let i: int = 0, i < padding_needed, i = i + 1 {
+        for let i: i64 = 0, i < padding_needed, i = i + 1 {
             result = result + char_to_string(pad_char).c_str()
         }
 
@@ -321,16 +321,16 @@ class StringUtils {
         return result
     }
 
-    static func pad_right(s: String, length: int, pad_char: char) -> String {
-        let current_len: int = s.len()
+    static func pad_right(s: String, length: i64, pad_char: char) -> String {
+        let current_len: i64 = s.len()
         if current_len >= length {
             return s
         }
 
         let result: String = s
-        let padding_needed: int = length - current_len
+        let padding_needed: i64 = length - current_len
 
-        for let i: int = 0, i < padding_needed, i = i + 1 {
+        for let i: i64 = 0, i < padding_needed, i = i + 1 {
             result = result + char_to_string(pad_char).c_str()
         }
 
@@ -339,10 +339,10 @@ class StringUtils {
 
     // Reverse string
     static func reverse(s: String) -> String {
-        let len: int = s.len()
+        let len: i64 = s.len()
         let result: String = new String("")
 
-        for let i: int = len - 1, i >= 0, i = i - 1 {
+        for let i: i64 = len - 1, i >= 0, i = i - 1 {
             let c: char = s[i]
             result = result + char_to_string(c).c_str()
         }
@@ -351,10 +351,10 @@ class StringUtils {
     }
 
     // Repeat string n times
-    static func repeat(s: String, times: int) -> String {
+    static func repeat(s: String, times: i64) -> String {
         let result: String = new String("")
 
-        for let i: int = 0, i < times, i = i + 1 {
+        for let i: i64 = 0, i < times, i = i + 1 {
             result = result + s.c_str()
         }
 
@@ -363,13 +363,13 @@ class StringUtils {
 
     // Check if string is empty or whitespace
     static func is_whitespace(s: String) -> bool {
-        let len: int = s.len()
+        let len: i64 = s.len()
 
         if len == 0 {
             return 1
         }
 
-        for let i: int = 0, i < len, i = i + 1 {
+        for let i: i64 = 0, i < len, i = i + 1 {
             let c: char = s[i]
             if c != 32 && c != 9 && c != 10 && c != 13 {
                 return 0
@@ -383,7 +383,7 @@ class StringUtils {
 // String builder for efficient concatenation
 class StringBuilder {
     let parts: Vector<String>
-    let total_length: int
+    let total_length: i64
 
     constructor() {
         self.parts = new Vector<String>()
@@ -399,8 +399,8 @@ class StringBuilder {
         self.append(char_to_string(c))
     }
 
-    func append_int(value: int) {
-        // Convert int to string
+    func append_int(value: i64) {
+        // Convert i64 to string
         let is_negative: bool = value < 0
         if is_negative {
             value = -value
@@ -423,8 +423,8 @@ class StringBuilder {
         }
 
         // Reverse digits
-        let size: int = digits.len()
-        for let i: int = size - 1, i >= 0, i = i - 1 {
+        let size: i64 = digits.len()
+        for let i: i64 = size - 1, i >= 0, i = i - 1 {
             self.append_char(digits.get(i))
         }
     }
@@ -438,7 +438,7 @@ class StringBuilder {
         self.total_length = 0
     }
 
-    func length() -> int {
+    func length() -> i64 {
         return self.total_length
     }
 }
@@ -447,11 +447,11 @@ class StringBuilder {
 class Format {
     static func format(template: String, args: Vector<String>) -> String {
         let result: StringBuilder = new StringBuilder()
-        let len: int = template.len()
-        let arg_idx: int = 0
-        let args_size: int = args.len()
+        let len: i64 = template.len()
+        let arg_idx: i64 = 0
+        let args_size: i64 = args.len()
 
-        let i: int = 0
+        let i: i64 = 0
         for i = 0, i < len, i = i + 1 {
             let c: char = template[i]
 

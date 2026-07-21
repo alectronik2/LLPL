@@ -1,6 +1,6 @@
 # LLPL - Low Level Programming Language
 
-A low-level programming language with Swift/JavaScript-like syntax that compiles to C for bare-metal x86_64 kernel development.
+A low-level programming language with familiary syntax that compiles to C for bare-metal development.
 
 ## Features
 
@@ -16,24 +16,34 @@ A low-level programming language with Swift/JavaScript-like syntax that compiles
 - **Macros**: Compile-time expansion with `quote`/`unquote`
 - **Result<T, E> with Traces**: `?` propagation captures a chained `file:line` trace
 - **Panics with Hooks**: `llpl_panic("...")` prints a message and aborts; optional handler for cleanup
+- **Assert Statement**: `assert(condition)` and `assert(condition, "message")` abort with a panic on failure
+- **Optional Bounds Checking**: `--safe` enables runtime bounds checks on fixed-size array indexing
 - **C FFI**: Easy interoperability with C code
+- **Pipe operator**: And syntactic sugar like `unless`
 - **Bare Metal**: Compiles to efficient C code for kernel development
+- **Grammars**: ANTLR-like grammars inlined with your code
+- **`embed("path")`**: bakes a file's raw bytes into the binary as a static array at compile time
 
 ## Language Syntax
 
 ### Variables
 
 ```swift
-let x: int = 42
-const PI: int = 314
-let name: char* = "Hello"
+let x = 42
+const PI = 314
+let name = "Hello"
+let foo = new Klass()
 ```
 
-### Functions
+### Functions and function overloading
 
 ```swift
 func add(a: int, b: int) -> int {
     return a + b
+}
+
+func add(a: int, b: int, c: int) -> int {
+    return a + b + c
 }
 
 func greet(name: char*) {
@@ -65,6 +75,8 @@ class Point {
 // Usage
 let p: Point = new Point(10, 20)
 let dist: int = p.distance()
+
+delete p
 ```
 
 ### Traits / Bounded Generics
@@ -229,6 +241,20 @@ func main() -> int {
 }
 ```
 
+### Assert Statement
+
+`assert(condition)` aborts with a panic if `condition` is false. An optional
+second argument provides a custom panic message.
+
+```swift
+func main() -> int {
+    assert(1 == 1)
+    assert(2 > 1, "two is greater than one")
+    // assert(1 == 2, "this would panic")
+    return 0
+}
+```
+
 ### C FFI
 
 ```swift
@@ -244,7 +270,7 @@ outb(0x3F8, 65)  // Output 'A' to serial port
 
 ```swift
 let addr: uint = 0xB8000
-let buffer: char* = addr as char*
+let buffer = addr as char*
 ```
 
 ## Building
@@ -257,6 +283,7 @@ let buffer: char* = addr as char*
 - NASM (for assembling boot code)
 - QEMU (for testing)
 - GRUB tools (optional, for creating bootable ISOs)
+- Limine (optional, for the specific example)
 
 ### Build the Compiler
 
@@ -265,6 +292,15 @@ dub build
 ```
 
 This creates the `llpl` compiler executable.
+
+If your code imports the standard library (`import stdlib..."`), set
+`LLPL_HOME` to this repo's root first, so those imports resolve regardless
+of where the importing file lives - see `MODULE_SYSTEM.md`'s "Module
+Search Paths" section for details:
+
+```bash
+export LLPL_HOME=$(pwd)
+```
 
 ### Compile LLPL Code
 
@@ -281,9 +317,21 @@ default - override with `--cc=<path>` or `$CC`) linked against
 ./llpl input.llpl -b -o output
 ```
 
+Add `--safe` to enable runtime bounds checks on fixed-size array indexing:
+
+```bash
+./llpl --safe input.llpl -b -o output
+```
+
+This currently checks one-dimensional fixed-size arrays (`T[N]`) declared
+as locals, globals, or class fields; pointer indexing and array parameters
+that have decayed to pointers are not checked.
+
 This targets ordinary hosted programs only - a freestanding/kernel target
-like `examples/baremetal_demo` needs its own Makefile-based build instead
-(custom linker script, boot assembly, `-ffreestanding` flags), not `-b`.
+like `examples/baremetal_demo` needs its own `tools/llplbuild` build
+instead (custom linker script, boot assembly, `-ffreestanding` flags),
+not `-b` - see [Example: Bare Metal Kernel](#example-bare-metal-kernel)
+below.
 
 ### Web Playground
 
@@ -329,19 +377,68 @@ cd examples/baremetal_demo
 This launches QEMU and runs your kernel. You should see output like:
 
 ```
-LLPL Kernel v0.1
-================
-
-Initializing serial port...
-Testing control flow:
-  Loop iteration:   Loop iteration:   Loop iteration:   Loop iteration:   Loop iteration:
-For loop test:
-  Step   Step   Step
-Conditional test: PASSED
-
-Kernel initialization complete!
-System halted.
+LLPL Bare-Metal Demo
+=====================
+colors: red green yellow cyan - a single log() call, tags inline
+Loading a fresh GDT from LLPL...
+GDT reloaded: base=0x0000000000163a00 limit=0x37
+Installing IDT and remapping the PIC...
+IDT installed (timer on IRQ0, keyboard on IRQ1).
+Triggering a breakpoint exception (int3)...
+Breakpoint (int3) handled, resuming...
+...resumed after the fault handler returned via iretq.
+Enabling interrupts...
+Interrupts enabled.
+Spawning tasks (shell + a background counter) and starting the scheduler...
+spawned user task 2 from atad.elf (entry=0x1000004d0)
+spawned user task 3 from wm.elf (entry=0x100003370)
+spawned user task 4 from netd.elf (entry=0x100002070)
+Starting the shell. Type 'help' for a list of commands.
+llpl $ atad: Bus Master DMA enabled
+netd: e1000 up, mac=52:54:00:12:34:56
+wm: loading wallpaper...
+wm: ready
+ATA: primary master detected (via atad); VFS mounted (self-formats on first boot)
+netd: DHCP ok, ip=10.0.2.15 gw=10.0.2.2
+SELFTEST: PASS
 ```
+
+By this point you have a preemptive multitasking kernel with a real
+network stack (DHCP-configured, ARP/ICMP), a persistent VFS on a virtual
+disk, and a windowing compositor with a mouse-driven desktop - not just a
+"hello world" that halts. See [Bare-Metal Demo Highlights](#bare-metal-demo-highlights)
+below for what's actually running underneath that boot log.
+
+## Bare-Metal Demo Highlights
+
+`examples/baremetal_demo` isn't a toy - past boot it has a real
+round-robin preemptive scheduler, a page-table-based VMM, a custom
+dynamic ELF loader (`ldso.llpl`) linking `-shared`/PIE user programs
+against a shared `libsys.so`, and a persistent VFS on top of a virtual
+ATA disk. On top of that:
+
+- **Networking** (`userapp/netd.llpl`): a from-scratch e1000 NIC driver
+  (Ethernet TX/RX descriptor rings, ARP, IPv4, ICMP echo, and a DHCP
+  client over a minimal UDP layer) that negotiates a real address from
+  QEMU SLIRP's DHCP server at boot, falling back to a static address only
+  if nothing answers. `ping`/`traceroute` are thin clients of its single
+  blocking `OP_PING` operation.
+- **Graphical ping monitor** (`userapp/pingview.llpl`): a windowed client
+  of that same `OP_PING` operation, rendering a live auto-scaling bar
+  graph of round-trip latency plus sent/received/loss stats - run it with
+  `run /boot/pingview.elf [ip]`.
+- **Windowing compositor** (`userapp/wm.llpl`): owns the real framebuffer
+  exclusively behind a shared-memory arena protocol (`userapp/
+  wm_protocol.llpl`/`wm_client.llpl`), compositing draggable, resizable,
+  semi-transparent windows (title bar, drop shadow, and a corner resize
+  grip) over a compile-time-embedded wallpaper photo (see `embed()`
+  below) - `editor.elf`, `filebrowser.elf`, `terminal.elf`, and a windowed
+  `tetris.elf` all run as ordinary clients of it.
+- **`embed("path")`**: a compiler builtin that bakes a file's raw bytes
+  into the compiled binary as a static array at compile time - used here
+  for the desktop wallpaper and cursor image, with no filesystem
+  dependency or on-target image decoding needed (see `test/
+  embed_demo.llpl` for the general feature, independent of this demo).
 
 ## Project Structure
 
@@ -352,17 +449,27 @@ LLPL/
 │   ├── lexer.d         # Lexical analyzer
 │   ├── parser.d        # Parser (tokens → AST)
 │   ├── ast.d           # AST node definitions
-│   └── codegen.d       # C code generator
+│   ├── codegen.d       # C code generator
+│   ├── modules.d       # Module resolution / import search paths
+│   ├── grammar.d       # Inline ANTLR-like grammar support
+│   ├── errors.d        # Diagnostics
+│   └── lspquery.d      # Editor/LSP-facing queries (hover, go-to-def, ...)
 ├── runtime/
 │   ├── runtime.h       # Runtime header
-│   └── runtime.c       # Reference counting & memory management
+│   └── runtime.c       # Reference counting, memory management, YAML/JSON parsers
+├── prelude.llpl         # Auto-imported: Result<T,E>, Hashable, Comparable, ...
+├── stdlib/              # import stdlib.* - collections, io, json, yaml, net, text, args, sdl
+├── tools/llplbuild/     # YAML-driven build tool used by both example kernels
 ├── examples/
-│   ├── kernel.llpl     # Sample kernel
-│   ├── boot.asm        # x86 bootloader
-│   ├── linker.ld       # Linker script
-│   └── Makefile        # Build system
-├── dub.json            # D project configuration
-└── README.md           # This file
+│   ├── baremetal_demo/         # Flagship demo: GRUB/Multiboot2 kernel (see below)
+│   ├── limine_baremetal_demo/  # Same idea, booted via Limine instead of GRUB
+│   ├── collections/, regex/, embed_demo/, modules/, sdl/  # smaller focused examples
+├── editors/vscode-llpl/ # VS Code extension (syntax highlighting + LSP client)
+├── playground/          # Local web playground (see Web Playground below)
+├── EXAMPLES.md           # Long-form language walkthrough
+├── MODULE_SYSTEM.md      # Import resolution / module search paths
+├── dub.json             # D project configuration
+└── README.md            # This file
 ```
 
 ## Type System
@@ -374,6 +481,10 @@ LLPL/
 - `char` - 8-bit character
 - `bool` - Boolean (true/false)
 - `void` - No value
+- `u8/u16/u32/u64` - sized unsigned integers
+- `i8/i16/i32/i64` - sized signed integers
+- `string` - C string, null terminated
+- `String` - Sugar class 
 
 ### Pointer Types
 
@@ -384,7 +495,7 @@ let arr: char[80]  // Fixed-size array
 
 ### Class Types
 
-All classes are reference-counted automatically. No need for manual memory management!
+Classes with single inheritance, complete with virtual and override. All classes are reference-counted automatically. No need for manual memory management!
 
 ## Memory Management
 
@@ -447,27 +558,24 @@ func example() {
 Current implementation limitations:
 
 - No garbage collection (uses reference counting)
-- No generics/templates
-- No exceptions (use return codes)
-- No standard library (you're building the kernel!)
-- Simple bump allocator (can't free individual objects)
-- No closures or lambdas
-- No string type (use char*)
 
 ## Future Enhancements
 
 Potential improvements:
 
-- [ ] Better memory allocator
-- [ ] String type
-- [ ] Array bounds checking (optional)
-- [ ] Generic types
-- [ ] Module system
-- [ ] Inline assembly
+- [X] Better memory allocator
+- [X] String type
+- [X] Array bounds checking (optional)
+- [X] Generic types
+- [X] Module system
+- [X] Inline assembly
 - [ ] Optimization passes
-- [ ] Better error messages
-- [ ] Type inference
-- [ ] Pattern matching
+- [X] Better error messages
+- [X] Type inference
+- [X] Pattern matching
+- [X] Single inheritance + virtual/override
+- [X] Inline grammars (ANTLR-like)
+- [X] `embed()` compile-time file embedding
 
 ## Contributing
 
@@ -493,7 +601,8 @@ func print(msg: char*) {
 }
 
 func kernel_main() {
-    print("Hello, World!\n")
+    let where = "world"
+    print("Hello, \(where)!\n")
 }
 ```
 
@@ -540,6 +649,8 @@ The runtime library (`runtime.c`) provides:
 - Reference counting primitives
 - Memory allocation (bump allocator)
 - Basic string functions (memcpy, memset, strlen)
+- YAML and JSON parsers
+- String and StringBuilder class
 
 All LLPL objects start with a `RefCount` structure, allowing the runtime to manage their lifetime.
 
@@ -548,7 +659,7 @@ All LLPL objects start with a `RefCount` structure, allowing the runtime to mana
 1. **Start Simple**: Begin with basic output (VGA text mode or serial)
 2. **Test Incrementally**: Use `defer` for cleanup to avoid memory leaks
 3. **Use Classes**: Organize hardware drivers as classes
-4. **External Functions**: Declare low-level x86 operations as `extern func`
+4. **External Functions**: Declare low-level x86 operations as `extern func` and `volatile`
 5. **Debug with Serial**: Use COM1 serial port for debugging output
 
 ## Troubleshooting

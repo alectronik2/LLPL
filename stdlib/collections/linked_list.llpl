@@ -19,7 +19,7 @@ class ListNode<T> {
 class LinkedList<T> {
     let head: ListNode<T>*
     let tail: ListNode<T>*
-    let count: int
+    let count: i64
 
     constructor() {
         self.head = null
@@ -31,7 +31,7 @@ class LinkedList<T> {
         self.clear()
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.count
     }
 
@@ -127,7 +127,7 @@ class LinkedList<T> {
         return result
     }
 
-    func get(index: int) -> Result<T, char*> {
+    func get(index: i64) -> Result<T, char*> {
         let result: Result<T, char*> = new Result<T, char*>()
 
         if index < 0 || index >= self.count {
@@ -136,7 +136,7 @@ class LinkedList<T> {
         }
 
         let current: ListNode<T>* = self.head
-        for let i: int = 0, i < index, i = i + 1 {
+        for let i: i64 = 0, i < index, i = i + 1 {
             current = (*current).next
         }
 
@@ -144,7 +144,7 @@ class LinkedList<T> {
         return result
     }
 
-    func insert(index: int, value: T) -> Result<bool, char*> {
+    func insert(index: i64, value: T) -> Result<bool, char*> {
         let result: Result<bool, char*> = new Result<bool, char*>()
 
         if index < 0 || index > self.count {
@@ -165,7 +165,7 @@ class LinkedList<T> {
         }
 
         let current: ListNode<T>* = self.head
-        for let i: int = 0, i < index - 1, i = i + 1 {
+        for let i: i64 = 0, i < index - 1, i = i + 1 {
             current = (*current).next
         }
 
@@ -181,7 +181,7 @@ class LinkedList<T> {
         return result
     }
 
-    func remove(index: int) -> Result<T, char*> {
+    func remove(index: i64) -> Result<T, char*> {
         let result: Result<T, char*> = new Result<T, char*>()
 
         if index < 0 || index >= self.count {
@@ -194,7 +194,7 @@ class LinkedList<T> {
         }
 
         let current: ListNode<T>* = self.head
-        for let i: int = 0, i < index - 1, i = i + 1 {
+        for let i: i64 = 0, i < index - 1, i = i + 1 {
             current = (*current).next
         }
 
@@ -250,7 +250,7 @@ class DListNode<T> {
 class DoublyLinkedList<T> {
     let head: DListNode<T>*
     let tail: DListNode<T>*
-    let count: int
+    let count: i64
 
     constructor() {
         self.head = null
@@ -262,7 +262,7 @@ class DoublyLinkedList<T> {
         self.clear()
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.count
     }
 

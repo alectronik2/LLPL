@@ -2,7 +2,7 @@
 
 Syntax highlighting, bracket/comment configuration, snippets, and a
 language server (diagnostics, completion, hover, go-to-definition,
-find-references) for [LLPL](../../README.md) (`.llpl`) files.
+find-references) for LLPL (`.llpl`) files.
 
 ## Features
 
@@ -67,7 +67,7 @@ npm install
 npm run compile
 npm install -g @vscode/vsce   # once, if you don't have vsce
 vsce package
-code --install-extension llpl-language-0.6.0.vsix
+code --install-extension llpl-language-0.7.0.vsix
 ```
 
 Or symlink the extension folder straight into your VS Code extensions

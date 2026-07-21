@@ -1017,6 +1017,13 @@ void llpl_panic(char* msg) {
 #endif
 }
 
+void* __llpl_check_index(void* arr, int64_t idx, int64_t size, uint64_t elem_size) {
+    if (idx < 0 || idx >= size) {
+        llpl_panic("index out of bounds");
+    }
+    return (char*)arr + idx * elem_size;
+}
+
 // Appends one character, tracking how many characters the *unclamped*
 // output would need in *pos while only actually writing while there's room.
 static void kfmt_putc(char* buf, size_t size, size_t* pos, char c) {

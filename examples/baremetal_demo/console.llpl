@@ -59,8 +59,8 @@ namespace Console {
     }
 
     class Screen {
-        let row: int
-        let col: int
+        let row: i64
+        let col: i64
         let color: char
 
         constructor(color: char) {
@@ -90,7 +90,7 @@ namespace Console {
                 return
             }
 
-            let cols: int = (Framebuffer.width as int) / Framebuffer.GLYPH_WIDTH
+            let cols: i64 = (Framebuffer.width as i64) / Framebuffer.GLYPH_WIDTH
             if self.col >= cols {
                 self.newline()
             }
@@ -132,14 +132,14 @@ namespace Console {
         }
 
         func cursor_right() {
-            let cols: int = (Framebuffer.width as int) / Framebuffer.GLYPH_WIDTH
+            let cols: i64 = (Framebuffer.width as i64) / Framebuffer.GLYPH_WIDTH
             if self.col < cols - 1 {
                 self.col = self.col + 1
             }
         }
 
         func write(str: char*) {
-            let i: int = 0
+            let i: i64 = 0
             while str[i] != 0 {
                 self.putchar(str[i])
                 i = i + 1
@@ -158,7 +158,7 @@ namespace Console {
         func newline() {
             self.col = 0
             self.row = self.row + 1
-            let rows: int = (Framebuffer.height as int) / Framebuffer.GLYPH_HEIGHT
+            let rows: i64 = (Framebuffer.height as i64) / Framebuffer.GLYPH_HEIGHT
             if self.row >= rows {
                 Framebuffer.scroll_up_one_row()
                 self.row = rows - 1

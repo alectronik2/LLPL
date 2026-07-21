@@ -33,8 +33,8 @@ namespace PageAlloc {
 
     // total_pages: pages the firmware reported as available RAM (set once
     // during init). free_pages: how many of those are currently unused.
-    let total_pages: uint = 0
-    let free_pages: uint = 0
+    let total_pages: u64 = 0
+    let free_pages: u64 = 0
 
     // Protects the bitmap and the two counters above - init/alloc/free/
     // alloc_contiguous (the entry points below) all acquire it before
@@ -45,38 +45,38 @@ namespace PageAlloc {
     // one of those already-locked entry points.
     let lock: HAL.SpinLock // zero-initialized -> starts unlocked, see HAL.SpinLock
 
-    func set_used(page: uint) {
-        let byte: uint = page / 8
-        let bit: int = (page % 8) as int
-        let cur: int = (bitmap[byte] as int) & 255
+    func set_used(page: u64) {
+        let byte: u64 = page / 8
+        let bit: i64 = (page % 8) as i64
+        let cur: i64 = (bitmap[byte] as i64) & 255
         if (cur & (1 << bit)) != 0 {
             free_pages = free_pages - 1
         }
         bitmap[byte] = (cur & ~(1 << bit)) as char
     }
 
-    func set_free(page: uint) {
-        let byte: uint = page / 8
-        let bit: int = (page % 8) as int
-        let cur: int = (bitmap[byte] as int) & 255
+    func set_free(page: u64) {
+        let byte: u64 = page / 8
+        let bit: i64 = (page % 8) as i64
+        let cur: i64 = (bitmap[byte] as i64) & 255
         if (cur & (1 << bit)) == 0 {
             free_pages = free_pages + 1
         }
         bitmap[byte] = (cur | (1 << bit)) as char
     }
 
-    func is_free(page: uint) -> bool {
-        let byte: uint = page / 8
-        let bit: int = (page % 8) as int
-        let cur: int = (bitmap[byte] as int) & 255
+    func is_free(page: u64) -> bool {
+        let byte: u64 = page / 8
+        let bit: i64 = (page % 8) as i64
+        let cur: i64 = (bitmap[byte] as i64) & 255
         return (cur & (1 << bit)) != 0
     }
 
-    func page_floor(addr: uint) -> uint {
+    func page_floor(addr: u64) -> u64 {
         return addr / PAGE_SIZE
     }
 
-    func page_ceil(addr: uint) -> uint {
+    func page_ceil(addr: u64) -> u64 {
         return (addr + PAGE_SIZE - 1) / PAGE_SIZE
     }
 
@@ -85,10 +85,10 @@ namespace PageAlloc {
     // only happen from firmware-reported ranges that aren't page-aligned)
     // is conservatively left alone rather than freed on the strength of a
     // partial overlap.
-    func mark_available(start: uint, end: uint) {
-        let lo: uint = page_ceil(start)
-        let hi: uint = page_floor(end)
-        let p: uint = lo
+    func mark_available(start: u64, end: u64) {
+        let lo: u64 = page_ceil(start)
+        let hi: u64 = page_floor(end)
+        let p: u64 = lo
         while p < hi {
             if p < MAX_PAGES {
                 set_free(p)
@@ -101,10 +101,10 @@ namespace PageAlloc {
     // Reserves every page *overlapping* [start, end) - rounds outward, so
     // a reserved range that isn't page-aligned still fully covers the
     // pages it touches.
-    func mark_reserved(start: uint, end: uint) {
-        let lo: uint = page_floor(start)
-        let hi: uint = page_ceil(end)
-        let p: uint = lo
+    func mark_reserved(start: u64, end: u64) {
+        let lo: u64 = page_floor(start)
+        let hi: u64 = page_ceil(end)
+        let p: u64 = lo
         while p < hi {
             if p < MAX_PAGES {
                 set_used(p)
@@ -113,8 +113,8 @@ namespace PageAlloc {
         }
     }
 
-    func reserve_range(start: uint, end: uint) {
-        let flags: uint = HAL.spinlock_acquire(&lock)
+    func reserve_range(start: u64, end: u64) {
+        let flags: u64 = HAL.spinlock_acquire(&lock)
         defer HAL.spinlock_release(&lock, flags)
 
         mark_reserved(start, end)
@@ -133,18 +133,18 @@ namespace PageAlloc {
     }
 
     packed struct MemMapEntry {
-        let base_addr: uint
-        let length: uint
+        let base_addr: u64
+        let length: u64
         let region_type: uint32
         let reserved: uint32
     }
 
-    func init(multiboot_ptr: uint) {
-        let flags: uint = HAL.spinlock_acquire(&lock)
+    func init(multiboot_ptr: u64) {
+        let flags: u64 = HAL.spinlock_acquire(&lock)
         defer HAL.spinlock_release(&lock, flags)
 
-        let byte_count: uint = MAX_PAGES / 8
-        let b: uint = 0
+        let byte_count: u64 = MAX_PAGES / 8
+        let b: u64 = 0
         while b < byte_count {
             bitmap[b] = 0
             b = b + 1
@@ -153,8 +153,8 @@ namespace PageAlloc {
         free_pages = 0
 
         let hdr: Framebuffer.InfoHeader* = multiboot_ptr as Framebuffer.InfoHeader*
-        let info_end: uint = multiboot_ptr + (hdr.total_size as uint)
-        let ptr: uint = multiboot_ptr + 8
+        let info_end: u64 = multiboot_ptr + (hdr.total_size as u64)
+        let ptr: u64 = multiboot_ptr + 8
         let scanning: bool = true
 
         while ptr < info_end && scanning {
@@ -164,17 +164,17 @@ namespace PageAlloc {
             } else {
                 if header.tag_type == 6 {
                     let mm: MemMapTag* = ptr as MemMapTag*
-                    let entry_ptr: uint = ptr + 16 // sizeof(MemMapTag)
-                    let entries_end: uint = ptr + (mm.size as uint)
+                    let entry_ptr: u64 = ptr + 16 // sizeof(MemMapTag)
+                    let entries_end: u64 = ptr + (mm.size as u64)
                     while entry_ptr < entries_end {
                         let e: MemMapEntry* = entry_ptr as MemMapEntry*
                         if e.region_type == 1 {
                             mark_available(e.base_addr, e.base_addr + e.length)
                         }
-                        entry_ptr = entry_ptr + (mm.entry_size as uint)
+                        entry_ptr = entry_ptr + (mm.entry_size as u64)
                     }
                 }
-                ptr = ptr + Framebuffer.align8(header.size as uint)
+                ptr = ptr + Framebuffer.align8(header.size as u64)
             }
         }
 
@@ -183,8 +183,8 @@ namespace PageAlloc {
         mark_reserved(multiboot_ptr, info_end) // the multiboot info structure
 
         if Framebuffer.ready {
-            let fb_start: uint = Framebuffer.addr
-            let fb_end: uint = fb_start + (Framebuffer.pitch as uint) * (Framebuffer.height as uint)
+            let fb_start: u64 = Framebuffer.addr
+            let fb_end: u64 = fb_start + (Framebuffer.pitch as u64) * (Framebuffer.height as u64)
             mark_reserved(fb_start, fb_end)
         }
     }
@@ -192,11 +192,11 @@ namespace PageAlloc {
     // Returns the physical address of a freshly-reserved 4KB page, or 0 if
     // none are free - 0 is never a valid result otherwise (it's always
     // inside the low-1MB reservation above).
-    func alloc() -> uint {
-        let flags: uint = HAL.spinlock_acquire(&lock)
+    func alloc() -> u64 {
+        let flags: u64 = HAL.spinlock_acquire(&lock)
         defer HAL.spinlock_release(&lock, flags)
 
-        let p: uint = 0
+        let p: u64 = 0
         while p < MAX_PAGES {
             if is_free(p) {
                 set_used(p)
@@ -209,11 +209,11 @@ namespace PageAlloc {
 
     // Returns `addr` (which must be a page-aligned address previously
     // handed out by alloc()) to the free pool.
-    func free(addr: uint) {
-        let flags: uint = HAL.spinlock_acquire(&lock)
+    func free(addr: u64) {
+        let flags: u64 = HAL.spinlock_acquire(&lock)
         defer HAL.spinlock_release(&lock, flags)
 
-        let p: uint = addr / PAGE_SIZE
+        let p: u64 = addr / PAGE_SIZE
         if p < MAX_PAGES {
             set_free(p)
         }
@@ -226,16 +226,16 @@ namespace PageAlloc {
     // scans for the first run of `count` consecutive free pages, marking
     // all of them used and returning the run's base address, or 0 if no
     // such run exists (including count == 0, which is never valid).
-    func alloc_contiguous(count: uint) -> uint {
-        let flags: uint = HAL.spinlock_acquire(&lock)
+    func alloc_contiguous(count: u64) -> u64 {
+        let flags: u64 = HAL.spinlock_acquire(&lock)
         defer HAL.spinlock_release(&lock, flags)
 
         if count == 0 {
             return 0
         }
-        let p: uint = 0
+        let p: u64 = 0
         while p + count <= MAX_PAGES {
-            let i: uint = 0
+            let i: u64 = 0
             let run_ok: bool = true
             while i < count && run_ok {
                 if !is_free(p + i) {
@@ -244,7 +244,7 @@ namespace PageAlloc {
                 i = i + 1
             }
             if run_ok {
-                let j: uint = 0
+                let j: u64 = 0
                 while j < count {
                     set_used(p + j)
                     j = j + 1

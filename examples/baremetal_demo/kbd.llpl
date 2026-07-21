@@ -35,17 +35,19 @@ namespace Keyboard {
     // happened to poll first won each keystroke, so once any windowed
     // client (or tetris.elf, which also polls directly) started polling
     // every tick, the shell silently went deaf. input_focus is a single
-    // system-wide switch, toggled only by F12 (see on_scancode below):
+    // system-wide switch, toggled only by F12 (see on_scancode below).
+    // Boot starts in windowing focus so the compositor can paint the GUI
+    // desktop/taskbar immediately; F12 still flips back to the console shell.
     // whichever side doesn't currently hold it sees "no key available"
     // rather than racing for real keys, so exactly one consumer can ever
     // drain a given keystroke.
     const FOCUS_CONSOLE = 0
     const FOCUS_WM = 1
-    let input_focus: int = FOCUS_CONSOLE
+    let input_focus: i64 = FOCUS_WM
 
     let buffer: char[64]
-    let head: int = 0
-    let tail: int = 0
+    let head: i64 = 0
+    let tail: i64 = 0
 
     let shift_held: bool = false
 
@@ -77,7 +79,7 @@ namespace Keyboard {
     ]
 
     func push(c: char) {
-        let next: int = (head + 1) % BUFFER_SIZE
+        let next: i64 = (head + 1) % BUFFER_SIZE
         if next != tail { // drop the key if the buffer's full
             buffer[head] = c
             head = next
@@ -88,12 +90,12 @@ namespace Keyboard {
     // port 0x60. Scancode set 1: bit 7 set means "key released" (we only
     // care about key-down); 0x2A/0x36 are the left/right shift make-codes.
     //
-    // `code as int` sign-extends (LLPL's `char` is a plain, signed C
+    // `code as i64` sign-extends (LLPL's `char` is a plain, signed C
     // `char`), so a byte like 0xAA would come back as -86, not 170 - `&
     // 255` recovers the true 0-255 value before any comparison against
     // 0x80 or bit-masking against 0x7F.
     func on_scancode(code: char) {
-        let raw: int = (code as int) & 255
+        let raw: i64 = (code as i64) & 255
 
         if raw == 0xE0 {
             extended = true
@@ -164,7 +166,7 @@ namespace Keyboard {
             return
         }
 
-        let index: int = key as int
+        let index: i64 = key as i64
         if index < 0 || index >= 58 {
             return
         }

@@ -5,7 +5,7 @@
 // or reading/writing the filesystem), but it is not privileged in any
 // special way anymore - it goes through exactly the same
 // Task.lookup_service/shm_region_for path a ring-3 program would, just
-// invoked directly rather than through the int 0x80 gate, since kernel
+// invoked directly rather than through the i64 0x80 gate, since kernel
 // code doesn't need to trap into itself to call its own functions. The
 // actual hardware access (port I/O) now lives entirely in atad, gated by
 // sys_inb/sys_outb/sys_inw/sys_outw's boot-only capability check - nothing
@@ -25,11 +25,34 @@ namespace ATA {
     const OP_WRITE = 2
 
     const SECTOR_SIZE = 512
-    const REQ_SIZE = 16 // two u64 fields (op, lba), 8 bytes each
+    const REQ_SIZE = 24 // three u64 fields (op, lba, count), 8 bytes each
+
+    // The largest sector count one request can move through atad's
+    // shared buffer in a single IPC round trip - must match atad.llpl's
+    // own same-named constant (its shared buffer is sized to exactly
+    // this many sectors). read_sectors/write_sectors chunk any bigger
+    // request into calls of at most this size. 128 sectors (64KB) is
+    // also PTRS_PER_INDIRECT (vfs.llpl) - a whole single-indirect
+    // block's worth of data in one round trip, the actual motivating
+    // case (see vfs.llpl's own header comment on why per-sector IPC
+    // round trips make big-file I/O impractically slow).
+    const MAX_BATCH = 128
 
     let present: bool = false
-    let atad_pid: int = -1
-    let shm_region: int = -1
+    let atad_pid: i64 = -1
+    let shm_region: i64 = -1
+    let read_ops: u64 = 0
+    let write_ops: u64 = 0
+    let read_sectors_total: u64 = 0
+    let write_sectors_total: u64 = 0
+    let ipc_calls: u64 = 0
+    let cache_hits: u64 = 0
+    let cache_misses: u64 = 0
+
+    const CACHE_SLOTS = 16
+    let cache_valid: bool[16]
+    let cache_lba: u64[16]
+    let cache_data: char[8192] // CACHE_SLOTS * SECTOR_SIZE
 
     // Guards atad's one shared sector buffer across a whole request+copy
     // cycle - not just the request itself. atad's own loop never waits for
@@ -78,11 +101,11 @@ namespace ATA {
         if atad_pid >= 0 && Task.exists(atad_pid) {
             return true
         }
-        let tries: int = 0
+        let tries: i64 = 0
         while tries < 2000000 {
-            let pid: int = Task.lookup_service("atad")
+            let pid: i64 = Task.lookup_service("atad")
             if pid >= 0 {
-                let region: int = Task.shm_region_for(pid)
+                let region: i64 = Task.shm_region_for(pid)
                 if region >= 0 {
                     atad_pid = pid
                     shm_region = region
@@ -98,18 +121,45 @@ namespace ATA {
         return Task.shm_phys_at(shm_region, 0) as char*
     }
 
+    func cache_index(lba: u64) -> i64 {
+        return (lba % (CACHE_SLOTS as u64)) as i64
+    }
+
+    func cache_slot_ptr(idx: i64) -> char* {
+        return (cache_data as char*) + idx * SECTOR_SIZE
+    }
+
+    func cache_read(lba: u64, buf: char*) -> bool {
+        let idx: i64 = cache_index(lba)
+        if cache_valid[idx] && cache_lba[idx] == lba {
+            llpl_memcpy(buf, cache_slot_ptr(idx), SECTOR_SIZE as u64)
+            cache_hits = cache_hits + 1
+            return true
+        }
+        cache_misses = cache_misses + 1
+        return false
+    }
+
+    func cache_store(lba: u64, src: char*) {
+        let idx: i64 = cache_index(lba)
+        cache_valid[idx] = true
+        cache_lba[idx] = lba
+        llpl_memcpy(cache_slot_ptr(idx), src, SECTOR_SIZE as u64)
+    }
+
     // Sends {op, lba} to atad and blocks until it replies with a status
     // word, exactly like Syscall.sys_msg_send/sys_msg_reply do for a
     // ring-3 caller (block_current_send/wake_with_return are the very
     // same primitives). The one real difference: a ring-3 syscall blocks
-    // by returning out of the int 0x80 handler, which the scheduler then
+    // by returning out of the i64 0x80 handler, which the scheduler then
     // switches away from; this is a kernel task with no such return path,
     // so it just spins reading its own TCB state - the ordinary
     // preemptive timer tick (already running by the time anything calls
     // this - see kernel_main's vfs_boot_task_entry) is what actually
     // switches this task out while blocked and back in once atad's reply
     // arrives, resuming this exact spin.
-    func call(op: u64, lba: u64) -> u64 {
+    func call(op: u64, lba: u64, count: u64) -> u64 {
+        ipc_calls = ipc_calls + 1
         if !ensure_ready() {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -119,10 +169,11 @@ namespace ATA {
             return 0xFFFFFFFFFFFFFFFF
         }
 
-        let raw: char[16]
+        let raw: char[24]
         let req: u64* = (raw as char*) as u64*
         req[0] = op
         req[1] = lba
+        req[2] = count
         let bytes: char* = raw as char*
         let len: u64 = REQ_SIZE
 
@@ -147,7 +198,7 @@ namespace ATA {
         // The handoff itself (check peer's state, wake it, mark ourselves
         // blocked) has to be atomic with respect to preemption, though.
         // Syscall.sys_msg_send gets that for free - it runs entirely
-        // inside the int 0x80 gate, which already has IF=0 for its whole
+        // inside the i64 0x80 gate, which already has IF=0 for its whole
         // duration - but this is a kernel task with no such gate, and at
         // this exact point interrupts are still whatever the caller had
         // (this function's own sti-forcing, below, hasn't run yet).
@@ -190,7 +241,7 @@ namespace ATA {
         // are - but VFS.read/write (and so this) is also reachable from
         // an ordinary ring-3 syscall (sys_open/sys_read/sys_write/
         // sys_spawn/sys_exec loading a file off the VFS disk), which
-        // executes inside the int 0x80 interrupt gate - and that gate has
+        // executes inside the i64 0x80 interrupt gate - and that gate has
         // already cleared IF on entry. Left alone, that means the timer
         // can never fire, atad can never run, and this spins forever: a
         // genuine deadlock, not just a slow path. Forcing interrupts on
@@ -237,61 +288,98 @@ namespace ATA {
     // asks it what it found.
     func init() -> bool {
         acquire_ata()
-        present = call(OP_PRESENT, 0) == 0
+        present = call(OP_PRESENT, 0, 1) == 0
         release_ata()
         return present
     }
 
     func read_sector(lba: u64, buf: char*) -> bool {
-        acquire_ata()
-        let ok: bool = call(OP_READ, lba) == 0
-        if ok {
-            let src: char* = shm_ptr()
-            let i: int = 0
-            while i < SECTOR_SIZE {
-                buf[i] = src[i]
-                i = i + 1
-            }
-        }
-        release_ata()
-        return ok
+        return read_sectors(lba, 1, buf)
     }
 
     func write_sector(lba: u64, buf: char*) -> bool {
-        acquire_ata()
-        let dst: char* = shm_ptr()
-        let i: int = 0
-        while i < SECTOR_SIZE {
-            dst[i] = buf[i]
-            i = i + 1
-        }
-        let ok: bool = call(OP_WRITE, lba) == 0
-        release_ata()
-        return ok
+        return write_sectors(lba, 1, buf)
     }
 
     // `count` contiguous sectors starting at `lba`, into/from a single
-    // `count * SECTOR_SIZE`-byte buffer - unchanged from the original
-    // driver: still just a loop over the single-sector primitives above,
-    // which is all vfs.llpl ever needed from this API.
+    // `count * SECTOR_SIZE`-byte buffer - chunked into calls of at most
+    // MAX_BATCH sectors, each one *IPC round trip* to atad regardless of
+    // how many sectors it covers (atad still transfers them to/from the
+    // real disk one at a time via PIO - see atad.llpl's own header
+    // comment on why DMA isn't used - but the expensive part per sector
+    // was never the PIO transfer itself, it was the message-send/wake/
+    // task-switch/wait/reply round trip surrounding it). The original,
+    // pre-batching version of this function called read_sector() once
+    // per sector - one full round trip each - which made anything more
+    // than a handful of sectors impractically slow (see vfs.llpl's own
+    // header comment on real indirect-block-sized files).
     func read_sectors(lba: u64, count: u64, buf: char*) -> bool {
-        let i: u64 = 0
-        while i < count {
-            if !read_sector(lba + i, buf + (i * SECTOR_SIZE) as int) {
+        read_ops = read_ops + 1
+        read_sectors_total = read_sectors_total + count
+        if count == 1 {
+            acquire_ata()
+            let hit: bool = cache_read(lba, buf)
+            release_ata()
+            if hit {
+                return true
+            }
+        }
+        let done: u64 = 0
+        while done < count {
+            let chunk: u64 = count - done
+            if chunk > MAX_BATCH as u64 {
+                chunk = MAX_BATCH as u64
+            }
+            acquire_ata()
+            let ok: bool = call(OP_READ, lba + done, chunk) == 0
+            if ok {
+                let src: char* = shm_ptr()
+                let bytes: u64 = chunk * (SECTOR_SIZE as u64)
+                let base: i64 = (done * (SECTOR_SIZE as u64)) as i64
+                llpl_memcpy(buf + base, src, bytes as u64)
+                let c: u64 = 0
+                while c < chunk {
+                    let off: i64 = (c * (SECTOR_SIZE as u64)) as i64
+                    cache_store(lba + done + c, src + off)
+                    c = c + 1
+                }
+            }
+            release_ata()
+            if !ok {
                 return false
             }
-            i = i + 1
+            done = done + chunk
         }
         return true
     }
 
     func write_sectors(lba: u64, count: u64, buf: char*) -> bool {
-        let i: u64 = 0
-        while i < count {
-            if !write_sector(lba + i, buf + (i * SECTOR_SIZE) as int) {
+        write_ops = write_ops + 1
+        write_sectors_total = write_sectors_total + count
+        let done: u64 = 0
+        while done < count {
+            let chunk: u64 = count - done
+            if chunk > MAX_BATCH as u64 {
+                chunk = MAX_BATCH as u64
+            }
+            acquire_ata()
+            let dst: char* = shm_ptr()
+            let bytes: u64 = chunk * (SECTOR_SIZE as u64)
+            let base: i64 = (done * (SECTOR_SIZE as u64)) as i64
+            llpl_memcpy(dst, buf + base, bytes as u64)
+            let ok: bool = call(OP_WRITE, lba + done, chunk) == 0
+            if !ok {
+                release_ata()
                 return false
             }
-            i = i + 1
+            let c: u64 = 0
+            while c < chunk {
+                let off: i64 = ((done + c) * (SECTOR_SIZE as u64)) as i64
+                cache_store(lba + done + c, buf + off)
+                c = c + 1
+            }
+            release_ata()
+            done = done + chunk
         }
         return true
     }

@@ -1,12 +1,12 @@
 // Example: Basic SDL3 window with rendering
 
-import "../../stdlib/sdl/sdl.llpl"
+import "stdlib/sdl/sdl.llpl"
 
 #link "SDL3"
 
 using namespace std.sdl
 
-func main() -> int {
+func main() -> i64 {
     // Initialize SDL3
     let init_result = SDL.init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)
 

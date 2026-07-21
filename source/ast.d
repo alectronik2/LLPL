@@ -18,6 +18,7 @@ enum NodeType {
     LinkDecl,
     FlagsDecl,
     EnumDecl,
+    GrammarDecl,
     VarDecl,
     IfStmt,
     WhileStmt,
@@ -65,6 +66,7 @@ enum NodeType {
     ThrowStmt,
     IfExpr,
     DeleteStmt,
+    AssertStmt,
     RangeExpr
 }
 
@@ -434,6 +436,17 @@ class FunctionDecl : ASTNode {
     // `static func` - a class method that doesn't receive a `self` parameter
     // and can be called on the class itself rather than on instances.
     bool isStatic;
+    // `virtual func` - establishes a new dispatchable vtable slot (only
+    // meaningful on a class with no base, or one introducing a method its
+    // own subclasses may override); `override func` - provides this
+    // class's implementation of a slot a base class already declared
+    // `virtual`/`override`. Both false (the default) means "resolved as
+    // an ordinary, statically-bound call, exactly like before inheritance
+    // existed" - dispatch overhead is opt-in per method, not automatic
+    // just because a class participates in a hierarchy. Only meaningful
+    // for a method (set by classDecl() in parser.d).
+    bool isVirtual;
+    bool isOverride;
 
     this(string name, Parameter[] params, Type returnType, Block body_, bool isExtern = false,
          bool isInterrupt = false, bool isVariadic = false, int line = 0, int column = 0,
@@ -465,6 +478,16 @@ class ClassDecl : ASTNode {
     string[] typeParams; // `<T, U>` after the class name - see FunctionDecl.typeParams
     string[] typeParamBounds; // parallel to typeParams - see FunctionDecl.typeParamBounds
     VarAttribute[] attributes;
+    // `class Derived : Base { ... }` - "" means no base class. Set by the
+    // parser to the raw, as-written name; canonicalized in place (e.g.
+    // namespace-qualified) by a resolution pass in codegen.d the same way
+    // an ordinary type name gets resolved via resolveType, before
+    // anything else looks at it. Single inheritance only, and mutually
+    // exclusive with generics (see codegen.d's resolution pass) - a
+    // generic ClassDecl's manual, non-reflective cloning
+    // (cloneClassDeclWithTypeSubs) would otherwise need to also
+    // remember to thread this field through by hand.
+    string baseClassName = "";
 
     this(string name, VarDecl[] fields, FunctionDecl[] constructors, FunctionDecl destructor, FunctionDecl[] methods,
          int line = 0, int column = 0, string[] typeParams = [], string[] typeParamBounds = [],
@@ -551,6 +574,145 @@ class UnionDecl : ASTNode {
         this.name = name;
         this.fields = fields;
         this.constructors = constructors;
+    }
+}
+
+// `grammar Name { rule : alt | alt ; ... }` - an ANTLR-like grammar DSL,
+// desugared at codegen time (see codegen.d's desugarGrammar) into a real
+// ClassDecl + FunctionDecls (one generated recursive-descent method per
+// rule), fed through the ordinary class-codegen pipeline exactly like any
+// hand-written class - see grammar.d for the analysis (left-recursion
+// elimination, FIRST/FOLLOW computation, ambiguity checking) that turns
+// these rules into that ClassDecl. GrammarRule/GrammarAlt/GrammarElement/
+// GrammarAtom below are this DSL's own parsed IR, entirely separate from
+// the ordinary LLPL expression/statement AST - grammar-rule syntax
+// (`'+' | '-'`, `[0-9]`, postfix `* + ?`) is a genuinely different concrete
+// syntax, not sugar over expressions/statements (see parser.d's
+// grammarDecl() family, which parses it directly rather than reusing
+// expression()/block()).
+class GrammarDecl : ASTNode {
+    string name;
+    GrammarRule[] rules;
+    string[] namespaceSegments; // Enclosing namespace path, set by the code generator
+
+    this(string name, GrammarRule[] rules, int line = 0, int column = 0) {
+        super(NodeType.GrammarDecl, line, column);
+        this.name = name;
+        this.rules = rules;
+    }
+}
+
+// One `name : alt1 | alt2 | ... ;` rule. An ALL-CAPS rule name is a common
+// convention for a "lexer-style" rule (e.g. NUMBER, IDENT) versus a
+// lowercase "parser-style" one - purely a naming convention grammar
+// authors use to organize their own rules, not a distinction this compiler
+// enforces or treats differently: unlike ANTLR's real separate lexer/
+// parser phases, every rule here - whatever it's named - is matched the
+// same character-level way, by the same generated recursive-descent code.
+class GrammarRule {
+    string name;
+    GrammarAlt[] alternatives;
+    int line;
+    int column;
+
+    this(string name, GrammarAlt[] alternatives, int line = 0, int column = 0) {
+        this.name = name;
+        this.alternatives = alternatives;
+        this.line = line;
+        this.column = column;
+    }
+}
+
+// One `|`-separated alternative: a sequence of elements matched in order.
+class GrammarAlt {
+    GrammarElement[] elements;
+
+    this(GrammarElement[] elements) {
+        this.elements = elements;
+    }
+}
+
+enum GrammarQuantifier {
+    None,
+    Star,     // `*` - zero or more
+    Plus,     // `+` - one or more
+    Question  // `?` - zero or one
+}
+
+// One atom plus its postfix quantifier, e.g. `[0-9]+` or `expr?`.
+class GrammarElement {
+    GrammarAtom atom;
+    GrammarQuantifier quantifier;
+
+    this(GrammarAtom atom, GrammarQuantifier quantifier = GrammarQuantifier.None) {
+        this.atom = atom;
+        this.quantifier = quantifier;
+    }
+}
+
+enum GrammarAtomKind {
+    Literal,    // a quoted string, matched verbatim: 'if', "+="
+    CharClass,  // [0-9], [a-zA-Z_], negated [^\n] - see CharRange/`negated`
+    Wildcard,   // `.` - matches any single character
+    RuleRef,    // a reference to another rule by name
+    Group       // `( alt | alt | ... )` - a parenthesized sub-choice
+}
+
+// One inclusive character range within a `[...]` class - a single
+// character `c` is just `CharRange(c, c)`.
+struct CharRange {
+    char lo;
+    char hi;
+}
+
+// A single terminal/nonterminal atom - exactly one field group below is
+// meaningful, selected by `kind` (see GrammarAtomKind's own per-variant
+// comment). Modeled as one class with a kind tag - this compiler's own
+// YamlValue/JsonValue "manual tagged tree" convention - rather than a D
+// `Algebraic`/tagged union, since `Group` is self-referential (GrammarAlt[]
+// containing more GrammarElements containing more GrammarAtoms) the exact
+// same way those runtime types are.
+class GrammarAtom {
+    GrammarAtomKind kind;
+    string literal;       // Literal
+    CharRange[] ranges;   // CharClass
+    bool negated;         // CharClass: true for `[^...]`
+    string ruleRef;       // RuleRef
+    GrammarAlt[] group;   // Group
+
+    static GrammarAtom makeLiteral(string s) {
+        auto a = new GrammarAtom();
+        a.kind = GrammarAtomKind.Literal;
+        a.literal = s;
+        return a;
+    }
+
+    static GrammarAtom makeCharClass(CharRange[] ranges, bool negated) {
+        auto a = new GrammarAtom();
+        a.kind = GrammarAtomKind.CharClass;
+        a.ranges = ranges;
+        a.negated = negated;
+        return a;
+    }
+
+    static GrammarAtom makeWildcard() {
+        auto a = new GrammarAtom();
+        a.kind = GrammarAtomKind.Wildcard;
+        return a;
+    }
+
+    static GrammarAtom makeRuleRef(string name) {
+        auto a = new GrammarAtom();
+        a.kind = GrammarAtomKind.RuleRef;
+        a.ruleRef = name;
+        return a;
+    }
+
+    static GrammarAtom makeGroup(GrammarAlt[] alts) {
+        auto a = new GrammarAtom();
+        a.kind = GrammarAtomKind.Group;
+        a.group = alts;
+        return a;
     }
 }
 
@@ -960,6 +1122,20 @@ class DeleteStmt : ASTNode {
     this(ASTNode value, int line = 0, int column = 0) {
         super(NodeType.DeleteStmt, line, column);
         this.value = value;
+    }
+}
+
+// `assert(condition)` or `assert(condition, "message")` - built-in statement
+// that aborts with a panic if the condition is false. Lowered to an
+// `if (!(condition)) llpl_panic(...)` by the code generator.
+class AssertStmt : ASTNode {
+    ASTNode condition;
+    ASTNode message; // optional string expression
+
+    this(ASTNode condition, ASTNode message = null, int line = 0, int column = 0) {
+        super(NodeType.AssertStmt, line, column);
+        this.condition = condition;
+        this.message = message;
     }
 }
 

@@ -135,8 +135,8 @@ struct SDL_Color {
     }
 }
 
-// Rectangle structure - SDL_Rect's x/y/w/h are `int` (32-bit) in real
-// SDL3, not LLPL's own 64-bit `int` - see this file's own header comment
+// Rectangle structure - SDL_Rect's x/y/w/h are `i64` (32-bit) in real
+// SDL3, not LLPL's own 64-bit `i64` - see this file's own header comment
 // on why every field here matches SDL3's real declared widths exactly.
 struct SDL_Rect {
     let x: i32
@@ -155,7 +155,7 @@ struct SDL_Rect {
 // FRect (floating point rectangle) - the *only* rect type SDL3's own
 // render functions actually take (SDL_RenderRect/SDL_RenderFillRect/
 // SDL_RenderTexture all want `const SDL_FRect*`, not SDL_Rect* - real
-// SDL3 has no separate int-rect render calls at all, unlike this
+// SDL3 has no separate i64-rect render calls at all, unlike this
 // binding's own former SDL_RenderFRect/SDL_RenderFillFRect, which never
 // existed in the real library and have been removed below).
 struct SDL_FRect {
@@ -262,9 +262,9 @@ union SDL_Event {
 // SDL_surface.h/SDL_events.h/SDL_keyboard.h/SDL_mouse.h/SDL_timer.h): a
 // signature that merely happens to be ABI-compatible still fails outright
 // at the C level once <SDL3/SDL.h> is *also* included (see codegen.d's
-// own "conflicting types" comment on typeToC's `bool` case) - `int` vs
-// SDL3's real `bool`, or LLPL's 64-bit `int`/`uint` vs SDL3's real 32-bit
-// `int`/`Uint32`/`SDL_WindowFlags`, are both hard redeclaration errors,
+// own "conflicting types" comment on typeToC's `bool` case) - `i64` vs
+// SDL3's real `bool`, or LLPL's 64-bit `i64`/`u64` vs SDL3's real 32-bit
+// `i64`/`Uint32`/`SDL_WindowFlags`, are both hard redeclaration errors,
 // not just a style mismatch.
 extern func SDL_Init(flags: u32) -> bool
 extern func SDL_Quit()
@@ -288,7 +288,7 @@ extern func SDL_SetRenderDrawColor(renderer: SDL_Renderer*, r: u8, g: u8, b: u8,
 extern func SDL_SetRenderDrawBlendMode(renderer: SDL_Renderer*, blendMode: u32) -> bool
 
 // Drawing primitives - SDL3 only has a *float*-rect render path (no
-// separate int-rect entry points at all); SDL_RenderRect/SDL_RenderFillRect
+// separate i64-rect entry points at all); SDL_RenderRect/SDL_RenderFillRect
 // themselves take `const SDL_FRect*` in the real library, so there's no
 // separate SDL_RenderFRect/SDL_RenderFillFRect to bind (a former version
 // of this file invented those two - they don't exist in real SDL3 and

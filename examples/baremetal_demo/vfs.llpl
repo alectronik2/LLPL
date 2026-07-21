@@ -30,8 +30,15 @@
 // what makes files created in one boot still be there on the next.
 //
 // Known v1 limitations (see also each function's own comment):
-//   - Fixed capacity: MAX_INODES inodes total, MAX_DIRECT_BLOCKS direct
-//     data blocks per file (32KB max file size) - no indirect blocks.
+//   - Fixed capacity: MAX_INODES inodes total. A file's data blocks are
+//     addressed the classic Unix way - MAX_DIRECT_BLOCKS direct pointers
+//     in the inode itself (32KB, no extra I/O - the fast path for every
+//     small file), then a single-indirect block (one more 512-byte block
+//     holding PTRS_PER_INDIRECT more direct pointers, +64KB), then a
+//     double-indirect block (a 512-byte block of pointers to *more*
+//     indirect blocks, +8MB) - see resolve_block(). MAX_FILE_BLOCKS is
+//     the resulting ceiling (~8.1MB); actual usable size is also capped
+//     by real free space on disk.
 //   - No permissions, timestamps, or symlinks - `kind` is just file-or-dir.
 //   - Single fixed disk (primary ATA master only, see ata.llpl), no
 //     partition table - the whole disk image is the filesystem.
@@ -54,9 +61,9 @@ namespace VFS {
     // `cwd`, exactly like a real VFS's mount table.
     enum Node {
         NotFound,
-        Disk(idx: int),
+        Disk(idx: i64),
         TmpfsRoot,
-        TmpfsFile(idx: int)
+        TmpfsFile(idx: i64)
     }
 
     // The one mount point this demo has - hard-coded rather than a
@@ -71,43 +78,67 @@ namespace VFS {
     const MAX_DIRECT_BLOCKS = 64
     const ROOT_INODE = 0
 
+    // A block pointer is a uint32 (block numbers comfortably fit in 32
+    // bits even for a much bigger disk than this demo's), so one
+    // 512-byte indirect block holds this many of them.
+    const PTRS_PER_INDIRECT = 128
+
+    // The addressing ceiling resolve_block() can reach: MAX_DIRECT_BLOCKS
+    // direct + PTRS_PER_INDIRECT single-indirect + PTRS_PER_INDIRECT^2
+    // double-indirect = 64 + 128 + 16384 = 16576 blocks (~8.1MB).
+    const MAX_FILE_BLOCKS = MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT + PTRS_PER_INDIRECT * PTRS_PER_INDIRECT
+
     const KIND_FREE = 0
     const KIND_FILE = 1
     const KIND_DIR = 2
 
-    // Must match the Makefile's `dd ... bs=1M count=16` disk image size
-    // (16MB / 512-byte sectors).
-    const DISK_SECTORS = 32768
+    // Must match build.yaml's persistent_files `dd ... bs=1M count=64`
+    // disk image size (64MB / 512-byte sectors) - room for real media
+    // (icons, wallpaper, ...) now that files aren't capped at 32KB.
+    const DISK_SECTORS = 131072
 
-    // "LLPFS2" in ASCII, as one 64-bit constant - wrong or absent on disk
-    // means "not our filesystem", triggering a fresh format instead of
-    // trying to interpret garbage as a superblock.
-    const MAGIC = 0x4C4C50465332
+    // "LLPFS3" in ASCII, as one 64-bit constant - bumped from LLPFS2
+    // when Inode gained real indirect blocks (narrower uint32 block
+    // pointers, two new fields - see the Inode struct below), so an
+    // old-format disk correctly triggers a fresh reformat instead of
+    // being misread through the new, differently-sized layout. Wrong or
+    // absent on disk means "not our filesystem" either way, triggering a
+    // fresh format instead of trying to interpret garbage as a
+    // superblock.
+    const MAGIC = 0x4C4C50465333
 
     packed struct Superblock {
-        let magic: uint
-        let total_blocks: uint
-        let inode_count: uint
-        let bitmap_block: uint
-        let inode_table_block: uint
-        let data_start_block: uint
+        let magic: u64
+        let total_blocks: u64
+        let inode_count: u64
+        let bitmap_block: u64
+        let inode_table_block: u64
+        let data_start_block: u64
     }
 
     packed struct Inode {
         let name: char[32]
-        let kind: uint          // KIND_FREE/KIND_FILE/KIND_DIR
-        let size: uint          // file: bytes in use
-        let parent: int         // inode-table index, -1 for root
-        let first_child: int    // dir: first child's index, -1 if empty
-        let next_sibling: int   // next sibling's index, -1 if last
-        let blocks: uint[64]    // file: direct data-block numbers (0 = hole)
+        let kind: u64          // KIND_FREE/KIND_FILE/KIND_DIR
+        let size: u64          // file: bytes in use
+        let parent: i64         // inode-table index, -1 for root
+        let first_child: i64    // dir: first child's index, -1 if empty
+        let next_sibling: i64   // next sibling's index, -1 if last
+        let blocks: uint32[64]  // file: direct data-block numbers (0 = hole)
+        let single_indirect: uint32 // block # of a PTRS_PER_INDIRECT-entry
+                                     // array of direct data-block numbers
+                                     // (0 = none allocated yet)
+        let double_indirect: uint32 // block # of a PTRS_PER_INDIRECT-entry
+                                     // array of *other* indirect blocks,
+                                     // each shaped exactly like
+                                     // single_indirect's own target
+                                     // (0 = none allocated yet)
     }
 
     let sb_buf: char[512]       // block 0, viewed through superblock() below
     let bitmap: char* = null    // kmalloc'd, bitmap_blocks * 512 bytes
     let inode_table: char* = null // kmalloc'd, inode_table_blocks * 512 bytes
-    let bitmap_blocks: uint = 0
-    let inode_table_blocks: uint = 0
+    let bitmap_blocks: u64 = 0
+    let inode_table_blocks: u64 = 0
 
     let cwd: Node // set to Node.Disk(ROOT_INODE) by init() - no meaningful
                   // value before that, so no initializer here (see the
@@ -121,7 +152,7 @@ namespace VFS {
     // needs as their "relative to" starting point, and the clean way for
     // them to simply fail (rather than misinterpret a tmpfs index as a
     // disk one) when the shell's cwd is currently inside the tmpfs mount.
-    func cwd_disk_index() -> int {
+    func cwd_disk_index() -> i64 {
         match cwd {
             case Node.Disk(idx) => {
                 return idx
@@ -137,13 +168,13 @@ namespace VFS {
         return p as Superblock*
     }
 
-    func inode_at(idx: int) -> Inode* {
-        let p: char* = inode_table + (idx as uint) * sizeof(Inode)
+    func inode_at(idx: i64) -> Inode* {
+        let p: char* = inode_table + (idx as u64) * sizeof(Inode)
         return p as Inode*
     }
 
-    func cstrlen(s: char*) -> uint {
-        let i: uint = 0
+    func cstrlen(s: char*) -> u64 {
+        let i: u64 = 0
         while s[i] != 0 {
             i = i + 1
         }
@@ -151,7 +182,7 @@ namespace VFS {
     }
 
     func str_eq(a: char*, b: char*) -> bool {
-        let i: int = 0
+        let i: i64 = 0
         while a[i] != 0 && b[i] != 0 {
             if a[i] != b[i] {
                 return false
@@ -162,7 +193,7 @@ namespace VFS {
     }
 
     func inode_name_eq(node: Inode*, name: char*) -> bool {
-        let i: int = 0
+        let i: i64 = 0
         while name[i] != 0 {
             if node.name[i] != name[i] {
                 return false
@@ -173,7 +204,7 @@ namespace VFS {
     }
 
     func set_inode_name(node: Inode*, name: char*) {
-        let i: int = 0
+        let i: i64 = 0
         while name[i] != 0 && i < MAX_NAME - 1 {
             node.name[i] = name[i]
             i = i + 1
@@ -184,24 +215,24 @@ namespace VFS {
     // ---- Free-block bitmap (same idiom as pagealloc.llpl's page bitmap -
     // one bit/block, 1 = free) ----
 
-    func block_is_free(block: uint) -> bool {
-        let byte: uint = block / 8
-        let bit: int = (block % 8) as int
-        let cur: int = (bitmap[byte] as int) & 255
+    func block_is_free(block: u64) -> bool {
+        let byte: u64 = block / 8
+        let bit: i64 = (block % 8) as i64
+        let cur: i64 = (bitmap[byte] as i64) & 255
         return (cur & (1 << bit)) != 0
     }
 
-    func set_block_free(block: uint) {
-        let byte: uint = block / 8
-        let bit: int = (block % 8) as int
-        let cur: int = (bitmap[byte] as int) & 255
+    func set_block_free(block: u64) {
+        let byte: u64 = block / 8
+        let bit: i64 = (block % 8) as i64
+        let cur: i64 = (bitmap[byte] as i64) & 255
         bitmap[byte] = (cur | (1 << bit)) as char
     }
 
-    func set_block_used(block: uint) {
-        let byte: uint = block / 8
-        let bit: int = (block % 8) as int
-        let cur: int = (bitmap[byte] as int) & 255
+    func set_block_used(block: u64) {
+        let byte: u64 = block / 8
+        let bit: i64 = (block % 8) as i64
+        let cur: i64 = (bitmap[byte] as i64) & 255
         bitmap[byte] = (cur & ~(1 << bit)) as char
     }
 
@@ -209,8 +240,8 @@ namespace VFS {
     // inode-table blocks are marked permanently used at format time and
     // never revisited. Returns 0 (never a valid data block, since block 0
     // is always the superblock) on "disk full".
-    func alloc_block() -> uint {
-        let b: uint = superblock().data_start_block
+    func alloc_block() -> u64 {
+        let b: u64 = superblock().data_start_block
         while b < DISK_SECTORS {
             if block_is_free(b) {
                 set_block_used(b)
@@ -222,9 +253,22 @@ namespace VFS {
         return 0
     }
 
-    func free_block(b: uint) {
+    func free_block(b: u64) {
         if b == 0 {
             return
+        }
+        // A freed block must never keep serving stale cached content if
+        // it's immediately reallocated for a different indirect block
+        // (see the indirect-block cache's own comment below) - dropped
+        // outright, never flushed, since a freed block's old content
+        // doesn't need to survive.
+        if b == top_cache_block {
+            top_cache_block = 0
+            top_cache_dirty = false
+        }
+        if b == leaf_cache_block {
+            leaf_cache_block = 0
+            leaf_cache_dirty = false
         }
         set_block_free(b)
         ATA.write_sectors(1, bitmap_blocks, bitmap)
@@ -234,8 +278,8 @@ namespace VFS {
         ATA.write_sectors(superblock().inode_table_block, inode_table_blocks, inode_table)
     }
 
-    func alloc_inode() -> int {
-        let i: int = 0
+    func alloc_inode() -> i64 {
+        let i: i64 = 0
         while i < MAX_INODES {
             if inode_at(i).kind == KIND_FREE {
                 return i
@@ -245,30 +289,306 @@ namespace VFS {
         return -1
     }
 
+    // ---- Indirect-block addressing (see resolve_block) ----
+
+    // Writes 512 zero bytes to block `b` - every freshly-allocated
+    // indirect block (single_indirect, double_indirect, and each
+    // second-level block double_indirect points to) must start zeroed so
+    // its slots read back as "0 = no pointer yet", not garbage left over
+    // from whatever this block last held.
+    func zero_block(b: u64) {
+        let buf: char[512]
+        let i: i64 = 0
+        while i < 512 {
+            buf[i] = 0
+            i = i + 1
+        }
+        ATA.write_sector(b, buf as char*)
+    }
+
+    // A tiny write-back cache for indirect-block I/O - without it,
+    // indirect_slot() would do a full ATA read-modify-write round trip
+    // for *every single slot* it touches, even though write()'s own
+    // block-filling loop calls it with a steadily increasing logical
+    // index, meaning long runs of consecutive calls all target the very
+    // same indirect block (128 calls to fill one single-indirect
+    // block's worth of pointers, instead of one read + 128 in-memory
+    // updates + one write). Real ATA latency makes that add up to real,
+    // multi-second delays even for a file well under a megabyte -
+    // exactly the files this feature exists to make practical.
+    //
+    // Two independent slots, not one: `top_cache` holds whichever
+    // "index block" is currently active - single_indirect's own block,
+    // or (within the double-indirect region) double_indirect's own
+    // top-level block - the two are never both active in the same
+    // resolve_block() call, so they safely share one slot. `leaf_cache`
+    // holds the current second-level block within double_indirect,
+    // which only changes once per PTRS_PER_INDIRECT calls (`outer`
+    // incrementing); without its own separate slot, every double-
+    // indirect access would thrash `top_cache` against it on every
+    // single call instead of every 128th.
+    //
+    // Invalidated (dropped, never flushed - correctly, since a freed
+    // block's old content need not survive) by free_block() whenever
+    // the block it names happens to be cached, so a freed-then-
+    // immediately-reallocated block number can never serve stale
+    // content for its new use. Flushed explicitly at the end of every
+    // operation that can dirty them (see flush_indirect_caches(),
+    // called from write()) - this module's own "flush whatever you
+    // touched before returning" discipline, just batched at the whole-
+    // operation level for indirect blocks instead of per slot.
+    let top_cache_block: u64 = 0
+    let top_cache_buf: char[512]
+    let top_cache_dirty: bool = false
+    let leaf_cache_block: u64 = 0
+    let leaf_cache_buf: char[512]
+    let leaf_cache_dirty: bool = false
+
+    func flush_indirect_caches() {
+        if top_cache_block != 0 && top_cache_dirty {
+            ATA.write_sector(top_cache_block, top_cache_buf as char*)
+            top_cache_dirty = false
+        }
+        if leaf_cache_block != 0 && leaf_cache_dirty {
+            ATA.write_sector(leaf_cache_block, leaf_cache_buf as char*)
+            leaf_cache_dirty = false
+        }
+    }
+
+    func ensure_top_cache(block_num: u64) -> char* {
+        if top_cache_block != block_num {
+            if top_cache_block != 0 && top_cache_dirty {
+                ATA.write_sector(top_cache_block, top_cache_buf as char*)
+            }
+            ATA.read_sector(block_num, top_cache_buf as char*)
+            top_cache_block = block_num
+            top_cache_dirty = false
+        }
+        return top_cache_buf as char*
+    }
+
+    func ensure_leaf_cache(block_num: u64) -> char* {
+        if leaf_cache_block != block_num {
+            if leaf_cache_block != 0 && leaf_cache_dirty {
+                ATA.write_sector(leaf_cache_block, leaf_cache_buf as char*)
+            }
+            ATA.read_sector(block_num, leaf_cache_buf as char*)
+            leaf_cache_block = block_num
+            leaf_cache_dirty = false
+        }
+        return leaf_cache_buf as char*
+    }
+
+    // Reads `block_num` (already a real, allocated block) through the
+    // appropriate cache slot above (`is_leaf` selects which - see its
+    // own comment) as an array of PTRS_PER_INDIRECT uint32 block
+    // numbers, and gets/creates the pointer at `slot` - used identically
+    // for a single-indirect block's own direct data-block numbers, a
+    // double-indirect block's own second-level indirect-block numbers,
+    // and a second-level block's own direct data-block numbers, since
+    // all three are really just this same "512-byte array of block
+    // pointers" shape. A pointer allocated here is always zeroed first
+    // (see zero_block) - correct whether it ends up holding real file
+    // bytes (about to be overwritten anyway) or, for the double-indirect
+    // case, itself being interpreted as another array of pointers by the
+    // caller's own next indirect_slot() call.
+    func indirect_slot(block_num: u64, slot: u64, create: bool, is_leaf: bool) -> u64 {
+        let buf: char*
+        if is_leaf {
+            buf = ensure_leaf_cache(block_num)
+        } else {
+            buf = ensure_top_cache(block_num)
+        }
+        let ptrs: uint32* = buf as uint32*
+        let existing: u64 = ptrs[slot] as u64
+        if existing != 0 || !create {
+            return existing
+        }
+        let b: u64 = alloc_block()
+        if b == 0 {
+            return 0
+        }
+        zero_block(b)
+        ptrs[slot] = b as uint32
+        if is_leaf {
+            leaf_cache_dirty = true
+        } else {
+            top_cache_dirty = true
+        }
+        return b
+    }
+
+    // Resolves a file's logical block index `li` (0-based, contiguous
+    // across the direct/single-indirect/double-indirect regions) to a
+    // real disk block number, walking (and, when `create` is true,
+    // allocating) exactly as much indirect-block structure as that index
+    // actually needs - a small file never touches single_indirect/
+    // double_indirect at all. `node.single_indirect`/`node.double_indirect`
+    // themselves live in the in-RAM inode table (see Inode), so setting
+    // them here rides along with the caller's own flush_inode_table() -
+    // only the indirect blocks *pointed to* need their own direct
+    // ATA read/write (via indirect_slot/zero_block above). When `create`
+    // is false (read()'s use), never allocates - returns 0 for a hole/
+    // never-written slot, or for an index past MAX_FILE_BLOCKS entirely.
+    func resolve_block(node: Inode*, li: u64, create: bool) -> u64 {
+        if li < MAX_DIRECT_BLOCKS as u64 {
+            let existing: u64 = node.blocks[li] as u64
+            if existing != 0 || !create {
+                return existing
+            }
+            let b: u64 = alloc_block()
+            if b != 0 {
+                node.blocks[li] = b as uint32
+            }
+            return b
+        }
+        li = li - (MAX_DIRECT_BLOCKS as u64)
+
+        if li < PTRS_PER_INDIRECT as u64 {
+            if node.single_indirect == 0 {
+                if !create {
+                    return 0
+                }
+                let b: u64 = alloc_block()
+                if b == 0 {
+                    return 0
+                }
+                zero_block(b)
+                node.single_indirect = b as uint32
+            }
+            return indirect_slot(node.single_indirect as u64, li, create, false)
+        }
+        li = li - (PTRS_PER_INDIRECT as u64)
+
+        let outer: u64 = li / (PTRS_PER_INDIRECT as u64)
+        let inner: u64 = li % (PTRS_PER_INDIRECT as u64)
+        if outer >= PTRS_PER_INDIRECT as u64 {
+            return 0 // past MAX_FILE_BLOCKS entirely
+        }
+
+        if node.double_indirect == 0 {
+            if !create {
+                return 0
+            }
+            let b: u64 = alloc_block()
+            if b == 0 {
+                return 0
+            }
+            zero_block(b)
+            node.double_indirect = b as uint32
+        }
+
+        let second_level: u64 = indirect_slot(node.double_indirect as u64, outer, create, false)
+        if second_level == 0 {
+            return 0
+        }
+        return indirect_slot(second_level, inner, create, true)
+    }
+
+    // Frees every block a single indirect block points to - direct data
+    // blocks when `two_level` is false, or (for double_indirect's own
+    // top-level block) other indirect blocks recursed into once more
+    // when `two_level` is true - then frees the pointer-array block
+    // itself.
+    func free_indirect_block(block_num: u64, two_level: bool) {
+        let buf: char[512]
+        ATA.read_sector(block_num, buf as char*)
+        let ptrs: uint32* = buf as uint32*
+        let i: i64 = 0
+        while i < PTRS_PER_INDIRECT {
+            let p: u64 = ptrs[i] as u64
+            if p != 0 {
+                if two_level {
+                    free_indirect_block(p, false)
+                } else {
+                    free_block(p)
+                }
+            }
+            i = i + 1
+        }
+        free_block(block_num)
+    }
+
+    // Frees every block a file currently owns - direct, single-indirect,
+    // and double-indirect alike - and resets all three fields to "none",
+    // ready for either deletion (rm()) or a full rewrite (write()).
+    func free_file_blocks(node: Inode*) {
+        let bi: i64 = 0
+        while bi < MAX_DIRECT_BLOCKS {
+            if node.blocks[bi] != 0 {
+                free_block(node.blocks[bi] as u64)
+                node.blocks[bi] = 0
+            }
+            bi = bi + 1
+        }
+        if node.single_indirect != 0 {
+            free_indirect_block(node.single_indirect as u64, false)
+            node.single_indirect = 0
+        }
+        if node.double_indirect != 0 {
+            free_indirect_block(node.double_indirect as u64, true)
+            node.double_indirect = 0
+        }
+    }
+
+    // A freshly-created file's blocks/single_indirect/double_indirect
+    // all start as "nothing allocated yet" - shared by touch() and
+    // write()'s own "create if missing" branch.
+    func init_empty_blocks(node: Inode*) {
+        let bi: i64 = 0
+        while bi < MAX_DIRECT_BLOCKS {
+            node.blocks[bi] = 0
+            bi = bi + 1
+        }
+        node.single_indirect = 0
+        node.double_indirect = 0
+    }
+
     // ---- Formatting / init ----
 
-    func format(data_start: uint) {
+    func format(data_start: u64) {
         // Zeroing every byte marks every block used (1 = free, 0 = used -
         // same convention pagealloc.llpl's page bitmap uses) - the data
         // region is then explicitly marked free below, exactly like
         // PageAlloc.init() starts everything reserved and only frees the
         // ranges firmware actually reports as available.
-        let i: uint = 0
+        let i: u64 = 0
         while i < bitmap_blocks * 512 {
             bitmap[i] = 0
             i = i + 1
         }
-        let b: uint = 0
+        let b: u64 = 0
         while b < data_start {
             set_block_used(b)
             b = b + 1
         }
+        // Marks the (potentially huge - see DISK_SECTORS' own comment on
+        // why the disk is 64MB now) rest of the disk free a whole byte
+        // (8 blocks) at a time instead of bit-by-bit - format() only
+        // ever runs once, on a genuinely fresh disk, but at DISK_SECTORS
+        // iterations of per-bit function-call overhead each, this loop
+        // alone was slow enough under software CPU emulation to matter:
+        // a bare `dd`-created 64MB disk's very first boot could take
+        // upwards of a minute before this fix. Finishes any leading
+        // partial byte (data_start isn't guaranteed byte-aligned)
+        // bit-by-bit first, same as the loop above.
+        while b < DISK_SECTORS && (b % 8) != 0 {
+            set_block_free(b)
+            b = b + 1
+        }
+        let byte: u64 = b / 8
+        let end_byte: u64 = DISK_SECTORS / 8
+        while byte < end_byte {
+            bitmap[byte] = 0xFF as char
+            byte = byte + 1
+        }
+        b = byte * 8
         while b < DISK_SECTORS {
             set_block_free(b)
             b = b + 1
         }
 
-        let j: uint = 0
+        let j: u64 = 0
         while j < inode_table_blocks * 512 {
             inode_table[j] = 0
             j = j + 1
@@ -301,7 +621,7 @@ namespace VFS {
 
         bitmap_blocks = (DISK_SECTORS + 8 * 512 - 1) / (8 * 512)
         inode_table_blocks = (MAX_INODES * sizeof(Inode) + 511) / 512
-        let data_start: uint = 1 + bitmap_blocks + inode_table_blocks
+        let data_start: u64 = 1 + bitmap_blocks + inode_table_blocks
 
         bitmap = KHeap.kmalloc(bitmap_blocks * 512) as char*
         inode_table = KHeap.kmalloc(inode_table_blocks * 512) as char*
@@ -327,16 +647,16 @@ namespace VFS {
 
     // ---- Path resolution ----
 
-    func find_slash_or_end(path: char*, start: int) -> int {
-        let i: int = start
+    func find_slash_or_end(path: char*, start: i64) -> i64 {
+        let i: i64 = start
         while path[i] != 0 && path[i] != 47 { // 47 = '/'
             i = i + 1
         }
         return i
     }
 
-    func find_child(parent: int, name: char*) -> int {
-        let child: int = inode_at(parent).first_child
+    func find_child(parent: i64, name: char*) -> i64 {
+        let child: i64 = inode_at(parent).first_child
         while child != -1 {
             if inode_name_eq(inode_at(child), name) {
                 return child
@@ -352,9 +672,9 @@ namespace VFS {
     // is looked up among the current directory's children. Returns -1 if
     // any component isn't found, or if a non-final component isn't a
     // directory.
-    func resolve_from(start: int, path: char*) -> int {
-        let cur: int = start
-        let i: int = 0
+    func resolve_from(start: i64, path: char*) -> i64 {
+        let cur: i64 = start
+        let i: i64 = 0
         if path[0] == 47 {
             cur = ROOT_INODE
             i = 1
@@ -362,13 +682,13 @@ namespace VFS {
 
         let comp: char[32]
         while path[i] != 0 {
-            let end: int = find_slash_or_end(path, i)
-            let len: int = end - i
+            let end: i64 = find_slash_or_end(path, i)
+            let len: i64 = end - i
             if len > 0 {
                 if len >= MAX_NAME {
                     return -1
                 }
-                let k: int = 0
+                let k: i64 = 0
                 while k < len {
                     comp[k] = path[i + k]
                     k = k + 1
@@ -385,7 +705,7 @@ namespace VFS {
                     if inode_at(cur).kind != KIND_DIR {
                         return -1
                     }
-                    let found: int = find_child(cur, comp as char*)
+                    let found: i64 = find_child(cur, comp as char*)
                     if found == -1 {
                         return -1
                     }
@@ -405,10 +725,10 @@ namespace VFS {
     // least MAX_NAME bytes) - what mkdir/touch/write need: the parent
     // must already exist (and be a directory), and the leaf is the new
     // name being created there.
-    func resolve_parent(start: int, path: char*, leaf_out: char*) -> int {
-        let total_len: int = 0
-        let last_slash: int = -1
-        let i: int = 0
+    func resolve_parent(start: i64, path: char*, leaf_out: char*) -> i64 {
+        let total_len: i64 = 0
+        let last_slash: i64 = -1
+        let i: i64 = 0
         while path[i] != 0 {
             if path[i] == 47 {
                 last_slash = i
@@ -418,7 +738,7 @@ namespace VFS {
         total_len = i
 
         if last_slash == -1 {
-            let k: int = 0
+            let k: i64 = 0
             while k < total_len {
                 leaf_out[k] = path[k]
                 k = k + 1
@@ -427,8 +747,8 @@ namespace VFS {
             return start
         }
 
-        let leaf_len: int = total_len - last_slash - 1
-        let k: int = 0
+        let leaf_len: i64 = total_len - last_slash - 1
+        let k: i64 = 0
         while k < leaf_len {
             leaf_out[k] = path[last_slash + 1 + k]
             k = k + 1
@@ -440,7 +760,7 @@ namespace VFS {
         }
 
         let parent_path: char[128]
-        let k2: int = 0
+        let k2: i64 = 0
         while k2 < last_slash {
             parent_path[k2] = path[k2]
             k2 = k2 + 1
@@ -452,15 +772,15 @@ namespace VFS {
     // Disk-only (see resolve() for the mount-aware entry point shell.llpl
     // actually calls now) - still used internally by selftest() below,
     // which only ever deals with on-disk paths.
-    func resolve_dir(path: char*) -> int {
-        let idx: int = resolve_from(cwd_disk_index(), path)
+    func resolve_dir(path: char*) -> i64 {
+        let idx: i64 = resolve_from(cwd_disk_index(), path)
         if idx == -1 || inode_at(idx).kind != KIND_DIR {
             return -1
         }
         return idx
     }
 
-    func link_child(parent: int, idx: int) {
+    func link_child(parent: i64, idx: i64) {
         let p: Inode* = inode_at(parent)
         let node: Inode* = inode_at(idx)
         node.next_sibling = p.first_child
@@ -474,14 +794,14 @@ namespace VFS {
             return false
         }
         let leaf: char[32]
-        let parent: int = resolve_parent(cwd_disk_index(), path, leaf as char*)
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
         if find_child(parent, leaf as char*) != -1 {
             return false // already exists
         }
-        let idx: int = alloc_inode()
+        let idx: i64 = alloc_inode()
         if idx == -1 {
             return false
         }
@@ -501,14 +821,14 @@ namespace VFS {
             return false
         }
         let leaf: char[32]
-        let parent: int = resolve_parent(cwd_disk_index(), path, leaf as char*)
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
         if find_child(parent, leaf as char*) != -1 {
             return false // already exists
         }
-        let idx: int = alloc_inode()
+        let idx: i64 = alloc_inode()
         if idx == -1 {
             return false
         }
@@ -517,11 +837,7 @@ namespace VFS {
         node.size = 0
         node.parent = parent
         node.first_child = -1
-        let bi: int = 0
-        while bi < MAX_DIRECT_BLOCKS {
-            node.blocks[bi] = 0
-            bi = bi + 1
-        }
+        init_empty_blocks(node)
         set_inode_name(node, leaf as char*)
         link_child(parent, idx)
         flush_inode_table()
@@ -531,18 +847,18 @@ namespace VFS {
     // Always fully replaces the file's content (frees every block it
     // currently owns, then allocates exactly enough fresh ones) - creates
     // the file first if it doesn't exist yet. Fails if `len` needs more
-    // than MAX_DIRECT_BLOCKS blocks (32KB) - no indirect blocks in v1.
-    func write(path: char*, text: char*, len: uint) -> bool {
+    // than MAX_FILE_BLOCKS blocks (~8.1MB - see resolve_block).
+    func write(path: char*, text: char*, len: u64) -> bool {
         if !ready {
             return false
         }
         let leaf: char[32]
-        let parent: int = resolve_parent(cwd_disk_index(), path, leaf as char*)
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
 
-        let idx: int = find_child(parent, leaf as char*)
+        let idx: i64 = find_child(parent, leaf as char*)
         if idx == -1 {
             idx = alloc_inode()
             if idx == -1 {
@@ -553,11 +869,7 @@ namespace VFS {
             node.size = 0
             node.parent = parent
             node.first_child = -1
-            let bi: int = 0
-            while bi < MAX_DIRECT_BLOCKS {
-                node.blocks[bi] = 0
-                bi = bi + 1
-            }
+            init_empty_blocks(node)
             set_inode_name(node, leaf as char*)
             link_child(parent, idx)
         }
@@ -567,45 +879,83 @@ namespace VFS {
             return false
         }
 
-        let needed: uint = (len + 511) / 512
-        if needed > (MAX_DIRECT_BLOCKS as uint) {
+        let needed: u64 = (len + 511) / 512
+        if needed > (MAX_FILE_BLOCKS as u64) {
             return false
         }
 
-        let bi: int = 0
-        while bi < MAX_DIRECT_BLOCKS {
-            if node.blocks[bi] != 0 {
-                free_block(node.blocks[bi])
-                node.blocks[bi] = 0
-            }
-            bi = bi + 1
+        free_file_blocks(node)
+
+        // Blocks are written in runs of *contiguous* disk block numbers
+        // via ATA.write_sectors, not one at a time - resolve_block()
+        // hands out newly-allocated blocks from a first-fit scan that's
+        // contiguous almost everywhere (broken only where an indirect
+        // structure block gets interleaved in - see resolve_block), so a
+        // sequential write like this one gets the vast majority of its
+        // sectors into a small number of big batched calls instead of
+        // one ATA round trip per 512 bytes (see ata.llpl's own comment
+        // on why that distinction matters). batch_buf is heap-allocated,
+        // not a local array - at MAX_BATCH*512 bytes (64KB) it would
+        // blow well past a task's 16KB stack (see task.llpl's
+        // STACK_SIZE).
+        let batch_buf: char* = KHeap.kmalloc((ATA.MAX_BATCH as u64) * 512) as char*
+        if batch_buf == null {
+            return false
         }
 
-        let sector_buf: char[512]
-        let written: uint = 0
-        let block_idx: int = 0
+        let run_start: u64 = 0
+        let run_len: u64 = 0 // sectors currently staged in batch_buf, not yet flushed
+        let written: u64 = 0
+        let block_idx: u64 = 0
         while written < len {
-            let chunk: uint = len - written
+            let chunk: u64 = len - written
             if chunk > 512 {
                 chunk = 512
             }
-            let k: uint = 0
+            let b: u64 = resolve_block(node, block_idx, true)
+            if b == 0 {
+                break // out of space mid-write - flushed below, then reported as failure
+            }
+            let contiguous: bool = run_len > 0 && b == run_start + run_len && run_len < (ATA.MAX_BATCH as u64)
+            if run_len > 0 && !contiguous {
+                if !ATA.write_sectors(run_start, run_len, batch_buf) {
+                    break
+                }
+                run_len = 0
+            }
+            if run_len == 0 {
+                run_start = b
+            }
+            let dst: char* = batch_buf + (run_len * 512) as i64
+            let k: u64 = 0
             while k < chunk {
-                sector_buf[k] = text[written + k]
+                dst[k] = text[written + k]
                 k = k + 1
             }
             while k < 512 {
-                sector_buf[k] = 0
+                dst[k] = 0
                 k = k + 1
             }
-            let b: uint = alloc_block()
-            if b == 0 {
-                return false // out of space mid-write - blocks already written stay allocated (a real, documented gap: no rollback)
-            }
-            node.blocks[block_idx] = b
-            ATA.write_sector(b, sector_buf as char*)
+            run_len = run_len + 1
             written = written + chunk
             block_idx = block_idx + 1
+        }
+
+        // Always attempt this, even after a break above - whatever's
+        // staged here was already allocated (and marked used in the
+        // bitmap) by resolve_block, so leaving it unflushed would be
+        // *worse* than the documented no-rollback gap: a block the inode
+        // claims as real data that was never actually written at all,
+        // not just a file truncated at the point of failure.
+        let flush_ok: bool = true
+        if run_len > 0 {
+            flush_ok = ATA.write_sectors(run_start, run_len, batch_buf)
+        }
+        KHeap.kfree(batch_buf as u64)
+        flush_indirect_caches()
+
+        if written < len || !flush_ok {
+            return false // out of space mid-write, or a flush failed - blocks already allocated/written stay that way (a real, documented gap: no rollback)
         }
         node.size = len
         flush_inode_table()
@@ -617,11 +967,11 @@ namespace VFS {
     // many bytes were copied, or -1 if `path` doesn't resolve to a file.
     // Silently truncates if `max_len` is smaller than the file (the
     // caller can compare the return value against what it expected).
-    func read(path: char*, out_buf: char*, max_len: uint) -> int {
+    func read(path: char*, out_buf: char*, max_len: u64) -> i64 {
         if !ready {
             return -1
         }
-        let idx: int = resolve_from(cwd_disk_index(), path)
+        let idx: i64 = resolve_from(cwd_disk_index(), path)
         if idx == -1 {
             return -1
         }
@@ -629,36 +979,64 @@ namespace VFS {
         if node.kind != KIND_FILE {
             return -1
         }
-        let total: uint = node.size
+        let total: u64 = node.size
         if total > max_len {
             total = max_len
         }
-        let sector_buf: char[512]
-        let copied: uint = 0
-        let block_idx: int = 0
-        while copied < total {
-            let b: uint = node.blocks[block_idx]
-            ATA.read_sector(b, sector_buf as char*)
-            let chunk: uint = total - copied
-            if chunk > 512 {
-                chunk = 512
-            }
-            let k: uint = 0
-            while k < chunk {
-                out_buf[copied + k] = sector_buf[k]
-                k = k + 1
-            }
-            copied = copied + chunk
-            block_idx = block_idx + 1
+
+        // Reads runs of *contiguous* disk blocks in one ATA.read_sectors
+        // call instead of one round trip per 512 bytes - see write()'s
+        // own comment on why sequential block numbers are the common
+        // case, and ata.llpl's own comment on why the distinction
+        // matters at all. batch_buf is heap-allocated for the same
+        // stack-size reason write() explains.
+        let batch_buf: char* = KHeap.kmalloc((ATA.MAX_BATCH as u64) * 512) as char*
+        if batch_buf == null {
+            return -1
         }
-        return copied as int
+
+        let copied: u64 = 0
+        let block_idx: u64 = 0
+        let needed_blocks: u64 = (total + 511) / 512
+        while block_idx < needed_blocks {
+            let run_start: u64 = resolve_block(node, block_idx, false)
+            let run_len: u64 = 1
+            while block_idx + run_len < needed_blocks && run_len < (ATA.MAX_BATCH as u64) {
+                let nb: u64 = resolve_block(node, block_idx + run_len, false)
+                if nb != run_start + run_len {
+                    break
+                }
+                run_len = run_len + 1
+            }
+            ATA.read_sectors(run_start, run_len, batch_buf)
+
+            let i: u64 = 0
+            while i < run_len {
+                let chunk: u64 = total - copied
+                if chunk > 512 {
+                    chunk = 512
+                }
+                let src: char* = batch_buf + (i * 512) as i64
+                let k: u64 = 0
+                while k < chunk {
+                    out_buf[copied + k] = src[k]
+                    k = k + 1
+                }
+                copied = copied + chunk
+                i = i + 1
+            }
+            block_idx = block_idx + run_len
+        }
+
+        KHeap.kfree(batch_buf as u64)
+        return copied as i64
     }
 
     func rm(path: char*) -> bool {
         if !ready {
             return false
         }
-        let idx: int = resolve_from(cwd_disk_index(), path)
+        let idx: i64 = resolve_from(cwd_disk_index(), path)
         if idx == -1 || idx == ROOT_INODE {
             return false
         }
@@ -668,22 +1046,15 @@ namespace VFS {
         }
 
         if node.kind == KIND_FILE {
-            let bi: int = 0
-            while bi < MAX_DIRECT_BLOCKS {
-                if node.blocks[bi] != 0 {
-                    free_block(node.blocks[bi])
-                    node.blocks[bi] = 0
-                }
-                bi = bi + 1
-            }
+            free_file_blocks(node)
         }
 
-        let parent: int = node.parent
+        let parent: i64 = node.parent
         let p: Inode* = inode_at(parent)
         if p.first_child == idx {
             p.first_child = node.next_sibling
         } else {
-            let sib: int = p.first_child
+            let sib: i64 = p.first_child
             while sib != -1 && inode_at(sib).next_sibling != idx {
                 sib = inode_at(sib).next_sibling
             }
@@ -698,7 +1069,7 @@ namespace VFS {
     }
 
     func str_prefix(s: char*, prefix: char*) -> bool {
-        let i: int = 0
+        let i: i64 = 0
         while prefix[i] != 0 {
             if s[i] != prefix[i] {
                 return false
@@ -714,7 +1085,7 @@ namespace VFS {
         if !str_prefix(path, MOUNT_PREFIX) {
             return false
         }
-        let plen: int = cstrlen(MOUNT_PREFIX) as int
+        let plen: i64 = cstrlen(MOUNT_PREFIX) as i64
         return path[plen] == 0 || path[plen] == 47
     }
 
@@ -728,7 +1099,7 @@ namespace VFS {
         if !str_prefix(path, name) {
             return false
         }
-        let plen: int = cstrlen(name) as int
+        let plen: i64 = cstrlen(name) as i64
         return path[plen] == 0 || path[plen] == 47
     }
 
@@ -737,7 +1108,7 @@ namespace VFS {
     // alongside its real on-disk entries (see shell.llpl's cmd_ls).
     func mount_name(out_buf: char*) {
         let name: char* = MOUNT_PREFIX + 1
-        let i: int = 0
+        let i: i64 = 0
         while name[i] != 0 {
             out_buf[i] = name[i]
             i = i + 1
@@ -752,7 +1123,7 @@ namespace VFS {
         if rest[0] == 0 {
             return Node.TmpfsRoot()
         }
-        let idx: int = TmpFS.find(rest + 1)
+        let idx: i64 = TmpFS.find(rest + 1)
         if idx == -1 {
             return Node.NotFound()
         }
@@ -774,7 +1145,7 @@ namespace VFS {
         if str_eq(path, "..") {
             return Node.Disk(ROOT_INODE)
         }
-        let idx: int = TmpFS.find(path)
+        let idx: i64 = TmpFS.find(path)
         if idx == -1 {
             return Node.NotFound()
         }
@@ -792,9 +1163,9 @@ namespace VFS {
     func resolve(path: char*) -> Node {
         if path[0] == 47 {
             if is_boot_path(path) {
-                return resolve_in_tmpfs(path + (cstrlen(MOUNT_PREFIX) as int))
+                return resolve_in_tmpfs(path + (cstrlen(MOUNT_PREFIX) as i64))
             }
-            let idx: int = resolve_from(ROOT_INODE, path)
+            let idx: i64 = resolve_from(ROOT_INODE, path)
             if idx == -1 {
                 return Node.NotFound()
             }
@@ -809,10 +1180,10 @@ namespace VFS {
                 // entry), so `cd boot`/`cat boot/hello.txt` typed exactly
                 // as seen there resolve the same way `/boot/...` does.
                 if cur == ROOT_INODE && is_boot_path_relative(path) {
-                    let name_len: int = cstrlen(MOUNT_PREFIX) as int - 1
+                    let name_len: i64 = cstrlen(MOUNT_PREFIX) as i64 - 1
                     return resolve_in_tmpfs(path + name_len)
                 }
-                let idx: int = resolve_from(cur, path)
+                let idx: i64 = resolve_from(cur, path)
                 if idx == -1 {
                     return Node.NotFound()
                 }
@@ -849,29 +1220,29 @@ namespace VFS {
     // Reconstructs the full "/a/b/c" path of `idx` into `out_buf` (at
     // least `max_len` bytes) by walking the `parent` chain back to root,
     // then printing root-to-leaf.
-    func path_of(idx: int, out_buf: char*, max_len: uint) {
+    func path_of(idx: i64, out_buf: char*, max_len: u64) {
         if idx == ROOT_INODE {
             out_buf[0] = 47
             out_buf[1] = 0
             return
         }
 
-        let stack: int[16]
-        let depth: int = 0
-        let cur: int = idx
+        let stack: i64[16]
+        let depth: i64 = 0
+        let cur: i64 = idx
         while cur != ROOT_INODE && depth < 16 {
             stack[depth] = cur
             depth = depth + 1
             cur = inode_at(cur).parent
         }
 
-        let pos: uint = 0
-        let d: int = depth - 1
+        let pos: u64 = 0
+        let d: i64 = depth - 1
         while d >= 0 {
             out_buf[pos] = 47
             pos = pos + 1
             let node: Inode* = inode_at(stack[d])
-            let k: int = 0
+            let k: i64 = 0
             while node.name[k] != 0 && pos < max_len - 1 {
                 out_buf[pos] = node.name[k]
                 pos = pos + 1
@@ -885,13 +1256,13 @@ namespace VFS {
     // pwd's underlying helper - path_of() only handles the on-disk tree
     // (it walks real inode `parent` pointers), so this adds the one other
     // state `cwd` can be in.
-    func current_path(out_buf: char*, max_len: uint) {
+    func current_path(out_buf: char*, max_len: u64) {
         match cwd {
             case Node.Disk(idx) => {
                 path_of(idx, out_buf, max_len)
             }
             default => {
-                let i: int = 0
+                let i: i64 = 0
                 while MOUNT_PREFIX[i] != 0 {
                     out_buf[i] = MOUNT_PREFIX[i]
                     i = i + 1
@@ -905,25 +1276,25 @@ namespace VFS {
     // rather than VFS taking a callback, keeping this module's surface
     // plain data accessors, not a bespoke iteration protocol. ----
 
-    func first_child(idx: int) -> int {
+    func first_child(idx: i64) -> i64 {
         return inode_at(idx).first_child
     }
 
-    func next_sibling(idx: int) -> int {
+    func next_sibling(idx: i64) -> i64 {
         return inode_at(idx).next_sibling
     }
 
-    func inode_kind(idx: int) -> uint {
+    func inode_kind(idx: i64) -> u64 {
         return inode_at(idx).kind
     }
 
-    func inode_size(idx: int) -> uint {
+    func inode_size(idx: i64) -> u64 {
         return inode_at(idx).size
     }
 
-    func inode_name(idx: int, out_buf: char*) {
+    func inode_name(idx: i64, out_buf: char*) {
         let node: Inode* = inode_at(idx)
-        let i: int = 0
+        let i: i64 = 0
         while node.name[i] != 0 {
             out_buf[i] = node.name[i]
             i = i + 1
@@ -945,7 +1316,7 @@ namespace VFS {
         }
 
         let prev_buf: char[64]
-        let prev_len: int = read("/selftest/proof.txt", prev_buf as char*, 63)
+        let prev_len: i64 = read("/selftest/proof.txt", prev_buf as char*, 63)
         if prev_len > 0 {
             prev_buf[prev_len] = 0
             log("<CYAN>VFS: /selftest/proof.txt survived from a previous boot: </>")
@@ -966,7 +1337,7 @@ namespace VFS {
         pass = pass && write("/selftest/hello.txt", "hi", cstrlen("hi"))
 
         let readbuf: char[16]
-        let n: int = read("/selftest/hello.txt", readbuf as char*, 15)
+        let n: i64 = read("/selftest/hello.txt", readbuf as char*, 15)
         pass = pass && (n == 2) && (readbuf[0] == "hi"[0]) && (readbuf[1] == "hi"[1])
 
         pass = pass && (first_child(resolve_dir("/selftest")) != -1)
@@ -980,6 +1351,45 @@ namespace VFS {
 
         pass = pass && rm("/selftest/hello.txt")
         pass = pass && (resolve_from(ROOT_INODE, "/selftest/hello.txt") == -1)
+
+        // A file big enough to walk through every addressing tier
+        // resolve_block() has - direct (32KB), single-indirect (+64KB),
+        // and double-indirect (+8MB) - the only way to actually prove
+        // real indirect blocks work end to end without a way to script
+        // keyboard input into headless QEMU (see this function's own
+        // header comment). 100000 bytes fully exhausts the 64 direct
+        // blocks and all 128 single-indirect ones, then spills a few
+        // blocks into double-indirect - past every tier boundary at
+        // once. Filled with a cheap, position-derived pattern (not a
+        // real asset) so correctness can be checked byte-for-byte
+        // without embedding a literal blob this size in source.
+        let big_size: u64 = 100000
+        let big_buf: char* = KHeap.kmalloc(big_size) as char*
+        let read_buf: char* = KHeap.kmalloc(big_size) as char*
+        if big_buf != null && read_buf != null {
+            let i: u64 = 0
+            while i < big_size {
+                big_buf[i] = (i % 251) as char
+                i = i + 1
+            }
+            pass = pass && write("/selftest/big.bin", big_buf, big_size)
+            let got: i64 = read("/selftest/big.bin", read_buf, big_size)
+            pass = pass && (got == big_size as i64)
+            let k: u64 = 0
+            while k < big_size && big_buf[k] == read_buf[k] {
+                k = k + 1
+            }
+            pass = pass && (k == big_size)
+            pass = pass && rm("/selftest/big.bin")
+        } else {
+            pass = false
+        }
+        if big_buf != null {
+            KHeap.kfree(big_buf as u64)
+        }
+        if read_buf != null {
+            KHeap.kfree(read_buf as u64)
+        }
 
         pass = pass && write("/selftest/proof.txt", "vfs persistence proof", cstrlen("vfs persistence proof"))
 
@@ -1004,7 +1414,7 @@ namespace VFS {
             full[3] = 111
             full[4] = 116
             full[5] = 47
-            let k: int = 0
+            let k: i64 = 0
             while namebuf[k] != 0 {
                 full[6 + k] = namebuf[k]
                 k = k + 1

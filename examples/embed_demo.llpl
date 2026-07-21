@@ -1,6 +1,6 @@
-extern func puts(s: string) -> int
+extern func puts(s: string) -> i64
 
-func main() -> int {
+func main() -> i64 {
     let font = embed("sample_font.bin")
 
     puts("font bytes: \(font.len)")

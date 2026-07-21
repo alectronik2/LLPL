@@ -10,13 +10,22 @@
 // launched on demand like ping.elf/traceroute.elf.
 //
 // Owns the whole network stack end to end - Ethernet TX/RX descriptor
-// rings, ARP request/reply, a minimal IPv4 header, and ICMP echo - and
-// exposes one blocking request/reply operation to its clients (OP_PING:
-// "send an ICMP echo with this TTL/id/seq to this IP, then wait for
-// either an echo reply or a time-exceeded and tell me who it came from").
-// That single operation is *both* what ping.elf loops on (fixed TTL,
-// incrementing seq) and what traceroute.elf loops on (fixed id/seq,
-// incrementing TTL) - see those two files' own header comments.
+// rings, ARP request/reply, a minimal IPv4 header, ICMP echo, and a DHCP
+// client over UDP (see dhcp_configure, called once at startup before
+// this registers as "netd") - and exposes one blocking request/reply
+// operation to its clients (OP_PING: "send an ICMP echo with this
+// TTL/id/seq to this IP, then wait for either an echo reply or a
+// time-exceeded and tell me who it came from"). That single operation is
+// *both* what ping.elf loops on (fixed TTL, incrementing seq) and what
+// traceroute.elf loops on (fixed id/seq, incrementing TTL) - see those
+// two files' own header comments.
+//
+// DHCP is attempted first and, if it succeeds, is what actually decides
+// our_ip/gateway_ip/subnet_mask - only falling back to the old hardcoded
+// 10.0.2.15/10.0.2.2 (QEMU SLIRP's own defaults) if no DHCP server
+// answers in time, so this still works unmodified under the same default
+// setup this demo has always assumed, but also now works against a real
+// DHCP server on a real network.
 //
 // A note on risk, for whoever reads this after finding a bug here: the
 // e1000's TX/RX descriptor rings are conceptually the same kind of
@@ -60,6 +69,8 @@ const REG_RAH0   = 0x5404
 const CTRL_RST = 0x04000000
 const CTRL_ASDE = 0x00000020
 const CTRL_SLU  = 0x00000040
+
+const STATUS_LU = 0x00000002 // Link Up Indication
 
 const RCTL_EN    = 0x00000002
 const RCTL_BAM   = 0x00008000 // accept broadcast
@@ -172,6 +183,22 @@ packed struct IpHeader {
 }
 const IP_HLEN = 20
 const IP_PROTO_ICMP = 1
+const IP_PROTO_UDP = 17
+
+// UDP checksum is left as 0 (see send_dhcp_packet) rather than computed
+// over the IPv4 pseudo-header - RFC 768 makes it explicitly optional
+// ("If the computed checksum is zero, it is transmitted as all ones...
+// If the transmitted checksum is zero, that means the transmitter
+// generated no checksum"), and this demo has exactly one UDP use (DHCP)
+// where skipping it is a much smaller addition than a whole pseudo-
+// header checksum implementation just for that.
+packed struct UdpHeader {
+    let src_port: u16
+    let dst_port: u16
+    let length: u16
+    let checksum: u16
+}
+const UDP_HLEN = 8
 
 packed struct IcmpHeader {
     let type_: u8
@@ -189,21 +216,19 @@ const ICMP_DEST_UNREACHABLE = 3
 const ICMP_PAYLOAD_LEN = 32
 const FRAME_MAX = ETH_HLEN + IP_HLEN + ICMP_HLEN + ICMP_PAYLOAD_LEN
 
-// ---- static network configuration - this demo has no DHCP client, so
-// it self-assigns the address QEMU's SLIRP (user-mode networking, the
-// default whenever the run command doesn't say "-nic none") already
-// reserves for exactly this purpose: 10.0.2.15 is SLIRP's own default
-// first-guest address, 10.0.2.2 its virtual gateway - using them
-// statically avoids needing to implement DHCP just for a demo NIC
-// driver. A real deployment (or a non-default SLIRP subnet) would need
-// these to be configurable, not hardcoded. ----
+// ---- network configuration - our_ip/gateway_ip/subnet_mask are all set
+// once at startup (see _start) by dhcp_configure(), and only fall back to
+// QEMU SLIRP's own well-known defaults (10.0.2.15 first-guest address,
+// 10.0.2.2 virtual gateway, a /24) if no DHCP server answers in time -
+// see dhcp_configure's own doc comment. subnet_prefix is derived from
+// whichever of those two won, never independently configured. ----
 func make_ip(a: u64, b: u64, c: u64, d: u64) -> u64 {
     return (a << 24) | (b << 16) | (c << 8) | d
 }
-let our_ip: u64 = 0    // set in main() via make_ip(10,0,2,15)
-let gateway_ip: u64 = 0 // set in main() via make_ip(10,0,2,2)
-let subnet_prefix: u64 = 0 // set in main() via make_ip(10,0,2,0)
-const SUBNET_MASK = 0xFFFFFF00 // /24
+let our_ip: u64 = 0        // set in _start, via DHCP or the static fallback
+let gateway_ip: u64 = 0    // ditto
+let subnet_prefix: u64 = 0 // our_ip & subnet_mask, recomputed once either way
+let subnet_mask: u64 = 0xFFFFFF00 // /24 - overwritten if DHCP's own option 1 says otherwise
 
 let our_mac: u8[6]
 
@@ -240,6 +265,69 @@ func checksum16(data: u8*, len: u64) -> u16 {
         sum = (sum & 0xFFFF) + (sum >> 16)
     }
     return (~sum) as u16
+}
+
+// Same summation checksum16 does, but returns the raw (pre-fold, pre-
+// complement) running sum instead of finishing it - lets a caller add up
+// two separate buffers (a synthetic pseudo-header plus the real segment
+// that follows it in memory, see udp_checksum below) before folding and
+// complementing once at the end, without needing them contiguous or
+// copied into one buffer first.
+func sum16_partial(data: u8*, len: u64) -> u64 {
+    let sum: u64 = 0
+    let i: u64 = 0
+    while i + 1 < len {
+        let word: u64 = ((data[i] as u64) << 8) | (data[i + 1] as u64)
+        sum = sum + word
+        i = i + 2
+    }
+    if i < len {
+        sum = sum + ((data[i] as u64) << 8)
+    }
+    return sum
+}
+
+// UDP's checksum (unlike IP's own, which only ever covers its own fixed
+// header) also covers a "pseudo-header" of fields borrowed from the IP
+// layer (RFC 768) - src/dst address, protocol, and UDP length - so that
+// a UDP payload delivered to the wrong IP or protocol number still fails
+// its checksum instead of being silently accepted. Built here as a
+// throwaway 12-byte buffer rather than a struct since it's synthetic
+// (assembled from fields already living elsewhere in the real frame, not
+// itself part of the wire format). This driver leaves outgoing UDP
+// checksums at plain 0 (see UdpHeader's own doc comment) everywhere
+// *except* DHCP: QEMU SLIRP's own minimal DHCP/BOOTP server was
+// empirically found to silently drop DHCP packets with a zero checksum,
+// even though RFC 768 makes it optional - real hardware/most stacks
+// don't care, but this one apparently does.
+func udp_checksum(src_ip: u64, dst_ip: u64, udp_start: u8*, udp_len: u64) -> u16 {
+    let pseudo: u8[12]
+    pseudo[0] = ((src_ip >> 24) & 0xFF) as u8
+    pseudo[1] = ((src_ip >> 16) & 0xFF) as u8
+    pseudo[2] = ((src_ip >> 8) & 0xFF) as u8
+    pseudo[3] = (src_ip & 0xFF) as u8
+    pseudo[4] = ((dst_ip >> 24) & 0xFF) as u8
+    pseudo[5] = ((dst_ip >> 16) & 0xFF) as u8
+    pseudo[6] = ((dst_ip >> 8) & 0xFF) as u8
+    pseudo[7] = (dst_ip & 0xFF) as u8
+    pseudo[8] = 0
+    pseudo[9] = IP_PROTO_UDP as u8
+    pseudo[10] = ((udp_len >> 8) & 0xFF) as u8
+    pseudo[11] = (udp_len & 0xFF) as u8
+
+    let sum: u64 = sum16_partial(pseudo as u8*, 12) + sum16_partial(udp_start, udp_len)
+    let folded: u64 = sum
+    while (folded >> 16) != 0 {
+        folded = (folded & 0xFFFF) + (folded >> 16)
+    }
+    let result: u16 = (~folded) as u16
+    if result == 0 {
+        // RFC 768: an actually-computed checksum of exactly 0 is sent as
+        // all-ones on the wire, since a literal 0 means "no checksum was
+        // computed" (see UdpHeader's own doc comment on that convention).
+        return 0xFFFF as u16
+    }
+    return result
 }
 
 // ---- MMIO register access - volatile-qualified so the compiler never
@@ -380,6 +468,25 @@ func init_tx() {
     tx_next = 0
 }
 
+// Bounded wait for the Link Up bit in STATUS (set once CTRL_SLU from
+// init_chip actually takes effect) before this driver sends anything -
+// found necessary the hard way: DHCP (dhcp_configure, called right after
+// this from _start) runs within milliseconds of boot, far earlier than
+// any interactive use of ping.elf/traceroute.elf ever would, and without
+// this wait its DISCOVER went out (TX completed per the descriptor's own
+// DD bit) before QEMU's e1000 model had actually finished bringing the
+// virtual link up - so it, and everything SLIRP might have sent back,
+// went nowhere. Same bounded-poll convention as everywhere else in this
+// file; a real link that never comes up (no cable, wrong backend) just
+// falls through and lets DHCP fail/time out normally rather than hanging
+// boot forever.
+func wait_for_link_up() {
+    let tries: u64 = 0
+    while (reg_read32(REG_STATUS) & STATUS_LU) == 0 && tries < 2000000 {
+        tries = tries + 1
+    }
+}
+
 // Copies `len` bytes from `buf` into the next TX slot's own buffer and
 // hands it to hardware, then polls (bounded) for the descriptor's own
 // Descriptor Done bit - mirrors atad.llpl's dma_wait in spirit (poll,
@@ -464,7 +571,7 @@ let arp_valid: bool = false
 func send_arp_request(target_ip: u64) -> bool {
     let frame: u8[42]
     let eth: EthHeader* = (frame as u8*) as EthHeader*
-    let i: int = 0
+    let i: i64 = 0
     while i < 6 {
         eth.dest[i] = 0xFF // broadcast
         eth.src[i] = our_mac[i]
@@ -505,7 +612,7 @@ func handle_arp(buf: u8*, len: u64) {
     if oper == ARP_OPER_REQUEST && tpa == our_ip {
         let reply: u8[42]
         let eth: EthHeader* = (reply as u8*) as EthHeader*
-        let i: int = 0
+        let i: i64 = 0
         while i < 6 {
             eth.dest[i] = arp.sha[i]
             eth.src[i] = our_mac[i]
@@ -529,7 +636,7 @@ func handle_arp(buf: u8*, len: u64) {
         rarp.tpa = htonl(spa)
         send_frame(reply as u8*, ETH_HLEN + ARP_LEN)
     } else if oper == ARP_OPER_REPLY && spa == arp_ip {
-        let i: int = 0
+        let i: i64 = 0
         while i < 6 {
             arp_mac[i] = arp.sha[i]
             i = i + 1
@@ -573,7 +680,7 @@ func resolve_mac(ip: u64, out_mac: u8*) -> bool {
 }
 
 func next_hop_ip(dest_ip: u64) -> u64 {
-    if (dest_ip & SUBNET_MASK) == subnet_prefix {
+    if (dest_ip & subnet_mask) == subnet_prefix {
         return dest_ip
     }
     return gateway_ip
@@ -662,7 +769,7 @@ func send_icmp_echo(dest_ip: u64, ttl: u64, id: u64, seq: u64) -> bool {
 
     let frame: u8[74]
     let eth: EthHeader* = (frame as u8*) as EthHeader*
-    let i: int = 0
+    let i: i64 = 0
     while i < 6 {
         eth.dest[i] = dest_mac[i]
         eth.src[i] = our_mac[i]
@@ -735,13 +842,400 @@ func do_ping(dest_ip: u64, ttl: u64, id: u64, seq: u64, timeout_iters: u64, out_
     out_rtt[0] = tries
 }
 
+// ---- DHCP client (RFC 2131/2132), over the UDP header above ----
+// BOOTP/DHCP's fixed-size header - 236 bytes before the 4-byte magic
+// cookie (99.130.83.99) and the variable-length options that follow it,
+// which this driver reads/writes as raw bytes right after this struct
+// rather than as part of it (see dhcp_parse_options/build_dhcp_options_*).
+packed struct DhcpHeader {
+    let op: u8
+    let htype: u8
+    let hlen: u8
+    let hops: u8
+    let xid: u32
+    let secs: u16
+    let flags: u16
+    let ciaddr: u32
+    let yiaddr: u32
+    let siaddr: u32
+    let giaddr: u32
+    let chaddr: u8[16]
+    let sname: u8[64]
+    let file: u8[128]
+}
+const DHCP_HLEN = 236
+const DHCP_SERVER_PORT = 67
+const DHCP_CLIENT_PORT = 68
+const DHCP_OP_REQUEST = 1
+const DHCP_OP_REPLY = 2
+const DHCP_HTYPE_ETH = 1
+
+const DHCP_OPT_PAD = 0
+const DHCP_OPT_SUBNET_MASK = 1
+const DHCP_OPT_ROUTER = 3
+const DHCP_OPT_REQUESTED_IP = 50
+const DHCP_OPT_MSG_TYPE = 53
+const DHCP_OPT_SERVER_ID = 54
+const DHCP_OPT_PARAM_REQ_LIST = 55
+const DHCP_OPT_END = 255
+
+const DHCP_DISCOVER = 1
+const DHCP_OFFER = 2
+const DHCP_REQUEST = 3
+const DHCP_ACK = 5
+const DHCP_NAK = 6
+
+// Generously sized for a real DHCP server's OFFER/ACK, which often
+// echoes back more/longer options than the handful this client actually
+// requests (see build_dhcp_options_discover's option 55) - comfortably
+// covers ETH+IP+UDP+the fixed DHCP header+magic cookie+a few dozen bytes
+// of options either way.
+const DHCP_FRAME_MAX = 400
+
+// Every DHCPDISCOVER/DHCPREQUEST this client sends pads its options
+// region (zero-filled past the real options, which always end in an
+// explicit END(255) marker so the padding is never mistaken for more
+// options) out to this fixed size regardless of how few bytes the actual
+// option set used - some minimal DHCP/BOOTP server implementations
+// (empirically, QEMU SLIRP's own: this driver got zero replies without
+// this) still expect the classic historical BOOTP minimum of a 300-byte
+// UDP payload (236-byte fixed header + 64 bytes of options/padding), and
+// silently drop anything shorter rather than replying with an error.
+const DHCP_OPTS_PADDED_LEN = 64
+
+// Not cryptographically random (no RNG in this driver) - just needs to
+// be a value the OFFER/ACK we're waiting for will echo back unchanged so
+// we know it's really replying to *our* request, not some unrelated
+// traffic. XORing a fixed pattern with our own pid is enough for that,
+// the same "good enough for a demo, not a real multi-client network"
+// spirit as ping.elf/traceroute.elf's own fixed ICMP id.
+let dhcp_xid_val: u64 = 0
+
+// Walks the TLV option bytes following the magic cookie, filling in
+// whichever of the four output pointers correspond to options actually
+// present (each stays 0 if the server didn't send that option) - a 0-len
+// PAD byte (option 0) has no length byte of its own and is just skipped;
+// option 255 (END) stops the walk even if bytes remain after it.
+func dhcp_parse_options(opts: u8*, opts_len: u64, out_msg_type: u8*, out_subnet: u64*, out_router: u64*, out_server_id: u64*) {
+    out_msg_type[0] = 0
+    out_subnet[0] = 0
+    out_router[0] = 0
+    out_server_id[0] = 0
+
+    let i: u64 = 0
+    while i < opts_len {
+        let code: u8 = opts[i]
+        if code == DHCP_OPT_END {
+            return
+        }
+        if code == DHCP_OPT_PAD {
+            i = i + 1
+            continue
+        }
+        if i + 1 >= opts_len {
+            return
+        }
+        let opt_len: u64 = opts[i + 1] as u64
+        let val: u8* = opts + i + 2
+        if i + 2 + opt_len > opts_len {
+            return
+        }
+
+        if code == DHCP_OPT_MSG_TYPE && opt_len >= 1 {
+            out_msg_type[0] = val[0]
+        } else if code == DHCP_OPT_SUBNET_MASK && opt_len >= 4 {
+            out_subnet[0] = ((val[0] as u64) << 24) | ((val[1] as u64) << 16) | ((val[2] as u64) << 8) | (val[3] as u64)
+        } else if code == DHCP_OPT_ROUTER && opt_len >= 4 {
+            out_router[0] = ((val[0] as u64) << 24) | ((val[1] as u64) << 16) | ((val[2] as u64) << 8) | (val[3] as u64)
+        } else if code == DHCP_OPT_SERVER_ID && opt_len >= 4 {
+            out_server_id[0] = ((val[0] as u64) << 24) | ((val[1] as u64) << 16) | ((val[2] as u64) << 8) | (val[3] as u64)
+        }
+
+        i = i + 2 + opt_len
+    }
+}
+
+// DISCOVER just asks for the usual three (mask/router/server id) via
+// option 55 - no requested IP yet, since we have nothing to request.
+func build_dhcp_options_discover(opts: u8*) -> u64 {
+    let i: u64 = 0
+    opts[i] = DHCP_OPT_MSG_TYPE as u8
+    opts[i + 1] = 1
+    opts[i + 2] = DHCP_DISCOVER as u8
+    i = i + 3
+    opts[i] = DHCP_OPT_PARAM_REQ_LIST as u8
+    opts[i + 1] = 2
+    opts[i + 2] = DHCP_OPT_SUBNET_MASK as u8
+    opts[i + 3] = DHCP_OPT_ROUTER as u8
+    i = i + 4
+    opts[i] = DHCP_OPT_END as u8
+    i = i + 1
+    return i
+}
+
+// REQUEST echoes back the offered address and which server offered it
+// (option 50/54) - required by RFC 2131 so a server that *didn't* make
+// this offer knows to ignore the (broadcast) request.
+func build_dhcp_options_request(opts: u8*, requested_ip: u64, server_id: u64) -> u64 {
+    let i: u64 = 0
+    opts[i] = DHCP_OPT_MSG_TYPE as u8
+    opts[i + 1] = 1
+    opts[i + 2] = DHCP_REQUEST as u8
+    i = i + 3
+    opts[i] = DHCP_OPT_REQUESTED_IP as u8
+    opts[i + 1] = 4
+    opts[i + 2] = ((requested_ip >> 24) & 0xFF) as u8
+    opts[i + 3] = ((requested_ip >> 16) & 0xFF) as u8
+    opts[i + 4] = ((requested_ip >> 8) & 0xFF) as u8
+    opts[i + 5] = (requested_ip & 0xFF) as u8
+    i = i + 6
+    opts[i] = DHCP_OPT_SERVER_ID as u8
+    opts[i + 1] = 4
+    opts[i + 2] = ((server_id >> 24) & 0xFF) as u8
+    opts[i + 3] = ((server_id >> 16) & 0xFF) as u8
+    opts[i + 4] = ((server_id >> 8) & 0xFF) as u8
+    opts[i + 5] = (server_id & 0xFF) as u8
+    i = i + 6
+    opts[i] = DHCP_OPT_END as u8
+    i = i + 1
+    return i
+}
+
+// Builds and broadcasts one DHCPDISCOVER or DHCPREQUEST - always to the
+// Ethernet broadcast address and 255.255.255.255, always from 0.0.0.0,
+// since this client has no address of its own until the exchange
+// finishes (the whole point of DHCP). The broadcast flag (0x8000) in the
+// DHCP header itself asks the server to reply via broadcast too, since
+// unicasting a reply to an address we haven't configured yet wouldn't
+// reach us.
+func send_dhcp_packet(msg_type: u64, requested_ip: u64, server_id: u64) -> bool {
+    let frame: u8[400]
+    let eth: EthHeader* = (frame as u8*) as EthHeader*
+    let i: i64 = 0
+    while i < 6 {
+        eth.dest[i] = 0xFF
+        eth.src[i] = our_mac[i]
+        i = i + 1
+    }
+    eth.ethertype = htons(ETHERTYPE_IPV4)
+
+    let opts_scratch: u8[64]
+    let opts_len: u64 = 0
+    if msg_type == DHCP_DISCOVER {
+        opts_len = build_dhcp_options_discover(opts_scratch as u8*)
+    } else {
+        opts_len = build_dhcp_options_request(opts_scratch as u8*, requested_ip, server_id)
+    }
+    let pad_i: u64 = opts_len
+    while pad_i < DHCP_OPTS_PADDED_LEN {
+        opts_scratch[pad_i] = 0
+        pad_i = pad_i + 1
+    }
+    let udp_len: u64 = UDP_HLEN + DHCP_HLEN + 4 + DHCP_OPTS_PADDED_LEN
+    let total_len: u64 = IP_HLEN + udp_len
+
+    let ip: IpHeader* = ((frame as u8*) + ETH_HLEN) as IpHeader*
+    ip.ver_ihl = 0x45
+    ip.tos = 0
+    ip.total_len = htons(total_len)
+    ip.ident = htons(1)
+    ip.flags_frag = 0
+    ip.ttl = 64
+    ip.proto = IP_PROTO_UDP as u8
+    ip.checksum = 0
+    ip.src = htonl(0)
+    ip.dst = htonl(0xFFFFFFFF)
+    ip.checksum = htons(checksum16(((frame as u8*) + ETH_HLEN) as u8*, IP_HLEN) as u64)
+
+    let udp: UdpHeader* = ((frame as u8*) + ETH_HLEN + IP_HLEN) as UdpHeader*
+    udp.src_port = htons(DHCP_CLIENT_PORT)
+    udp.dst_port = htons(DHCP_SERVER_PORT)
+    udp.length = htons(udp_len)
+    udp.checksum = 0 // must be 0 while udp_checksum (below) sums over it
+
+    let dhcp: DhcpHeader* = ((frame as u8*) + ETH_HLEN + IP_HLEN + UDP_HLEN) as DhcpHeader*
+    dhcp.op = DHCP_OP_REQUEST as u8
+    dhcp.htype = DHCP_HTYPE_ETH as u8
+    dhcp.hlen = 6
+    dhcp.hops = 0
+    dhcp.xid = htonl(dhcp_xid_val)
+    dhcp.secs = 0
+    dhcp.flags = htons(0x8000)
+    dhcp.ciaddr = 0
+    dhcp.yiaddr = 0
+    dhcp.siaddr = 0
+    dhcp.giaddr = 0
+    let ci: i64 = 0
+    while ci < 16 {
+        dhcp.chaddr[ci] = 0
+        ci = ci + 1
+    }
+    ci = 0
+    while ci < 6 {
+        dhcp.chaddr[ci] = our_mac[ci]
+        ci = ci + 1
+    }
+    ci = 0
+    while ci < 64 {
+        dhcp.sname[ci] = 0
+        ci = ci + 1
+    }
+    ci = 0
+    while ci < 128 {
+        dhcp.file[ci] = 0
+        ci = ci + 1
+    }
+
+    let magic: u8* = (frame as u8*) + ETH_HLEN + IP_HLEN + UDP_HLEN + DHCP_HLEN
+    magic[0] = 99
+    magic[1] = 130
+    magic[2] = 83
+    magic[3] = 99
+    sys_memcpy(magic + 4, opts_scratch as u8*, DHCP_OPTS_PADDED_LEN)
+
+    // Computed last, now that the full UDP segment (header + DHCP
+    // payload) this checksum covers is actually in place - see
+    // udp_checksum's own doc comment on why DHCP specifically needs a
+    // real one where every other UDP use in this driver (there are none
+    // yet) could've left it 0.
+    udp.checksum = htons(udp_checksum(0, 0xFFFFFFFF, ((frame as u8*) + ETH_HLEN + IP_HLEN) as u8*, udp_len) as u64)
+
+    return send_frame(frame as u8*, ETH_HLEN + total_len)
+}
+
+// Polls RX for a DHCP reply matching our own xid and the message type
+// the caller is waiting for (OFFER after a DISCOVER, ACK after a
+// REQUEST) - false either on timeout or an explicit DHCPNAK (a REQUEST
+// the server refused, e.g. because someone else already took the
+// address between the OFFER and our REQUEST).
+//
+// Structured as bounded "rounds" (a short tight poll_rx burst, then a
+// real sys_sleep) rather than one giant tight spin like every other
+// bounded wait in this file (do_ping's own ICMP wait, resolve_mac's ARP
+// wait) - found necessary the hard way: a DHCP reply comes from QEMU
+// SLIRP's actual user-mode DHCP server logic, not the near-instant
+// e1000/SLIRP plumbing that answers ARP/ICMP, and packet capture proved
+// SLIRP *was* sending a valid DHCPOFFER back every time - it just wasn't
+// getting a chance to be processed and delivered while this driver's
+// vCPU sat in a tight, un-yielding register-polling loop with no vmexits
+// for the host to catch up on between them. A real sleep between short
+// polling bursts gives the host side actual wall-clock time to act,
+// exactly like this same driver already relies on sys_sleep for pacing
+// elsewhere (see e.g. wm.llpl's own tick loop) - the fix isn't "poll
+// longer", it's "yield in between".
+func wait_for_dhcp(expect_type: u64, timeout_rounds: u64, out_yiaddr: u64*, out_subnet: u64*, out_router: u64*, out_server_id: u64*) -> bool {
+    let round: u64 = 0
+    while round < timeout_rounds {
+        let tries: u64 = 0
+        while tries < 2000 {
+            let buf: u8[400]
+            let n: u64 = poll_rx(buf as u8*, DHCP_FRAME_MAX)
+            if n >= ETH_HLEN + IP_HLEN {
+                let eth: EthHeader* = buf as EthHeader*
+                if ntohs(eth.ethertype) as u64 == ETHERTYPE_IPV4 {
+                    let ip: IpHeader* = (buf + ETH_HLEN) as IpHeader*
+                    if ip.proto == IP_PROTO_UDP as u8 {
+                        let ihl: u64 = ((ip.ver_ihl as u64) & 0xF) * 4
+                        let udp_off: u64 = ETH_HLEN + ihl
+                        if n >= udp_off + UDP_HLEN {
+                            let udp: UdpHeader* = (buf + udp_off) as UdpHeader*
+                            if ntohs(udp.dst_port) as u64 == DHCP_CLIENT_PORT {
+                                let dhcp_off: u64 = udp_off + UDP_HLEN
+                                if n >= dhcp_off + DHCP_HLEN + 4 {
+                                    let dhcp: DhcpHeader* = (buf + dhcp_off) as DhcpHeader*
+                                    if ntohl(dhcp.xid) as u64 == dhcp_xid_val && dhcp.op == DHCP_OP_REPLY as u8 {
+                                        let magic: u8* = buf + dhcp_off + DHCP_HLEN
+                                        if magic[0] == 99 && magic[1] == 130 && magic[2] == 83 && magic[3] == 99 {
+                                            let opts: u8* = magic + 4
+                                            let opts_len: u64 = n - (dhcp_off + DHCP_HLEN + 4)
+                                            let msg_type: u8 = 0
+                                            let subnet: u64 = 0
+                                            let router: u64 = 0
+                                            let server_id: u64 = 0
+                                            dhcp_parse_options(opts, opts_len, &msg_type, &subnet, &router, &server_id)
+                                            if msg_type as u64 == expect_type {
+                                                out_yiaddr[0] = ntohl(dhcp.yiaddr) as u64
+                                                out_subnet[0] = subnet
+                                                out_router[0] = router
+                                                out_server_id[0] = server_id
+                                                return true
+                                            } else if msg_type as u64 == DHCP_NAK {
+                                                return false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            tries = tries + 1
+        }
+        sys_sleep(5)
+        round = round + 1
+    }
+    return false
+}
+
+// 200 rounds x (a 2000-iteration poll burst + a 5ms sleep) is about a
+// second of real wall-clock time per wait_for_dhcp call - comfortably
+// past the delay packet capture showed SLIRP actually needs, without
+// risking the multi-second+ CPU-bound stall a much larger tight-spin
+// bound was found to cause instead.
+const DHCP_TIMEOUT_ROUNDS = 200
+const DHCP_MAX_ATTEMPTS = 3
+
+// The full DISCOVER -> OFFER -> REQUEST -> ACK exchange (RFC 2131
+// section 4.4), retried a few times in case the first DISCOVER goes out
+// before the network's actually ready. On success, sets our_ip/
+// gateway_ip/subnet_mask/subnet_prefix directly and returns true; on
+// failure (no server answers, or a NAK) leaves them untouched and
+// returns false, letting the caller (_start) fall back to the static
+// configuration this driver always used before.
+func dhcp_configure() -> bool {
+    dhcp_xid_val = 0x44484350 ^ (sys_getpid() as u64)
+
+    let attempt: u64 = 0
+    while attempt < DHCP_MAX_ATTEMPTS {
+        if send_dhcp_packet(DHCP_DISCOVER, 0, 0) {
+            let offered_ip: u64 = 0
+            let offered_subnet: u64 = 0
+            let offered_router: u64 = 0
+            let server_id: u64 = 0
+            if wait_for_dhcp(DHCP_OFFER, DHCP_TIMEOUT_ROUNDS, &offered_ip, &offered_subnet, &offered_router, &server_id) {
+                if send_dhcp_packet(DHCP_REQUEST, offered_ip, server_id) {
+                    let ack_ip: u64 = 0
+                    let ack_subnet: u64 = 0
+                    let ack_router: u64 = 0
+                    let ack_server: u64 = 0
+                    if wait_for_dhcp(DHCP_ACK, DHCP_TIMEOUT_ROUNDS, &ack_ip, &ack_subnet, &ack_router, &ack_server) {
+                        our_ip = ack_ip
+                        if ack_subnet != 0 {
+                            subnet_mask = ack_subnet
+                        }
+                        if ack_router != 0 {
+                            gateway_ip = ack_router
+                        }
+                        subnet_prefix = our_ip & subnet_mask
+                        return true
+                    }
+                }
+            }
+        }
+        attempt = attempt + 1
+    }
+    return false
+}
+
 // ---- client protocol ----
 const OP_PING = 1
 
 func _start(argc: u64, argv: u64*) {
-    our_ip = make_ip(10, 0, 2, 15)
+    // Static fallback only - used if dhcp_configure() (below) doesn't
+    // succeed. Matches QEMU SLIRP's own defaults, same as this driver
+    // always assumed before DHCP existed.
     gateway_ip = make_ip(10, 0, 2, 2)
-    subnet_prefix = make_ip(10, 0, 2, 0)
 
     nic_base = sys_nic_mmap() as u64
     if nic_base == 0 {
@@ -758,9 +1252,10 @@ func _start(argc: u64, argv: u64*) {
     init_chip()
     init_rx()
     init_tx()
+    wait_for_link_up()
 
     sys_puts("netd: e1000 up, mac=")
-    let i: int = 0
+    let i: i64 = 0
     while i < 6 {
         rt_print_hex_byte(our_mac[i] as u64)
         if i < 5 {
@@ -768,7 +1263,21 @@ func _start(argc: u64, argv: u64*) {
         }
         i = i + 1
     }
-    sys_puts(", ip=10.0.2.15\n")
+    sys_putln("")
+
+    if dhcp_configure() {
+        sys_puts("netd: DHCP ok, ip=")
+        rt_print_ip(our_ip)
+        sys_puts(" gw=")
+        rt_print_ip(gateway_ip)
+        sys_putln("")
+    } else {
+        our_ip = make_ip(10, 0, 2, 15)
+        subnet_prefix = make_ip(10, 0, 2, 0)
+        sys_puts("netd: DHCP failed, using static ip=")
+        rt_print_ip(our_ip)
+        sys_putln("")
+    }
 
     if sys_register("netd") == RT_SYS_ERR {
         rt_exit(1)

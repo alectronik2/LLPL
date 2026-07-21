@@ -13,7 +13,7 @@ class BinaryHeap<T> {
         self.data = new Vector<T>()
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.data.len()
     }
 
@@ -22,31 +22,31 @@ class BinaryHeap<T> {
     }
 
     // Helper: Get parent index
-    func parent(index: int) -> int {
+    func parent(index: i64) -> i64 {
         return (index - 1) / 2
     }
 
     // Helper: Get left child index
-    func left_child(index: int) -> int {
+    func left_child(index: i64) -> i64 {
         return 2 * index + 1
     }
 
     // Helper: Get right child index
-    func right_child(index: int) -> int {
+    func right_child(index: i64) -> i64 {
         return 2 * index + 2
     }
 
     // Helper: Swap two elements
-    func swap(i: int, j: int) {
+    func swap(i: i64, j: i64) {
         let temp: T = self.data.get(i)
         self.data.set(i, self.data.get(j))
         self.data.set(j, temp)
     }
 
     // Bubble up element at index
-    func bubble_up(index: int) {
+    func bubble_up(index: i64) {
         while index > 0 {
-            let parent_idx: int = self.parent(index)
+            let parent_idx: i64 = self.parent(index)
 
             if self.data.get(index) < self.data.get(parent_idx) {
                 self.swap(index, parent_idx)
@@ -58,13 +58,13 @@ class BinaryHeap<T> {
     }
 
     // Bubble down element at index
-    func bubble_down(index: int) {
-        let size: int = self.data.len()
+    func bubble_down(index: i64) {
+        let size: i64 = self.data.len()
 
         while true {
-            let smallest: int = index
-            let left: int = self.left_child(index)
-            let right: int = self.right_child(index)
+            let smallest: i64 = index
+            let left: i64 = self.left_child(index)
+            let right: i64 = self.right_child(index)
 
             if left < size && self.data.get(left) < self.data.get(smallest) {
                 smallest = left
@@ -138,9 +138,9 @@ class BinaryHeap<T> {
     func heapify(values: Vector<T>) {
         self.data = values
 
-        let size: int = self.data.len()
+        let size: i64 = self.data.len()
         // Start from last non-leaf node and bubble down
-        for let i: int = (size / 2) - 1, i >= 0, i = i - 1 {
+        for let i: i64 = (size / 2) - 1, i >= 0, i = i - 1 {
             self.bubble_down(i)
         }
     }
@@ -149,12 +149,19 @@ class BinaryHeap<T> {
 // Priority Queue with custom priority values
 class PriorityQueueItem<T> {
     let value: T
-    let priority: int
+    let priority: i64
 
-    constructor(val: T, pri: int) {
+    constructor(val: T, pri: i64) {
         self.value = val
         self.priority = pri
     }
+
+    // A class needs an explicit destructor - even an empty one - for any
+    // *other* class's auto-generated cleanup to be able to release a
+    // field of this type (see e.g. std.json.JsonValue's identical
+    // comment): PriorityQueue<T>.dequeue()'s own Result<PriorityQueueItem<T>,
+    // char*> needs PriorityQueueItem_destroy to exist at all.
+    destructor() {}
 
     func operator<(other: PriorityQueueItem<T>) -> bool {
         return self.priority < other.priority
@@ -168,7 +175,7 @@ class PriorityQueue<T> {
         self.heap = new BinaryHeap<PriorityQueueItem<T>>()
     }
 
-    func enqueue(value: T, priority: int) {
+    func enqueue(value: T, priority: i64) {
         let item: PriorityQueueItem<T> = new PriorityQueueItem<T>(value, priority)
         self.heap.insert(item)
     }
@@ -201,7 +208,7 @@ class PriorityQueue<T> {
         return result
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.heap.size()
     }
 
@@ -245,7 +252,7 @@ class MaxHeap<T> {
         return result
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.min_heap.size()
     }
 

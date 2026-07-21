@@ -13,19 +13,19 @@ func upper_char(c: char) -> char {
     return c
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     if sys_register("echo") == RT_SYS_ERR {
         rt_exit(1)
     }
 
     while true {
         let buf: char[64]
-        let sender: uint = sys_msg_recv(buf as char*, 64)
+        let sender: u64 = sys_msg_recv(buf as char*, 64)
         if sender == RT_SYS_ERR {
             continue
         }
 
-        let i: uint = 0
+        let i: u64 = 0
         while buf[i] != 0 && i < 63 {
             buf[i] = upper_char(buf[i])
             i = i + 1

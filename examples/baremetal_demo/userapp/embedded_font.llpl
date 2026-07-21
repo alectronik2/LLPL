@@ -1,0 +1,707 @@
+// Embedded TrueType-style font data
+// For demonstration, we'll create a simple vector font programmatically
+
+import "../libsys/imports"
+
+// Simple vector font: define glyphs as line segments
+struct VectorGlyph {
+    let advance_width: i16
+    let x_min: i16
+    let y_min: i16
+    let x_max: i16
+    let y_max: i16
+    // Simple representation: alternating x,y coordinates of line endpoints
+    let points: i16[32]
+    let num_points: u16
+}
+
+// Create a simple vector 'A'
+func create_glyph_A() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 600
+    glyph.x_min = 0
+    glyph.y_min = 0
+    glyph.x_max = 600
+    glyph.y_max = 700
+
+    // Define 'A' shape as line segments
+    // Left leg: (100, 0) to (250, 700)
+    glyph.points[0] = 100
+    glyph.points[1] = 0
+    glyph.points[2] = 250
+    glyph.points[3] = 700
+
+    // Right leg: (500, 0) to (350, 700)
+    glyph.points[4] = 500
+    glyph.points[5] = 0
+    glyph.points[6] = 350
+    glyph.points[7] = 700
+
+    // Top: (250, 700) to (350, 700)
+    glyph.points[8] = 250
+    glyph.points[9] = 700
+    glyph.points[10] = 350
+    glyph.points[11] = 700
+
+    // Crossbar: (200, 250) to (400, 250)
+    glyph.points[12] = 200
+    glyph.points[13] = 250
+    glyph.points[14] = 400
+    glyph.points[15] = 250
+
+    glyph.num_points = 8  // 4 lines = 8 points
+
+    return glyph
+}
+
+// Render a vector glyph using line drawing
+func render_vector_glyph(glyph: VectorGlyph, scale: i16, baseline: i16,
+                         buffer: u8*, buf_w: i16, buf_h: i16, x_offset: i16) {
+    let i: u16 = 0
+    while i + 3 < glyph.num_points * 2 {
+        let x1: i16 = (glyph.points[i] * scale / 1000) + x_offset
+        let y1: i16 = baseline - (glyph.points[i + 1] * scale / 1000)
+        let x2: i16 = (glyph.points[i + 2] * scale / 1000) + x_offset
+        let y2: i16 = baseline - (glyph.points[i + 3] * scale / 1000)
+
+        // Simple line drawing (Bresenham's algorithm)
+        draw_line(buffer, buf_w, buf_h, x1, y1, x2, y2)
+
+        i = i + 4
+    }
+}
+
+// Bresenham's line algorithm
+func draw_line(buffer: u8*, buf_w: i16, buf_h: i16,
+               x0: i16, y0: i16, x1: i16, y1: i16) {
+    let dx: i16 = x1 - x0
+    let dy: i16 = y1 - y0
+
+    if dx < 0 { dx = -dx }
+    if dy < 0 { dy = -dy }
+
+    let sx: i16 = -1
+    if x0 < x1 { sx = 1 }
+
+    let sy: i16 = -1
+    if y0 < y1 { sy = 1 }
+
+    let err: i16 = dx - dy
+    let x: i16 = x0
+    let y: i16 = y0
+
+    let max_steps: i64 = 1000  // Prevent infinite loops
+    let steps: i64 = 0
+
+    while steps < max_steps {
+        if x >= 0 && x < buf_w && y >= 0 && y < buf_h {
+            buffer[(y as u32) * (buf_w as u32) + (x as u32)] = 255
+        }
+
+        if x == x1 && y == y1 {
+            return
+        }
+
+        let e2: i16 = err * 2
+
+        if e2 > -dy {
+            err = err - dy
+            x = x + sx
+        }
+
+        if e2 < dx {
+            err = err + dx
+            y = y + sy
+        }
+
+        steps = steps + 1
+    }
+}
+
+// Create additional vector glyphs
+func create_glyph_H() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 600
+    glyph.x_min = 50
+    glyph.y_min = 0
+    glyph.x_max = 550
+    glyph.y_max = 700
+
+    // Left vertical: (100, 0) to (100, 700)
+    glyph.points[0] = 100
+    glyph.points[1] = 0
+    glyph.points[2] = 100
+    glyph.points[3] = 700
+
+    // Right vertical: (500, 0) to (500, 700)
+    glyph.points[4] = 500
+    glyph.points[5] = 0
+    glyph.points[6] = 500
+    glyph.points[7] = 700
+
+    // Crossbar: (100, 350) to (500, 350)
+    glyph.points[8] = 100
+    glyph.points[9] = 350
+    glyph.points[10] = 500
+    glyph.points[11] = 350
+
+    glyph.num_points = 6
+
+    return glyph
+}
+
+func create_glyph_E() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 550
+    glyph.x_min = 100
+    glyph.y_min = 0
+    glyph.x_max = 500
+    glyph.y_max = 700
+
+    // Left vertical
+    glyph.points[0] = 100
+    glyph.points[1] = 0
+    glyph.points[2] = 100
+    glyph.points[3] = 700
+
+    // Top horizontal
+    glyph.points[4] = 100
+    glyph.points[5] = 700
+    glyph.points[6] = 500
+    glyph.points[7] = 700
+
+    // Middle horizontal
+    glyph.points[8] = 100
+    glyph.points[9] = 350
+    glyph.points[10] = 450
+    glyph.points[11] = 350
+
+    // Bottom horizontal
+    glyph.points[12] = 100
+    glyph.points[13] = 0
+    glyph.points[14] = 500
+    glyph.points[15] = 0
+
+    glyph.num_points = 8
+
+    return glyph
+}
+
+func create_glyph_L() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 500
+    glyph.x_min = 100
+    glyph.y_min = 0
+    glyph.x_max = 450
+    glyph.y_max = 700
+
+    // Vertical
+    glyph.points[0] = 100
+    glyph.points[1] = 0
+    glyph.points[2] = 100
+    glyph.points[3] = 700
+
+    // Bottom horizontal
+    glyph.points[4] = 100
+    glyph.points[5] = 0
+    glyph.points[6] = 450
+    glyph.points[7] = 0
+
+    glyph.num_points = 4
+
+    return glyph
+}
+
+func create_glyph_O() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 650
+    glyph.x_min = 100
+    glyph.y_min = 0
+    glyph.x_max = 550
+    glyph.y_max = 700
+
+    // Draw as octagon for simplicity
+    // Top
+    glyph.points[0] = 200
+    glyph.points[1] = 700
+    glyph.points[2] = 450
+    glyph.points[3] = 700
+
+    // Top-right
+    glyph.points[4] = 450
+    glyph.points[5] = 700
+    glyph.points[6] = 550
+    glyph.points[7] = 600
+
+    // Right
+    glyph.points[8] = 550
+    glyph.points[9] = 600
+    glyph.points[10] = 550
+    glyph.points[11] = 100
+
+    // Bottom-right
+    glyph.points[12] = 550
+    glyph.points[13] = 100
+    glyph.points[14] = 450
+    glyph.points[15] = 0
+
+    // Bottom
+    glyph.points[16] = 450
+    glyph.points[17] = 0
+    glyph.points[18] = 200
+    glyph.points[19] = 0
+
+    // Bottom-left
+    glyph.points[20] = 200
+    glyph.points[21] = 0
+    glyph.points[22] = 100
+    glyph.points[23] = 100
+
+    // Left
+    glyph.points[24] = 100
+    glyph.points[25] = 100
+    glyph.points[26] = 100
+    glyph.points[27] = 600
+
+    // Top-left
+    glyph.points[28] = 100
+    glyph.points[29] = 600
+    glyph.points[30] = 200
+    glyph.points[31] = 700
+
+    glyph.num_points = 16
+
+    return glyph
+}
+
+func create_glyph_T() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 550
+    glyph.x_min = 50
+    glyph.y_min = 0
+    glyph.x_max = 500
+    glyph.y_max = 700
+
+    // Top horizontal
+    glyph.points[0] = 50
+    glyph.points[1] = 700
+    glyph.points[2] = 500
+    glyph.points[3] = 700
+
+    // Vertical stem
+    glyph.points[4] = 275
+    glyph.points[5] = 0
+    glyph.points[6] = 275
+    glyph.points[7] = 700
+
+    glyph.num_points = 4
+
+    return glyph
+}
+
+func create_glyph_R() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 600
+    glyph.x_min = 100
+    glyph.y_min = 0
+    glyph.x_max = 550
+    glyph.y_max = 700
+
+    // Left vertical
+    glyph.points[0] = 100
+    glyph.points[1] = 0
+    glyph.points[2] = 100
+    glyph.points[3] = 700
+
+    // Top horizontal
+    glyph.points[4] = 100
+    glyph.points[5] = 700
+    glyph.points[6] = 450
+    glyph.points[7] = 700
+
+    // Right curve (simplified)
+    glyph.points[8] = 450
+    glyph.points[9] = 700
+    glyph.points[10] = 500
+    glyph.points[11] = 600
+
+    glyph.points[12] = 500
+    glyph.points[13] = 600
+    glyph.points[14] = 500
+    glyph.points[15] = 400
+
+    // Middle horizontal
+    glyph.points[16] = 500
+    glyph.points[17] = 400
+    glyph.points[18] = 100
+    glyph.points[19] = 400
+
+    // Diagonal leg
+    glyph.points[20] = 300
+    glyph.points[21] = 400
+    glyph.points[22] = 500
+    glyph.points[23] = 0
+
+    glyph.num_points = 12
+
+    return glyph
+}
+
+func create_glyph_I() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 300
+    glyph.x_min = 100
+    glyph.y_min = 0
+    glyph.x_max = 200
+    glyph.y_max = 700
+
+    // Vertical
+    glyph.points[0] = 150
+    glyph.points[1] = 0
+    glyph.points[2] = 150
+    glyph.points[3] = 700
+
+    glyph.num_points = 2
+
+    return glyph
+}
+
+func create_glyph_N() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 650
+    glyph.x_min = 100
+    glyph.y_min = 0
+    glyph.x_max = 550
+    glyph.y_max = 700
+
+    // Left vertical
+    glyph.points[0] = 100
+    glyph.points[1] = 0
+    glyph.points[2] = 100
+    glyph.points[3] = 700
+
+    // Diagonal
+    glyph.points[4] = 100
+    glyph.points[5] = 700
+    glyph.points[6] = 550
+    glyph.points[7] = 0
+
+    // Right vertical
+    glyph.points[8] = 550
+    glyph.points[9] = 0
+    glyph.points[10] = 550
+    glyph.points[11] = 700
+
+    glyph.num_points = 6
+
+    return glyph
+}
+
+func create_glyph_M() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 750
+    glyph.x_min = 80
+    glyph.y_min = 0
+    glyph.x_max = 670
+    glyph.y_max = 700
+
+    // Left vertical
+    glyph.points[0] = 80
+    glyph.points[1] = 0
+    glyph.points[2] = 80
+    glyph.points[3] = 700
+
+    // Left diagonal
+    glyph.points[4] = 80
+    glyph.points[5] = 700
+    glyph.points[6] = 375
+    glyph.points[7] = 300
+
+    // Right diagonal
+    glyph.points[8] = 375
+    glyph.points[9] = 300
+    glyph.points[10] = 670
+    glyph.points[11] = 700
+
+    // Right vertical
+    glyph.points[12] = 670
+    glyph.points[13] = 700
+    glyph.points[14] = 670
+    glyph.points[15] = 0
+
+    glyph.num_points = 8
+
+    return glyph
+}
+
+func create_glyph_D() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 650
+    glyph.x_min = 100
+    glyph.y_min = 0
+    glyph.x_max = 550
+    glyph.y_max = 700
+
+    // Left vertical
+    glyph.points[0] = 100
+    glyph.points[1] = 0
+    glyph.points[2] = 100
+    glyph.points[3] = 700
+
+    // Top
+    glyph.points[4] = 100
+    glyph.points[5] = 700
+    glyph.points[6] = 400
+    glyph.points[7] = 700
+
+    // Right curve (approximated)
+    glyph.points[8] = 400
+    glyph.points[9] = 700
+    glyph.points[10] = 550
+    glyph.points[11] = 550
+
+    glyph.points[12] = 550
+    glyph.points[13] = 550
+    glyph.points[14] = 550
+    glyph.points[15] = 150
+
+    glyph.points[16] = 550
+    glyph.points[17] = 150
+    glyph.points[18] = 400
+    glyph.points[19] = 0
+
+    // Bottom
+    glyph.points[20] = 400
+    glyph.points[21] = 0
+    glyph.points[22] = 100
+    glyph.points[23] = 0
+
+    glyph.num_points = 12
+
+    return glyph
+}
+
+func create_glyph_S() -> VectorGlyph {
+    let glyph: VectorGlyph
+    glyph.advance_width = 550
+    glyph.x_min = 80
+    glyph.y_min = 0
+    glyph.x_max = 470
+    glyph.y_max = 700
+
+    // Top curve
+    glyph.points[0] = 450
+    glyph.points[1] = 650
+    glyph.points[2] = 350
+    glyph.points[3] = 700
+
+    glyph.points[4] = 350
+    glyph.points[5] = 700
+    glyph.points[6] = 200
+    glyph.points[7] = 700
+
+    glyph.points[8] = 200
+    glyph.points[9] = 700
+    glyph.points[10] = 100
+    glyph.points[11] = 600
+
+    // Middle
+    glyph.points[12] = 100
+    glyph.points[13] = 600
+    glyph.points[14] = 450
+    glyph.points[15] = 350
+
+    // Bottom curve
+    glyph.points[16] = 450
+    glyph.points[17] = 350
+    glyph.points[18] = 100
+    glyph.points[19] = 100
+
+    glyph.points[20] = 100
+    glyph.points[21] = 100
+    glyph.points[22] = 200
+    glyph.points[23] = 0
+
+    glyph.points[24] = 200
+    glyph.points[25] = 0
+    glyph.points[26] = 350
+    glyph.points[27] = 0
+
+    glyph.points[28] = 350
+    glyph.points[29] = 0
+    glyph.points[30] = 450
+    glyph.points[31] = 50
+
+    glyph.num_points = 16
+
+    return glyph
+}
+
+// Enhanced bitmap font rendering with anti-aliasing simulation
+func render_smooth_char(c: u8, size: i16, buffer: u8*, buf_w: i16, buf_h: i16) {
+    // Clear buffer
+    let i: i16 = 0
+    while i < buf_w * buf_h {
+        buffer[i] = 0
+        i = i + 1
+    }
+
+    // Render based on character
+    let rendered: bool = false
+    let glyph: VectorGlyph
+
+    if c == 65 || c == 97 {  // 'A' or 'a'
+        glyph = create_glyph_A()
+        rendered = true
+    } else if c == 68 || c == 100 {  // 'D' or 'd'
+        glyph = create_glyph_D()
+        rendered = true
+    } else if c == 69 || c == 101 {  // 'E' or 'e'
+        glyph = create_glyph_E()
+        rendered = true
+    } else if c == 72 || c == 104 {  // 'H' or 'h'
+        glyph = create_glyph_H()
+        rendered = true
+    } else if c == 73 || c == 105 {  // 'I' or 'i'
+        glyph = create_glyph_I()
+        rendered = true
+    } else if c == 76 || c == 108 {  // 'L' or 'l'
+        glyph = create_glyph_L()
+        rendered = true
+    } else if c == 77 || c == 109 {  // 'M' or 'm'
+        glyph = create_glyph_M()
+        rendered = true
+    } else if c == 78 || c == 110 {  // 'N' or 'n'
+        glyph = create_glyph_N()
+        rendered = true
+    } else if c == 79 || c == 111 {  // 'O' or 'o'
+        glyph = create_glyph_O()
+        rendered = true
+    } else if c == 82 || c == 114 {  // 'R' or 'r'
+        glyph = create_glyph_R()
+        rendered = true
+    } else if c == 83 || c == 115 {  // 'S' or 's'
+        glyph = create_glyph_S()
+        rendered = true
+    } else if c == 84 || c == 116 {  // 'T' or 't'
+        glyph = create_glyph_T()
+        rendered = true
+    }
+
+    if rendered {
+        render_vector_glyph(glyph, size, buf_h * 3 / 4, buffer, buf_w, buf_h, 0)
+    }
+
+    // For unsupported characters, draw a placeholder box
+    if !rendered && c >= 32 {
+        let box_w: i16 = size / 2
+        let box_h: i16 = size
+        let y: i16 = buf_h / 4
+        let row: i16 = 0
+        while row < box_h {
+            buffer[((y + row) as u32) * (buf_w as u32)] = 255
+            buffer[((y + row) as u32) * (buf_w as u32) + (box_w as u32)] = 255
+            row = row + 1
+        }
+        let col: i16 = 0
+        while col < box_w {
+            buffer[((y as u32) * (buf_w as u32)) + (col as u32)] = 255
+            buffer[(((y + box_h) as u32) * (buf_w as u32)) + (col as u32)] = 255
+            col = col + 1
+        }
+    }
+}
+
+// Check if a character is supported by vector font
+func is_vector_char(c: u8) -> bool {
+    if c == 65 || c == 97 { return true }  // A
+    if c == 68 || c == 100 { return true }  // D
+    if c == 69 || c == 101 { return true }  // E
+    if c == 72 || c == 104 { return true }  // H
+    if c == 73 || c == 105 { return true }  // I
+    if c == 76 || c == 108 { return true }  // L
+    if c == 77 || c == 109 { return true }  // M
+    if c == 78 || c == 110 { return true }  // N
+    if c == 79 || c == 111 { return true }  // O
+    if c == 82 || c == 114 { return true }  // R
+    if c == 83 || c == 115 { return true }  // S
+    if c == 84 || c == 116 { return true }  // T
+    return false
+}
+
+// Get approximate advance width for a character
+func get_char_advance(c: u8, size: i16) -> i16 {
+    if c == 73 || c == 105 {  // I is narrower
+        return size / 2
+    } else if c == 77 || c == 109 {  // M is wider
+        return size * 3 / 4
+    } else if c == 32 {  // Space
+        return size / 3
+    }
+    return size * 6 / 10  // Default advance
+}
+
+// Render smooth text to buffer with better quality than bitmap font
+func render_smooth_text(text: u8*, size: i16, buffer: u32*, buf_w: i16, buf_h: i16,
+                        x: i16, y: i16, color: u32, bg_color: u32) {
+    let char_buf: u8[1024]  // 32x32 character buffer (reduced to save stack)
+    let char_w: i16 = 32
+    let char_h: i16 = 32
+
+    let cursor_x: i16 = x
+    let i: i64 = 0
+
+    while text[i] != 0 {
+        let c: u8 = text[i]
+
+        // Only render if supported, otherwise skip with spacing
+        if is_vector_char(c) {
+            // Render character to temp buffer
+            render_smooth_char(c, size, char_buf as u8*, char_w, char_h)
+
+            // Copy to main buffer with anti-aliasing
+            let cy: i16 = 0
+            while cy < char_h {
+                let cx: i16 = 0
+                while cx < char_w {
+                    let alpha: u8 = char_buf[(cy as u32) * (char_w as u32) + (cx as u32)]
+
+                    if alpha > 0 {
+                        let px: i16 = cursor_x + cx
+                        let py: i16 = y + cy
+
+                        if px >= 0 && px < buf_w && py >= 0 && py < buf_h {
+                            if alpha == 255 {
+                                buffer[(py as u32) * (buf_w as u32) + (px as u32)] = color
+                            } else {
+                                // Blend with background for anti-aliasing
+                                let r_fg: u32 = (color >> 16) & 0xFF
+                                let g_fg: u32 = (color >> 8) & 0xFF
+                                let b_fg: u32 = color & 0xFF
+
+                                let r_bg: u32 = (bg_color >> 16) & 0xFF
+                                let g_bg: u32 = (bg_color >> 8) & 0xFF
+                                let b_bg: u32 = bg_color & 0xFF
+
+                                let a: u32 = alpha as u32
+                                let r: u32 = (r_fg * a + r_bg * (255 - a)) / 255
+                                let g: u32 = (g_fg * a + g_bg * (255 - a)) / 255
+                                let b: u32 = (b_fg * a + b_bg * (255 - a)) / 255
+
+                                let blended: u32 = (r << 16) | (g << 8) | b
+                                buffer[(py as u32) * (buf_w as u32) + (px as u32)] = blended
+                            }
+                        }
+                    }
+
+                    cx = cx + 1
+                }
+                cy = cy + 1
+            }
+        }
+
+        // Advance cursor
+        cursor_x = cursor_x + get_char_advance(c, size)
+        i = i + 1
+    }
+}

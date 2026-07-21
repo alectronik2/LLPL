@@ -12,7 +12,7 @@ func upper_char(c: char) -> char {
     return c
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     // This task was sys_spawn()ed by ipcdemo, an ordinary user program, not
     // by the kernel's own boot manifest - it must not be able to squat the
     // name a real system service (echod) registers.
@@ -23,12 +23,12 @@ func _start(argc: uint, argv: uint*) {
     }
 
     let buf: char[64]
-    let sender: uint = sys_msg_recv(buf as char*, 64)
+    let sender: u64 = sys_msg_recv(buf as char*, 64)
     if sender == RT_SYS_ERR {
         rt_exit(1)
     }
 
-    let i: uint = 0
+    let i: u64 = 0
     while buf[i] != 0 && i < 63 {
         buf[i] = upper_char(buf[i])
         i = i + 1

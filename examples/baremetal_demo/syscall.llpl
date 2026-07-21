@@ -1,7 +1,7 @@
 // System-call dispatcher for ring-3 tasks.
 //
 // ABI: user puts the syscall number in RAX and up to three arguments in
-// RDI, RSI, RDX, then executes `int 0x80`. The return value comes back in
+// RDI, RSI, RDX, then executes `i64 0x80`. The return value comes back in
 // RAX. The low-level entry point lives in boot64.asm (syscall_isr_entry)
 // because GCC's attribute((interrupt)) doesn't give us access to the
 // interrupted register frame.
@@ -64,14 +64,20 @@ namespace Syscall {
 
     packed struct FileDesc {
         let used: bool
-        let owner: int
-        let offset: uint
+        let owner: i64
+        let offset: u64
         let path: char[96]
     }
 
     let fds: FileDesc[16]
+    let dispatch_count: u64 = 0
+    let msg_send_count: u64 = 0
+    let msg_recv_count: u64 = 0
+    let msg_try_recv_count: u64 = 0
+    let msg_reply_count: u64 = 0
 
-    func dispatch(number: uint, a: uint, b: uint, c: uint) -> uint {
+    func dispatch(number: u64, a: u64, b: u64, c: u64) -> u64 {
+        dispatch_count = dispatch_count + 1
         Task.record_syscall()
         EventLog.add2("syscall", "dispatch", number, a)
         if number == SYS_EXIT {
@@ -89,7 +95,7 @@ namespace Syscall {
             return sys_mmap(a, b, c)
         }
         if number == SYS_GETPID {
-            return Task.current_id() as uint
+            return Task.current_id() as u64
         }
         if number == SYS_YIELD {
             Task.yield_current()
@@ -199,8 +205,8 @@ namespace Syscall {
         return 0
     }
 
-    func user_read_byte(pml4: uint, addr: uint, out: char*) -> bool {
-        let page: uint = VMM.virt_to_phys(pml4, addr)
+    func user_read_byte(pml4: u64, addr: u64, out: char*) -> bool {
+        let page: u64 = VMM.virt_to_phys(pml4, addr)
         if page == 0 {
             return false
         }
@@ -209,8 +215,8 @@ namespace Syscall {
         return true
     }
 
-    func user_write_byte(pml4: uint, addr: uint, value: char) -> bool {
-        let page: uint = VMM.virt_to_phys(pml4, addr)
+    func user_write_byte(pml4: u64, addr: u64, value: char) -> bool {
+        let page: u64 = VMM.virt_to_phys(pml4, addr)
         if page == 0 {
             return false
         }
@@ -219,12 +225,12 @@ namespace Syscall {
         return true
     }
 
-    func copy_user_string(user_addr: uint, out: char*, max_len: int) -> bool {
-        let pml4: uint = Task.get_current_pml4()
-        let i: int = 0
+    func copy_user_string(user_addr: u64, out: char*, max_len: i64) -> bool {
+        let pml4: u64 = Task.get_current_pml4()
+        let i: i64 = 0
         let ch: char = 0
         while i < max_len - 1 {
-            if !user_read_byte(pml4, user_addr + (i as uint), &ch) {
+            if !user_read_byte(pml4, user_addr + (i as u64), &ch) {
                 out[0] = 0
                 return false
             }
@@ -238,9 +244,9 @@ namespace Syscall {
         return true
     }
 
-    func copy_from_user(user_addr: uint, out: char*, len: uint) -> uint {
-        let pml4: uint = Task.get_current_pml4()
-        let i: uint = 0
+    func copy_from_user(user_addr: u64, out: char*, len: u64) -> u64 {
+        let pml4: u64 = Task.get_current_pml4()
+        let i: u64 = 0
         let ch: char = 0
         while i < len {
             if !user_read_byte(pml4, user_addr + i, &ch) {
@@ -252,13 +258,13 @@ namespace Syscall {
         return i
     }
 
-    func copy_to_user(user_addr: uint, src: char*, len: uint) -> uint {
-        let pml4: uint = Task.get_current_pml4()
+    func copy_to_user(user_addr: u64, src: char*, len: u64) -> u64 {
+        let pml4: u64 = Task.get_current_pml4()
         return copy_to_user_pml4(pml4, user_addr, src, len)
     }
 
-    func copy_to_user_pml4(pml4: uint, user_addr: uint, src: char*, len: uint) -> uint {
-        let i: uint = 0
+    func copy_to_user_pml4(pml4: u64, user_addr: u64, src: char*, len: u64) -> u64 {
+        let i: u64 = 0
         while i < len {
             if !user_write_byte(pml4, user_addr + i, src[i]) {
                 return i
@@ -268,7 +274,7 @@ namespace Syscall {
         return i
     }
 
-    func min_u(a: uint, b: uint) -> uint {
+    func min_u(a: u64, b: u64) -> u64 {
         if a < b {
             return a
         }
@@ -276,7 +282,7 @@ namespace Syscall {
     }
 
     func path_copy(dst: char*, src: char*) {
-        let i: int = 0
+        let i: i64 = 0
         while src[i] != 0 && i < FD_PATH_MAX - 1 {
             dst[i] = src[i]
             i = i + 1
@@ -284,15 +290,15 @@ namespace Syscall {
         dst[i] = 0
     }
 
-    func valid_fd(fd: int) -> bool {
+    func valid_fd(fd: i64) -> bool {
         if fd < 0 || fd >= MAX_FDS {
             return false
         }
         return fds[fd].used && fds[fd].owner == Task.current_id()
     }
 
-    func close_owner(owner: int) {
-        let i: int = 0
+    func close_owner(owner: i64) {
+        let i: i64 = 0
         while i < MAX_FDS {
             if fds[i].used && fds[i].owner == owner {
                 fds[i].used = false
@@ -303,23 +309,23 @@ namespace Syscall {
         }
     }
 
-    func sys_print(buf: uint, len: uint) -> uint {
-        let pml4: uint = Task.get_current_pml4()
-        let i: uint = 0
+    func sys_print(buf: u64, len: u64) -> u64 {
+        let pml4: u64 = Task.get_current_pml4()
+        let i: u64 = 0
         while i < len {
-            let page: uint = VMM.virt_to_phys(pml4, buf + i)
+            let page: u64 = VMM.virt_to_phys(pml4, buf + i)
             if page == 0 {
                 break
             }
             let ptr: char* = page as char*
-            let offset: uint = (buf + i) & 0xFFF
+            let offset: u64 = (buf + i) & 0xFFF
             HAL.Serial.write_char(ptr[offset])
             i = i + 1
         }
         return i
     }
 
-    func sys_mmap(virt_hint: uint, pages: uint, flags: uint) -> uint {
+    func sys_mmap(virt_hint: u64, pages: u64, flags: u64) -> u64 {
         let aspace: VMM.AddressSpace* = Task.get_current_aspace()
         if aspace == null {
             return 0
@@ -330,7 +336,7 @@ namespace Syscall {
         return VMM.mmap(aspace, pages)
     }
 
-    func sys_munmap(addr: uint, pages: uint) -> uint {
+    func sys_munmap(addr: u64, pages: u64) -> u64 {
         let aspace: VMM.AddressSpace* = Task.get_current_aspace()
         if aspace == null || pages == 0 {
             return 0xFFFFFFFFFFFFFFFF
@@ -341,7 +347,7 @@ namespace Syscall {
         return 0xFFFFFFFFFFFFFFFF
     }
 
-    func sys_open(path_addr: uint, mode: uint) -> uint {
+    func sys_open(path_addr: u64, mode: u64) -> u64 {
         let path: char[96]
         if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return -1
@@ -366,23 +372,23 @@ namespace Syscall {
             }
         }
 
-        let i: int = 0
+        let i: i64 = 0
         while i < MAX_FDS {
             if !fds[i].used {
                 fds[i].used = true
                 fds[i].owner = Task.current_id()
                 fds[i].offset = 0
                 path_copy(fds[i].path as char*, path as char*)
-                EventLog.add1("syscall", "open fd", i as uint)
-                return i as uint
+                EventLog.add1("syscall", "open fd", i as u64)
+                return i as u64
             }
             i = i + 1
         }
         return -1
     }
 
-    func sys_close(fd_u: uint) -> uint {
-        let fd: int = fd_u as int
+    func sys_close(fd_u: u64) -> u64 {
+        let fd: i64 = fd_u as i64
         if !valid_fd(fd) {
             return -1
         }
@@ -406,7 +412,7 @@ namespace Syscall {
     // then kind and size as two back-to-back 8-byte uints at offset 32
     // and 40 - copied out with copy_to_user exactly like sys_read does
     // for its own buffer, rather than needing a new IPC-style shape.
-    func sys_readdir(path_addr: uint, index: uint, out_buf: uint) -> uint {
+    func sys_readdir(path_addr: u64, index: u64, out_buf: u64) -> u64 {
         let path: char[96]
         if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return 0xFFFFFFFFFFFFFFFF
@@ -417,8 +423,8 @@ namespace Syscall {
                 if VFS.inode_kind(idx) != VFS.KIND_DIR {
                     return 0xFFFFFFFFFFFFFFFF
                 }
-                let child: int = VFS.first_child(idx)
-                let n: uint = 0
+                let child: i64 = VFS.first_child(idx)
+                let n: u64 = 0
                 while child != -1 && n < index {
                     child = VFS.next_sibling(child)
                     n = n + 1
@@ -428,8 +434,13 @@ namespace Syscall {
                 }
 
                 let entry: char[48]
+                let zi: i64 = 0
+                while zi < 48 {
+                    entry[zi] = 0
+                    zi = zi + 1
+                }
                 VFS.inode_name(child, entry as char*)
-                let fields: uint* = ((entry as char*) + 32) as uint*
+                let fields: u64* = ((entry as char*) + 32) as u64*
                 fields[0] = VFS.inode_kind(child)
                 fields[1] = VFS.inode_size(child)
                 copy_to_user(out_buf, entry as char*, 48)
@@ -441,17 +452,17 @@ namespace Syscall {
         }
     }
 
-    func sys_read(fd_u: uint, buf: uint, len: uint) -> uint {
-        let fd: int = fd_u as int
+    func sys_read(fd_u: u64, buf: u64, len: u64) -> u64 {
+        let fd: i64 = fd_u as i64
         if !valid_fd(fd) {
             return 0xFFFFFFFFFFFFFFFF
         }
-        let max: uint = len
+        let max: u64 = len
         if max > IO_MAX {
             max = IO_MAX
         }
         let tmp: char[4096]
-        let n: int = -1
+        let n: i64 = -1
         match VFS.resolve(fds[fd].path as char*) {
             case VFS.Node.TmpfsFile(idx) => {
                 n = TmpFS.read(idx, tmp as char*, max)
@@ -468,20 +479,20 @@ namespace Syscall {
         if n < 0 {
             return -1
         }
-        return copy_to_user(buf, tmp as char*, n as uint)
+        return copy_to_user(buf, tmp as char*, n as u64)
     }
 
-    func sys_write(fd_u: uint, buf: uint, len: uint) -> uint {
-        let fd: int = fd_u as int
+    func sys_write(fd_u: u64, buf: u64, len: u64) -> u64 {
+        let fd: i64 = fd_u as i64
         if !valid_fd(fd) {
             return -1
         }
-        let max: uint = len
+        let max: u64 = len
         if max > IO_MAX {
             max = IO_MAX
         }
         let tmp: char[4096]
-        let copied: uint = copy_from_user(buf, tmp as char*, max)
+        let copied: u64 = copy_from_user(buf, tmp as char*, max)
         if copied != max {
             return copied
         }
@@ -501,9 +512,10 @@ namespace Syscall {
         return -1
     }
 
-    func sys_msg_send(handle_u: uint, buf: uint, len: uint) -> uint {
+    func sys_msg_send(handle_u: u64, buf: u64, len: u64) -> u64 {
+        msg_send_count = msg_send_count + 1
         let cur: Task.TCB* = Task.current_tcb()
-        let peer_id: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_SEND)
+        let peer_id: i64 = Task.handle_target(cur, handle_u as i64, Task.RIGHT_SEND)
         if peer_id < 0 {
             return -1
         }
@@ -513,32 +525,33 @@ namespace Syscall {
         }
 
         let tmp: char[128]
-        let copied: uint = copy_from_user(buf, tmp as char*, len)
+        let copied: u64 = copy_from_user(buf, tmp as char*, len)
         if copied != len {
             return -1
         }
 
         if peer.state == Task.STATE_RECV_BLOCKED {
-            let deliver: uint = min_u(len, peer.ipc_recv_len)
+            let deliver: u64 = min_u(len, peer.ipc_recv_len)
             copy_to_user_pml4(peer.pml4, peer.ipc_recv_buf, tmp as char*, deliver)
             peer.ipc_len = deliver
             peer.ipc_peer = cur.id
-            Task.wake_with_return(peer, cur.id as uint)
+            Task.wake_with_return(peer, cur.id as u64)
 
             cur.state = Task.STATE_REPLY_BLOCKED
             cur.resched_requested = true
             cur.ipc_peer = peer.id
             cur.ipc_reply_buf = buf
             cur.ipc_reply_len = len
-            EventLog.add2("ipc", "send delivered", cur.id as uint, peer.id as uint)
+            EventLog.add2("ipc", "send delivered", cur.id as u64, peer.id as u64)
         } else {
             Task.block_current_send(peer_id, buf, len, tmp as char*, len)
-            EventLog.add2("ipc", "send blocked", cur.id as uint, peer.id as uint)
+            EventLog.add2("ipc", "send blocked", cur.id as u64, peer.id as u64)
         }
         return 0
     }
 
-    func sys_msg_recv(buf: uint, len: uint) -> uint {
+    func sys_msg_recv(buf: u64, len: u64) -> u64 {
+        msg_recv_count = msg_recv_count + 1
         let cur: Task.TCB* = Task.current_tcb()
         if cur == null || len > Task.IPC_MAX {
             return -1
@@ -547,17 +560,17 @@ namespace Syscall {
         let sender: Task.TCB* = Task.first_sender_for(cur.id)
         if sender == null {
             Task.block_current_recv(buf, len)
-            EventLog.add1("ipc", "recv blocked", cur.id as uint)
+            EventLog.add1("ipc", "recv blocked", cur.id as u64)
             return 0
         }
 
-        let deliver: uint = min_u(sender.ipc_len, len)
+        let deliver: u64 = min_u(sender.ipc_len, len)
         copy_to_user(buf, sender.ipc_msg as char*, deliver)
         sender.state = Task.STATE_REPLY_BLOCKED
         sender.ipc_peer = cur.id
         cur.ipc_peer = sender.id
-        EventLog.add2("ipc", "recv delivered", sender.id as uint, cur.id as uint)
-        return sender.id as uint
+        EventLog.add2("ipc", "recv delivered", sender.id as u64, cur.id as u64)
+        return sender.id as u64
     }
 
     // Non-blocking twin of sys_msg_recv: identical when a sender is
@@ -568,7 +581,8 @@ namespace Syscall {
     // redraws every tick) - sys_msg_recv taking the whole calling task off
     // the run queue until a message arrives would starve that other work
     // exactly as long as no client happens to be talking to it.
-    func sys_msg_try_recv(buf: uint, len: uint) -> uint {
+    func sys_msg_try_recv(buf: u64, len: u64) -> u64 {
+        msg_try_recv_count = msg_try_recv_count + 1
         let cur: Task.TCB* = Task.current_tcb()
         if cur == null || len > Task.IPC_MAX {
             return 0xFFFFFFFFFFFFFFFF
@@ -579,17 +593,18 @@ namespace Syscall {
             return 0xFFFFFFFFFFFFFFFF
         }
 
-        let deliver: uint = min_u(sender.ipc_len, len)
+        let deliver: u64 = min_u(sender.ipc_len, len)
         copy_to_user(buf, sender.ipc_msg as char*, deliver)
         sender.state = Task.STATE_REPLY_BLOCKED
         sender.ipc_peer = cur.id
         cur.ipc_peer = sender.id
-        EventLog.add2("ipc", "recv delivered", sender.id as uint, cur.id as uint)
-        return sender.id as uint
+        EventLog.add2("ipc", "recv delivered", sender.id as u64, cur.id as u64)
+        return sender.id as u64
     }
 
-    func sys_msg_reply(peer_u: uint, buf: uint, len: uint) -> uint {
-        let sender_id: int = peer_u as int
+    func sys_msg_reply(peer_u: u64, buf: u64, len: u64) -> u64 {
+        msg_reply_count = msg_reply_count + 1
+        let sender_id: i64 = peer_u as i64
         let sender: Task.TCB* = Task.find_by_id(sender_id)
         let cur: Task.TCB* = Task.current_tcb()
         if sender == null || cur == null || len > Task.IPC_MAX {
@@ -600,25 +615,25 @@ namespace Syscall {
         }
 
         let tmp: char[128]
-        let copied: uint = copy_from_user(buf, tmp as char*, len)
+        let copied: u64 = copy_from_user(buf, tmp as char*, len)
         if copied != len {
             return 0xFFFFFFFFFFFFFFFF
         }
-        let deliver: uint = min_u(len, sender.ipc_reply_len)
+        let deliver: u64 = min_u(len, sender.ipc_reply_len)
         // sender.pml4 is 0 (a placeholder, not a real page table - see
         // Task.pml4_for) when the original sender was kernel-mode code
         // acting as its own IPC client (see ata.llpl) rather than a ring-3
         // task - resolve it the same way Task's own internals do, or this
         // walks page-table structures starting at physical address 0.
-        let written: uint = copy_to_user_pml4(Task.pml4_for(sender), sender.ipc_reply_buf, tmp as char*, deliver)
+        let written: u64 = copy_to_user_pml4(Task.pml4_for(sender), sender.ipc_reply_buf, tmp as char*, deliver)
         sender.ipc_len = written
         sender.ipc_peer = -1
         Task.wake_with_return(sender, written)
-        EventLog.add2("ipc", "reply", cur.id as uint, sender.id as uint)
+        EventLog.add2("ipc", "reply", cur.id as u64, sender.id as u64)
         return written
     }
 
-    func sys_spawn(path_addr: uint, args_addr: uint) -> uint {
+    func sys_spawn(path_addr: u64, args_addr: u64) -> u64 {
         let path: char[96]
         let args: char[128]
         if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
@@ -634,17 +649,17 @@ namespace Syscall {
         }
 
         let cur: Task.TCB* = Task.current_tcb()
-        let handle: int = Task.alloc_handle(cur, last_spawned_user_id, Task.RIGHT_KILL | Task.RIGHT_WAIT | Task.RIGHT_SEND | Task.RIGHT_SHM)
+        let handle: i64 = Task.alloc_handle(cur, last_spawned_user_id, Task.RIGHT_KILL | Task.RIGHT_WAIT | Task.RIGHT_SEND | Task.RIGHT_SHM)
         if handle < 0 {
             // No free handle slot to give the parent control over its own
             // child - don't leave an unkillable orphan running.
             Task.kill(last_spawned_user_id)
             return -1
         }
-        return handle as uint
+        return handle as u64
     }
 
-    func sys_exec(path_addr: uint, args_addr: uint) -> uint {
+    func sys_exec(path_addr: u64, args_addr: u64) -> u64 {
         let path: char[96]
         let args: char[128]
         if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
@@ -661,14 +676,14 @@ namespace Syscall {
         return 0
     }
 
-    func sys_wait(handle_u: uint) -> uint {
+    func sys_wait(handle_u: u64) -> u64 {
         let cur: Task.TCB* = Task.current_tcb()
-        let pid: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_WAIT)
+        let pid: i64 = Task.handle_target(cur, handle_u as i64, Task.RIGHT_WAIT)
         if pid < 0 {
             return -1
         }
-        let status: uint = 0
-        let child_state: int = Task.child_status(pid, &status)
+        let status: u64 = 0
+        let child_state: i64 = Task.child_status(pid, &status)
         if child_state < 0 {
             return -1
         }
@@ -680,9 +695,9 @@ namespace Syscall {
         return 0
     }
 
-    func sys_kill(handle_u: uint) -> uint {
+    func sys_kill(handle_u: u64) -> u64 {
         let cur: Task.TCB* = Task.current_tcb()
-        let pid: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_KILL)
+        let pid: i64 = Task.handle_target(cur, handle_u as i64, Task.RIGHT_KILL)
         if pid < 0 {
             return -1
         }
@@ -698,7 +713,7 @@ namespace Syscall {
         return -1
     }
 
-    func sys_register(name_addr: uint) -> uint {
+    func sys_register(name_addr: u64) -> u64 {
         let name: char[16]
         if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
             return -1
@@ -712,21 +727,21 @@ namespace Syscall {
     // Grants a SEND+SHM handle to whoever holds `name`, if anyone does -
     // never KILL/WAIT: looking a service up makes the caller its client,
     // not its owner.
-    func sys_lookup(name_addr: uint) -> uint {
+    func sys_lookup(name_addr: u64) -> u64 {
         let name: char[16]
         if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
             return -1
         }
-        let pid: int = Task.lookup_service(name as char*)
+        let pid: i64 = Task.lookup_service(name as char*)
         if pid < 0 {
             return -1
         }
         let cur: Task.TCB* = Task.current_tcb()
-        let handle: int = Task.alloc_handle(cur, pid, Task.RIGHT_SEND | Task.RIGHT_SHM)
+        let handle: i64 = Task.alloc_handle(cur, pid, Task.RIGHT_SEND | Task.RIGHT_SHM)
         if handle < 0 {
             return -1
         }
-        return handle as uint
+        return handle as u64
     }
 
     // Allocates and maps `pages` fresh, zeroed pages into the caller's own
@@ -735,16 +750,16 @@ namespace Syscall {
     // caller's pid so a RIGHT_SHM handle-holder can later map the very same
     // pages into its own space (sys_shm_map below). v1 limitation: one
     // region per task - see Task.shm_create.
-    func sys_shm_create(pages: uint) -> uint {
+    func sys_shm_create(pages: u64) -> u64 {
         if pages == 0 || pages > Task.SHM_MAX_PAGES {
             return 0
         }
-        let cur_id: int = Task.current_id()
+        let cur_id: i64 = Task.current_id()
         let aspace: VMM.AddressSpace* = Task.get_current_aspace()
         if aspace == null {
             return 0
         }
-        let virt: uint = VMM.mmap(aspace, pages)
+        let virt: u64 = VMM.mmap(aspace, pages)
         if virt == 0 {
             return 0
         }
@@ -756,13 +771,13 @@ namespace Syscall {
         // compiler placed above it on the stack - including, once pages
         // was raised to (and this array wasn't), this function's own
         // saved return address.
-        let phys: uint[256]
-        let i: uint = 0
+        let phys: u64[256]
+        let i: u64 = 0
         while i < pages {
             phys[i] = VMM.virt_to_phys(aspace.pml4, virt + i * VMM.PAGE_SIZE)
             i = i + 1
         }
-        if !Task.shm_create(cur_id, phys as uint*, pages, virt) {
+        if !Task.shm_create(cur_id, phys as u64*, pages, virt) {
             VMM.munmap(aspace, virt, pages)
             return 0
         }
@@ -776,32 +791,32 @@ namespace Syscall {
     // shared). Requires RIGHT_SHM, separate from RIGHT_SEND: being able to
     // message a task doesn't by itself mean sharing its memory is safe or
     // wanted. Like sys_shm_create, 0/null on failure, not SYS_ERR.
-    func sys_shm_map(handle_u: uint) -> uint {
+    func sys_shm_map(handle_u: u64) -> u64 {
         let cur: Task.TCB* = Task.current_tcb()
-        let target_pid: int = Task.handle_target(cur, handle_u as int, Task.RIGHT_SHM)
+        let target_pid: i64 = Task.handle_target(cur, handle_u as i64, Task.RIGHT_SHM)
         if target_pid < 0 {
             return 0
         }
-        let region: int = Task.shm_region_for(target_pid)
+        let region: i64 = Task.shm_region_for(target_pid)
         if region < 0 {
             return 0
         }
-        let pages: uint = Task.shm_pages_of(region)
+        let pages: u64 = Task.shm_pages_of(region)
         // Same fix, same reasoning as sys_shm_create's own phys buffer
         // just above - must match Task.SHM_MAX_PAGES, not the mapped
         // region's own page count, since `pages` here can be anything up
         // to that cap.
-        let phys: uint[256]
-        let i: uint = 0
+        let phys: u64[256]
+        let i: u64 = 0
         while i < pages {
-            phys[i] = Task.shm_phys_at(region, i as int)
+            phys[i] = Task.shm_phys_at(region, i as i64)
             i = i + 1
         }
         let aspace: VMM.AddressSpace* = Task.get_current_aspace()
         if aspace == null {
             return 0
         }
-        return VMM.mmap_foreign(aspace, phys as uint*, pages)
+        return VMM.mmap_foreign(aspace, phys as u64*, pages)
     }
 
     // The only ports any user-space driver in this demo needs: the
@@ -822,26 +837,26 @@ namespace Syscall {
     // found/not yet asked", never a real base address, so the range
     // check is simply skipped in that case rather than needing its own
     // separate on/off flag).
-    func port_allowed(port: uint) -> bool {
+    func port_allowed(port: u64) -> bool {
         if (port >= 0x1F0 && port <= 0x1F7) || port == 0x3F6 {
             return true
         }
-        let base: uint = PCI.bmide_base()
+        let base: u64 = PCI.bmide_base()
         return base != 0 && port >= base && port < base + 8
     }
 
-    func io_port_permitted(port: uint) -> bool {
+    func io_port_permitted(port: u64) -> bool {
         return Task.is_boot_spawned(Task.current_id()) && port_allowed(port)
     }
 
-    func sys_inb(port: uint) -> uint {
+    func sys_inb(port: u64) -> u64 {
         if !io_port_permitted(port) {
             return 0xFFFFFFFFFFFFFFFF
         }
-        return HAL.inb(port) as uint
+        return HAL.inb(port) as u64
     }
 
-    func sys_outb(port: uint, value: uint) -> uint {
+    func sys_outb(port: u64, value: u64) -> u64 {
         if !io_port_permitted(port) {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -849,14 +864,14 @@ namespace Syscall {
         return 0
     }
 
-    func sys_inw(port: uint) -> uint {
+    func sys_inw(port: u64) -> u64 {
         if !io_port_permitted(port) {
             return 0xFFFFFFFFFFFFFFFF
         }
         return HAL.inw(port)
     }
 
-    func sys_outw(port: uint, value: uint) -> uint {
+    func sys_outw(port: u64, value: u64) -> u64 {
         if !io_port_permitted(port) {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -867,14 +882,14 @@ namespace Syscall {
     // 32-bit forms of the above, gated the same way - atad.llpl's DMA
     // path needs these for the Bus Master IDE controller's PRDT pointer
     // register, the one register in that block wider than a byte.
-    func sys_inl(port: uint) -> uint {
+    func sys_inl(port: u64) -> u64 {
         if !io_port_permitted(port) {
             return 0xFFFFFFFFFFFFFFFF
         }
         return HAL.inl(port)
     }
 
-    func sys_outl(port: uint, value: uint) -> uint {
+    func sys_outl(port: u64, value: u64) -> u64 {
         if !io_port_permitted(port) {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -889,7 +904,7 @@ namespace Syscall {
     // plain PIO). Gated the same way raw port access itself is: this is
     // only useful information for a task that could also use the ports
     // it describes, and there's no reason to hand it to anyone else.
-    func sys_bmide_base() -> uint {
+    func sys_bmide_base() -> u64 {
         if !Task.is_boot_spawned(Task.current_id()) {
             return 0
         }
@@ -919,22 +934,22 @@ namespace Syscall {
     // Not gated beyond ordinary reachability: a task learning the
     // physical backing of memory it already owns isn't a new
     // capability, just information about one it already has.
-    func sys_virt_to_phys(virt: uint) -> uint {
-        let cur_id: int = Task.current_id()
-        let region: int = Task.shm_region_for(cur_id)
+    func sys_virt_to_phys(virt: u64) -> u64 {
+        let cur_id: i64 = Task.current_id()
+        let region: i64 = Task.shm_region_for(cur_id)
         if region < 0 {
             return 0
         }
-        let base: uint = Task.shm_owner_virt(region)
-        let pages: uint = Task.shm_pages_of(region)
+        let base: u64 = Task.shm_owner_virt(region)
+        let pages: u64 = Task.shm_pages_of(region)
         if virt < base {
             return 0
         }
-        let page: uint = (virt - base) / VMM.PAGE_SIZE
+        let page: u64 = (virt - base) / VMM.PAGE_SIZE
         if page >= pages {
             return 0
         }
-        let page_phys: uint = Task.shm_phys_at(region, page as int)
+        let page_phys: u64 = Task.shm_phys_at(region, page as i64)
         if page_phys == 0 {
             return 0
         }
@@ -945,15 +960,15 @@ namespace Syscall {
     // out buffer - not gated to boot-spawned tasks like the raw I/O ports
     // above: there's only one shared screen and no hardware-safety reason
     // to restrict who can draw to it, unlike arbitrary port access.
-    func sys_fb_info(out_addr: uint) -> uint {
+    func sys_fb_info(out_addr: u64) -> u64 {
         if !Framebuffer.ready {
             return 0xFFFFFFFFFFFFFFFF
         }
-        let info: uint[3]
-        info[0] = Framebuffer.width as uint
-        info[1] = Framebuffer.height as uint
-        info[2] = Framebuffer.pitch as uint
-        let n: uint = copy_to_user(out_addr, info as char*, 24)
+        let info: u64[3]
+        info[0] = Framebuffer.width as u64
+        info[1] = Framebuffer.height as u64
+        info[2] = Framebuffer.pitch as u64
+        let n: u64 = copy_to_user(out_addr, info as char*, 24)
         if n != 24 {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -967,7 +982,7 @@ namespace Syscall {
     // without a syscall per pixel or per frame. 0/null on failure, not
     // SYS_ERR, matching sys_mmap/sys_shm_map's own convention for a
     // pointer-returning call.
-    func sys_fb_map() -> uint {
+    func sys_fb_map() -> u64 {
         if !Framebuffer.ready {
             return 0
         }
@@ -975,9 +990,9 @@ namespace Syscall {
         if aspace == null {
             return 0
         }
-        let bytes: uint = (Framebuffer.height as uint) * (Framebuffer.pitch as uint)
-        let pages: uint = (bytes + VMM.PAGE_SIZE - 1) / VMM.PAGE_SIZE
-        let phys_base: uint = Framebuffer.addr & ~(VMM.PAGE_SIZE - 1)
+        let bytes: u64 = (Framebuffer.height as u64) * (Framebuffer.pitch as u64)
+        let pages: u64 = (bytes + VMM.PAGE_SIZE - 1) / VMM.PAGE_SIZE
+        let phys_base: u64 = Framebuffer.addr & ~(VMM.PAGE_SIZE - 1)
         return VMM.mmap_foreign_range(aspace, phys_base, pages)
     }
 
@@ -998,11 +1013,11 @@ namespace Syscall {
     // failure (no e1000 found, caller not boot-spawned, or the mapping
     // itself failed), matching sys_fb_map/sys_shm_create/sys_shm_map's
     // own "0, not SYS_ERR" convention for a pointer-returning call.
-    func sys_nic_mmap() -> uint {
+    func sys_nic_mmap() -> u64 {
         if !Task.is_boot_spawned(Task.current_id()) {
             return 0
         }
-        let bar0: uint = PCI.e1000_bar0()
+        let bar0: u64 = PCI.e1000_bar0()
         if bar0 == 0 {
             return 0
         }
@@ -1021,11 +1036,11 @@ namespace Syscall {
     // (a plain ASCII byte, or one of Keyboard.KEY_UP/DOWN/LEFT/RIGHT,
     // always > 0 either way). Deliberately not a blocking read like
     // Keyboard.read_char() itself - this can be called from inside the
-    // int 0x80 interrupt gate (IF already 0 on entry), where a wait that
+    // i64 0x80 interrupt gate (IF already 0 on entry), where a wait that
     // depends on a future interrupt to make progress would deadlock
     // exactly like ata.llpl's call() once did before it started forcing
     // interrupts on for its own wait. A poll has no such wait to protect.
-    func sys_kbd_poll() -> uint {
+    func sys_kbd_poll() -> u64 {
         // Deliberately not Keyboard.read_char(): that now blocks whenever
         // input_focus isn't FOCUS_WM (see kbd.llpl), which would violate
         // this function's own "never blocks" contract (documented above)
@@ -1038,12 +1053,12 @@ namespace Syscall {
         // `& 255` undoes char's signedness, exactly like on_scancode's own
         // comment (kbd.llpl) describes for the identical hazard: the
         // KEY_UP/DOWN/LEFT/RIGHT/ESC/F2 sentinels (200-205) don't fit in
-        // a signed 8-bit char, so a bare `as uint` sign-extends them into
+        // a signed 8-bit char, so a bare `as u64` sign-extends them into
         // huge 64-bit garbage (201 becomes 0xFFFFFFFFFFFFFFC9, not 201) -
         // silently breaking every ring-3 comparison against
-        // `KEY_UP as uint` etc., which are plain positive int constants
+        // `KEY_UP as u64` etc., which are plain positive i64 constants
         // that never pass through a signed char at all.
-        return ((Keyboard.pop_char() as int) & 255) as uint
+        return ((Keyboard.pop_char() as i64) & 255) as u64
     }
 
     // Packed absolute mouse state: bits 0-9 = x, bits 10-19 = y, bit 20 =
@@ -1054,20 +1069,20 @@ namespace Syscall {
     // Packed: bits 0-9 = x, bits 10-19 = y, bit 20 = left button down,
     // bits 21-28 = wheel notches since the last call, as a *raw* 8-bit
     // two's-complement byte (not sign-extended into the surrounding
-    // 64-bit uint) - callers recover the real signed value the same way
+    // 64-bit u64) - callers recover the real signed value the same way
     // sys_kbd_poll's own doc comment describes for the keyboard
     // sentinels: mask out those 8 bits, then subtract 256 if the result
     // is >= 128. Consumed (not just read) here, same as
     // Mouse.take_wheel_delta's own doc comment explains, since this is
     // the one and only place anything ever reads Mouse's accumulated
     // wheel count.
-    func sys_mouse_poll() -> uint {
-        let bits: uint = (Mouse.mx as uint) & 0x3FF
-        bits = bits | (((Mouse.my as uint) & 0x3FF) << 10)
+    func sys_mouse_poll() -> u64 {
+        let bits: u64 = (Mouse.mx as u64) & 0x3FF
+        bits = bits | (((Mouse.my as u64) & 0x3FF) << 10)
         if Mouse.left_down {
             bits = bits | (1 << 20)
         }
-        let wheel: uint = (Mouse.take_wheel_delta() as uint) & 0xFF
+        let wheel: u64 = (Mouse.take_wheel_delta() as u64) & 0xFF
         bits = bits | (wheel << 21)
         return bits
     }
@@ -1082,7 +1097,7 @@ namespace Syscall {
     // wants the GUI, without needing a window to already exist -
     // otherwise there'd be no way to launch the very first app without
     // the console.
-    func sys_focus_state() -> uint {
-        return Keyboard.input_focus as uint
+    func sys_focus_state() -> u64 {
+        return Keyboard.input_focus as u64
     }
 }

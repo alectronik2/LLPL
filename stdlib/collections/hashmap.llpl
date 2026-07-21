@@ -9,10 +9,10 @@ namespace collections {
 class HashMapEntry<K, V> {
     let key: K
     let value: V
-    let hash: uint
+    let hash: u64
     let next: HashMapEntry<K, V>*
 
-    constructor(k: K, v: V, h: uint) {
+    constructor(k: K, v: V, h: u64) {
         self.key = k
         self.value = v
         self.hash = h
@@ -24,9 +24,9 @@ class HashMapEntry<K, V> {
 // Requires K to implement Hashable trait
 class EnhancedHashMap<K: Hashable, V> {
     let buckets: HashMapEntry<K, V>**
-    let capacity: int
-    let count: int
-    let load_factor: int  // Percentage (e.g., 75 for 0.75)
+    let capacity: i64
+    let count: i64
+    let load_factor: i64  // Percentage (e.g., 75 for 0.75)
 
     constructor() {
         self.capacity = 16
@@ -34,18 +34,18 @@ class EnhancedHashMap<K: Hashable, V> {
         self.load_factor = 75
         self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
-        for let i: int = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0, i < self.capacity, i = i + 1 {
             self.buckets[i] = null
         }
     }
 
-    constructor(initial_capacity: int) {
+    constructor(initial_capacity: i64) {
         self.capacity = initial_capacity
         self.count = 0
         self.load_factor = 75
         self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
-        for let i: int = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0, i < self.capacity, i = i + 1 {
             self.buckets[i] = null
         }
     }
@@ -57,7 +57,7 @@ class EnhancedHashMap<K: Hashable, V> {
         }
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.count
     }
 
@@ -65,8 +65,16 @@ class EnhancedHashMap<K: Hashable, V> {
         return self.count == 0
     }
 
-    func get_bucket_index(hash: uint) -> int {
-        return (hash as int) % self.capacity
+    func get_bucket_index(hash: u64) -> i64 {
+        // Modulo in unsigned arithmetic, THEN cast to i64 - casting the
+        // (up to 64-bit) hash to i64 *before* the modulo reinterprets any
+        // hash with its high bit set as a negative value, producing a
+        // negative (out-of-bounds) bucket index and a segfault on
+        // self.buckets[bucket_idx] - this bit real, depends only on the
+        // hashed content, not on map size (e.g. FNV-1a of "cherry" hits
+        // it; "apple"/"banana" happen not to). The result of `hash %
+        // capacity` is always in [0, capacity), so casting *after* is safe.
+        return (hash % (self.capacity as u64)) as i64
     }
 
     func should_resize() -> bool {
@@ -74,20 +82,20 @@ class EnhancedHashMap<K: Hashable, V> {
     }
 
     func resize() {
-        let old_capacity: int = self.capacity
+        let old_capacity: i64 = self.capacity
         let old_buckets: HashMapEntry<K, V>** = self.buckets
 
         self.capacity = self.capacity * 2
         self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
-        for let i: int = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0, i < self.capacity, i = i + 1 {
             self.buckets[i] = null
         }
 
         self.count = 0
 
         // Rehash all entries
-        for let i: int = 0, i < old_capacity, i = i + 1 {
+        for let i: i64 = 0, i < old_capacity, i = i + 1 {
             let entry: HashMapEntry<K, V>* = old_buckets[i]
 
             while entry != null {
@@ -102,8 +110,8 @@ class EnhancedHashMap<K: Hashable, V> {
     }
 
     func insert(key: K, value: V) {
-        let hash: uint = key.hash()
-        let bucket_idx: int = self.get_bucket_index(hash)
+        let hash: u64 = key.hash()
+        let bucket_idx: i64 = self.get_bucket_index(hash)
 
         let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
 
@@ -141,8 +149,8 @@ class EnhancedHashMap<K: Hashable, V> {
 
     func get(key: K) -> Result<V, char*> {
         let result: Result<V, char*> = new Result<V, char*>()
-        let hash: uint = key.hash()
-        let bucket_idx: int = self.get_bucket_index(hash)
+        let hash: u64 = key.hash()
+        let bucket_idx: i64 = self.get_bucket_index(hash)
 
         let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
 
@@ -159,8 +167,8 @@ class EnhancedHashMap<K: Hashable, V> {
     }
 
     func contains(key: K) -> bool {
-        let hash: uint = key.hash()
-        let bucket_idx: int = self.get_bucket_index(hash)
+        let hash: u64 = key.hash()
+        let bucket_idx: i64 = self.get_bucket_index(hash)
 
         let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
 
@@ -176,8 +184,8 @@ class EnhancedHashMap<K: Hashable, V> {
 
     func remove(key: K) -> Result<V, char*> {
         let result: Result<V, char*> = new Result<V, char*>()
-        let hash: uint = key.hash()
-        let bucket_idx: int = self.get_bucket_index(hash)
+        let hash: u64 = key.hash()
+        let bucket_idx: i64 = self.get_bucket_index(hash)
 
         let entry: HashMapEntry<K, V>* = self.buckets[bucket_idx]
         let prev: HashMapEntry<K, V>* = null
@@ -210,7 +218,7 @@ class EnhancedHashMap<K: Hashable, V> {
     func keys() -> Vector<K> {
         let result: Vector<K> = new Vector<K>()
 
-        for let i: int = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0, i < self.capacity, i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
 
             while entry != null {
@@ -225,7 +233,7 @@ class EnhancedHashMap<K: Hashable, V> {
     func values() -> Vector<V> {
         let result: Vector<V> = new Vector<V>()
 
-        for let i: int = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0, i < self.capacity, i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
 
             while entry != null {
@@ -238,7 +246,7 @@ class EnhancedHashMap<K: Hashable, V> {
     }
 
     func clear() {
-        for let i: int = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0, i < self.capacity, i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
 
             while entry != null {
@@ -254,7 +262,7 @@ class EnhancedHashMap<K: Hashable, V> {
     }
 
     // Get load factor as percentage
-    func get_load_factor() -> int {
+    func get_load_factor() -> i64 {
         if self.capacity == 0 {
             return 0
         }
@@ -262,12 +270,12 @@ class EnhancedHashMap<K: Hashable, V> {
     }
 
     // Get number of collisions (for performance analysis)
-    func get_collision_count() -> int {
-        let collisions: int = 0
+    func get_collision_count() -> i64 {
+        let collisions: i64 = 0
 
-        for let i: int = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0, i < self.capacity, i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
-            let chain_length: int = 0
+            let chain_length: i64 = 0
 
             while entry != null {
                 chain_length = chain_length + 1
@@ -304,7 +312,7 @@ class HashSet<T: Hashable> {
         return result.is_ok()
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.map.size()
     }
 
@@ -327,12 +335,12 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: int = 0, i < this_items.len(), i = i + 1 {
+        for let i: i64 = 0, i < this_items.len(), i = i + 1 {
             result.insert(this_items.get(i))
         }
 
         let other_items: Vector<T> = other.to_vector()
-        for let i: int = 0, i < other_items.len(), i = i + 1 {
+        for let i: i64 = 0, i < other_items.len(), i = i + 1 {
             result.insert(other_items.get(i))
         }
 
@@ -343,7 +351,7 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: int = 0, i < this_items.len(), i = i + 1 {
+        for let i: i64 = 0, i < this_items.len(), i = i + 1 {
             let item: T = this_items.get(i)
             if other.contains(item) {
                 result.insert(item)
@@ -357,7 +365,7 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: int = 0, i < this_items.len(), i = i + 1 {
+        for let i: i64 = 0, i < this_items.len(), i = i + 1 {
             let item: T = this_items.get(i)
             if !other.contains(item) {
                 result.insert(item)

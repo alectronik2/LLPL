@@ -3,9 +3,9 @@
 import "../../libsys/imports"
 import "../user_runtime"
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     let path: char* = rt_arg(argc, argv, 1, "/boot/hello.txt")
-    let fd: uint = sys_open(path, 0)
+    let fd: u64 = sys_open(path, 0)
     if fd == RT_SYS_ERR {
         sys_puts("cat: open failed: ")
         sys_putln(path)
@@ -13,7 +13,7 @@ func _start(argc: uint, argv: uint*) {
     }
 
     let buf: char[256]
-    let n: uint = sys_read(fd, buf as char*, 255)
+    let n: u64 = sys_read(fd, buf as char*, 255)
     sys_close(fd)
     if n == RT_SYS_ERR {
         sys_puts("cat: read failed: ")

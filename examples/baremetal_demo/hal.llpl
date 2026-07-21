@@ -9,17 +9,17 @@ namespace HAL {
     // Implemented in boot64.asm, backed by the `_kernel_end` linker symbol
     // (linker64.ld) - the physical address just past the kernel image's
     // .bss, i.e. where pagealloc.llpl's free physical memory can start.
-    extern func get_kernel_end() -> uint
+    extern func get_kernel_end() -> u64
 
-    // `port` is LLPL's 64-bit `uint` (the language has no 16-bit integer
+    // `port` is LLPL's 64-bit `u64` (the language has no 16-bit integer
     // type), but the x86 variable-port form of in/out only accepts DX. The
     // %w operand modifier tells GCC to print operand 1 as its 16-bit
     // sub-register (dx) regardless of the C-level operand width.
-    func outb(port: uint, value: char) {
+    func outb(port: u64, value: char) {
         asm("outb %0, %w1" : : "a"(value), "Nd"(port))
     }
 
-    func inb(port: uint) -> char {
+    func inb(port: u64) -> char {
         let result: char = 0
         asm("inb %w1, %0" : "=a"(result) : "Nd"(port))
         return result
@@ -29,14 +29,14 @@ namespace HAL {
     // data port transfers a whole 16-bit word per access. `%w0` on the
     // value/result operand (not just the port) does the same "print this
     // as its 16-bit sub-register" trick outb/inb already use for the port
-    // operand - LLPL's `uint` is 64 bits, but only the low 16 of it are
+    // operand - LLPL's `u64` is 64 bits, but only the low 16 of it are
     // ever read or written here.
-    func outw(port: uint, value: uint) {
+    func outw(port: u64, value: u64) {
         asm("outw %w0, %w1" : : "a"(value), "Nd"(port))
     }
 
-    func inw(port: uint) -> uint {
-        let result: uint = 0
+    func inw(port: u64) -> u64 {
+        let result: u64 = 0
         asm("inw %w1, %w0" : "=a"(result) : "Nd"(port))
         return result
     }
@@ -47,14 +47,59 @@ namespace HAL {
     // register (see ata.llpl's DMA path). `%k0`/`%k1` print a register as
     // its 32-bit sub-register, the same "pick a narrower width" trick
     // `%w` already does for 16-bit above.
-    func outl(port: uint, value: uint) {
+    func outl(port: u64, value: u64) {
         asm("outl %k0, %w1" : : "a"(value), "Nd"(port))
     }
 
-    func inl(port: uint) -> uint {
-        let result: uint = 0
+    func inl(port: u64) -> u64 {
+        let result: u64 = 0
         asm("inl %w1, %k0" : "=a"(result) : "Nd"(port))
         return result
+    }
+
+    func cpuid_eax(leaf: u64) -> u64 {
+        let eax: u64 = 0
+        let ebx: u64 = 0
+        let ecx: u64 = 0
+        let edx: u64 = 0
+        asm("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(leaf), "c"(0))
+        return eax
+    }
+
+    func cpuid_edx(leaf: u64) -> u64 {
+        let eax: u64 = 0
+        let ebx: u64 = 0
+        let ecx: u64 = 0
+        let edx: u64 = 0
+        asm("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(leaf), "c"(0))
+        return edx
+    }
+
+    func rdmsr(msr: u64) -> u64 {
+        let lo: u64 = 0
+        let hi: u64 = 0
+        asm("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr))
+        return (hi << 32) | (lo & 0xFFFFFFFF)
+    }
+
+    func wrmsr(msr: u64, value: u64) {
+        let lo: u64 = value & 0xFFFFFFFF
+        let hi: u64 = value >> 32
+        asm("wrmsr" : : "c"(msr), "a"(lo), "d"(hi) : "memory")
+    }
+
+    func read_cr0() -> u64 {
+        let value: u64 = 0
+        asm("mov %%cr0, %0" : "=r"(value))
+        return value
+    }
+
+    func write_cr0(value: u64) {
+        asm("mov %0, %%cr0" : : "r"(value) : "memory")
+    }
+
+    func flush_caches() {
+        asm("wbinvd" : : : "memory")
     }
 
     func disable_interrupts() {
@@ -73,13 +118,13 @@ namespace HAL {
     // KHeap.lock) from concurrent access. `locked` is 0/1 rather than
     // `bool` so its C representation is a predictable full-width `uint64_t`
     // for atomic_exchange below, not `bool`'s narrower/less-portable C
-    // `int` mapping. Global `SpinLock` variables come out unlocked for
+    // `i64` mapping. Global `SpinLock` variables come out unlocked for
     // free: C zero-initializes .bss, and 0 is the unlocked state - no
     // separate init() call needed (spinlock_init below exists for a lock
     // embedded in memory that *isn't* implicitly zeroed, e.g. inside a
     // future heap-allocated object).
     struct SpinLock {
-        let locked: uint
+        let locked: u64
     }
 
     func spinlock_init(lock: SpinLock*) {
@@ -90,24 +135,24 @@ namespace HAL {
     // before - `xchg` with a memory operand is implicitly a locked
     // (atomic) operation on x86, unlike most other read-modify-write
     // instructions, which need an explicit `lock` prefix.
-    func atomic_exchange(addr: uint*, value: uint) -> uint {
-        let old: uint = value
+    func atomic_exchange(addr: u64*, value: u64) -> u64 {
+        let old: u64 = value
         asm("xchg %0, (%1)" : "+r"(old) : "r"(addr))
         return old
     }
 
-    func read_flags() -> uint {
-        let flags: uint = 0
+    func read_flags() -> u64 {
+        let flags: u64 = 0
         asm("pushfq; pop %0" : "=r"(flags))
         return flags
     }
 
-    func write_flags(flags: uint) {
+    func write_flags(flags: u64) {
         asm("push %0; popfq" : : "r"(flags))
     }
 
-    func read_cr2() -> uint {
-        let value: uint = 0
+    func read_cr2() -> u64 {
+        let value: u64 = 0
         asm("mov %%cr2, %0" : "=r"(value))
         return value
     }
@@ -126,8 +171,8 @@ namespace HAL {
     // check-then-set (not atomic) would race with itself if this kernel
     // ever grew real multi-core support, where disabling interrupts on
     // *one* core doesn't stop another core from running concurrently.
-    func spinlock_acquire(lock: SpinLock*) -> uint {
-        let flags: uint = read_flags()
+    func spinlock_acquire(lock: SpinLock*) -> u64 {
+        let flags: u64 = read_flags()
         disable_interrupts()
         while atomic_exchange(&lock.locked, 1) != 0 {
             // spin
@@ -135,7 +180,7 @@ namespace HAL {
         return flags
     }
 
-    func spinlock_release(lock: SpinLock*, saved_flags: uint) {
+    func spinlock_release(lock: SpinLock*, saved_flags: u64) {
         atomic_exchange(&lock.locked, 0)
         write_flags(saved_flags)
     }
@@ -184,7 +229,7 @@ namespace HAL {
         }
 
         func write(str: char*) {
-            let i: int = 0
+            let i: i64 = 0
             while str[i] != 0 {
                 write_char(str[i])
                 i = i + 1
@@ -249,7 +294,7 @@ namespace HAL {
             outb(DATA2, mask2 & 0xEF)
         }
 
-        func send_eoi(irq: int) {
+        func send_eoi(irq: i64) {
             if irq >= 8 {
                 outb(COMMAND2, 0x20)
             }
@@ -276,8 +321,8 @@ namespace HAL {
 
         // mode 3 (square wave), channel 0, lobyte/hibyte access, binary -
         // the standard "just give me a periodic IRQ0" PIT setup.
-        func set_frequency(hz: uint) {
-            let divisor: uint = BASE_HZ / hz
+        func set_frequency(hz: u64) {
+            let divisor: u64 = BASE_HZ / hz
             outb(COMMAND, 0x36)
             outb(CHANNEL0, (divisor & 0xFF) as char)
             outb(CHANNEL0, ((divisor >> 8) & 0xFF) as char)
@@ -299,7 +344,7 @@ namespace HAL {
     namespace Log {
         let buffer: char[128]
 
-        extern func ksnprintf(buf: char*, size: uint, fmt: char*, ...) -> int
+        extern func ksnprintf(buf: char*, size: u64, fmt: char*, ...) -> i64
 
         func flush() {
             Serial.write(buffer as char*)

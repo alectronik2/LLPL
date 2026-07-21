@@ -89,9 +89,29 @@
 - A tiny `userapp/userapp.asm` program is loaded as a GRUB multiboot2
   module and runs in ring 3, demonstrating `mmap`, `print`, and `exit`.
 
+#### Built-in `assert` Statement
+- `assert(condition)` aborts with a panic if the condition is false.
+- `assert(condition, "message")` includes a custom panic message.
+- No `extern func llpl_panic` declaration is needed; the statement lowers
+  directly to an `if (!(condition)) llpl_panic(...)` check.
+- Added `test/assert_pass_demo.llpl` and `test/assert_fail_demo.llpl`.
+
+#### Optional Bounds Checking with `--safe`
+- New `--safe` compiler flag enables runtime bounds checks on fixed-size
+  array indexing (`T[N]`).
+- Both reads and assignments are checked.
+- Scope is currently one-dimensional fixed-size arrays declared as locals,
+  globals, or class fields; pointer indexing and decayed array parameters
+  are not checked.
+- Out-of-bounds accesses panic with "index out of bounds".
+- Added `test/bounds_check_pass.llpl` and `test/bounds_check_fail.llpl`,
+  compiled with `--safe` via a new `test/<name>.flags` mechanism.
+
 ### Tooling
 - Added `run_tests.sh` to compile and execute every `test/*.llpl`.
 - Golden `.expected` files and `.expected_fail` markers for abort tests.
+- Per-test compiler flags: a `test/<name>.flags` file is passed to the
+  compiler when running the matching test.
 
 ## Version 0.2.0 - Module System & 64-bit Support
 

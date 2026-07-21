@@ -18,54 +18,72 @@ namespace VMM {
     const PTE_USER     = 4
 
     const USER_CODE_BASE  = 0x100000000
-    const USER_STACK_TOP  = 0x100010000
+    // Was USER_CODE_BASE+0x10000 (64KB) - fine for the original small demo
+    // binaries this layout was designed around (see wm_protocol.llpl's own
+    // comment on the 104x52-ball-bouncer era), but a *fixed* offset from
+    // USER_CODE_BASE with no relationship to how big the actual loaded
+    // program is: load_elf64_user (kernel.llpl) enforces that budget for a
+    // static ELF (rejects one that doesn't fit before this point), but
+    // nothing enforced it for a *dynamically*-linked one - LdSo.map_dyn_object
+    // just keeps mapping pages whatever the real image needs. Once wm.elf
+    // grew past 64KB (a compile-time-embedded photo, not a bug in wm.elf
+    // itself), its own data segment started running into this same fixed
+    // stack address, and the user-stack setup that runs right after ELF
+    // loading (kernel.llpl's own build_user_stack/map_in_aspace call)
+    // silently remapped that exact virtual page out from under the
+    // program's own already-loaded (and already-correct) data - a real,
+    // reproduced bug: VMM.map_in_aspace has no guard against overwriting an
+    // existing mapping, so the *program's* data, not the stack, silently
+    // lost the race. 8MB gives real headroom for embedded assets (icons,
+    // wallpaper, ...) without touching the stack's own page count.
+    const USER_STACK_TOP  = USER_CODE_BASE + 0x800000
     const USER_STACK_BASE = USER_STACK_TOP - PAGE_SIZE
     const USER_STACK_GUARD_BASE = USER_STACK_BASE - PAGE_SIZE
-    const USER_MMAP_BASE  = 0x100020000
+    const USER_MMAP_BASE  = USER_STACK_TOP + 0x10000
     const MAX_MAPPED_PAGES = 256
 
     // Physical address of the kernel's boot PML4. Filled in by init().
-    let kernel_pml4: uint = 0
+    let kernel_pml4: u64 = 0
 
     packed struct AddressSpace {
-        let pml4: uint
-        let next_virt: uint
-        let pt_count: int
-        let pt_pages: uint[32]
-        let map_count: int
-        let map_virt: uint[256]
-        let map_phys: uint[256]
+        let pml4: u64
+        let next_virt: u64
+        let pt_count: i64
+        let pt_pages: u64[32]
+        let map_count: i64
+        let map_virt: u64[256]
+        let map_phys: u64[256]
     }
 
-    func get_cr3() -> uint {
-        let cr3: uint = 0
+    func get_cr3() -> u64 {
+        let cr3: u64 = 0
         asm("mov %%cr3, %0" : "=r"(cr3))
         return cr3
     }
 
-    func set_cr3(phys: uint) {
+    func set_cr3(phys: u64) {
         asm("mov %0, %%cr3" : : "r"(phys))
     }
 
-    func invlpg(virt: uint) {
+    func invlpg(virt: u64) {
         asm("invlpg (%0)" : : "r"(virt) : "memory")
     }
 
-    func page_index(virt: uint, shift: int) -> int {
-        return ((virt >> shift) & 511) as int
+    func page_index(virt: u64, shift: i64) -> i64 {
+        return ((virt >> shift) & 511) as i64
     }
 
-    func get_pte(table: uint, index: int) -> uint* {
-        return (table + (index as uint) * 8) as uint*
+    func get_pte(table: u64, index: i64) -> u64* {
+        return (table + (index as u64) * 8) as u64*
     }
 
-    func alloc_zero_page() -> uint {
-        let p: uint = PageAlloc.alloc()
+    func alloc_zero_page() -> u64 {
+        let p: u64 = PageAlloc.alloc()
         if p == 0 {
             return 0
         }
-        let q: uint* = p as uint*
-        let i: int = 0
+        let q: u64* = p as u64*
+        let i: i64 = 0
         while i < 512 {
             q[i] = 0
             i = i + 1
@@ -102,79 +120,79 @@ namespace VMM {
     // alloc_zero_page and everywhere else a physical address doubles as a
     // dereferencable pointer), so for it virt == phys directly - no walk
     // needed, or possible, no matter which pml4 was asked to resolve it.
-    func virt_to_phys(pml4: uint, virt: uint) -> uint {
+    func virt_to_phys(pml4: u64, virt: u64) -> u64 {
         if virt < USER_CODE_BASE {
             return virt & ~(PAGE_SIZE - 1)
         }
-        let pml4i: int = page_index(virt, 39)
-        let pdpti: int = page_index(virt, 30)
-        let pdi: int = page_index(virt, 21)
-        let pti: int = page_index(virt, 12)
+        let pml4i: i64 = page_index(virt, 39)
+        let pdpti: i64 = page_index(virt, 30)
+        let pdi: i64 = page_index(virt, 21)
+        let pti: i64 = page_index(virt, 12)
 
-        let pml4e: uint* = get_pte(pml4, pml4i)
+        let pml4e: u64* = get_pte(pml4, pml4i)
         if (pml4e[0] & PTE_PRESENT) == 0 {
             return 0
         }
-        let pdpt: uint = (pml4e[0] >> 12) << 12
+        let pdpt: u64 = (pml4e[0] >> 12) << 12
 
-        let pdpte: uint* = get_pte(pdpt, pdpti)
+        let pdpte: u64* = get_pte(pdpt, pdpti)
         if (pdpte[0] & PTE_PRESENT) == 0 {
             return 0
         }
-        let pd: uint = (pdpte[0] >> 12) << 12
+        let pd: u64 = (pdpte[0] >> 12) << 12
 
-        let pde: uint* = get_pte(pd, pdi)
+        let pde: u64* = get_pte(pd, pdi)
         if (pde[0] & PTE_PRESENT) == 0 {
             return 0
         }
-        let pt: uint = (pde[0] >> 12) << 12
+        let pt: u64 = (pde[0] >> 12) << 12
 
-        let pte: uint* = get_pte(pt, pti)
+        let pte: u64* = get_pte(pt, pti)
         if (pte[0] & PTE_PRESENT) == 0 {
             return 0
         }
         return (pte[0] >> 12) << 12
     }
 
-    func pte_for(pml4: uint, virt: uint) -> uint* {
-        let pml4i: int = page_index(virt, 39)
-        let pdpti: int = page_index(virt, 30)
-        let pdi: int = page_index(virt, 21)
-        let pti: int = page_index(virt, 12)
+    func pte_for(pml4: u64, virt: u64) -> u64* {
+        let pml4i: i64 = page_index(virt, 39)
+        let pdpti: i64 = page_index(virt, 30)
+        let pdi: i64 = page_index(virt, 21)
+        let pti: i64 = page_index(virt, 12)
 
-        let pml4e: uint* = get_pte(pml4, pml4i)
+        let pml4e: u64* = get_pte(pml4, pml4i)
         if (pml4e[0] & PTE_PRESENT) == 0 {
             return null
         }
-        let pdpt: uint = (pml4e[0] >> 12) << 12
+        let pdpt: u64 = (pml4e[0] >> 12) << 12
 
-        let pdpte: uint* = get_pte(pdpt, pdpti)
+        let pdpte: u64* = get_pte(pdpt, pdpti)
         if (pdpte[0] & PTE_PRESENT) == 0 {
             return null
         }
-        let pd: uint = (pdpte[0] >> 12) << 12
+        let pd: u64 = (pdpte[0] >> 12) << 12
 
-        let pde: uint* = get_pte(pd, pdi)
+        let pde: u64* = get_pte(pd, pdi)
         if (pde[0] & PTE_PRESENT) == 0 {
             return null
         }
-        let pt: uint = (pde[0] >> 12) << 12
+        let pt: u64 = (pde[0] >> 12) << 12
 
-        let pte: uint* = get_pte(pt, pti)
+        let pte: u64* = get_pte(pt, pti)
         if (pte[0] & PTE_PRESENT) == 0 {
             return null
         }
         return pte
     }
 
-    func map_page(pml4: uint, virt: uint, phys: uint, flags: uint) -> bool {
-        let pml4i: int = page_index(virt, 39)
-        let pdpti: int = page_index(virt, 30)
-        let pdi: int = page_index(virt, 21)
-        let pti: int = page_index(virt, 12)
+    func map_page(pml4: u64, virt: u64, phys: u64, flags: u64) -> bool {
+        let pml4i: i64 = page_index(virt, 39)
+        let pdpti: i64 = page_index(virt, 30)
+        let pdi: i64 = page_index(virt, 21)
+        let pti: i64 = page_index(virt, 12)
 
-        let pml4e: uint* = get_pte(pml4, pml4i)
-        let pdpt: uint = 0
+        let pml4e: u64* = get_pte(pml4, pml4i)
+        let pdpt: u64 = 0
         if (pml4e[0] & PTE_PRESENT) == 0 {
             pdpt = alloc_zero_page()
             if pdpt == 0 {
@@ -185,8 +203,8 @@ namespace VMM {
             pdpt = (pml4e[0] >> 12) << 12
         }
 
-        let pdpte: uint* = get_pte(pdpt, pdpti)
-        let pd: uint = 0
+        let pdpte: u64* = get_pte(pdpt, pdpti)
+        let pd: u64 = 0
         if (pdpte[0] & PTE_PRESENT) == 0 {
             pd = alloc_zero_page()
             if pd == 0 {
@@ -197,8 +215,8 @@ namespace VMM {
             pd = (pdpte[0] >> 12) << 12
         }
 
-        let pde: uint* = get_pte(pd, pdi)
-        let pt: uint = 0
+        let pde: u64* = get_pte(pd, pdi)
+        let pt: u64 = 0
         if (pde[0] & PTE_PRESENT) == 0 {
             pt = alloc_zero_page()
             if pt == 0 {
@@ -209,17 +227,17 @@ namespace VMM {
             pt = (pde[0] >> 12) << 12
         }
 
-        let pte: uint* = get_pte(pt, pti)
+        let pte: u64* = get_pte(pt, pti)
         pte[0] = ((phys >> 12) << 12) | (flags & 0xFFF) | PTE_PRESENT
         invlpg(virt)
         return true
     }
 
-    func alloc_pt_page(aspace: AddressSpace*) -> uint {
+    func alloc_pt_page(aspace: AddressSpace*) -> u64 {
         if aspace.pt_count >= 32 {
             return 0
         }
-        let p: uint = alloc_zero_page()
+        let p: u64 = alloc_zero_page()
         if p != 0 {
             aspace.pt_pages[aspace.pt_count] = p
             aspace.pt_count = aspace.pt_count + 1
@@ -233,14 +251,14 @@ namespace VMM {
     // shared-memory region - see Task.shm_* - so it must never be recorded
     // here, or a client's ordinary process teardown would free physical
     // memory its owner still has mapped and considers live).
-    func map_in_aspace_ex(aspace: AddressSpace*, virt: uint, phys: uint, flags: uint, track: bool) -> bool {
-        let pml4i: int = page_index(virt, 39)
-        let pdpti: int = page_index(virt, 30)
-        let pdi: int = page_index(virt, 21)
-        let pti: int = page_index(virt, 12)
+    func map_in_aspace_ex(aspace: AddressSpace*, virt: u64, phys: u64, flags: u64, track: bool) -> bool {
+        let pml4i: i64 = page_index(virt, 39)
+        let pdpti: i64 = page_index(virt, 30)
+        let pdi: i64 = page_index(virt, 21)
+        let pti: i64 = page_index(virt, 12)
 
-        let pml4e: uint* = get_pte(aspace.pml4, pml4i)
-        let pdpt: uint = 0
+        let pml4e: u64* = get_pte(aspace.pml4, pml4i)
+        let pdpt: u64 = 0
         if (pml4e[0] & PTE_PRESENT) == 0 {
             pdpt = alloc_pt_page(aspace)
             if pdpt == 0 {
@@ -251,8 +269,8 @@ namespace VMM {
             pdpt = (pml4e[0] >> 12) << 12
         }
 
-        let pdpte: uint* = get_pte(pdpt, pdpti)
-        let pd: uint = 0
+        let pdpte: u64* = get_pte(pdpt, pdpti)
+        let pd: u64 = 0
         if (pdpte[0] & PTE_PRESENT) == 0 {
             pd = alloc_pt_page(aspace)
             if pd == 0 {
@@ -263,8 +281,8 @@ namespace VMM {
             pd = (pdpte[0] >> 12) << 12
         }
 
-        let pde: uint* = get_pte(pd, pdi)
-        let pt: uint = 0
+        let pde: u64* = get_pte(pd, pdi)
+        let pt: u64 = 0
         if (pde[0] & PTE_PRESENT) == 0 {
             pt = alloc_pt_page(aspace)
             if pt == 0 {
@@ -275,7 +293,7 @@ namespace VMM {
             pt = (pde[0] >> 12) << 12
         }
 
-        let pte: uint* = get_pte(pt, pti)
+        let pte: u64* = get_pte(pt, pti)
         pte[0] = ((phys >> 12) << 12) | (flags & 0xFFF) | PTE_PRESENT
         invlpg(virt)
         if track && aspace.map_count < MAX_MAPPED_PAGES {
@@ -286,7 +304,7 @@ namespace VMM {
         return true
     }
 
-    func map_in_aspace(aspace: AddressSpace*, virt: uint, phys: uint, flags: uint) -> bool {
+    func map_in_aspace(aspace: AddressSpace*, virt: u64, phys: u64, flags: u64) -> bool {
         return map_in_aspace_ex(aspace, virt, phys, flags, true)
     }
 
@@ -294,7 +312,7 @@ namespace VMM {
     // for sharing another task's memory (see Task.shm_create/shm_map).
     // Deliberately untracked: free_address_space() must never free a page
     // some other, still-alive address space owns and still has mapped.
-    func map_foreign(aspace: AddressSpace*, virt: uint, phys: uint, flags: uint) -> bool {
+    func map_foreign(aspace: AddressSpace*, virt: u64, phys: u64, flags: u64) -> bool {
         return map_in_aspace_ex(aspace, virt, phys, flags, false)
     }
 
@@ -304,7 +322,7 @@ namespace VMM {
             return null
         }
 
-        let pml4: uint = alloc_zero_page()
+        let pml4: u64 = alloc_zero_page()
         if pml4 == 0 {
             return null
         }
@@ -312,21 +330,21 @@ namespace VMM {
         // Start with the kernel's page tables, but give the user address space
         // its own PDPT for the low canonical region so user mappings above 4GB
         // don't leak into the shared kernel PDPT.
-        let kp: uint* = kernel_pml4 as uint*
-        let kernel_pdpt: uint = (kp[0] >> 12) << 12
-        let user_pdpt: uint = alloc_zero_page()
+        let kp: u64* = kernel_pml4 as u64*
+        let kernel_pdpt: u64 = (kp[0] >> 12) << 12
+        let user_pdpt: u64 = alloc_zero_page()
         if user_pdpt == 0 {
             return null
         }
-        let src: uint* = kernel_pdpt as uint*
-        let dst: uint* = user_pdpt as uint*
-        let i: int = 0
+        let src: u64* = kernel_pdpt as u64*
+        let dst: u64* = user_pdpt as u64*
+        let i: i64 = 0
         while i < 512 {
             dst[i] = src[i]
             i = i + 1
         }
 
-        let pml4_entries: uint* = pml4 as uint*
+        let pml4_entries: u64* = pml4 as u64*
         pml4_entries[0] = user_pdpt | PTE_PRESENT | PTE_WRITABLE | PTE_USER
 
         aspace.pml4 = pml4
@@ -339,12 +357,12 @@ namespace VMM {
         return aspace
     }
 
-    func forget_mapping(aspace: AddressSpace*, virt: uint) {
-        let page: uint = virt & ~(PAGE_SIZE - 1)
-        let i: int = 0
+    func forget_mapping(aspace: AddressSpace*, virt: u64) {
+        let page: u64 = virt & ~(PAGE_SIZE - 1)
+        let i: i64 = 0
         while i < aspace.map_count {
             if aspace.map_virt[i] == page {
-                let last: int = aspace.map_count - 1
+                let last: i64 = aspace.map_count - 1
                 aspace.map_virt[i] = aspace.map_virt[last]
                 aspace.map_phys[i] = aspace.map_phys[last]
                 aspace.map_count = last
@@ -354,20 +372,20 @@ namespace VMM {
         }
     }
 
-    func mmap(aspace: AddressSpace*, pages: uint) -> uint {
+    func mmap(aspace: AddressSpace*, pages: u64) -> u64 {
         if pages == 0 || aspace == null {
             return 0
         }
-        let base: uint = aspace.next_virt
-        let i: uint = 0
+        let base: u64 = aspace.next_virt
+        let i: u64 = 0
         while i < pages {
-            let phys: uint = PageAlloc.alloc()
+            let phys: u64 = PageAlloc.alloc()
             if phys == 0 {
                 return 0
             }
             let p: char* = phys as char*
-            let j: int = 0
-            while j < PAGE_SIZE as int {
+            let j: i64 = 0
+            while j < PAGE_SIZE as i64 {
                 p[j] = 0
                 j = j + 1
             }
@@ -382,12 +400,12 @@ namespace VMM {
         return base
     }
 
-    func mmap_at(aspace: AddressSpace*, base: uint, pages: uint) -> uint {
+    func mmap_at(aspace: AddressSpace*, base: u64, pages: u64) -> u64 {
         if pages == 0 || aspace == null || (base & (PAGE_SIZE - 1)) != 0 {
             return 0
         }
         let all_mapped: bool = true
-        let i: uint = 0
+        let i: u64 = 0
         while i < pages {
             if virt_to_phys(aspace.pml4, base + i * PAGE_SIZE) == 0 {
                 all_mapped = false
@@ -400,15 +418,15 @@ namespace VMM {
 
         i = 0
         while i < pages {
-            let virt: uint = base + i * PAGE_SIZE
+            let virt: u64 = base + i * PAGE_SIZE
             if virt_to_phys(aspace.pml4, virt) == 0 {
-                let phys: uint = PageAlloc.alloc()
+                let phys: u64 = PageAlloc.alloc()
                 if phys == 0 {
                     return 0
                 }
                 let p: char* = phys as char*
-                let j: int = 0
-                while j < PAGE_SIZE as int {
+                let j: i64 = 0
+                while j < PAGE_SIZE as i64 {
                     p[j] = 0
                     j = j + 1
                 }
@@ -420,7 +438,7 @@ namespace VMM {
             }
             i = i + 1
         }
-        let end: uint = base + pages * PAGE_SIZE
+        let end: u64 = base + pages * PAGE_SIZE
         if end > aspace.next_virt {
             aspace.next_virt = end
         }
@@ -433,12 +451,12 @@ namespace VMM {
     // mmap() above. Like mmap()/mmap_at(), a failure partway through isn't
     // unwound - the pages mapped so far stay mapped, matching this
     // codebase's existing v1 stance on partial-mapping cleanup.
-    func mmap_foreign(aspace: AddressSpace*, phys_pages: uint*, pages: uint) -> uint {
+    func mmap_foreign(aspace: AddressSpace*, phys_pages: u64*, pages: u64) -> u64 {
         if aspace == null || pages == 0 {
             return 0
         }
-        let base: uint = aspace.next_virt
-        let i: uint = 0
+        let base: u64 = aspace.next_virt
+        let i: u64 = 0
         while i < pages {
             if !map_foreign(aspace, base + i * PAGE_SIZE, phys_pages[i],
                             PTE_PRESENT | PTE_WRITABLE | PTE_USER) {
@@ -456,12 +474,12 @@ namespace VMM {
     // framebuffer into a user task's own address space (see
     // Syscall.sys_fb_map), so a ring-3 program can draw directly into it
     // without a syscall per pixel.
-    func mmap_foreign_range(aspace: AddressSpace*, phys_base: uint, pages: uint) -> uint {
+    func mmap_foreign_range(aspace: AddressSpace*, phys_base: u64, pages: u64) -> u64 {
         if aspace == null || pages == 0 {
             return 0
         }
-        let base: uint = aspace.next_virt
-        let i: uint = 0
+        let base: u64 = aspace.next_virt
+        let i: u64 = 0
         while i < pages {
             if !map_foreign(aspace, base + i * PAGE_SIZE, phys_base + i * PAGE_SIZE,
                             PTE_PRESENT | PTE_WRITABLE | PTE_USER) {
@@ -473,19 +491,19 @@ namespace VMM {
         return base
     }
 
-    func munmap(aspace: AddressSpace*, addr: uint, pages: uint) -> bool {
+    func munmap(aspace: AddressSpace*, addr: u64, pages: u64) -> bool {
         if aspace == null || pages == 0 || (addr & (PAGE_SIZE - 1)) != 0 {
             return false
         }
-        let end: uint = addr + pages * PAGE_SIZE
-        let i: uint = 0
+        let end: u64 = addr + pages * PAGE_SIZE
+        let i: u64 = 0
         while i < pages {
-            let virt: uint = addr + i * PAGE_SIZE
-            let pte: uint* = pte_for(aspace.pml4, virt)
+            let virt: u64 = addr + i * PAGE_SIZE
+            let pte: u64* = pte_for(aspace.pml4, virt)
             if pte == null {
                 return false
             }
-            let phys: uint = (pte[0] >> 12) << 12
+            let phys: u64 = (pte[0] >> 12) << 12
             pte[0] = 0
             invlpg(virt)
             forget_mapping(aspace, virt)
@@ -502,7 +520,7 @@ namespace VMM {
         if aspace == null {
             return
         }
-        let m: int = 0
+        let m: i64 = 0
         while m < aspace.map_count {
             if aspace.map_phys[m] != 0 {
                 PageAlloc.free(aspace.map_phys[m])
@@ -510,11 +528,11 @@ namespace VMM {
             m = m + 1
         }
         aspace.map_count = 0
-        let i: int = 0
+        let i: i64 = 0
         while i < aspace.pt_count {
             PageAlloc.free(aspace.pt_pages[i])
             i = i + 1
         }
-        KHeap.kfree(aspace as uint)
+        KHeap.kfree(aspace as u64)
     }
 }

@@ -50,25 +50,25 @@ const O_CREATE = 1
 
 func syscall0(number: u64) -> u64 {
     let ret: u64 = 0
-    asm("int $0x80" : "=a"(ret) : "a"(number) : "memory")
+    asm("i64 $0x80" : "=a"(ret) : "a"(number) : "memory")
     return ret
 }
 
 func syscall1(number: u64, a: u64) -> u64 {
     let ret: u64 = 0
-    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
+    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
     return ret
 }
 
 func syscall2(number: u64, a: u64, b: u64) -> u64 {
     let ret: u64 = 0
-    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
+    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
     return ret
 }
 
 func syscall3(number: u64, a: u64, b: u64, c: u64) -> u64 {
     let ret: u64 = 0
-    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
+    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
     return ret
 }
 

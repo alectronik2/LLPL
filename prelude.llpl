@@ -16,43 +16,52 @@
 alias string = char*
 
 alias u8 = char
-alias u64 = uint
+alias u64 = u64
 
 // Minimal printf-style formatter, always available without an `extern
 // func` declaration of your own. Backed by runtime/runtime.c; see that
 // file's header comment (runtime.h) for the exact contract - supported
 // specifiers, width/zero-pad, and why the parameter types are what they
 // are (they're chosen to exactly match what this declaration generates).
-extern func ksnprintf(buf: char*, size: uint, fmt: char*, ...) -> int
+extern func ksnprintf(buf: char*, size: u64, fmt: char*, ...) -> i64
+// Used by grammar-generated parser classes (see codegen.d's grammar
+// desugaring) to report a malformed-input syntax error - a `grammar { }`
+// block's generated parser is backtrack-free (predictive, not PEG-style),
+// so an input that doesn't match at a point the analysis already proved
+// unambiguous is a genuine error in the *input*, not the grammar; reported
+// this way rather than via Result<T,E> threading through every generated
+// call site, matching how many of this codebase's other "this should be
+// unreachable in valid input" cases already fail loudly instead.
+extern func llpl_panic(msg: char*)
 
 // Heap-allocation and raw-buffer primitives String is built on - see
 // runtime.h's comment on why these are separate wrappers rather than
 // `extern func` redeclarations of libc-shaped strlen/strcmp/rc_alloc
 // themselves (same "conflicting types" trap as ksnprintf above).
-extern func llpl_strlen(s: char*) -> uint
-extern func llpl_strcmp(a: char*, b: char*) -> int
+extern func llpl_strlen(s: char*) -> u64
+extern func llpl_strcmp(a: char*, b: char*) -> i64
 extern func llpl_utf8_valid(s: char*) -> bool
-extern func llpl_utf8_len(s: char*) -> uint
-extern func llpl_utf8_byte_offset(s: char*, char_index: uint) -> uint
-extern func llpl_utf8_char_index(s: char*, byte_offset: uint) -> uint
-extern func llpl_utf8_codepoint_at(s: char*, char_index: uint) -> uint
+extern func llpl_utf8_len(s: char*) -> u64
+extern func llpl_utf8_byte_offset(s: char*, char_index: u64) -> u64
+extern func llpl_utf8_char_index(s: char*, byte_offset: u64) -> u64
+extern func llpl_utf8_codepoint_at(s: char*, char_index: u64) -> u64
 extern func llpl_regex_match(pattern: char*, text: char*) -> bool
-extern func llpl_regex_group_count(pattern: char*) -> uint
-extern func llpl_regex_capture_bounds(pattern: char*, text: char*, group: uint, start: int*, end: int*) -> bool
-extern func llpl_regex_capture(pattern: char*, text: char*, group: uint) -> char*
+extern func llpl_regex_group_count(pattern: char*) -> u64
+extern func llpl_regex_capture_bounds(pattern: char*, text: char*, group: u64, start: i64*, end: i64*) -> bool
+extern func llpl_regex_capture(pattern: char*, text: char*, group: u64) -> char*
 extern func llpl_reflect_type(name: char*) -> char*
 extern func llpl_reflect_type_name(type: char*) -> char*
 extern func llpl_reflect_type_kind(type: char*) -> char*
-extern func llpl_reflect_type_size(type: char*) -> uint
-extern func llpl_reflect_field_count(type: char*) -> uint
-extern func llpl_reflect_field(type: char*, index: uint) -> char*
+extern func llpl_reflect_type_size(type: char*) -> u64
+extern func llpl_reflect_field_count(type: char*) -> u64
+extern func llpl_reflect_field(type: char*, index: u64) -> char*
 extern func llpl_reflect_field_name(field: char*) -> char*
 extern func llpl_reflect_field_type_name(field: char*) -> char*
-extern func llpl_reflect_field_offset(field: char*) -> uint
-extern func llpl_reflect_field_size(field: char*) -> uint
-extern func llpl_alloc(size: uint) -> char*
+extern func llpl_reflect_field_offset(field: char*) -> u64
+extern func llpl_reflect_field_size(field: char*) -> u64
+extern func llpl_alloc(size: u64) -> char*
 extern func llpl_free(ptr: char*)
-extern func llpl_memcpy(dest: char*, src: char*, count: uint)
+extern func llpl_memcpy(dest: char*, src: char*, count: u64)
 // Weak<T>'s own building blocks - see runtime.h/runtime.c's own comments
 // on RefCount.weak_count. `ptr` is always a class instance's own address
 // (its RefCount header is its first field), cast to char* the same way
@@ -66,10 +75,10 @@ extern func rc_is_alive(ptr: char*) -> bool
 // examples/baremetal_demo/backtrace.llpl), not necessarily a function's
 // exact start - llpl_resolve_symbol finds whichever compiled
 // function/method/constructor contains it.
-extern func llpl_resolve_symbol(addr: uint) -> char*
+extern func llpl_resolve_symbol(addr: u64) -> char*
 extern func llpl_symbol_name(symbol: char*) -> char*
 extern func llpl_symbol_file(symbol: char*) -> char*
-extern func llpl_symbol_line(symbol: char*) -> int
+extern func llpl_symbol_line(symbol: char*) -> i64
 
 // Prints "PANIC: <msg>\n" and halts - stderr+abort() on a hosted target,
 // or (freestanding) whatever a kernel/port wired up via
@@ -78,10 +87,11 @@ extern func llpl_symbol_line(symbol: char*) -> int
 // kernel.llpl overrides the weak hooks so a panic is never silent there).
 // Used below by Slice<T>/Vector<T>'s bounds checks.
 extern func llpl_panic(msg: char*)
+extern func __llpl_check_index(arr: void*, idx: i64, size: i64, elem_size: u64) -> void*
 
 struct EmbeddedFile {
     let data: char*
-    let len: uint
+    let len: u64
 }
 
 class ReflectField {
@@ -94,7 +104,7 @@ class ReflectField {
     destructor() {}
 
     func exists() -> bool {
-        return (self.raw as uint) != 0
+        return (self.raw as u64) != 0
     }
 
     func name() -> string {
@@ -105,12 +115,12 @@ class ReflectField {
         return llpl_reflect_field_type_name(self.raw)
     }
 
-    func offset() -> int {
-        return llpl_reflect_field_offset(self.raw) as int
+    func offset() -> i64 {
+        return llpl_reflect_field_offset(self.raw) as i64
     }
 
-    func size() -> int {
-        return llpl_reflect_field_size(self.raw) as int
+    func size() -> i64 {
+        return llpl_reflect_field_size(self.raw) as i64
     }
 }
 
@@ -124,7 +134,7 @@ class ReflectType {
     destructor() {}
 
     func exists() -> bool {
-        return (self.raw as uint) != 0
+        return (self.raw as u64) != 0
     }
 
     func name() -> string {
@@ -135,19 +145,19 @@ class ReflectType {
         return llpl_reflect_type_kind(self.raw)
     }
 
-    func size() -> int {
-        return llpl_reflect_type_size(self.raw) as int
+    func size() -> i64 {
+        return llpl_reflect_type_size(self.raw) as i64
     }
 
-    func field_count() -> int {
-        return llpl_reflect_field_count(self.raw) as int
+    func field_count() -> i64 {
+        return llpl_reflect_field_count(self.raw) as i64
     }
 
-    func field(index: int) -> ReflectField {
+    func field(index: i64) -> ReflectField {
         if index < 0 {
             return new ReflectField(null)
         }
-        return new ReflectField(llpl_reflect_field(self.raw, index as uint))
+        return new ReflectField(llpl_reflect_field(self.raw, index as u64))
     }
 }
 
@@ -165,16 +175,16 @@ class RegexMatch {
     // searches one suffix at a time but wants callers to see positions
     // relative to the whole original text). Never affects group()'s
     // returned *content*, which is read out of `text` directly regardless.
-    let base_offset: int
+    let base_offset: i64
 
-    constructor(pattern: string, text: string, base_offset: int = 0) {
-        let pattern_len: int = llpl_strlen(pattern) as int
-        self.pattern = llpl_alloc((pattern_len + 1) as uint)
-        llpl_memcpy(self.pattern, pattern, (pattern_len + 1) as uint)
+    constructor(pattern: string, text: string, base_offset: i64 = 0) {
+        let pattern_len: i64 = llpl_strlen(pattern) as i64
+        self.pattern = llpl_alloc((pattern_len + 1) as u64)
+        llpl_memcpy(self.pattern, pattern, (pattern_len + 1) as u64)
 
-        let text_len: int = llpl_strlen(text) as int
-        self.text = llpl_alloc((text_len + 1) as uint)
-        llpl_memcpy(self.text, text, (text_len + 1) as uint)
+        let text_len: i64 = llpl_strlen(text) as i64
+        self.text = llpl_alloc((text_len + 1) as u64)
+        llpl_memcpy(self.text, text, (text_len + 1) as u64)
 
         self.base_offset = base_offset
         self.matched = llpl_regex_match(self.pattern, self.text)
@@ -189,48 +199,48 @@ class RegexMatch {
         return self.matched
     }
 
-    func group_count() -> int {
-        return llpl_regex_group_count(self.pattern) as int
+    func group_count() -> i64 {
+        return llpl_regex_group_count(self.pattern) as i64
     }
 
-    func has_group(index: int) -> bool {
+    func has_group(index: i64) -> bool {
         if index < 0 {
             return false
         }
-        let start: int = 0
-        let end: int = 0
-        return llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end)
+        let start: i64 = 0
+        let end: i64 = 0
+        return llpl_regex_capture_bounds(self.pattern, self.text, index as u64, &start, &end)
     }
 
-    func group_start(index: int) -> int {
+    func group_start(index: i64) -> i64 {
         if index < 0 {
             return -1
         }
-        let start: int = 0
-        let end: int = 0
-        if llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end) {
+        let start: i64 = 0
+        let end: i64 = 0
+        if llpl_regex_capture_bounds(self.pattern, self.text, index as u64, &start, &end) {
             return start + self.base_offset
         }
         return -1
     }
 
-    func group_end(index: int) -> int {
+    func group_end(index: i64) -> i64 {
         if index < 0 {
             return -1
         }
-        let start: int = 0
-        let end: int = 0
-        if llpl_regex_capture_bounds(self.pattern, self.text, index as uint, &start, &end) {
+        let start: i64 = 0
+        let end: i64 = 0
+        if llpl_regex_capture_bounds(self.pattern, self.text, index as u64, &start, &end) {
             return end + self.base_offset
         }
         return -1
     }
 
-    func group(index: int) -> String {
+    func group(index: i64) -> String {
         if index < 0 {
             return new String("")
         }
-        let raw: char* = llpl_regex_capture(self.pattern, self.text, index as uint)
+        let raw: char* = llpl_regex_capture(self.pattern, self.text, index as u64)
         let out: String = new String(raw)
         llpl_free(raw)
         return out
@@ -244,9 +254,9 @@ class RegexMatch {
     func expand(template: string) -> String {
         let ts: String = new String(template)
         let result: String = new String("")
-        let len: int = ts.byte_len()
-        let lit_start: int = 0
-        let i: int = 0
+        let len: i64 = ts.byte_len()
+        let lit_start: i64 = 0
+        let i: i64 = 0
         while i < len {
             if ts.byte_at(i) == 36 && i + 1 < len {
                 if i > lit_start {
@@ -257,10 +267,10 @@ class RegexMatch {
                     result = result + "$"
                     i = i + 2
                 } else if next >= 48 && next <= 57 {
-                    let group_index: int = (next as int) - 48
-                    let j: int = i + 2
+                    let group_index: i64 = (next as i64) - 48
+                    let j: i64 = i + 2
                     while j < len && ts.byte_at(j) >= 48 && ts.byte_at(j) <= 57 {
-                        group_index = group_index * 10 + ((ts.byte_at(j) as int) - 48)
+                        group_index = group_index * 10 + ((ts.byte_at(j) as i64) - 48)
                         j = j + 1
                     }
                     if self.has_group(group_index) {
@@ -297,20 +307,20 @@ class RegexMatch {
 class RegexMatchIterator {
     let pattern: char*
     let text: char*
-    let text_len: int
-    let pos: int
+    let text_len: i64
+    let pos: i64
     let current: RegexMatch
     let has_current: bool
     let done: bool
 
     constructor(pattern: string, text: string) {
-        let pattern_len: int = llpl_strlen(pattern) as int
-        self.pattern = llpl_alloc((pattern_len + 1) as uint)
-        llpl_memcpy(self.pattern, pattern, (pattern_len + 1) as uint)
+        let pattern_len: i64 = llpl_strlen(pattern) as i64
+        self.pattern = llpl_alloc((pattern_len + 1) as u64)
+        llpl_memcpy(self.pattern, pattern, (pattern_len + 1) as u64)
 
-        self.text_len = llpl_strlen(text) as int
-        self.text = llpl_alloc((self.text_len + 1) as uint)
-        llpl_memcpy(self.text, text, (self.text_len + 1) as uint)
+        self.text_len = llpl_strlen(text) as i64
+        self.text = llpl_alloc((self.text_len + 1) as u64)
+        llpl_memcpy(self.text, text, (self.text_len + 1) as u64)
 
         self.pos = 0
         self.has_current = false
@@ -333,8 +343,8 @@ class RegexMatchIterator {
             return false
         }
         self.current = m
-        let end_in_suffix: int = m.group_end(0) - self.pos
-        let start_in_suffix: int = m.group_start(0) - self.pos
+        let end_in_suffix: i64 = m.group_end(0) - self.pos
+        let start_in_suffix: i64 = m.group_start(0) - self.pos
         if end_in_suffix == start_in_suffix {
             self.pos = self.pos + end_in_suffix + 1
         } else {
@@ -364,9 +374,9 @@ class Regex {
     let pattern: char*
 
     constructor(pattern: string) {
-        let len: int = llpl_strlen(pattern) as int
-        self.pattern = llpl_alloc((len + 1) as uint)
-        llpl_memcpy(self.pattern, pattern, (len + 1) as uint)
+        let len: i64 = llpl_strlen(pattern) as i64
+        self.pattern = llpl_alloc((len + 1) as u64)
+        llpl_memcpy(self.pattern, pattern, (len + 1) as u64)
     }
 
     destructor() {
@@ -396,8 +406,8 @@ class Regex {
             return new String(text)
         }
         let ts: String = new String(text)
-        let start: int = m.group_start(0)
-        let end: int = m.group_end(0)
+        let start: i64 = m.group_start(0)
+        let end: i64 = m.group_end(0)
         let result: String = ts.byte_substring(0, start)
         result = result + m.expand(replacement).c_str()
         result = result + ts.byte_substring(end, ts.byte_len() - end).c_str()
@@ -409,11 +419,11 @@ class Regex {
         let ts: String = new String(text)
         let result: String = new String("")
         let it: RegexMatchIterator = self.find_all(text)
-        let last_end: int = 0
+        let last_end: i64 = 0
         while it.iter_has_next() {
             let m: RegexMatch = it.iter_next()
-            let start: int = m.group_start(0)
-            let end: int = m.group_end(0)
+            let start: i64 = m.group_start(0)
+            let end: i64 = m.group_end(0)
             if start > last_end {
                 result = result + ts.byte_substring(last_end, start - last_end).c_str()
             }
@@ -453,13 +463,13 @@ class Regex {
 // String (`s + other.c_str()`).
 class String {
     let buf: char*
-    let length: int
-    let iter_pos: int // foreach cursor - see iter_has_next/iter_next/iter_reset
+    let length: i64
+    let iter_pos: i64 // foreach cursor - see iter_has_next/iter_next/iter_reset
 
     constructor(s: string) {
-        self.length = llpl_strlen(s) as int
-        self.buf = llpl_alloc((self.length + 1) as uint)
-        llpl_memcpy(self.buf, s, (self.length + 1) as uint)
+        self.length = llpl_strlen(s) as i64
+        self.buf = llpl_alloc((self.length + 1) as u64)
+        llpl_memcpy(self.buf, s, (self.length + 1) as u64)
         self.iter_pos = 0
     }
 
@@ -467,37 +477,37 @@ class String {
         llpl_free(self.buf)
     }
 
-    func byte_len() -> int {
+    func byte_len() -> i64 {
         return self.length
     }
 
-    func len() -> int {
-        return llpl_utf8_len(self.buf) as int
+    func len() -> i64 {
+        return llpl_utf8_len(self.buf) as i64
     }
 
     func is_utf8() -> bool {
         return llpl_utf8_valid(self.buf)
     }
 
-    func byte_index(char_index: int) -> int {
+    func byte_index(char_index: i64) -> i64 {
         if char_index < 0 {
             return 0
         }
-        return llpl_utf8_byte_offset(self.buf, char_index as uint) as int
+        return llpl_utf8_byte_offset(self.buf, char_index as u64) as i64
     }
 
-    func char_index(byte_offset: int) -> int {
+    func char_index(byte_offset: i64) -> i64 {
         if byte_offset < 0 {
             return 0
         }
-        return llpl_utf8_char_index(self.buf, byte_offset as uint) as int
+        return llpl_utf8_char_index(self.buf, byte_offset as u64) as i64
     }
 
-    func codepoint_at(char_index: int) -> uint {
+    func codepoint_at(char_index: i64) -> u64 {
         if char_index < 0 {
             return 0
         }
-        return llpl_utf8_codepoint_at(self.buf, char_index as uint)
+        return llpl_utf8_codepoint_at(self.buf, char_index as u64)
     }
 
     // The owned buffer as a plain `char*` - for passing a String to
@@ -507,11 +517,11 @@ class String {
         return self.buf
     }
 
-    func byte_at(index: int) -> char {
+    func byte_at(index: i64) -> char {
         return self.buf[index]
     }
 
-    func operator[](index: int) -> uint {
+    func operator[](index: i64) -> u64 {
         return self.codepoint_at(index)
     }
 
@@ -527,13 +537,13 @@ class String {
         return self.iter_pos < self.len()
     }
 
-    func iter_next() -> uint {
-        let c: uint = self.codepoint_at(self.iter_pos)
+    func iter_next() -> u64 {
+        let c: u64 = self.codepoint_at(self.iter_pos)
         self.iter_pos = self.iter_pos + 1
         return c
     }
 
-    func byte_set(index: int, value: char) {
+    func byte_set(index: i64, value: char) {
         self.buf[index] = value
     }
 
@@ -583,24 +593,24 @@ class String {
     // one `+` is the price of String's single-argument constructor; simple
     // and correct beats a second constructor form LLPL doesn't have.
     func operator+(other: string) -> String {
-        let other_len: int = llpl_strlen(other) as int
-        let total: int = self.length + other_len
-        let joined: char* = llpl_alloc((total + 1) as uint)
-        llpl_memcpy(joined, self.buf, self.length as uint)
-        llpl_memcpy(joined + self.length, other, (other_len + 1) as uint)
+        let other_len: i64 = llpl_strlen(other) as i64
+        let total: i64 = self.length + other_len
+        let joined: char* = llpl_alloc((total + 1) as u64)
+        llpl_memcpy(joined, self.buf, self.length as u64)
+        llpl_memcpy(joined + self.length, other, (other_len + 1) as u64)
         return new String(joined)
     }
 
     // Clamps byte `start`/`count` into range rather than faulting on an
     // out-of-bounds request. Prefer substring() for character-indexed text.
-    func byte_substring(start: int, count: int) -> String {
+    func byte_substring(start: i64, count: i64) -> String {
         if start < 0 {
             start = 0
         }
         if start > self.length {
             start = self.length
         }
-        let max_count: int = self.length - start
+        let max_count: i64 = self.length - start
         if count > max_count {
             count = max_count
         }
@@ -608,21 +618,21 @@ class String {
             count = 0
         }
 
-        let piece: char* = llpl_alloc((count + 1) as uint)
-        llpl_memcpy(piece, self.buf + start, count as uint)
+        let piece: char* = llpl_alloc((count + 1) as u64)
+        llpl_memcpy(piece, self.buf + start, count as u64)
         piece[count] = 0
         return new String(piece)
     }
 
-    func substring(start: int, count: int) -> String {
+    func substring(start: i64, count: i64) -> String {
         if start < 0 {
             start = 0
         }
-        let total_chars: int = self.len()
+        let total_chars: i64 = self.len()
         if start > total_chars {
             start = total_chars
         }
-        let max_count: int = total_chars - start
+        let max_count: i64 = total_chars - start
         if count > max_count {
             count = max_count
         }
@@ -630,24 +640,24 @@ class String {
             count = 0
         }
 
-        let byte_start: int = self.byte_index(start)
-        let byte_end: int = self.byte_index(start + count)
+        let byte_start: i64 = self.byte_index(start)
+        let byte_end: i64 = self.byte_index(start + count)
         return self.byte_substring(byte_start, byte_end - byte_start)
     }
 
-    func utf8_substring(start: int, count: int) -> String {
+    func utf8_substring(start: i64, count: i64) -> String {
         return self.substring(start, count)
     }
 
     // First byte index of `needle`, or -1 if it doesn't occur.
-    func byte_find(needle: string) -> int {
-        let needle_len: int = llpl_strlen(needle) as int
+    func byte_find(needle: string) -> i64 {
+        let needle_len: i64 = llpl_strlen(needle) as i64
         if needle_len == 0 {
             return 0
         }
-        let i: int = 0
+        let i: i64 = 0
         while i <= self.length - needle_len {
-            let j: int = 0
+            let j: i64 = 0
             let matched: bool = true
             while j < needle_len && matched {
                 if self.buf[i + j] != needle[j] {
@@ -665,8 +675,8 @@ class String {
 
     // First character index of `needle`, or -1 if it doesn't occur. An
     // empty needle matches at 0, mirroring most languages' find()/indexOf().
-    func find(needle: string) -> int {
-        let byte_pos: int = self.byte_find(needle)
+    func find(needle: string) -> i64 {
+        let byte_pos: i64 = self.byte_find(needle)
         if byte_pos < 0 {
             return -1
         }
@@ -678,11 +688,11 @@ class String {
     }
 
     func starts_with(prefix: string) -> bool {
-        let prefix_len: int = llpl_strlen(prefix) as int
+        let prefix_len: i64 = llpl_strlen(prefix) as i64
         if prefix_len > self.length {
             return false
         }
-        let i: int = 0
+        let i: i64 = 0
         while i < prefix_len {
             if self.buf[i] != prefix[i] {
                 return false
@@ -693,12 +703,12 @@ class String {
     }
 
     func ends_with(suffix: string) -> bool {
-        let suffix_len: int = llpl_strlen(suffix) as int
+        let suffix_len: i64 = llpl_strlen(suffix) as i64
         if suffix_len > self.length {
             return false
         }
-        let offset: int = self.length - suffix_len
-        let i: int = 0
+        let offset: i64 = self.length - suffix_len
+        let i: i64 = 0
         while i < suffix_len {
             if self.buf[offset + i] != suffix[i] {
                 return false
@@ -709,12 +719,12 @@ class String {
     }
 
     func to_upper() -> String {
-        let out: char* = llpl_alloc((self.length + 1) as uint)
-        let i: int = 0
+        let out: char* = llpl_alloc((self.length + 1) as u64)
+        let i: i64 = 0
         while i < self.length {
             let c: char = self.buf[i]
             if c >= 97 && c <= 122 {
-                out[i] = ((c as int) - 32) as char
+                out[i] = ((c as i64) - 32) as char
             } else {
                 out[i] = c
             }
@@ -725,12 +735,12 @@ class String {
     }
 
     func to_lower() -> String {
-        let out: char* = llpl_alloc((self.length + 1) as uint)
-        let i: int = 0
+        let out: char* = llpl_alloc((self.length + 1) as u64)
+        let i: i64 = 0
         while i < self.length {
             let c: char = self.buf[i]
             if c >= 65 && c <= 90 {
-                out[i] = ((c as int) + 32) as char
+                out[i] = ((c as i64) + 32) as char
             } else {
                 out[i] = c
             }
@@ -742,12 +752,12 @@ class String {
 
     // Strips leading/trailing space, tab, '\n', and '\r'.
     func trim() -> String {
-        let start: int = 0
+        let start: i64 = 0
         while start < self.length && (self.buf[start] == 32 || self.buf[start] == 9 ||
                 self.buf[start] == 10 || self.buf[start] == 13) {
             start = start + 1
         }
-        let end: int = self.length
+        let end: i64 = self.length
         while end > start && (self.buf[end - 1] == 32 || self.buf[end - 1] == 9 ||
                 self.buf[end - 1] == 10 || self.buf[end - 1] == 13) {
             end = end - 1
@@ -763,28 +773,28 @@ class String {
 // convention, with nothing stopping them from drifting out of sync or an
 // index from running off the end - into one value slice_get/slice_set
 // can actually validate before ever touching memory. Build one directly
-// with a struct literal (`Slice<int> { ptr: buf, len: 10 }`) over a fixed
+// with a struct literal (`Slice<i64> { ptr: buf, len: 10 }`) over a fixed
 // array, a raw `llpl_alloc`'d buffer, or see Vector<T>.as_slice() below.
 struct Slice<T> {
     // `T[]`, not `T*` - see Vector<T>.data's own comment (typeToC's
     // isDynamicArray) for why: identical C type for a value-type T
-    // (`int*` either way), but correctly `String**` rather than a
+    // (`i64*` either way), but correctly `String**` rather than a
     // collapsed single `String*` for a class-type T, matching what
     // Vector<String>.as_slice() actually hands this struct's `ptr` field.
     let ptr: T[]
-    let len: uint
+    let len: u64
 }
 
 // Panics (see llpl_panic above) rather than reading/writing past `len` -
 // the entire reason this exists instead of plain `ptr[index]`.
-func slice_get<T>(s: Slice<T>, index: uint) -> T {
+func slice_get<T>(s: Slice<T>, index: u64) -> T {
     if index >= s.len {
         llpl_panic("Slice.get: index out of bounds")
     }
     return s.ptr[index]
 }
 
-func slice_set<T>(s: Slice<T>, index: uint, value: T) {
+func slice_set<T>(s: Slice<T>, index: u64, value: T) {
     if index >= s.len {
         llpl_panic("Slice.set: index out of bounds")
     }
@@ -800,9 +810,9 @@ func slice_set<T>(s: Slice<T>, index: uint, value: T) {
 // safe together. `take()` transfers the raw pointer out and disables cleanup.
 class OwnedBuffer {
     let ptr: char*
-    let length: uint
+    let length: u64
 
-    constructor(size: uint) {
+    constructor(size: u64) {
         self.ptr = llpl_alloc(size)
         self.length = size
     }
@@ -823,7 +833,7 @@ class OwnedBuffer {
         return self.ptr
     }
 
-    func len() -> uint {
+    func len() -> u64 {
         return self.length
     }
 
@@ -831,18 +841,18 @@ class OwnedBuffer {
         return self.ptr == null
     }
 
-    func byte_at(index: uint) -> char {
+    func byte_at(index: u64) -> char {
         if index >= self.length {
             llpl_panic("OwnedBuffer.byte_at: index out of bounds")
         }
-        return self.ptr[index as int]
+        return self.ptr[index as i64]
     }
 
-    func set(index: uint, value: char) {
+    func set(index: u64, value: char) {
         if index >= self.length {
             llpl_panic("OwnedBuffer.set: index out of bounds")
         }
-        self.ptr[index as int] = value
+        self.ptr[index as i64] = value
     }
 
     func as_slice() -> Slice<char> {
@@ -967,9 +977,9 @@ class Weak<T> {
 // instantiateGenericTypeArgs), `sizeof(T)` is a real compile-time constant
 // in every instantiation, exactly as if this had been hand-written per type.
 //
-// T may be a primitive (int, char, ...) or a class (Vector<SomeClass> just
+// T may be a primitive (i64, char, ...) or a class (Vector<SomeClass> just
 // stores references, like any other class field) - but NOT itself an
-// explicit pointer type (Vector<char*>, Vector<int*>, and so `Vector<string>`
+// explicit pointer type (Vector<char*>, Vector<i64*>, and so `Vector<string>`
 // since `string` is `char*`): this class's own `data: T*` field would need
 // a genuine pointer-to-pointer C type in that case, which ast.Type's
 // single `isPointer` flag has no way to represent (the same limitation
@@ -980,7 +990,7 @@ class Vector<T> {
     // `T[]` (no fixed size), not `T*` - a dynamic/growable array, unlike
     // an ordinary explicit pointer (see typeToC's own isDynamicArray
     // comment for the full reasoning): for a value-type T this compiles
-    // the same either way (`int*`), but for a class-type T (Vector<String>)
+    // the same either way (`i64*`), but for a class-type T (Vector<String>)
     // it correctly gives `String**` - a real array of separately
     // heap-allocated String instances - instead of collapsing onto
     // String's own single implicit pointer star and trying to store
@@ -988,13 +998,13 @@ class Vector<T> {
     // allocation, `self.data[i] = item` where `item` is itself always a
     // pointer for a class) already assumes doesn't happen.
     let data: T[]
-    let length: int
-    let capacity: int
+    let length: i64
+    let capacity: i64
 
     constructor() {
         self.length = 0
         self.capacity = 4
-        self.data = llpl_alloc((self.capacity as uint) * sizeof(T)) as T[]
+        self.data = llpl_alloc((self.capacity as u64) * sizeof(T)) as T[]
     }
 
     destructor() {
@@ -1014,22 +1024,22 @@ class Vector<T> {
     }
 
     func grow() {
-        let new_capacity: int = self.capacity * 2
-        let new_data: T[] = llpl_alloc((new_capacity as uint) * sizeof(T)) as T[]
-        llpl_memcpy(new_data as char*, self.data as char*, (self.length as uint) * sizeof(T))
+        let new_capacity: i64 = self.capacity * 2
+        let new_data: T[] = llpl_alloc((new_capacity as u64) * sizeof(T)) as T[]
+        llpl_memcpy(new_data as char*, self.data as char*, (self.length as u64) * sizeof(T))
         llpl_free(self.data as char*)
         self.data = new_data
         self.capacity = new_capacity
     }
 
-    func get(index: int) -> T {
+    func get(index: i64) -> T {
         if index < 0 || index >= self.length {
             llpl_panic("Vector.get: index out of bounds")
         }
         return self.data[index]
     }
 
-    func set(index: int, item: T) {
+    func set(index: i64, item: T) {
         if index < 0 || index >= self.length {
             llpl_panic("Vector.set: index out of bounds")
         }
@@ -1041,7 +1051,7 @@ class Vector<T> {
         return self.data[self.length]
     }
 
-    func len() -> int {
+    func len() -> i64 {
         return self.length
     }
 
@@ -1056,7 +1066,7 @@ class Vector<T> {
     // caveat a C++ vector iterator or a Rust &[T] borrow would document,
     // just not compiler-enforced here).
     func as_slice() -> Slice<T> {
-        return Slice { ptr: self.data, len: self.length as uint }
+        return Slice { ptr: self.data, len: self.length as u64 }
     }
 }
 
@@ -1066,7 +1076,7 @@ class Vector<T> {
 // from any argument (there's nothing to infer it from), and this compiler
 // only infers a generic function's type parameters from its argument
 // types (see resolveGenericFunctionCall) - so `T` has to already be
-// concrete before any method runs, which `new Optional<int>()` gives for
+// concrete before any method runs, which `new Optional<i64>()` gives for
 // free.
 class Optional<T> {
     let has_value: bool
@@ -1107,7 +1117,7 @@ class Optional<T> {
 // have to already be concrete before any method runs, same as Optional<T>.
 //
 // The `?` operator (see codegen.d's generatePropagateExpr) unwraps a
-// Result<T, E> (or Optional<T>) inline: `let v: int = try_something()?`
+// Result<T, E> (or Optional<T>) inline: `let v: i64 = try_something()?`
 // evaluates to the T on Ok/Some, or returns early out of the *enclosing*
 // function with an equivalent Err/None if there wasn't one - the
 // enclosing function must itself return a Result<T, E> (or Optional<T>/
@@ -1173,6 +1183,51 @@ class Result<T, E> {
     }
 }
 
+// One node of the concrete parse tree a `grammar { ... }` block's generated
+// parser produces (see codegen.d's grammar-desugaring pass) - every rule
+// match and every matched terminal becomes one ParseNode, so this needs to
+// be unconditionally available (like String/Vector<T>/Optional<T>/
+// Result<T,E> above) rather than living in an importable stdlib file: the
+// generated parser class's methods reference it in their own return types
+// whether or not the program importing `grammar` ever imports anything else.
+// A manual tagged tree (plain fields, not this language's real tagged-enum
+// feature) for the same reason Optional<T>/Result<T,E> are plain classes
+// above: it's self-referential (children are more ParseNodes).
+class ParseNode {
+    let rule_name: String
+    let text_val: String
+    let children: Vector<ParseNode>
+    let is_terminal: bool
+
+    constructor() {
+        self.rule_name = new String("")
+        self.text_val = new String("")
+        self.children = new Vector<ParseNode>()
+        self.is_terminal = false
+    }
+
+    // See Optional<T>/Result<T,E>'s own comment on why every class that
+    // might be held/released by another class's generated cleanup needs an
+    // explicit destructor, even an empty one.
+    destructor() {}
+
+    func name() -> String {
+        return self.rule_name
+    }
+
+    func text() -> String {
+        return self.text_val
+    }
+
+    func child(index: i64) -> ParseNode {
+        return self.children.get(index)
+    }
+
+    func child_count() -> i64 {
+        return self.children.len()
+    }
+}
+
 // One node of a LinkedList<T> - a plain struct (not a class): it's a
 // manually `llpl_alloc`/`llpl_free`'d value with no reference-counting
 // overhead, the same tradeoff a hand-written singly-linked list already
@@ -1184,7 +1239,7 @@ struct LinkedListNode<T> {
 
 class LinkedList<T> {
     let head: LinkedListNode<T>*
-    let count: int
+    let count: i64
 
     constructor() {
         self.head = null
@@ -1208,7 +1263,7 @@ class LinkedList<T> {
         self.count = self.count + 1
     }
 
-    func len() -> int {
+    func len() -> i64 {
         return self.count
     }
 
@@ -1265,31 +1320,31 @@ trait Iterator<T> {
 // signatures and inside a matching `impl` block's bodies refers to whatever
 // concrete type the `impl` targets; it's resolved by name, not a keyword.
 trait Hashable {
-    func hash() -> uint
+    func hash() -> u64
     func equals(other: Self) -> bool
 }
 
-impl Hashable for int {
-    func hash() -> uint {
-        return self as uint
+impl Hashable for i64 {
+    func hash() -> u64 {
+        return self as u64
     }
-    func equals(other: int) -> bool {
+    func equals(other: i64) -> bool {
         return self == other
     }
 }
 
-impl Hashable for uint {
-    func hash() -> uint {
+impl Hashable for u64 {
+    func hash() -> u64 {
         return self
     }
-    func equals(other: uint) -> bool {
+    func equals(other: u64) -> bool {
         return self == other
     }
 }
 
 impl Hashable for char {
-    func hash() -> uint {
-        return self as uint
+    func hash() -> u64 {
+        return self as u64
     }
     func equals(other: char) -> bool {
         return self == other
@@ -1301,12 +1356,12 @@ impl Hashable for char {
 // before traits existed, two different `char*` pointers holding the same
 // text now hash/compare equal, exactly like a normal string-keyed map.
 impl Hashable for char* {
-    func hash() -> uint {
-        let len: uint = llpl_strlen(self)
-        let h: uint = 2166136261
-        let i: uint = 0
+    func hash() -> u64 {
+        let len: u64 = llpl_strlen(self)
+        let h: u64 = 2166136261
+        let i: u64 = 0
         while i < len {
-            h = h ^ (self[i] as uint)
+            h = h ^ (self[i] as u64)
             h = h * 16777619
             i = i + 1
         }
@@ -1320,11 +1375,11 @@ impl Hashable for char* {
 // Content-aware hashing/equality for the `String` class so HashMap<String, V>
 // compares string contents, not pointer identity.
 impl Hashable for String {
-    func hash() -> uint {
-        let h: uint = 2166136261
-        let i: int = 0
+    func hash() -> u64 {
+        let h: u64 = 2166136261
+        let i: i64 = 0
         while i < self.length {
-            h = h ^ (self.buf[i] as uint)
+            h = h ^ (self.buf[i] as u64)
             h = h * 16777619
             i = i + 1
         }
@@ -1341,19 +1396,19 @@ impl Hashable for String {
 // A trait a type implements to provide ordering, for use in a bounded
 // generic function (`func f<T: Comparable>(...)`) - see test/traits_demo.llpl.
 trait Comparable {
-    func compare(other: Self) -> int
+    func compare(other: Self) -> i64
 }
 
-impl Comparable for int {
-    func compare(other: int) -> int {
+impl Comparable for i64 {
+    func compare(other: i64) -> i64 {
         if self < other { return -1 }
         if self > other { return 1 }
         return 0
     }
 }
 
-impl Comparable for uint {
-    func compare(other: uint) -> int {
+impl Comparable for u64 {
+    func compare(other: u64) -> i64 {
         if self < other { return -1 }
         if self > other { return 1 }
         return 0
@@ -1361,7 +1416,7 @@ impl Comparable for uint {
 }
 
 impl Comparable for char {
-    func compare(other: char) -> int {
+    func compare(other: char) -> i64 {
         if self < other { return -1 }
         if self > other { return 1 }
         return 0
@@ -1382,8 +1437,8 @@ trait StringOperators {
 
 impl StringOperators for char* {
     func operator==(other: char*) -> bool {
-        let self_null: bool = (self as uint) == 0
-        let other_null: bool = (other as uint) == 0
+        let self_null: bool = (self as u64) == 0
+        let other_null: bool = (other as u64) == 0
         if self_null || other_null {
             return self_null && other_null
         }
@@ -1395,8 +1450,8 @@ impl StringOperators for char* {
     }
 
     func operator<(other: char*) -> bool {
-        let self_null: bool = (self as uint) == 0
-        let other_null: bool = (other as uint) == 0
+        let self_null: bool = (self as u64) == 0
+        let other_null: bool = (other as u64) == 0
         if self_null || other_null {
             return self_null && !other_null
         }
@@ -1404,8 +1459,8 @@ impl StringOperators for char* {
     }
 
     func operator>(other: char*) -> bool {
-        let self_null: bool = (self as uint) == 0
-        let other_null: bool = (other as uint) == 0
+        let self_null: bool = (self as u64) == 0
+        let other_null: bool = (other as u64) == 0
         if self_null || other_null {
             return !self_null && other_null
         }
@@ -1429,10 +1484,10 @@ impl StringOperators for char* {
 // inline `func operator+` method already does, so both forms dispatch
 // identically at a use site like `a + b`).
 //
-// Deliberately *not* implemented here for the primitive types (int/uint/
+// Deliberately *not* implemented here for the primitive types (i64/u64/
 // char) - the plain `+`/`-`/`*` C operator already works unconditionally
 // for those with no trait bound needed at all, and a hypothetical
-// `impl Add for int` would recurse (its own `self + other` body would
+// `impl Add for i64` would recurse (its own `self + other` body would
 // dispatch straight back into that same impl, since operator lookup can't
 // tell "the native primitive operator" apart from "this exact impl" once
 // one exists). These traits are for user-defined arithmetic types (vectors,
@@ -1463,9 +1518,9 @@ trait Mul {
 // *content*, not pointer identity - see `impl Hashable for char*` above.
 class HashMap<K: Hashable, V> {
     let buckets: HashBucket<K, V>*
-    let bucket_count: int
-    let count: int
-    let iter_bucket: int
+    let bucket_count: i64
+    let count: i64
+    let iter_bucket: i64
     let iter_entry: HashEntry<K, V>*
 
     constructor() {
@@ -1473,8 +1528,8 @@ class HashMap<K: Hashable, V> {
         self.count = 0
         self.iter_bucket = 0
         self.iter_entry = null
-        self.buckets = llpl_alloc((self.bucket_count as uint) * sizeof(HashBucket<K, V>)) as HashBucket<K, V>*
-        let i: int = 0
+        self.buckets = llpl_alloc((self.bucket_count as u64) * sizeof(HashBucket<K, V>)) as HashBucket<K, V>*
+        let i: i64 = 0
         while i < self.bucket_count {
             self.buckets[i].head = null
             i = i + 1
@@ -1482,7 +1537,7 @@ class HashMap<K: Hashable, V> {
     }
 
     destructor() {
-        let i: int = 0
+        let i: i64 = 0
         while i < self.bucket_count {
             let entry: HashEntry<K, V>* = self.buckets[i].head
             while entry != null {
@@ -1495,28 +1550,28 @@ class HashMap<K: Hashable, V> {
         llpl_free(self.buckets as char*)
     }
 
-    func init_buckets(buckets: HashBucket<K, V>*, bucket_count: int) {
-        let i: int = 0
+    func init_buckets(buckets: HashBucket<K, V>*, bucket_count: i64) {
+        let i: i64 = 0
         while i < bucket_count {
             buckets[i].head = null
             i = i + 1
         }
     }
 
-    func resize(new_bucket_count: int) {
+    func resize(new_bucket_count: i64) {
         let old_buckets: HashBucket<K, V>* = self.buckets
-        let old_bucket_count: int = self.bucket_count
+        let old_bucket_count: i64 = self.bucket_count
 
         let new_buckets: HashBucket<K, V>* =
-            llpl_alloc((new_bucket_count as uint) * sizeof(HashBucket<K, V>)) as HashBucket<K, V>*
+            llpl_alloc((new_bucket_count as u64) * sizeof(HashBucket<K, V>)) as HashBucket<K, V>*
         self.init_buckets(new_buckets, new_bucket_count)
 
-        let i: int = 0
+        let i: i64 = 0
         while i < old_bucket_count {
             let entry: HashEntry<K, V>* = old_buckets[i].head
             while entry != null {
                 let next_entry: HashEntry<K, V>* = entry.next
-                let idx: int = (entry.key.hash() % (new_bucket_count as uint)) as int
+                let idx: i64 = (entry.key.hash() % (new_bucket_count as u64)) as i64
                 entry.next = new_buckets[idx].head
                 new_buckets[idx].head = entry
                 entry = next_entry
@@ -1537,7 +1592,7 @@ class HashMap<K: Hashable, V> {
     }
 
     func insert(key: K, value: V) {
-        let idx: int = (key.hash() % (self.bucket_count as uint)) as int
+        let idx: i64 = (key.hash() % (self.bucket_count as u64)) as i64
         let entry: HashEntry<K, V>* = self.buckets[idx].head
         while entry != null {
             if entry.key.equals(key) {
@@ -1547,7 +1602,7 @@ class HashMap<K: Hashable, V> {
             entry = entry.next
         }
         self.ensure_capacity_for_insert()
-        let new_idx: int = (key.hash() % (self.bucket_count as uint)) as int
+        let new_idx: i64 = (key.hash() % (self.bucket_count as u64)) as i64
         let new_entry: HashEntry<K, V>* = llpl_alloc(sizeof(HashEntry<K, V>)) as HashEntry<K, V>*
         new_entry.key = key
         new_entry.value = value
@@ -1557,7 +1612,7 @@ class HashMap<K: Hashable, V> {
     }
 
     func get(key: K) -> Optional<V> {
-        let idx: int = (key.hash() % (self.bucket_count as uint)) as int
+        let idx: i64 = (key.hash() % (self.bucket_count as u64)) as i64
         let entry: HashEntry<K, V>* = self.buckets[idx].head
         let result: Optional<V> = new Optional<V>()
         while entry != null {
@@ -1571,7 +1626,7 @@ class HashMap<K: Hashable, V> {
     }
 
     func remove(key: K) -> bool {
-        let idx: int = (key.hash() % (self.bucket_count as uint)) as int
+        let idx: i64 = (key.hash() % (self.bucket_count as u64)) as i64
         let entry: HashEntry<K, V>* = self.buckets[idx].head
         let prev: HashEntry<K, V>* = null
         while entry != null {
@@ -1591,11 +1646,11 @@ class HashMap<K: Hashable, V> {
         return false
     }
 
-    func len() -> int {
+    func len() -> i64 {
         return self.count
     }
 
-    func capacity() -> int {
+    func capacity() -> i64 {
         return self.bucket_count
     }
 

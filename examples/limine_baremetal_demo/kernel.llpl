@@ -56,7 +56,7 @@ func limine_get_hhdm() -> LimineHhdmResponse* {
     return hhdm_request.response
 }
 
-func memmap_type_name(t: uint) -> string {
+func memmap_type_name(t: u64) -> string {
     match t {
         case MemMapType.Usable =>                { return "usable" }
         case MemMapType.Reserved =>              { return "reserved" }
@@ -136,7 +136,7 @@ func draw_demo(fb: LimineFramebuffer*) {
 func print_memmap(memmap: LimineMemmapResponse*) {
     hs.write("Limine memory map entries: \(memmap.entry_count)\n")
 
-    let entries = memmap.entries as uint*
+    let entries = memmap.entries as u64*
     let i = 0
     while i < memmap.entry_count {
         let entry = entries[i] as LimineMemmapEntry*
@@ -146,12 +146,12 @@ func print_memmap(memmap: LimineMemmapResponse*) {
 }
 
 func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
-    let entries = memmap.entries as uint*
+    let entries = memmap.entries as u64*
     let max_end = 0
     let i = 0
     while i < memmap.entry_count {
         let entry = entries[i] as LimineMemmapEntry*
-        let end_addr: uint = entry.base + entry.length
+        let end_addr: u64 = entry.base + entry.length
         if end_addr > max_end {
             max_end = end_addr
         }
@@ -197,7 +197,7 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
 func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
     hs.write("Limine HHDM offset: \(hhdm.offset:hex)\n")
 
-    let entries= memmap.entries as uint*
+    let entries= memmap.entries as u64*
     let probe_phys = 0
     let found = false
     let i = 0
@@ -218,7 +218,7 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
     if found {
         let probe_virt = hhdm.offset + probe_phys
         let p = probe_virt as char*
-        let value = p[0] as uint
+        let value = p[0] as u64
         hs.write("HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n")
     } else {
         hs.write("No usable memory region available for HHDM probe\n")

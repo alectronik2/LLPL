@@ -1,8 +1,8 @@
 // Example: TCP Echo Server using the standard library
 
-import "../../stdlib/text/string_utils.llpl"
-import "../../stdlib/io/file.llpl"
-import "../../stdlib/net/socket.llpl"
+import "stdlib/text/string_utils.llpl"
+import "stdlib/io/file.llpl"
+import "stdlib/net/socket.llpl"
 
 using namespace std.text
 using namespace std.io
@@ -21,7 +21,7 @@ func handle_client(client: Socket) {
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     // Create TCP server on port 8080
     let server: TcpServer = new TcpServer(8080)
 

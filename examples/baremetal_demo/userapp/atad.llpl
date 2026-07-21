@@ -55,6 +55,14 @@ const OP_PRESENT = 0
 const OP_READ = 1
 const OP_WRITE = 2
 
+const REQ_SIZE = 24 // three u64 fields (op, lba, count) - must match ata.llpl's own REQ_SIZE
+
+// The largest sector count one request can move in a single IPC round
+// trip - must match ata.llpl's own same-named constant, since it's what
+// sizes the shared data buffer below (MAX_BATCH * 512 bytes). See
+// ata.llpl's own comment on why batching matters at all.
+const MAX_BATCH = 128
+
 // Bus Master IDE register offsets, relative to sys_bmide_base() - the
 // primary channel's own 8-byte block (a controller with a secondary
 // channel repeats this same layout 8 bytes higher, unused here since
@@ -70,10 +78,15 @@ const BM_STATUS_ERROR = 0x02
 const BM_STATUS_INTERRUPT = 0x04
 const BM_STATUS_ACTIVE = 0x01
 
-// Where, within the driver's one shared page (sys_shm_create(1) =
-// 4096 bytes), the single PRDT entry lives - just past the 512-byte
-// sector buffer at offset 0, with plenty of room to spare either side.
-const PRDT_OFFSET = 512
+// Where, within the driver's shared region, the single PRDT entry
+// lives - just past the full MAX_BATCH*512-byte data buffer at offset
+// 0 (128 sectors = 65536 bytes = exactly 16 pages), not overlapping it.
+// Moved from its old fixed offset of 512 (right after a single sector)
+// when the data buffer grew from one sector to a whole batch - leaving
+// it at 512 would have let a real DMA transfer (or even just a batch
+// read/write spanning more than one sector) silently corrupt the PRDT
+// entry, or vice versa.
+const PRDT_OFFSET = 65536
 
 let bmide_base: u64 = 0
 let dma_available: bool = false
@@ -120,7 +133,7 @@ func ata_init() -> bool {
         return false
     }
 
-    let i: int = 0
+    let i: i64 = 0
     while i < 256 {
         sys_inw(DATA) // drain the IDENTIFY payload; contents unused
         i = i + 1
@@ -143,7 +156,7 @@ func read_sector(lba: u64, buf: u8*) -> bool {
     if !wait_drq() {
         return false
     }
-    let i: int = 0
+    let i: i64 = 0
     while i < 256 {
         let word: u64 = sys_inw(DATA)
         buf[i * 2] = (word & 0xFF) as u8
@@ -160,7 +173,7 @@ func write_sector(lba: u64, buf: u8*) -> bool {
     if !wait_drq() {
         return false
     }
-    let i: int = 0
+    let i: i64 = 0
     while i < 256 {
         let lo: u64 = (buf[i * 2] as u64) & 0xFF
         let hi: u64 = (buf[i * 2 + 1] as u64) & 0xFF
@@ -337,6 +350,33 @@ func do_write_sector(lba: u64, buf: u8*) -> bool {
     return write_sector(lba, buf)
 }
 
+// `count` contiguous sectors, one PIO transfer each (still - see
+// do_read_sector's own comment on why) but all within this one message
+// turn, so a batch of many sectors costs exactly one IPC round trip
+// instead of one per sector (see ata.llpl's own comment on why that
+// distinction is the entire point).
+func do_read_batch(lba: u64, count: u64, buf: u8*) -> bool {
+    let i: u64 = 0
+    while i < count {
+        if !do_read_sector(lba + i, buf + (i * 512) as i64) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+func do_write_batch(lba: u64, count: u64, buf: u8*) -> bool {
+    let i: u64 = 0
+    while i < count {
+        if !do_write_sector(lba + i, buf + (i * 512) as i64) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
 func _start(argc: u64, argv: u64*) {
     let present: bool = ata_init()
 
@@ -344,7 +384,10 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    let shm: u8* = sys_shm_create(1)
+    // 16 pages (65536 bytes = MAX_BATCH sectors) of data buffer, plus
+    // one more page for the (unused while DMA stays disabled - see this
+    // file's own header comment) PRDT entry at PRDT_OFFSET.
+    let shm: u8* = sys_shm_create(17)
     if shm == null {
         rt_exit(1)
     }
@@ -359,22 +402,25 @@ func _start(argc: u64, argv: u64*) {
     }
 
     while true {
-        let raw: u8[16]
-        let sender: u64 = sys_msg_recv(raw as u8*, 16)
+        let raw: u8[24]
+        let sender: u64 = sys_msg_recv(raw as u8*, 24)
         if sender == RT_SYS_ERR {
             continue
         }
         let req: u64* = (raw as u8*) as u64*
         let op: u64 = req[0]
         let lba: u64 = req[1]
+        let count: u64 = req[2]
 
         let status: u64 = 1
         if op == OP_PRESENT {
             status = if present { 0 } else { 1 }
+        } else if count == 0 || count > (MAX_BATCH as u64) {
+            status = 1 // malformed/out-of-range request - never trust the client's own count blindly
         } else if op == OP_READ {
-            status = if present && do_read_sector(lba, shm) { 0 } else { 1 }
+            status = if present && do_read_batch(lba, count, shm) { 0 } else { 1 }
         } else if op == OP_WRITE {
-            status = if present && do_write_sector(lba, shm) { 0 } else { 1 }
+            status = if present && do_write_batch(lba, count, shm) { 0 } else { 1 }
         }
 
         let reply: u8[8]

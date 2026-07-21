@@ -1,9 +1,9 @@
 // Example: Simple HTTP server using the standard library
 // Demonstrates integration of file I/O, networking, and string utilities
 
-import "../../stdlib/text/string_utils.llpl"
-import "../../stdlib/io/file.llpl"
-import "../../stdlib/net/socket.llpl"
+import "stdlib/text/string_utils.llpl"
+import "stdlib/io/file.llpl"
+import "stdlib/net/socket.llpl"
 
 using namespace std.text
 using namespace std.io
@@ -141,7 +141,7 @@ func create_sample_files() {
     std.io.write_file("data.json", json)
 }
 
-func main() -> int {
+func main() -> i64 {
     // Create sample files for serving
     create_sample_files()
 

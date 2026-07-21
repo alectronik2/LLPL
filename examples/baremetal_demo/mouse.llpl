@@ -13,23 +13,23 @@
 import hal
 
 namespace Mouse {
-    const CTRL_PORT: uint = 0x64
-    const DATA_PORT: uint = 0x60
+    const CTRL_PORT: u64 = 0x64
+    const DATA_PORT: u64 = 0x60
 
     let packet: char[4]
-    let packet_index: int = 0
+    let packet_index: i64 = 0
     // 3 unless enable_wheel (called from init, below) gets a real "yes,
     // I understand the Intellimouse extension" reply from the device -
     // real hardware and QEMU's emulated mouse alike default to plain
     // 3-byte packets (no wheel byte) until asked otherwise.
-    let packet_size: int = 3
+    let packet_size: i64 = 3
 
-    let mx: int = 0
-    let my: int = 0
-    let min_x: int = 0
-    let min_y: int = 0
-    let max_x: int = 1023
-    let max_y: int = 767
+    let mx: i64 = 0
+    let my: i64 = 0
+    let min_x: i64 = 0
+    let min_y: i64 = 0
+    let max_x: i64 = 1023
+    let max_y: i64 = 767
 
     let left_down: bool = false
     let left_was_down: bool = false
@@ -38,7 +38,7 @@ namespace Mouse {
     // accumulated, not overwritten, because wm.llpl only calls that once
     // per ~15ms tick while the mouse can send many packets in that
     // window; overwriting would silently drop all but the last one.
-    let wheel_delta: int = 0
+    let wheel_delta: i64 = 0
 
     // Bit 1 of the status port (0x64 read): 1 means the controller's
     // input buffer is still full (a previous command/data byte hasn't
@@ -48,9 +48,9 @@ namespace Mouse {
     // hardware-readiness spin: a missing/broken controller fails cleanly
     // instead of hanging boot forever.
     func wait_input_clear() {
-        let tries: int = 0
+        let tries: i64 = 0
         while tries < 100000 {
-            if ((HAL.inb(CTRL_PORT) as int) & 2) == 0 {
+            if ((HAL.inb(CTRL_PORT) as i64) & 2) == 0 {
                 return
             }
             tries = tries + 1
@@ -61,9 +61,9 @@ namespace Mouse {
     // the data port - set before every reply this driver reads back
     // (config byte reads, command ACKs).
     func wait_output_full() {
-        let tries: int = 0
+        let tries: i64 = 0
         while tries < 100000 {
-            if ((HAL.inb(CTRL_PORT) as int) & 1) != 0 {
+            if ((HAL.inb(CTRL_PORT) as i64) & 1) != 0 {
                 return
             }
             tries = tries + 1
@@ -88,7 +88,7 @@ namespace Mouse {
         write_data(data)
     }
 
-    func set_bounds(screen_w: int, screen_h: int) {
+    func set_bounds(screen_w: i64, screen_h: i64) {
         max_x = screen_w - 1
         max_y = screen_h - 1
         mx = screen_w / 2
@@ -125,7 +125,7 @@ namespace Mouse {
         write_aux(0xF2 as char) // "get device ID"
         read_ack()
         wait_output_full()
-        let id: int = (HAL.inb(DATA_PORT) as int) & 255
+        let id: i64 = (HAL.inb(DATA_PORT) as i64) & 255
         if id == 3 {
             packet_size = 4
         }
@@ -137,7 +137,7 @@ namespace Mouse {
         write_command(0x20 as char) // "read controller configuration byte"
         wait_output_full()
         let config: char = HAL.inb(DATA_PORT)
-        config = (config as int | 2) as char // bit 1: enable IRQ12 on aux data
+        config = (config as i64 | 2) as char // bit 1: enable IRQ12 on aux data
         write_command(0x60 as char) // "write controller configuration byte"
         write_data(config)
 
@@ -150,7 +150,7 @@ namespace Mouse {
         read_ack()
     }
 
-    func clampi(v: int, lo: int, hi: int) -> int {
+    func clampi(v: i64, lo: i64, hi: i64) -> i64 {
         if v < lo {
             return lo
         }
@@ -170,7 +170,7 @@ namespace Mouse {
     // bits 4/5 are the sign bits for the 9-bit signed dx/dy that follow
     // in bytes 1/2.
     func on_byte(b: char) {
-        if packet_index == 0 && (((b as int) & 255) & 8) == 0 {
+        if packet_index == 0 && (((b as i64) & 255) & 8) == 0 {
             return
         }
         packet[packet_index] = b
@@ -180,7 +180,7 @@ namespace Mouse {
         }
         packet_index = 0
 
-        let b0: int = (packet[0] as int) & 255
+        let b0: i64 = (packet[0] as i64) & 255
 
         left_was_down = left_down
         left_down = (b0 & 1) != 0
@@ -195,14 +195,14 @@ namespace Mouse {
             return
         }
 
-        let dx_raw: int = (packet[1] as int) & 255
-        let dy_raw: int = (packet[2] as int) & 255
+        let dx_raw: i64 = (packet[1] as i64) & 255
+        let dy_raw: i64 = (packet[2] as i64) & 255
 
-        let dx: int = dx_raw
+        let dx: i64 = dx_raw
         if (b0 & 16) != 0 {
             dx = dx - 256
         }
-        let dy: int = dy_raw
+        let dy: i64 = dy_raw
         if (b0 & 32) != 0 {
             dy = dy - 256
         }
@@ -216,7 +216,7 @@ namespace Mouse {
         // two's-complement value - unlike dx/dy above, no separate sign
         // bit lives elsewhere in b0 to combine it with.
         if packet_size == 4 {
-            let wheel_raw: int = (packet[3] as int) & 255
+            let wheel_raw: i64 = (packet[3] as i64) & 255
             if wheel_raw >= 128 {
                 wheel_raw = wheel_raw - 256
             }
@@ -228,8 +228,8 @@ namespace Mouse {
     // and consume", the same convention Keyboard.pop_char (kbd.llpl)
     // uses for the same reason: whoever reads it is the one accounting
     // for it, so it can't be double-counted by a second, later reader.
-    func take_wheel_delta() -> int {
-        let d: int = wheel_delta
+    func take_wheel_delta() -> i64 {
+        let d: i64 = wheel_delta
         wheel_delta = 0
         return d
     }

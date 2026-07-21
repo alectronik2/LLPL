@@ -46,13 +46,35 @@ import syscall
 import eventlog
 import ldso
 
+const VERIFY_VFS_INSTALL = false
+const ENABLE_FB_MTRR_WC = true
+
 let screen: Console.Screen = null
-let last_spawned_user_id: int = -1
+let last_spawned_user_id: i64 = -1
+
+// Set once wm.elf (the window compositor) has been spawned - see its own
+// spawn site below. screen.write*/Framebuffer.put_pixel write straight to
+// the raw hardware framebuffer address with no coordination whatsoever
+// with wm.llpl's own backbuf+present_frame compositing of that exact
+// same physical memory (two independently-scheduled tasks, no lock or
+// handoff protocol between them). Before wm exists, that's fine - the
+// framebuffer console *is* the display. Once wm is running, any further
+// print()/log() call (most visibly the VFS boot task's own selftest
+// logging, which runs concurrently and can land well after wm has
+// already composited a window+wallpaper) draws a stray line of text
+// glyphs directly on top of it - a real, reproduced bug, not a
+// hypothetical one - that nothing ever redraws over, since wm has no way
+// to know the kernel just wrote to "its" screen. Serial output (see
+// emit()'s own HAL.Serial.write/write_colored calls, never gated here)
+// stays live the whole time regardless - this only silences the
+// framebuffer copy once something else legitimately owns the display.
+let wm_active: bool = false
 
 func print(msg: char*) {
-    if screen != null {
+    if screen != null && !wm_active {
         screen.write(msg)
     }
+    HAL.Serial.write(msg)
 }
 
 // Writes `s` to whichever outputs are live. When `colored` is set, wraps it
@@ -61,12 +83,12 @@ func print(msg: char*) {
 // alone.
 func emit(s: string, colored: bool, vga_color: char, ansi_code: string) {
     if colored {
-        if screen != null {
+        if screen != null && !wm_active {
             screen.write_colored(s, vga_color)
         }
         HAL.Serial.write_colored(s, ansi_code)
     } else {
-        if screen != null {
+        if screen != null && !wm_active {
             screen.write(s)
         }
         HAL.Serial.write(s)
@@ -131,11 +153,11 @@ func log(msg: char*) {
     let ansi_code: char* = null
 
     let seg: char[128]
-    let seg_len: int = 0
+    let seg_len: i64 = 0
     let tag: char[16]
-    let tag_len: int = 0
+    let tag_len: i64 = 0
 
-    let i: int = 0
+    let i: i64 = 0
     while msg[i] != 0 {
         if msg[i] == 60 { // '<'
             if seg_len > 0 {
@@ -205,7 +227,7 @@ func llpl_panic_halt() {
 }
 
 // Task entry points (see task.llpl) - each becomes its own preemptible task
-// via Task.spawn(name as uint), run on its own dedicated stack.
+// via Task.spawn(name as u64), run on its own dedicated stack.
 
 // The shell itself is just another task, not special-cased by the
 // scheduler - the busy loop in Shell.read_line() (HAL.halt() while waiting
@@ -232,7 +254,7 @@ func shell_task_entry() {
 // are two different execution contexts the compiler has no idea can
 // interleave, so without `volatile` the write could simply never become
 // visible outside this loop.
-volatile let bg_counter: uint = 0
+volatile let bg_counter: u64 = 0
 
 func bg_task_entry() {
     while true {
@@ -265,9 +287,9 @@ packed struct Elf64Header {
     let elf_type: uint16
     let machine: uint16
     let version: uint32
-    let entry: uint
-    let phoff: uint
-    let shoff: uint
+    let entry: u64
+    let phoff: u64
+    let shoff: u64
     let flags: uint32
     let ehsize: uint16
     let phentsize: uint16
@@ -280,12 +302,12 @@ packed struct Elf64Header {
 packed struct Elf64ProgramHeader {
     let ph_type: uint32
     let flags: uint32
-    let offset: uint
-    let vaddr: uint
-    let paddr: uint
-    let filesz: uint
-    let memsz: uint
-    let align: uint
+    let offset: u64
+    let vaddr: u64
+    let paddr: u64
+    let filesz: u64
+    let memsz: u64
+    let align: u64
 }
 
 const ELF_PT_LOAD = 1
@@ -296,27 +318,27 @@ const USER_ARG_MAX = 8
 const USER_ARG_BYTES_MAX = 512
 
 struct UserStackSetup {
-    let rsp: uint
-    let argc: uint
-    let argv: uint
+    let rsp: u64
+    let argc: u64
+    let argv: u64
 }
 
 struct LoadedUserImage {
     let ok: bool
-    let entry: uint
+    let entry: u64
     let aspace: VMM.AddressSpace*
     let stack: UserStackSetup
 }
 
-func align_down_page(addr: uint) -> uint {
+func align_down_page(addr: u64) -> u64 {
     return addr & ~4095
 }
 
-func align_up_page(addr: uint) -> uint {
+func align_up_page(addr: u64) -> u64 {
     return (addr + 4095) & ~4095
 }
 
-func validate_elf64(file: char*, size: uint) -> bool {
+func validate_elf64(file: char*, size: u64) -> bool {
     if size < sizeof(Elf64Header) {
         return false
     }
@@ -335,44 +357,44 @@ func validate_elf64(file: char*, size: uint) -> bool {
     if hdr.phentsize != sizeof(Elf64ProgramHeader) as uint16 || hdr.phnum == 0 as uint16 {
         return false
     }
-    let ph_end: uint = hdr.phoff + (hdr.phnum as uint) * sizeof(Elf64ProgramHeader)
+    let ph_end: u64 = hdr.phoff + (hdr.phnum as u64) * sizeof(Elf64ProgramHeader)
     if hdr.phoff < sizeof(Elf64Header) || ph_end > size {
         return false
     }
     return true
 }
 
-func copy_elf_page(file: char*, file_size: uint, ph: Elf64ProgramHeader*, page_vaddr: uint, phys: uint) -> bool {
+func copy_elf_page(file: char*, file_size: u64, ph: Elf64ProgramHeader*, page_vaddr: u64, phys: u64) -> bool {
     let dst: char* = phys as char*
 
-    let j: int = 0
+    let j: i64 = 0
     while j < 4096 {
         dst[j] = 0
         j = j + 1
     }
 
-    let seg_start: uint = ph.vaddr
-    let seg_file_end: uint = ph.vaddr + ph.filesz
-    let page_end: uint = page_vaddr + 4096
+    let seg_start: u64 = ph.vaddr
+    let seg_file_end: u64 = ph.vaddr + ph.filesz
+    let page_end: u64 = page_vaddr + 4096
 
-    let copy_start: uint = page_vaddr
+    let copy_start: u64 = page_vaddr
     if copy_start < seg_start {
         copy_start = seg_start
     }
-    let copy_end: uint = page_end
+    let copy_end: u64 = page_end
     if copy_end > seg_file_end {
         copy_end = seg_file_end
     }
 
     if copy_start < copy_end {
-        let file_start: uint = ph.offset + (copy_start - ph.vaddr)
-        let copy_len: uint = copy_end - copy_start
+        let file_start: u64 = ph.offset + (copy_start - ph.vaddr)
+        let copy_len: u64 = copy_end - copy_start
         if file_start + copy_len > file_size {
             return false
         }
 
-        let dst_off: uint = copy_start - page_vaddr
-        let k: uint = 0
+        let dst_off: u64 = copy_start - page_vaddr
+        let k: u64 = 0
         while k < copy_len {
             dst[dst_off + k] = file[file_start + k]
             k = k + 1
@@ -382,15 +404,15 @@ func copy_elf_page(file: char*, file_size: uint, ph: Elf64ProgramHeader*, page_v
     return true
 }
 
-func load_elf64_user(file: char*, size: uint, aspace: VMM.AddressSpace*) -> uint {
+func load_elf64_user(file: char*, size: u64, aspace: VMM.AddressSpace*) -> u64 {
     if !validate_elf64(file, size) {
         return 0
     }
 
     let hdr: Elf64Header* = file as Elf64Header*
-    let i: int = 0
-    while i < hdr.phnum as int {
-        let ph: Elf64ProgramHeader* = (file + hdr.phoff + (i as uint) * sizeof(Elf64ProgramHeader)) as Elf64ProgramHeader*
+    let i: i64 = 0
+    while i < hdr.phnum as i64 {
+        let ph: Elf64ProgramHeader* = (file + hdr.phoff + (i as u64) * sizeof(Elf64ProgramHeader)) as Elf64ProgramHeader*
         if ph.ph_type == ELF_PT_LOAD as uint32 {
             if ph.memsz == 0 {
                 i = i + 1
@@ -404,11 +426,11 @@ func load_elf64_user(file: char*, size: uint, aspace: VMM.AddressSpace*) -> uint
                 return 0
             }
 
-            let first_page: uint = align_down_page(ph.vaddr)
-            let last_page: uint = align_up_page(ph.vaddr + ph.memsz)
-            let page: uint = first_page
+            let first_page: u64 = align_down_page(ph.vaddr)
+            let last_page: u64 = align_up_page(ph.vaddr + ph.memsz)
+            let page: u64 = first_page
             while page < last_page {
-                let phys: uint = PageAlloc.alloc()
+                let phys: u64 = PageAlloc.alloc()
                 if phys == 0 {
                     return 0
                 }
@@ -417,7 +439,7 @@ func load_elf64_user(file: char*, size: uint, aspace: VMM.AddressSpace*) -> uint
                     return 0
                 }
 
-                let map_flags: uint = VMM.PTE_PRESENT | VMM.PTE_USER
+                let map_flags: u64 = VMM.PTE_PRESENT | VMM.PTE_USER
                 if (ph.flags & ELF_PF_W as uint32) != 0 {
                     map_flags = map_flags | VMM.PTE_WRITABLE
                 }
@@ -434,8 +456,8 @@ func load_elf64_user(file: char*, size: uint, aspace: VMM.AddressSpace*) -> uint
     return hdr.entry
 }
 
-func str_len(s: char*) -> uint {
-    let i: uint = 0
+func str_len(s: char*) -> u64 {
+    let i: u64 = 0
     while s[i] != 0 {
         i = i + 1
     }
@@ -449,65 +471,65 @@ func skip_spaces(s: char*) -> char* {
     return s
 }
 
-func token_len(s: char*) -> uint {
-    let i: uint = 0
+func token_len(s: char*) -> u64 {
+    let i: u64 = 0
     while s[i] != 0 && s[i] != 32 {
         i = i + 1
     }
     return i
 }
 
-func copy_bytes(dst: char*, src: char*, len: uint) {
-    let i: uint = 0
+func copy_bytes(dst: char*, src: char*, len: u64) {
+    let i: u64 = 0
     while i < len {
         dst[i] = src[i]
         i = i + 1
     }
 }
 
-func write_u64(base: char*, offset: uint, value: uint) {
-    let p: uint* = (base + offset) as uint*
+func write_u64(base: char*, offset: u64, value: u64) {
+    let p: u64* = (base + offset) as u64*
     p[0] = value
 }
 
-func push_arg_string(stack: char*, sp_off: uint, src: char*, len: uint) -> uint {
+func push_arg_string(stack: char*, sp_off: u64, src: char*, len: u64) -> u64 {
     sp_off = sp_off - (len + 1)
     copy_bytes(stack + sp_off, src, len)
     stack[sp_off + len] = 0
     return sp_off
 }
 
-func build_user_stack(stack_phys: uint, label: char*, args: char*) -> UserStackSetup {
+func build_user_stack(stack_phys: u64, label: char*, args: char*) -> UserStackSetup {
     let stack: char* = stack_phys as char*
     let setup: UserStackSetup
     setup.argc = 0
     setup.argv = 0
     setup.rsp = VMM.USER_STACK_TOP
 
-    let j: int = 0
+    let j: i64 = 0
     while j < 4096 {
         stack[j] = 0
         j = j + 1
     }
 
-    let arg_ptrs: uint[8]
-    let env_ptrs: uint[2]
-    let sp_off: uint = VMM.PAGE_SIZE
+    let arg_ptrs: u64[8]
+    let env_ptrs: u64[2]
+    let sp_off: u64 = VMM.PAGE_SIZE
 
-    let label_len: uint = str_len(label)
+    let label_len: u64 = str_len(label)
     sp_off = push_arg_string(stack, sp_off, label, label_len)
     arg_ptrs[0] = VMM.USER_STACK_BASE + sp_off
     setup.argc = 1
 
     let p: char* = skip_spaces(args)
     while p[0] != 0 && setup.argc < USER_ARG_MAX {
-        let len: uint = token_len(p)
+        let len: u64 = token_len(p)
         if len > 0 {
             if sp_off < len + 1 + 128 {
                 p = p + len
             } else {
                 sp_off = push_arg_string(stack, sp_off, p, len)
-                arg_ptrs[setup.argc as int] = VMM.USER_STACK_BASE + sp_off
+                arg_ptrs[setup.argc as i64] = VMM.USER_STACK_BASE + sp_off
                 setup.argc = setup.argc + 1
                 p = p + len
             }
@@ -517,29 +539,29 @@ func build_user_stack(stack_phys: uint, label: char*, args: char*) -> UserStackS
 
     sp_off = push_arg_string(stack, sp_off, "LD_LIBRARY_PATH=/lib:/boot:.", str_len("LD_LIBRARY_PATH=/lib:/boot:."))
     env_ptrs[0] = VMM.USER_STACK_BASE + sp_off
-    sp_off = push_arg_string(stack, sp_off, "PATH=/bin:/boot:.", str_len("PATH=/bin:/boot:."))
+    sp_off = push_arg_string(stack, sp_off, "PATH=/boot:/bin:.", str_len("PATH=/boot:/bin:."))
     env_ptrs[1] = VMM.USER_STACK_BASE + sp_off
 
     sp_off = sp_off & ~15
-    let argv_bytes: uint = (setup.argc + 1) * 8
-    let env_bytes: uint = 3 * 8
-    let aux_bytes: uint = 5 * 16
+    let argv_bytes: u64 = (setup.argc + 1) * 8
+    let env_bytes: u64 = 3 * 8
+    let aux_bytes: u64 = 5 * 16
     sp_off = sp_off - (argv_bytes + env_bytes + aux_bytes)
-    let argv_off: uint = sp_off
-    let i: uint = 0
+    let argv_off: u64 = sp_off
+    let i: u64 = 0
     while i < setup.argc {
-        write_u64(stack, argv_off + i * 8, arg_ptrs[i as int])
+        write_u64(stack, argv_off + i * 8, arg_ptrs[i as i64])
         i = i + 1
     }
     write_u64(stack, argv_off + setup.argc * 8, 0)
     setup.argv = VMM.USER_STACK_BASE + argv_off
 
-    let env_off: uint = argv_off + argv_bytes
+    let env_off: u64 = argv_off + argv_bytes
     write_u64(stack, env_off, env_ptrs[0])
     write_u64(stack, env_off + 8, env_ptrs[1])
     write_u64(stack, env_off + 16, 0)
 
-    let aux_off: uint = env_off + env_bytes
+    let aux_off: u64 = env_off + env_bytes
     write_u64(stack, aux_off, 6) // AT_PAGESZ
     write_u64(stack, aux_off + 8, VMM.PAGE_SIZE)
     write_u64(stack, aux_off + 16, 3) // AT_PHDR placeholder
@@ -557,7 +579,7 @@ func build_user_stack(stack_phys: uint, label: char*, args: char*) -> UserStackS
     return setup
 }
 
-func load_user_image_with_args(file: char*, size: uint, label: char*, args: char*) -> LoadedUserImage {
+func load_user_image_with_args(file: char*, size: u64, label: char*, args: char*) -> LoadedUserImage {
     let image: LoadedUserImage
     image.ok = false
     image.entry = 0
@@ -572,8 +594,9 @@ func load_user_image_with_args(file: char*, size: uint, label: char*, args: char
         return image
     }
 
-    let entry: uint = load_elf64_user(file, size, aspace)
+    let entry: u64 = load_elf64_user(file, size, aspace)
     if entry == 0 {
+        LdSo.load_default_user_libraries(aspace)
         let dyn_image: LdSo.ExecImage = LdSo.load_executable(file, size, aspace, label)
         entry = dyn_image.entry
     } else {
@@ -588,7 +611,7 @@ func load_user_image_with_args(file: char*, size: uint, label: char*, args: char
     }
 
     // Allocate and map one user stack page.
-    let stack_phys: uint = PageAlloc.alloc()
+    let stack_phys: u64 = PageAlloc.alloc()
     let stack_setup: UserStackSetup
     stack_setup.rsp = VMM.USER_STACK_TOP
     stack_setup.argc = 0
@@ -606,13 +629,13 @@ func load_user_image_with_args(file: char*, size: uint, label: char*, args: char
     return image
 }
 
-func spawn_user_elf_with_args_parent(file: char*, size: uint, label: char*, args: char*, parent_id: int) -> bool {
+func spawn_user_elf_with_args_parent(file: char*, size: u64, label: char*, args: char*, parent_id: i64) -> bool {
     let image: LoadedUserImage = load_user_image_with_args(file, size, label, args)
     if !image.ok {
         return false
     }
 
-    let id: int = Task.spawn_user_with_args_parent(image.entry, image.stack.rsp, image.aspace, label, image.stack.argc, image.stack.argv, parent_id)
+    let id: i64 = Task.spawn_user_with_args_parent(image.entry, image.stack.rsp, image.aspace, label, image.stack.argc, image.stack.argv, parent_id)
     if id < 0 {
         log("<RED>failed to spawn user task\n</>")
         VMM.free_address_space(image.aspace)
@@ -622,23 +645,23 @@ func spawn_user_elf_with_args_parent(file: char*, size: uint, label: char*, args
         log("<GREEN>spawned user task \(id) from </>")
         emit(label, false, 0, null)
         log("<GREEN> (entry=\(image.entry:hex))\n</>")
-        EventLog.add2("elf", "spawn user elf", id as uint, image.entry)
+        EventLog.add2("elf", "spawn user elf", id as u64, image.entry)
     }
     return true
 }
 
-func spawn_user_elf_with_args(file: char*, size: uint, label: char*, args: char*) -> bool {
+func spawn_user_elf_with_args(file: char*, size: u64, label: char*, args: char*) -> bool {
     return spawn_user_elf_with_args_parent(file, size, label, args, Task.current_id())
 }
 
-func spawn_user_elf(file: char*, size: uint, label: char*) -> bool {
+func spawn_user_elf(file: char*, size: u64, label: char*) -> bool {
     return spawn_user_elf_with_args(file, size, label, "")
 }
 
-func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: int) -> bool {
+func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i64) -> bool {
     match VFS.resolve(path) {
         case VFS.Node.TmpfsFile(idx) => {
-            let size: uint = TmpFS.size_at(idx)
+            let size: u64 = TmpFS.size_at(idx)
             if size == 0 {
                 return false
             }
@@ -649,7 +672,7 @@ func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i
             }
             TmpFS.read(idx, tmp, size)
             let ok: bool = spawn_user_elf_with_args_parent(tmp, size, path, args, parent_id)
-            KHeap.kfree(tmp as uint)
+            KHeap.kfree(tmp as u64)
             return ok
         }
         case VFS.Node.Disk(idx) => {
@@ -657,7 +680,7 @@ func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i
                 log("<LIGHT_RED>not a file\n</>")
                 return false
             }
-            let size: uint = VFS.inode_size(idx)
+            let size: u64 = VFS.inode_size(idx)
             if size == 0 {
                 return false
             }
@@ -666,16 +689,16 @@ func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i
                 log("<RED>failed to allocate executable buffer\n</>")
                 return false
             }
-            let n: int = VFS.read(path, tmp, size)
-            if n < 0 || n as uint != size {
+            let n: i64 = VFS.read(path, tmp, size)
+            if n < 0 || n as u64 != size {
                 log("<LIGHT_RED>failed to read executable from VFS: </>")
                 emit(path, false, 0, null)
                 log("<LIGHT_RED> expected=\(size) got=\(n)\n</>")
-                KHeap.kfree(tmp as uint)
+                KHeap.kfree(tmp as u64)
                 return false
             }
             let ok: bool = spawn_user_elf_with_args_parent(tmp, size, path, args, parent_id)
-            KHeap.kfree(tmp as uint)
+            KHeap.kfree(tmp as u64)
             return ok
         }
         default => {
@@ -693,7 +716,7 @@ func run_user_executable(path: char*) -> bool {
     return run_user_executable_with_args(path, "")
 }
 
-func exec_user_buffer_with_args(file: char*, size: uint, label: char*, args: char*) -> bool {
+func exec_user_buffer_with_args(file: char*, size: u64, label: char*, args: char*) -> bool {
     let old_aspace: VMM.AddressSpace* = Task.get_current_aspace()
     let image: LoadedUserImage = load_user_image_with_args(file, size, label, args)
     if !image.ok {
@@ -713,7 +736,7 @@ func exec_user_buffer_with_args(file: char*, size: uint, label: char*, args: cha
 func exec_user_executable_with_args(path: char*, args: char*) -> bool {
     match VFS.resolve(path) {
         case VFS.Node.TmpfsFile(idx) => {
-            let size: uint = TmpFS.size_at(idx)
+            let size: u64 = TmpFS.size_at(idx)
             if size == 0 {
                 return false
             }
@@ -723,14 +746,14 @@ func exec_user_executable_with_args(path: char*, args: char*) -> bool {
             }
             TmpFS.read(idx, tmp, size)
             let ok: bool = exec_user_buffer_with_args(tmp, size, path, args)
-            KHeap.kfree(tmp as uint)
+            KHeap.kfree(tmp as u64)
             return ok
         }
         case VFS.Node.Disk(idx) => {
             if VFS.inode_kind(idx) != VFS.KIND_FILE {
                 return false
             }
-            let size: uint = VFS.inode_size(idx)
+            let size: u64 = VFS.inode_size(idx)
             if size == 0 {
                 return false
             }
@@ -738,13 +761,13 @@ func exec_user_executable_with_args(path: char*, args: char*) -> bool {
             if tmp == null {
                 return false
             }
-            let n: int = VFS.read(path, tmp, size)
-            if n < 0 || n as uint != size {
-                KHeap.kfree(tmp as uint)
+            let n: i64 = VFS.read(path, tmp, size)
+            if n < 0 || n as u64 != size {
+                KHeap.kfree(tmp as u64)
                 return false
             }
             let ok: bool = exec_user_buffer_with_args(tmp, size, path, args)
-            KHeap.kfree(tmp as uint)
+            KHeap.kfree(tmp as u64)
             return ok
         }
         default => {
@@ -763,7 +786,7 @@ func exec_user_executable_with_args(path: char*, args: char*) -> bool {
 // needs to read as boot-spawned no matter which kernel task technically
 // issues the spawn.
 func spawn_boot_user_module(name: char*) {
-    let idx: int = TmpFS.find(name)
+    let idx: i64 = TmpFS.find(name)
     if idx < 0 {
         log("<YELLOW>")
         emit(name, false, 0, null)
@@ -771,7 +794,7 @@ func spawn_boot_user_module(name: char*) {
         return
     }
 
-    let size: uint = TmpFS.size_at(idx)
+    let size: u64 = TmpFS.size_at(idx)
     if size == 0 {
         return
     }
@@ -783,15 +806,15 @@ func spawn_boot_user_module(name: char*) {
     }
     TmpFS.read(idx, tmp, size)
     spawn_user_elf_with_args_parent(tmp, size, name, "", -1)
-    KHeap.kfree(tmp as uint)
+    KHeap.kfree(tmp as u64)
 }
 
 func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
-    let idx: int = TmpFS.find(module_name)
+    let idx: i64 = TmpFS.find(module_name)
     if idx < 0 {
         return
     }
-    let size: uint = TmpFS.size_at(idx)
+    let size: u64 = TmpFS.size_at(idx)
     if size == 0 {
         return
     }
@@ -803,31 +826,68 @@ func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
         return
     }
     TmpFS.read(idx, tmp, size)
-    if VFS.write(dst_path, tmp, size) {
-        let verify: char* = KHeap.kmalloc(size) as char*
-        let src_sum: uint = 0
-        let dst_sum: uint = 0
-        let si: uint = 0
-        while si < size {
-            src_sum = src_sum + ((tmp[si] as uint) & 255)
-            si = si + 1
-        }
-        let vn: int = -1
-        if verify != null {
-            vn = VFS.read(dst_path, verify, size)
-            let vi: uint = 0
-            while vi < size && vn >= 0 {
-                dst_sum = dst_sum + ((verify[vi] as uint) & 255)
-                vi = vi + 1
+
+    let already_current: bool = false
+    match VFS.resolve(dst_path) {
+        case VFS.Node.Disk(existing_idx) => {
+            if VFS.inode_kind(existing_idx) == VFS.KIND_FILE && VFS.inode_size(existing_idx) == size {
+                let existing: char* = KHeap.kmalloc(size) as char*
+                if existing != null {
+                    let n: i64 = VFS.read(dst_path, existing, size)
+                    if n >= 0 && (n as u64) == size {
+                        let same: bool = true
+                        let bi: u64 = 0
+                        while bi < size {
+                            if existing[bi] != tmp[bi] {
+                                same = false
+                                bi = size
+                            } else {
+                                bi = bi + 1
+                            }
+                        }
+                        already_current = same
+                    }
+                    KHeap.kfree(existing as u64)
+                }
             }
-            KHeap.kfree(verify as uint)
         }
+        default => {
+            already_current = false
+        }
+    }
+
+    if already_current {
+        KHeap.kfree(tmp as u64)
+        return
+    }
+
+    if VFS.write(dst_path, tmp, size) {
         log("<GREEN>installed </>")
         emit(module_name, false, 0, null)
         log("<GREEN> to </>")
         emit(dst_path, false, 0, null)
-        if vn as uint != size || src_sum != dst_sum {
-            log("<LIGHT_RED> checksum mismatch src=\(src_sum:hex) dst=\(dst_sum:hex) n=\(vn)</>")
+        if VERIFY_VFS_INSTALL {
+            let verify: char* = KHeap.kmalloc(size) as char*
+            let src_sum: u64 = 0
+            let dst_sum: u64 = 0
+            let si: u64 = 0
+            while si < size {
+                src_sum = src_sum + ((tmp[si] as u64) & 255)
+                si = si + 1
+            }
+            let vn: i64 = -1
+            if verify != null {
+                vn = VFS.read(dst_path, verify, size)
+                let vi: u64 = 0
+                while vi < size && vn >= 0 {
+                    dst_sum = dst_sum + ((verify[vi] as u64) & 255)
+                    vi = vi + 1
+                }
+                KHeap.kfree(verify as u64)
+            }
+            if vn as u64 != size || src_sum != dst_sum {
+                log("<LIGHT_RED> checksum mismatch src=\(src_sum:hex) dst=\(dst_sum:hex) n=\(vn)</>")
+            }
         }
         emit("\n", false, 0, null)
     } else {
@@ -835,7 +895,7 @@ func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
         emit(module_name, false, 0, null)
         log("<YELLOW> to VFS\n</>")
     }
-    KHeap.kfree(tmp as uint)
+    KHeap.kfree(tmp as u64)
 }
 
 func install_userland_to_vfs() {
@@ -859,6 +919,7 @@ func install_userland_to_vfs() {
     install_boot_module_to_vfs("filebrowser.elf", "/bin/filebrowser.elf")
     install_boot_module_to_vfs("editor.elf", "/bin/editor.elf")
     install_boot_module_to_vfs("terminal.elf", "/bin/terminal.elf")
+    install_boot_module_to_vfs("ui_demo.elf", "/bin/ui_demo.elf")
 }
 
 // Runs as its own scheduled kernel task (spawned from kernel_main, after
@@ -909,7 +970,7 @@ func vfs_boot_task_entry() {
 // structure GRUB left behind, which is where fb.llpl's Framebuffer.init
 // finds the linear framebuffer it set up to satisfy this project's
 // framebuffer request tag (see boot64.asm's multiboot header).
-func kernel_main(multiboot_ptr: uint) {
+func kernel_main(multiboot_ptr: u64) {
     HAL.disable_interrupts()
     HAL.Serial.init()
     EventLog.add0("boot", "serial init")
@@ -924,6 +985,15 @@ func kernel_main(multiboot_ptr: uint) {
             HAL.halt()
         }
     }
+    if ENABLE_FB_MTRR_WC {
+        if Framebuffer.enable_write_combining() {
+            HAL.Serial.write("Framebuffer: MTRR write-combining enabled\n")
+        } else {
+            HAL.Serial.write("Framebuffer: MTRR write-combining unavailable\n")
+        }
+    } else {
+        HAL.Serial.write("Framebuffer: MTRR write-combining disabled\n")
+    }
 
     PageAlloc.init(multiboot_ptr)
     EventLog.add2("boot", "page allocator", PageAlloc.free_pages, PageAlloc.total_pages)
@@ -933,7 +1003,7 @@ func kernel_main(multiboot_ptr: uint) {
     // early, unlike VFS below.
     TmpFS.init(multiboot_ptr)
     TmpFS.reserve_loaded_pages()
-    EventLog.add1("boot", "tmpfs modules", TmpFS.count() as uint)
+    EventLog.add1("boot", "tmpfs modules", TmpFS.count() as u64)
     log("TmpFS: \(TmpFS.count()) boot module(s) found\n")
     TmpFS.selftest()
 
@@ -978,7 +1048,7 @@ func kernel_main(multiboot_ptr: uint) {
 
     log("<WHITE>Loading a fresh GDT from LLPL...\n</>")
     GDT.init()
-    EventLog.add2("boot", "gdt loaded", GDT.pointer.base, GDT.pointer.limit as uint)
+    EventLog.add2("boot", "gdt loaded", GDT.pointer.base, GDT.pointer.limit as u64)
     log("<GREEN>GDT reloaded: base=\(GDT.pointer.base:016:hex) limit=\(GDT.pointer.limit:hex)\n</>")
 
     log("<WHITE>Installing IDT and remapping the PIC...\n</>")
@@ -1003,7 +1073,7 @@ func kernel_main(multiboot_ptr: uint) {
     HAL.Pic.unmask_irq0()
     HAL.Pic.unmask_irq1()
 
-    Mouse.set_bounds(Framebuffer.width as int, Framebuffer.height as int)
+    Mouse.set_bounds(Framebuffer.width as i64, Framebuffer.height as i64)
     Mouse.init()
     HAL.Pic.unmask_irq12()
 
@@ -1013,8 +1083,8 @@ func kernel_main(multiboot_ptr: uint) {
 
     print("\n")
     log("<WHITE>Spawning tasks (shell + a background counter) and starting the scheduler...\n</>")
-    Task.spawn_named(shell_task_entry as uint, "shell")
-    Task.spawn_named(bg_task_entry as uint, "bg-counter")
+    Task.spawn_named(shell_task_entry as u64, "shell")
+    Task.spawn_named(bg_task_entry as u64, "bg-counter")
     // atad must be running before vfs_boot_task_entry's VFS.init() can
     // complete (see ata.llpl) - loaded straight from its tmpfs boot
     // module, same as userapp.elf/llpl_userapp.elf below, since the VFS
@@ -1028,12 +1098,18 @@ func kernel_main(multiboot_ptr: uint) {
     // anything can find it, not launched on demand like the window demos
     // that connect to it (winball1.elf/winball2.elf, via the shell's `run`).
     spawn_boot_user_module("wm.elf")
+    // From here on, the framebuffer belongs to wm - see wm_active's own
+    // comment for why any further print()/log() call must stay
+    // serial-only from this point on, regardless of which task makes it
+    // (most notably vfs_boot_task_entry below, which keeps running and
+    // logging well after this).
+    wm_active = true
     // netd (the e1000 NIC driver) is likewise a persistent, name-looked-up
     // service, not launched on demand - ping/traceroute (run interactively
     // via the shell, unlike the drivers above) find it via sys_lookup("netd")
     // exactly like a window client finds "wm".
     spawn_boot_user_module("netd.elf")
-    Task.spawn_named(vfs_boot_task_entry as uint, "vfsboot")
+    Task.spawn_named(vfs_boot_task_entry as u64, "vfsboot")
     Task.start() // never returns - see task.llpl
 
     // Only reached if Task.start() found nothing to run (spawn() failed for

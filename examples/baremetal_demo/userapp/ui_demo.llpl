@@ -1,0 +1,182 @@
+// UI Widgets Demo Application
+// Showcases all the modern UI widgets: buttons, checkboxes, radio buttons,
+// text boxes, sliders, progress bars, etc.
+//
+// Every widget on screen - labels included - lives in one `widgets:
+// Vector<Widget>`, built once in _start(). render() and handle_input()
+// never switch on "what kind of widget is this" themselves; they just
+// call each widget's own virtual draw()/click()/drag()/release()/
+// unfocus()/key_input() and let dispatch pick the right override (see
+// ui_widgets.llpl's Widget hierarchy) - the same loop handles a Button, a
+// Checkbox, a Slider, or a plain Label identically.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_client"
+import "ui_widgets"
+import "font"
+
+let widgets: Vector<Widget>
+let progress_bar: ProgressBar
+let slider: Slider
+
+let textbox_buf: u8[64]
+let slider_val_buf: u8[16]
+
+let mouse_x: i64 = 0
+let mouse_y: i64 = 0
+let mouse_down: bool = false
+let prev_mouse_down: bool = false
+
+func render() {
+    wm_clear(0xF8F8F8)
+
+    let buf: u32* = wm_get_buffer()
+    let buf_w: i64 = Wm.WIN_W
+    let buf_h: i64 = Wm.WIN_H
+
+    format_int(slider_val_buf as u8*, slider.value)
+
+    let i: i64 = 0
+    while i < widgets.len() {
+        widgets.get(i).draw(buf, buf_w, buf_h)
+        i = i + 1
+    }
+
+    wm_present()
+}
+
+func handle_input() {
+    let input: WmInput = wm_poll_input()
+
+    if input.key == KEY_CLOSE_REQ {
+        wm_close()
+        rt_exit(0)
+    }
+
+    mouse_x = input.mouse_x
+    mouse_y = input.mouse_y
+    prev_mouse_down = mouse_down
+    mouse_down = input.mouse_left
+
+    // Hover state for every widget (disabled ones never light up).
+    let i: i64 = 0
+    while i < widgets.len() {
+        let w: Widget = widgets.get(i)
+        w.hover = !w.disabled && w.contains(mouse_x, mouse_y)
+        i = i + 1
+    }
+
+    // Click edge: the first widget under the cursor gets click(); every
+    // other widget is told to unfocus (only TextBox acts on that).
+    if mouse_down && !prev_mouse_down {
+        let clicked: bool = false
+        let j: i64 = 0
+        while j < widgets.len() {
+            let w: Widget = widgets.get(j)
+            if !clicked && !w.disabled && w.contains(mouse_x, mouse_y) {
+                w.active = true
+                w.click(mouse_x, mouse_y)
+                clicked = true
+            } else {
+                w.unfocus()
+            }
+            j = j + 1
+        }
+    }
+
+    // Continuous drag while the mouse stays down (only Slider acts on it).
+    if mouse_down {
+        let k: i64 = 0
+        while k < widgets.len() {
+            widgets.get(k).drag(mouse_x, mouse_y)
+            k = k + 1
+        }
+    }
+
+    // Mouse-up edge: clear transient active/dragging state everywhere.
+    if !mouse_down && prev_mouse_down {
+        let m: i64 = 0
+        while m < widgets.len() {
+            let w: Widget = widgets.get(m)
+            w.active = false
+            w.release()
+            m = m + 1
+        }
+    }
+
+    // Keyboard goes to every widget; only a focused TextBox acts on it.
+    if input.key > 0 {
+        let n: i64 = 0
+        while n < widgets.len() {
+            widgets.get(n).key_input(input.key)
+            n = n + 1
+        }
+    }
+}
+
+func _start(argc: u64, argv: u64*) {
+    let placeholder: u8* = "Type here..." as u8*
+    let i: i64 = 0
+    while placeholder[i] != 0 && i < 63 {
+        textbox_buf[i] = placeholder[i]
+        i = i + 1
+    }
+    textbox_buf[i] = 0
+
+    widgets = new Vector<Widget>()
+
+    widgets.push(new Label(10, 10, "UI Widgets Demo" as u8*, 0x000000))
+
+    // Buttons
+    widgets.push(new Label(10, 35, "Buttons:" as u8*, 0x333333))
+    progress_bar = new ProgressBar(10, 310, 200, 20, 30)
+    widgets.push(new ActionButton(10, 50, 100, 30, "Click Me" as u8*, progress_bar))
+    widgets.push(new Button(120, 50, 80, 30, "Submit" as u8*))
+    let disabled_btn: Button = new Button(210, 50, 90, 30, "Disabled" as u8*)
+    disabled_btn.disabled = true
+    widgets.push(disabled_btn)
+
+    // Checkboxes
+    widgets.push(new Label(10, 95, "Checkboxes:" as u8*, 0x333333))
+    widgets.push(new Checkbox(10, 110, 16, "Option 1" as u8*, false))
+    widgets.push(new Checkbox(10, 132, 16, "Option 2" as u8*, true))
+    let disabled_cb: Checkbox = new Checkbox(10, 154, 16, "Disabled" as u8*, false)
+    disabled_cb.disabled = true
+    widgets.push(disabled_cb)
+
+    // Radio buttons
+    widgets.push(new Label(150, 95, "Radio Buttons:" as u8*, 0x333333))
+    let radio_group: RadioGroup = new RadioGroup(0)
+    widgets.push(new RadioButton(150, 110, 16, "Choice A" as u8*, 0, radio_group))
+    widgets.push(new RadioButton(150, 132, 16, "Choice B" as u8*, 1, radio_group))
+    widgets.push(new RadioButton(150, 154, 16, "Choice C" as u8*, 2, radio_group))
+
+    // Text input
+    widgets.push(new Label(10, 185, "Text Input:" as u8*, 0x333333))
+    widgets.push(new TextBox(10, 200, 200, 28, textbox_buf as u8*, i))
+
+    // Slider
+    widgets.push(new Label(10, 245, "Slider:" as u8*, 0x333333))
+    slider = new Slider(10, 260, 200, 50)
+    widgets.push(slider)
+    widgets.push(new Label(220, 265, slider_val_buf as u8*, 0x000000))
+
+    // Progress bar
+    widgets.push(new Label(10, 295, "Progress Bar:" as u8*, 0x333333))
+    widgets.push(progress_bar)
+
+    // Panel
+    widgets.push(new Label(10, 345, "Panel/Card:" as u8*, 0x333333))
+    widgets.push(new Panel(10, 360, 280, 60))
+    widgets.push(new Label(20, 375, "This is a panel with shadow" as u8*, 0x666666))
+    widgets.push(new Label(20, 390, "It can contain other widgets" as u8*, 0x666666))
+
+    wm_init()
+
+    while true {
+        handle_input()
+        render()
+        sys_sleep(16)  // ~60 FPS
+    }
+}

@@ -4,21 +4,21 @@
 
 import "../../libsys/imports"
 
-func print_digit(n: uint) {
+func print_digit(n: u64) {
     let buf: char[2]
     buf[0] = (48 + n) as char
     buf[1] = 0
     sys_puts(buf as char*)
 }
 
-func print_uint(n: uint) {
+func print_uint(n: u64) {
     if n >= 10 {
         print_uint(n / 10)
     }
     print_digit(n % 10)
 }
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("Hello from a dynamically linked LLPL executable.")
     sys_puts("pid=")
     print_uint(sys_getpid())
@@ -26,7 +26,7 @@ func _start(argc: uint, argv: uint*) {
     print_uint(argc)
     sys_puts(" argv:")
 
-    let i: uint = 0
+    let i: u64 = 0
     while i < argc {
         sys_puts(" ")
         sys_puts(argv[i] as char*)
@@ -59,7 +59,7 @@ func _start(argc: uint, argv: uint*) {
         sys_puts("small alloc1 failed\n")
     }
     sys_puts("small reuse=")
-    if small1 != null && (small2 as uint) == (small1 as uint) {
+    if small1 != null && (small2 as u64) == (small1 as u64) {
         print_uint(1)
     } else {
         print_uint(0)

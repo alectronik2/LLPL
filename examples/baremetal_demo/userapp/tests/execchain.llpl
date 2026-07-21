@@ -3,9 +3,9 @@
 import "../../libsys/imports"
 import "../user_runtime"
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("execchain")
-    let rc: uint = sys_exec("/bin/cat.elf", "/boot/hello.txt")
+    let rc: u64 = sys_exec("/bin/cat.elf", "/boot/hello.txt")
     if rc == RT_SYS_ERR {
         sys_putln("exec=fail")
         rt_exit(1)

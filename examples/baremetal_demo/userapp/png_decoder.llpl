@@ -1,0 +1,80 @@
+// Simplified PNG decoder for embedded images
+// Supports basic PNG format with simple compression
+// For baremetal use, we'll use pre-decompressed embedded data
+
+import "../libsys/imports"
+
+// PNG chunk types
+const PNG_IHDR: u32 = 0x49484452
+const PNG_IDAT: u32 = 0x49444154
+const PNG_IEND: u32 = 0x49454E44
+
+// Color types
+const PNG_GRAYSCALE: u8 = 0
+const PNG_RGB: u8 = 2
+const PNG_RGBA: u8 = 6
+
+struct PngImage {
+    let width: u32
+    let height: u32
+    let color_type: u8
+    let bit_depth: u8
+    let data: u32*  // RGBA pixel data
+}
+
+// Simple embedded image format for baremetal
+// Header: width (4 bytes), height (4 bytes), then RGBA data
+struct EmbeddedImage {
+    let width: u32
+    let height: u32
+    let data: u8*
+}
+
+// Load an embedded image (raw RGBA format)
+func load_embedded_image(data: u8*) -> EmbeddedImage {
+    let img: EmbeddedImage
+    let header: u32* = data as u32*
+    img.width = header[0]
+    img.height = header[1]
+    img.data = data + 8  // Skip 8-byte header
+    return img
+}
+
+// Get pixel from embedded image
+func get_pixel(img: EmbeddedImage, x: u32, y: u32) -> u32 {
+    if x >= img.width || y >= img.height {
+        return 0
+    }
+    let offset: u32 = (y * img.width + x) * 4
+    let r: u32 = img.data[offset] as u32
+    let g: u32 = img.data[offset + 1] as u32
+    let b: u32 = img.data[offset + 2] as u32
+    let a: u32 = img.data[offset + 3] as u32
+    return (r << 16) | (g << 8) | b
+}
+
+// Blend two colors with alpha
+func blend_alpha(fg: u32, bg: u32, alpha: u32) -> u32 {
+    let r_fg: u32 = (fg >> 16) & 0xFF
+    let g_fg: u32 = (fg >> 8) & 0xFF
+    let b_fg: u32 = fg & 0xFF
+
+    let r_bg: u32 = (bg >> 16) & 0xFF
+    let g_bg: u32 = (bg >> 8) & 0xFF
+    let b_bg: u32 = bg & 0xFF
+
+    let r: u32 = (r_fg * alpha + r_bg * (255 - alpha)) / 255
+    let g: u32 = (g_fg * alpha + g_bg * (255 - alpha)) / 255
+    let b: u32 = (b_fg * alpha + b_bg * (255 - alpha)) / 255
+
+    return (r << 16) | (g << 8) | b
+}
+
+// Get pixel with alpha channel
+func get_pixel_alpha(img: EmbeddedImage, x: u32, y: u32) -> u32 {
+    if x >= img.width || y >= img.height {
+        return 0
+    }
+    let offset: u32 = (y * img.width + x) * 4
+    return img.data[offset + 3] as u32
+}

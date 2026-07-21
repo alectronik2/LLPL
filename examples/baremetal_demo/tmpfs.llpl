@@ -36,8 +36,8 @@ namespace TmpFS {
 
     packed struct ModuleEntry {
         let name: char[32]
-        let start: uint  // physical address - already identity-mapped, usable as char* directly
-        let length: uint
+        let start: u64  // physical address - already identity-mapped, usable as char* directly
+        let length: u64
     }
 
     // Must match MAX_MODULES above - this array's own declared size is a
@@ -48,7 +48,7 @@ namespace TmpFS {
     // was bumped for atad.elf) means writing 16 elements past the end of
     // this array once module_count exceeds it.
     let modules: ModuleEntry[32]
-    let module_count: int = 0
+    let module_count: i64 = 0
 
     packed struct InfoHeader {
         let total_size: uint32
@@ -70,12 +70,12 @@ namespace TmpFS {
         let mod_end: uint32
     }
 
-    func align8(n: uint) -> uint {
+    func align8(n: u64) -> u64 {
         return (n + 7) & ~7
     }
 
-    func name_matches(i: int, name: char*) -> bool {
-        let k: int = 0
+    func name_matches(i: i64, name: char*) -> bool {
+        let k: i64 = 0
         while name[k] != 0 {
             if modules[i].name[k] != name[k] {
                 return false
@@ -88,11 +88,11 @@ namespace TmpFS {
     // Walks the same multiboot2 tag list fb.llpl/pagealloc.llpl already
     // walk (see either's own comment for the tag-list format), collecting
     // every type-3 (module) tag up to MAX_MODULES.
-    func init(multiboot_ptr: uint) {
+    func init(multiboot_ptr: u64) {
         module_count = 0
         let hdr: InfoHeader* = multiboot_ptr as InfoHeader*
-        let end: uint = multiboot_ptr + (hdr.total_size as uint)
-        let ptr: uint = multiboot_ptr + 8
+        let end: u64 = multiboot_ptr + (hdr.total_size as u64)
+        let ptr: u64 = multiboot_ptr + 8
 
         while ptr < end {
             let header: TagHeader* = ptr as TagHeader*
@@ -101,12 +101,12 @@ namespace TmpFS {
             }
             if header.tag_type == 3 && module_count < MAX_MODULES {
                 let mt: ModuleTag* = ptr as ModuleTag*
-                let idx: int = module_count
-                modules[idx].start = mt.mod_start as uint
-                modules[idx].length = (mt.mod_end - mt.mod_start) as uint
+                let idx: i64 = module_count
+                modules[idx].start = mt.mod_start as u64
+                modules[idx].length = (mt.mod_end - mt.mod_start) as u64
 
                 let str_ptr: char* = (ptr + 16) as char*
-                let i: int = 0
+                let i: i64 = 0
                 while str_ptr[i] != 0 && i < MAX_NAME - 1 {
                     modules[idx].name[i] = str_ptr[i]
                     i = i + 1
@@ -115,16 +115,16 @@ namespace TmpFS {
 
                 module_count = module_count + 1
             }
-            ptr = ptr + align8(header.size as uint)
+            ptr = ptr + align8(header.size as u64)
         }
     }
 
-    func count() -> int {
+    func count() -> i64 {
         return module_count
     }
 
-    func find(name: char*) -> int {
-        let i: int = 0
+    func find(name: char*) -> i64 {
+        let i: i64 = 0
         while i < module_count {
             if name_matches(i, name) {
                 return i
@@ -134,8 +134,8 @@ namespace TmpFS {
         return -1
     }
 
-    func name_at(i: int, out_buf: char*) {
-        let k: int = 0
+    func name_at(i: i64, out_buf: char*) {
+        let k: i64 = 0
         while modules[i].name[k] != 0 {
             out_buf[k] = modules[i].name[k]
             k = k + 1
@@ -143,12 +143,12 @@ namespace TmpFS {
         out_buf[k] = 0
     }
 
-    func size_at(i: int) -> uint {
+    func size_at(i: i64) -> u64 {
         return modules[i].length
     }
 
     func reserve_loaded_pages() {
-        let i: int = 0
+        let i: i64 = 0
         while i < module_count {
             PageAlloc.reserve_range(modules[i].start, modules[i].start + modules[i].length)
             i = i + 1
@@ -159,21 +159,21 @@ namespace TmpFS {
     // (not null-terminated by this call) - a plain memory copy, no disk
     // I/O, since the bytes are already sitting in RAM at modules[i].start.
     // Returns -1 for an out-of-range index.
-    func read(i: int, out_buf: char*, max_len: uint) -> int {
+    func read(i: i64, out_buf: char*, max_len: u64) -> i64 {
         if i < 0 || i >= module_count {
             return -1
         }
         let src: char* = modules[i].start as char*
-        let len: uint = modules[i].length
+        let len: u64 = modules[i].length
         if len > max_len {
             len = max_len
         }
-        let k: uint = 0
+        let k: u64 = 0
         while k < len {
             out_buf[k] = src[k]
             k = k + 1
         }
-        return len as int
+        return len as i64
     }
 
     // Exercises count/find/read against the demo modules this project's
@@ -185,11 +185,11 @@ namespace TmpFS {
         let pass: bool = true
         pass = pass && (module_count > 0)
 
-        let idx: int = find("hello.txt")
+        let idx: i64 = find("hello.txt")
         pass = pass && (idx != -1)
         if idx != -1 {
             let buf: char[256]
-            let n: int = read(idx, buf as char*, 255)
+            let n: i64 = read(idx, buf as char*, 255)
             pass = pass && (n > 0)
         }
 

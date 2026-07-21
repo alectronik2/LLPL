@@ -3,7 +3,7 @@
 import "../../libsys/imports"
 import "../user_runtime"
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("memtest")
     rt_put_uint_line("argc=", argc)
 
@@ -25,7 +25,7 @@ func _start(argc: uint, argv: uint*) {
     }
 
     sys_puts("reuse=")
-    if small1 != null && (small2 as uint) == (small1 as uint) {
+    if small1 != null && (small2 as u64) == (small1 as u64) {
         rt_print_uint(1)
     } else {
         rt_print_uint(0)

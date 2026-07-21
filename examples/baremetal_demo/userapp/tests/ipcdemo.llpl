@@ -5,10 +5,10 @@
 import "../../libsys/imports"
 import "../user_runtime"
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("ipcdemo")
 
-    let handle: uint = sys_spawn("/bin/echoserver.elf", "")
+    let handle: u64 = sys_spawn("/bin/echoserver.elf", "")
     if handle == RT_SYS_ERR {
         sys_putln("ipcdemo spawn=fail")
         rt_exit(1)
@@ -16,10 +16,10 @@ func _start(argc: uint, argv: uint*) {
 
     // sys_spawn only ever handed out the one handle above - any other
     // small index names a slot this task's handle table never filled in.
-    let bogus: uint = handle + 5
+    let bogus: u64 = handle + 5
     let probe: char[8]
     sys_strcpy(probe as char*, "x")
-    let bad: uint = sys_msg_send(bogus, probe as char*, 2)
+    let bad: u64 = sys_msg_send(bogus, probe as char*, 2)
     if bad == RT_SYS_ERR {
         sys_putln("bogus-send=rejected")
     } else {
@@ -28,14 +28,14 @@ func _start(argc: uint, argv: uint*) {
 
     let msg: char[64]
     sys_strcpy(msg as char*, "ping")
-    let n: uint = sys_msg_send(handle, msg as char*, 5)
+    let n: u64 = sys_msg_send(handle, msg as char*, 5)
     if n == RT_SYS_ERR {
         sys_putln("ipcdemo send=fail")
         rt_exit(1)
     }
     sys_putln(msg as char*)
 
-    let status: uint = sys_wait(handle)
+    let status: u64 = sys_wait(handle)
     rt_put_uint_line("wait=", status)
     rt_exit(0)
 }

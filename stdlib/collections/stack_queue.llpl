@@ -43,7 +43,7 @@ class Stack<T> {
         return result
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.data.len()
     }
 
@@ -80,7 +80,7 @@ class Queue<T> {
         return self.list.back()
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.list.size()
     }
 
@@ -125,7 +125,7 @@ class Deque<T> {
         return self.list.back()
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.list.size()
     }
 
@@ -140,15 +140,21 @@ class Deque<T> {
 
 // Circular buffer / Ring buffer
 class CircularBuffer<T> {
-    let buffer: T*
-    let capacity: int
-    let head: int
-    let tail: int
-    let count: int
+    // `T[]` (dynamic array), not `T*` - see Vector<T>'s own identical
+    // comment in prelude.llpl: for a class-type T (CircularBuffer<String>)
+    // `T*` collapses onto String's own single implicit pointer star and
+    // tries to store String *values* inline (`String buffer[cap]`)
+    // instead of the array-of-pointers (`String* buffer[cap]`) every
+    // method below assumes.
+    let buffer: T[]
+    let capacity: i64
+    let head: i64
+    let tail: i64
+    let count: i64
 
-    constructor(cap: int) {
+    constructor(cap: i64) {
         self.capacity = cap
-        self.buffer = llpl_alloc(cap * sizeof(T)) as T*
+        self.buffer = llpl_alloc(cap * sizeof(T)) as T[]
         self.head = 0
         self.tail = 0
         self.count = 0
@@ -168,7 +174,7 @@ class CircularBuffer<T> {
         return self.count == 0
     }
 
-    func size() -> int {
+    func size() -> i64 {
         return self.count
     }
 

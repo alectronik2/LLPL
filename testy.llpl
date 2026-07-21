@@ -1,18 +1,33 @@
-extern func puts(s: string) -> int
+extern func puts(s: string) -> i64
 
 struct List<T> {
     let head: T
     let tail: List<T>*
 }
 
-class Klass {
-    i: int
+class Parent {
+    func as_string() -> string {
+        "Parent as_string"
+    }
+
+    constructor() {
+        puts("Parent constructor")
+    }
+
+    destructor() {
+        puts("Parent destructor")
+    }
+}
+
+class Klass: Parent {
+    i: i64
 
     constructor() {
         puts("Klass constructor")
     }
 
     constructor( s: string ) {
+        super()
         puts("Klass constructor with string: \(s)")
         self.i = 10
     }
@@ -31,7 +46,7 @@ impl Iterator for Klass {
     func iter_has_next() -> bool {
         return self.i> 0
     }
-    func iter_next() -> int {
+    func iter_next() -> i64 {
         self.i = self.i- 1
         return self.i + 1
     }
@@ -42,9 +57,9 @@ func dbl( first: string, second: string = "world") -> (string, string) {
 }
 
 func pointer_to_pointer() {
-    let x: int = 5
-    let p: int* = &x
-    let pp: int** = &p
+    let x: i64 = 5
+    let p: i64* = &x
+    let pp: i64** = &p
     "Before: *p = \( *p ), **pp = \( **pp )" |> puts()
 }
 
@@ -52,29 +67,33 @@ func throw_func() {
     throw "This is a test exception"
 }
 
-func throw_func( l: int ) {
+func throw_func( l: i64 ) {
     throw "This is another test exception \(l)"
 }
 
 trait Foo {
-    func foo() -> int 
+    func foo() -> i64 
 }
 
 impl Foo for Klass {
-    func foo() -> int {
+    func foo() -> i64 {
         42
     }
 }
 
 namespace Foo {
     namespace Bar {
-        func bar() -> int {
+        func bar() -> i64 {
             99
         }
     }
 }
 
-func main( args: string[] ) -> uint32 {
+func xy() -> i32 {
+    return 1
+}
+
+func main( args: string[] ) -> u32 {
     "123" |> puts() unless false
 
     let x = if true {
@@ -87,12 +106,12 @@ func main( args: string[] ) -> uint32 {
     let (a, b) = dbl( first: "hello" )
     "a = \(a), b = \(b)" |> puts()
 
-    let l: List<int> 
+    let l: List<i64> 
     l.head = 1
     l.tail = null
 
     let xx = 666
-    let inner = func[xx]( l: int ) -> int {
+    let inner = func[xx]( l: i64 ) -> i64 {
         xx + 1 + l
     }
     let result = inner( 6 )
@@ -125,7 +144,7 @@ func main( args: string[] ) -> uint32 {
     puts("sz = \(sz)")
     "kl as string implicitly: \(kl)" |> puts()
 
-    puts("kl.foo = \(kl.foo() as uint)")
+    puts("kl.foo = \(kl.foo() as u64)")
 
     for x in kl {
         "x = \(x)" |> puts()
@@ -137,12 +156,16 @@ func main( args: string[] ) -> uint32 {
         case _ => { puts("Did not match the string.")   }
     }
 
-    let sug = 88 as uint
+    let sug = 88 as u64
     //puts( "Sug.foo is \(sug.foo)" )
 
     for arg in args {
         "arg = \(arg)" |> puts()
     }
 
-    result
+    delete kl
+
+    assert( false )
+
+    xy()
 }

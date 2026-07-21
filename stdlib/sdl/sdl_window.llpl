@@ -5,30 +5,30 @@ namespace std {
 namespace sdl {
 
 // High-level Window wrapper with RAII. Its own public API deliberately
-// stays in this language's ergonomic default width (`int`/`uint`, what a
+// stays in this language's ergonomic default width (`i64`/`u64`, what a
 // bare integer literal at a call site infers as) rather than SDL3's
 // exact-width `i32`/`u64` - overload resolution requires an *exact*
 // type match against a declared param (see codegen.d's resolveOverload),
 // so a two-constructor class taking i32 params would reject a plain
 // `new Window(title, 800, 600)` call outright (800/600 infer as the
-// 64-bit `int`, not `i32`) even though the values themselves fit fine.
+// 64-bit `i64`, not `i32`) even though the values themselves fit fine.
 // The narrowing to SDL3's real i32/u32/etc. widths happens with an
 // explicit cast at each call into the raw `extern func` bindings below,
 // not in this wrapper's own signature.
 class Window {
     let handle: SDL_Window*
-    let width: int
-    let height: int
+    let width: i64
+    let height: i64
     let title: String
 
-    constructor(title_str: String, w: int, h: int, flags: uint) {
+    constructor(title_str: String, w: i64, h: i64, flags: u64) {
         self.title = title_str
         self.width = w
         self.height = h
         self.handle = SDL_CreateWindow(title_str.c_str(), w as i32, h as i32, flags)
     }
 
-    constructor(title_str: String, w: int, h: int) {
+    constructor(title_str: String, w: i64, h: i64) {
         self.title = title_str
         self.width = w
         self.height = h
@@ -54,14 +54,14 @@ class Window {
         return SDL_SetWindowTitle(self.handle, new_title.c_str())
     }
 
-    func get_size() -> (int, int) {
+    func get_size() -> (i64, i64) {
         let w: i32 = 0
         let h: i32 = 0
         SDL_GetWindowSize(self.handle, &w, &h)
-        return (w as int, h as int)
+        return (w as i64, h as i64)
     }
 
-    func set_size(w: int, h: int) -> bool {
+    func set_size(w: i64, h: i64) -> bool {
         self.width = w
         self.height = h
         return SDL_SetWindowSize(self.handle, w as i32, h as i32)
@@ -131,7 +131,7 @@ class Renderer {
 
     // SDL3 only has a float-rect render path (see sdl_core.llpl's own
     // header comment on SDL_RenderRect/SDL_RenderFillRect) - draw_rect/
-    // fill_rect convert their int SDL_Rect to an SDL_FRect before calling
+    // fill_rect convert their i64 SDL_Rect to an SDL_FRect before calling
     // it, so callers that only have integer coordinates don't need to
     // do that conversion themselves.
     func draw_rect(rect: SDL_Rect) -> bool {
@@ -189,8 +189,8 @@ class Renderer {
 // Texture wrapper
 class Texture {
     let handle: SDL_Texture*
-    let width: int
-    let height: int
+    let width: i64
+    let height: i64
 
     constructor(texture_handle: SDL_Texture*) {
         self.handle = texture_handle
@@ -199,7 +199,7 @@ class Texture {
         // In real implementation, would query texture size
     }
 
-    constructor(texture_handle: SDL_Texture*, w: int, h: int) {
+    constructor(texture_handle: SDL_Texture*, w: i64, h: i64) {
         self.handle = texture_handle
         self.width = w
         self.height = h
@@ -219,11 +219,11 @@ class Texture {
         return self.handle
     }
 
-    func get_width() -> int {
+    func get_width() -> i64 {
         return self.width
     }
 
-    func get_height() -> int {
+    func get_height() -> i64 {
         return self.height
     }
 

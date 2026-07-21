@@ -1,24 +1,29 @@
 // Example: Comprehensive demonstration of stdlib collections
 
-import "../../stdlib/collections/linked_list.llpl"
-import "../../stdlib/collections/stack_queue.llpl"
-import "../../stdlib/collections/heap.llpl"
-import "../../stdlib/collections/hashmap.llpl"
-import "../../stdlib/collections/rbtree.llpl"
-import "../../stdlib/collections/trie.llpl"
+import "stdlib/collections/linked_list.llpl"
+import "stdlib/collections/stack_queue.llpl"
+import "stdlib/collections/heap.llpl"
+import "stdlib/collections/hashmap.llpl"
+import "stdlib/collections/rbtree.llpl"
+import "stdlib/collections/trie.llpl"
+import "stdlib/collections/graph.llpl"
 
 using namespace std.collections
 
 func demo_linked_lists() {
-    // Singly linked list
-    let slist: LinkedList<int> = new LinkedList<int>()
+    // Singly linked list - fully qualified: prelude.llpl has its own,
+    // more minimal LinkedList<T> (push_front/len/is_empty only), which
+    // the bare name would otherwise resolve to instead of this file's
+    // richer std::collections one, even with `using namespace
+    // std.collections` active.
+    let slist: std.collections.LinkedList<i64> = new std.collections.LinkedList<i64>()
     slist.push_back(1)
     slist.push_back(2)
     slist.push_back(3)
     slist.push_front(0)  // [0, 1, 2, 3]
 
-    let first: Result<int, char*> = slist.pop_front()  // 0
-    let value: Result<int, char*> = slist.get(1)  // 2
+    let first: Result<i64, char*> = slist.pop_front()  // 0
+    let value: Result<i64, char*> = slist.get(1)  // 2
 
     // Doubly linked list
     let dlist: DoublyLinkedList<String> = new DoublyLinkedList<String>()
@@ -32,13 +37,13 @@ func demo_linked_lists() {
 
 func demo_stack_queue() {
     // Stack (LIFO)
-    let stack: Stack<int> = new Stack<int>()
+    let stack: Stack<i64> = new Stack<i64>()
     stack.push(10)
     stack.push(20)
     stack.push(30)
 
-    let top: Result<int, char*> = stack.pop()  // 30
-    let peek: Result<int, char*> = stack.peek()  // 20
+    let top: Result<i64, char*> = stack.pop()  // 30
+    let peek: Result<i64, char*> = stack.peek()  // 20
 
     // Queue (FIFO)
     let queue: Queue<String> = new Queue<String>()
@@ -49,17 +54,17 @@ func demo_stack_queue() {
     let item: Result<String, char*> = queue.dequeue()  // "first"
 
     // Deque (double-ended)
-    let deque: Deque<int> = new Deque<int>()
+    let deque: Deque<i64> = new Deque<i64>()
     deque.push_front(1)
     deque.push_back(2)
     deque.push_front(0)  // [0, 1, 2]
 
-    let front: Result<int, char*> = deque.pop_front()  // 0
-    let back: Result<int, char*> = deque.pop_back()  // 2
+    let front: Result<i64, char*> = deque.pop_front()  // 0
+    let back: Result<i64, char*> = deque.pop_back()  // 2
 }
 
 func demo_circular_buffer() {
-    let buffer: CircularBuffer<int> = new CircularBuffer<int>(3)
+    let buffer: CircularBuffer<i64> = new CircularBuffer<i64>(3)
 
     buffer.push(1)
     buffer.push(2)
@@ -70,11 +75,11 @@ func demo_circular_buffer() {
         buffer.push_overwrite(4)  // Now contains [2, 3, 4]
     }
 
-    let value: Result<int, char*> = buffer.pop()  // 2
+    let value: Result<i64, char*> = buffer.pop()  // 2
 }
 
 func demo_rbtree() {
-    let tree: RBTree<int, String> = new RBTree<int, String>()
+    let tree: RBTree<i64, String> = new RBTree<i64, String>()
 
     tree.insert(50, new String("fifty"))
     tree.insert(30, new String("thirty"))
@@ -91,34 +96,34 @@ func demo_rbtree() {
     }
 
     // Get sorted keys
-    let keys: Vector<int> = tree.keys()  // [20, 30, 40, 50, 60, 70, 80]
+    let keys: Vector<i64> = tree.keys()  // [20, 30, 40, 50, 60, 70, 80]
 
     // Min and max
-    let min: Result<int, char*> = tree.min_key()  // 20
-    let max: Result<int, char*> = tree.max_key()  // 80
+    let min: Result<i64, char*> = tree.min_key()  // 20
+    let max: Result<i64, char*> = tree.max_key()  // 80
 
     // Tree height
-    let height: int = tree.height()
+    let height: i64 = tree.height()
 }
 
 func demo_heaps() {
     // Min heap
-    let min_heap: BinaryHeap<int> = new BinaryHeap<int>()
+    let min_heap: BinaryHeap<i64> = new BinaryHeap<i64>()
     min_heap.insert(50)
     min_heap.insert(30)
     min_heap.insert(70)
     min_heap.insert(10)
 
-    let min: Result<int, char*> = min_heap.extract_min()  // 10
+    let min: Result<i64, char*> = min_heap.extract_min()  // 10
 
     // Max heap
-    let max_heap: MaxHeap<int> = new MaxHeap<int>()
+    let max_heap: MaxHeap<i64> = new MaxHeap<i64>()
     max_heap.insert(50)
     max_heap.insert(30)
     max_heap.insert(70)
     max_heap.insert(10)
 
-    let max: Result<int, char*> = max_heap.extract_max()  // 70
+    let max: Result<i64, char*> = max_heap.extract_max()  // 70
 
     // Priority queue
     let pq: PriorityQueue<String> = new PriorityQueue<String>()
@@ -130,13 +135,13 @@ func demo_heaps() {
 }
 
 func demo_hashmap() {
-    let map: EnhancedHashMap<String, int> = new EnhancedHashMap<String, int>()
+    let map: EnhancedHashMap<String, i64> = new EnhancedHashMap<String, i64>()
 
     map.insert(new String("apple"), 1)
     map.insert(new String("banana"), 2)
     map.insert(new String("cherry"), 3)
 
-    let value: Result<int, char*> = map.get(new String("banana"))  // 2
+    let value: Result<i64, char*> = map.get(new String("banana"))  // 2
 
     let has_apple: bool = map.contains(new String("apple"))  // true
 
@@ -147,27 +152,27 @@ func demo_hashmap() {
     let keys: Vector<String> = map.keys()
 
     // Performance metrics
-    let load: int = map.get_load_factor()
-    let collisions: int = map.get_collision_count()
+    let load: i64 = map.get_load_factor()
+    let collisions: i64 = map.get_collision_count()
 }
 
 func demo_hashset() {
-    let set1: HashSet<int> = new HashSet<int>()
+    let set1: HashSet<i64> = new HashSet<i64>()
     set1.insert(1)
     set1.insert(2)
     set1.insert(3)
     set1.insert(4)
 
-    let set2: HashSet<int> = new HashSet<int>()
+    let set2: HashSet<i64> = new HashSet<i64>()
     set2.insert(3)
     set2.insert(4)
     set2.insert(5)
     set2.insert(6)
 
     // Set operations
-    let union_set: HashSet<int> = set1.union_with(set2)  // {1, 2, 3, 4, 5, 6}
-    let intersection: HashSet<int> = set1.intersection(set2)  // {3, 4}
-    let difference: HashSet<int> = set1.difference(set2)  // {1, 2}
+    let union_set: HashSet<i64> = set1.union_with(set2)  // {1, 2, 3, 4, 5, 6}
+    let intersection: HashSet<i64> = set1.intersection(set2)  // {3, 4}
+    let difference: HashSet<i64> = set1.difference(set2)  // {1, 2}
 
     let contains: bool = set1.contains(2)  // true
 }
@@ -189,7 +194,7 @@ func demo_trie() {
 
     // Prefix operations
     let has_prefix: bool = trie.starts_with("ca")  // true
-    let count: int = trie.count_prefix("ca")  // 4
+    let count: i64 = trie.count_prefix("ca")  // 4
 
     // Get all words with prefix
     let words: Vector<String> = trie.get_words_with_prefix("ca")
@@ -202,7 +207,7 @@ func demo_trie() {
     trie.insert_with_value("api_v1", 1)
     trie.insert_with_value("api_v2", 2)
 
-    let version: Result<int, char*> = trie.search_value("api_v1")  // 1
+    let version: Result<i64, char*> = trie.search_value("api_v1")  // 1
 
     // Delete
     trie.remove("car")
@@ -210,7 +215,7 @@ func demo_trie() {
 
 func demo_graph() {
     // Undirected graph
-    let graph: std.Graph = new std.Graph(5, false)
+    let graph: Graph = new Graph(5, false)
 
     graph.add_edge(0, 1, 10)
     graph.add_edge(1, 2, 5)
@@ -219,22 +224,22 @@ func demo_graph() {
     graph.add_edge(0, 4, 2)
 
     // Get neighbors
-    let neighbors: Vector<int> = graph.get_neighbors(0)  // [1, 4]
+    let neighbors: Vector<i64> = graph.get_neighbors(0)  // [1, 4]
 
     // Degree
-    let degree: int = graph.get_degree(1)
+    let degree: i64 = graph.get_degree(1)
 
     // BFS traversal
-    let bfs_order: Vector<int> = graph.bfs(0)
+    let bfs_order: Vector<i64> = graph.bfs(0)
 
     // DFS traversal
-    let dfs_order: Vector<int> = graph.dfs(0)
+    let dfs_order: Vector<i64> = graph.dfs(0)
 
     // Check connectivity
     let connected: bool = graph.is_connected()
 
     // Directed graph for topological sort
-    let dag: std.Graph = new std.Graph(6, true)
+    let dag: Graph = new Graph(6, true)
     dag.add_edge_unweighted(5, 2)
     dag.add_edge_unweighted(5, 0)
     dag.add_edge_unweighted(4, 0)
@@ -242,9 +247,9 @@ func demo_graph() {
     dag.add_edge_unweighted(2, 3)
     dag.add_edge_unweighted(3, 1)
 
-    let topo_result: Result<Vector<int>, char*> = dag.topological_sort()
+    let topo_result: Result<Vector<i64>, char*> = dag.topological_sort()
     if topo_result.is_ok() {
-        let order: Vector<int> = topo_result.unwrap()
+        let order: Vector<i64> = topo_result.unwrap()
         // Possible: [5, 4, 2, 3, 1, 0] or other valid orderings
     }
 
@@ -253,7 +258,7 @@ func demo_graph() {
 }
 
 func demo_graph_matrix() {
-    let graph: std.GraphMatrix = new std.GraphMatrix(4, false)
+    let graph: GraphMatrix = new GraphMatrix(4, false)
 
     graph.add_edge(0, 1, 4)
     graph.add_edge(1, 2, 3)
@@ -262,13 +267,13 @@ func demo_graph_matrix() {
 
     // Check edge
     let has_edge: bool = graph.has_edge(0, 1)  // true
-    let weight: int = graph.get_weight(0, 1)  // 4
+    let weight: i64 = graph.get_weight(0, 1)  // 4
 
     // Floyd-Warshall (all-pairs shortest paths)
-    let distances: int** = graph.floyd_warshall()
+    let distances: i64** = graph.floyd_warshall()
 
     // Shortest path from 0 to 3
-    let shortest: int = distances[0][3]  // Should be 9 (0->1->2->3)
+    let shortest: i64 = distances[0][3]  // Should be 9 (0->1->2->3)
 }
 
 func demo_real_world_use_cases() {
@@ -295,12 +300,12 @@ func demo_real_world_use_cases() {
     // Returns: ["apple", "application", "apply"]
 
     // Use case 3: Graph for social network
-    let social_network: std.Graph = new std.Graph(100, false)
+    let social_network: Graph = new Graph(100, false)
     social_network.add_edge_unweighted(0, 1)  // User 0 friends with User 1
     social_network.add_edge_unweighted(0, 2)
     social_network.add_edge_unweighted(1, 3)
 
-    let friends: Vector<int> = social_network.get_neighbors(0)
+    let friends: Vector<i64> = social_network.get_neighbors(0)
 
     // Use case 4: LRU cache with DoublyLinkedList + HashMap
     // (Would need custom implementation combining both)
@@ -312,7 +317,7 @@ func demo_real_world_use_cases() {
     // Automatically overwrites oldest when full
 }
 
-func main() -> int {
+func main() -> i64 {
     demo_linked_lists()
     demo_stack_queue()
     demo_circular_buffer()

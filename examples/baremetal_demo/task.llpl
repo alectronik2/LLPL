@@ -48,8 +48,8 @@ namespace Task {
     // up on a brand new stack) is indistinguishable from one that's really
     // been preempted mid-execution - the same code resumes either one.
     extern func timer_isr_entry() -> void
-    extern func start_first_task(rsp: uint) -> void
-    extern func set_tss_rsp0(rsp0: uint) -> void
+    extern func start_first_task(rsp: u64) -> void
+    extern func set_tss_rsp0(rsp0: u64) -> void
 
     // Mirrors exactly what timer_isr_entry/syscall_isr_entry push, in the
     // order they push them: rax is pushed first, ending up furthest from the
@@ -57,26 +57,26 @@ namespace Task {
     // address) - then the five words the CPU itself pushes for every
     // 64-bit interrupt (SS, RSP, RFLAGS, CS, RIP).
     packed struct TrapFrame {
-        let r15: uint
-        let r14: uint
-        let r13: uint
-        let r12: uint
-        let r11: uint
-        let r10: uint
-        let r9: uint
-        let r8: uint
-        let rbp: uint
-        let rdi: uint
-        let rsi: uint
-        let rdx: uint
-        let rcx: uint
-        let rbx: uint
-        let rax: uint
-        let rip: uint
-        let cs: uint
-        let rflags: uint
-        let rsp: uint
-        let ss: uint
+        let r15: u64
+        let r14: u64
+        let r13: u64
+        let r12: u64
+        let r11: u64
+        let r10: u64
+        let r9: u64
+        let r8: u64
+        let rbp: u64
+        let rdi: u64
+        let rsi: u64
+        let rdx: u64
+        let rcx: u64
+        let rbx: u64
+        let rax: u64
+        let rip: u64
+        let cs: u64
+        let rflags: u64
+        let rsp: u64
+        let ss: u64
     }
 
     const TRAP_FRAME_SIZE = 160 // sizeof(TrapFrame): 20 fields * 8 bytes
@@ -85,38 +85,38 @@ namespace Task {
     // spawn()); `next` threads the circular task list, so no separate
     // registry of any fixed size is needed.
     packed struct TCB {
-        let saved_rsp: uint
-        let stack_base: uint       // == this TCB's own address; diagnostics only
-        let id: int
-        let next: uint             // address of the next task's TCB
-        let state: int
-        let pml4: uint             // 0 means use the kernel's boot page table
+        let saved_rsp: u64
+        let stack_base: u64       // == this TCB's own address; diagnostics only
+        let id: i64
+        let next: u64             // address of the next task's TCB
+        let state: i64
+        let pml4: u64             // 0 means use the kernel's boot page table
         let aspace: VMM.AddressSpace*
-        let kernel_stack_top: uint // stack used for ring-3 interrupts / syscalls
-        let mode: int
-        let switches: uint
-        let syscalls: uint
-        let last_tick: uint
-        let canary_addr: uint
+        let kernel_stack_top: u64 // stack used for ring-3 interrupts / syscalls
+        let mode: i64
+        let switches: u64
+        let syscalls: u64
+        let last_tick: u64
+        let canary_addr: u64
         let canary_failed: bool
-        let user_stack_base: uint
-        let user_guard_base: uint
-        let wake_tick: uint
+        let user_stack_base: u64
+        let user_guard_base: u64
+        let wake_tick: u64
         let resched_requested: bool
-        let parent_id: int
-        let wait_pid: int
-        let exit_status: uint
-        let ipc_peer: int
-        let ipc_len: uint
-        let ipc_reply_buf: uint
-        let ipc_reply_len: uint
-        let ipc_recv_buf: uint
-        let ipc_recv_len: uint
+        let parent_id: i64
+        let wait_pid: i64
+        let exit_status: u64
+        let ipc_peer: i64
+        let ipc_len: u64
+        let ipc_reply_buf: u64
+        let ipc_reply_len: u64
+        let ipc_recv_buf: u64
+        let ipc_recv_len: u64
         let ipc_msg: char[128]
         let name: char[16]
         let handle_valid: bool[8]
-        let handle_target: int[8]
-        let handle_rights: uint[8]
+        let handle_target: i64[8]
+        let handle_rights: u64[8]
     }
 
     // Name registry: the only bootstrap for a SEND capability between two
@@ -129,14 +129,14 @@ namespace Task {
 
     packed struct ServiceEntry {
         let used: bool
-        let pid: int
+        let pid: i64
         let name: char[16]
     }
 
     let registry: ServiceEntry[8]
 
     func name_eq(a: char*, b: char*) -> bool {
-        let i: int = 0
+        let i: i64 = 0
         while true {
             if a[i] != b[i] {
                 return false
@@ -150,7 +150,7 @@ namespace Task {
     }
 
     func name_copy(dst: char*, src: char*) {
-        let i: int = 0
+        let i: i64 = 0
         while src[i] != 0 && i < SERVICE_NAME_MAX - 1 {
             dst[i] = src[i]
             i = i + 1
@@ -167,7 +167,7 @@ namespace Task {
     // any ordinary user program could sys_spawn a child that registers as
     // e.g. "echo" to hijack messages meant for the real service, or that
     // pokes arbitrary hardware ports.
-    func is_boot_spawned(pid: int) -> bool {
+    func is_boot_spawned(pid: i64) -> bool {
         let t: TCB* = find_by_id(pid)
         if t == null {
             return false
@@ -178,11 +178,11 @@ namespace Task {
     // One name names at most one owner at a time; a pid can register more
     // than one name. Fails if the caller isn't boot-spawned, the name is
     // already taken by a live service, or the registry is full.
-    func register_service(pid: int, name: char*) -> bool {
+    func register_service(pid: i64, name: char*) -> bool {
         if !is_boot_spawned(pid) {
             return false
         }
-        let i: int = 0
+        let i: i64 = 0
         while i < MAX_SERVICES {
             if registry[i].used && name_eq(registry[i].name as char*, name) {
                 if exists(registry[i].pid) {
@@ -208,8 +208,8 @@ namespace Task {
     // Returns the registered owner's pid, or -1 if no live service holds
     // that name (also clearing a stale entry left by one that died without
     // ever unregistering - this demo has no explicit unregister syscall).
-    func lookup_service(name: char*) -> int {
-        let i: int = 0
+    func lookup_service(name: char*) -> i64 {
+        let i: i64 = 0
         while i < MAX_SERVICES {
             if registry[i].used && name_eq(registry[i].name as char*, name) {
                 if exists(registry[i].pid) {
@@ -242,9 +242,9 @@ namespace Task {
 
     packed struct ShmRegion {
         let used: bool
-        let owner_pid: int
-        let pages: uint
-        let owner_virt: uint
+        let owner_pid: i64
+        let pages: u64
+        let owner_virt: u64
         // Must match SHM_MAX_PAGES exactly - shm_create (below) writes one
         // physical address per page requested, up to that cap, and a
         // smaller array here than the cap it's supposedly bounded by is
@@ -254,7 +254,7 @@ namespace Task {
         // silently overrun by a 250-page sys_shm_create call once it was
         // raised to 256 for wm.llpl's bigger arena - see SHM_MAX_PAGES's
         // own comment).
-        let phys: uint[256]
+        let phys: u64[256]
     }
 
     let shm_regions: ShmRegion[8]
@@ -262,8 +262,8 @@ namespace Task {
     // The owner's own region index, or -1 - also lazily clearing a stale
     // entry left by an owner that exited without any explicit teardown
     // (same pattern lookup_service uses for the name registry).
-    func shm_region_for(pid: int) -> int {
-        let i: int = 0
+    func shm_region_for(pid: i64) -> i64 {
+        let i: i64 = 0
         while i < MAX_SHM {
             if shm_regions[i].used && shm_regions[i].owner_pid == pid {
                 if exists(pid) {
@@ -277,21 +277,21 @@ namespace Task {
         return -1
     }
 
-    func shm_create(owner_pid: int, phys_list: uint*, pages: uint, owner_virt: uint) -> bool {
+    func shm_create(owner_pid: i64, phys_list: u64*, pages: u64, owner_virt: u64) -> bool {
         if pages == 0 || pages > SHM_MAX_PAGES {
             return false
         }
         if shm_region_for(owner_pid) >= 0 {
             return false
         }
-        let i: int = 0
+        let i: i64 = 0
         while i < MAX_SHM {
             if !shm_regions[i].used {
                 shm_regions[i].used = true
                 shm_regions[i].owner_pid = owner_pid
                 shm_regions[i].pages = pages
                 shm_regions[i].owner_virt = owner_virt
-                let k: uint = 0
+                let k: u64 = 0
                 while k < pages {
                     shm_regions[i].phys[k] = phys_list[k]
                     k = k + 1
@@ -303,22 +303,22 @@ namespace Task {
         return false
     }
 
-    func shm_pages_of(region: int) -> uint {
+    func shm_pages_of(region: i64) -> u64 {
         if region < 0 || region >= MAX_SHM {
             return 0
         }
         return shm_regions[region].pages
     }
 
-    func shm_owner_virt(region: int) -> uint {
+    func shm_owner_virt(region: i64) -> u64 {
         if region < 0 || region >= MAX_SHM {
             return 0
         }
         return shm_regions[region].owner_virt
     }
 
-    func shm_phys_at(region: int, page: int) -> uint {
-        if region < 0 || region >= MAX_SHM || page < 0 || (page as uint) >= shm_regions[region].pages {
+    func shm_phys_at(region: i64, page: i64) -> u64 {
+        if region < 0 || region >= MAX_SHM || page < 0 || (page as u64) >= shm_regions[region].pages {
             return 0
         }
         return shm_regions[region].phys[page]
@@ -332,8 +332,8 @@ namespace Task {
     // keeps its now-dangling mapping - a known v1 limitation, not a memory
     // safety issue: map_foreign() never let that client's own teardown
     // free pages it doesn't own, so nothing gets double-freed either way.
-    func shm_release(pid: int) {
-        let i: int = 0
+    func shm_release(pid: i64) {
+        let i: i64 = 0
         while i < MAX_SHM {
             if shm_regions[i].used && shm_regions[i].owner_pid == pid {
                 shm_regions[i].used = false
@@ -342,13 +342,15 @@ namespace Task {
         }
     }
 
-    let first_task: uint = 0 // 0 = no tasks spawned yet
-    let last_task: uint = 0  // so spawn() can extend the list in O(1)
-    let current_task: uint = 0
-    let preferred_next: uint = 0
-    let task_count: int = 0
-    let next_task_id: int = 0
+    let first_task: u64 = 0 // 0 = no tasks spawned yet
+    let last_task: u64 = 0  // so spawn() can extend the list in O(1)
+    let current_task: u64 = 0
+    let preferred_next: u64 = 0
+    let task_count: i64 = 0
+    let next_task_id: i64 = 0
     let scheduling_enabled: bool = false
+    let schedule_ticks: u64 = 0
+    let context_switches_total: u64 = 0
 
     // A kernel-mode task's own `pml4` field is 0 ("use the kernel's boot
     // page table" - see spawn_named), never a real address - anything that
@@ -359,14 +361,14 @@ namespace Task {
     // a kernel-mode task can be the target of an IPC reply (see
     // Syscall.sys_msg_reply and ata.llpl) - before that, every sender was
     // ring-3, so `.pml4` was always already a real value.
-    func pml4_for(tcb: TCB*) -> uint {
+    func pml4_for(tcb: TCB*) -> u64 {
         if tcb == null || tcb.pml4 == 0 {
             return VMM.kernel_pml4
         }
         return tcb.pml4
     }
 
-    func get_current_pml4() -> uint {
+    func get_current_pml4() -> u64 {
         if current_task == 0 {
             return VMM.kernel_pml4
         }
@@ -375,13 +377,13 @@ namespace Task {
 
     // Writes `len` bytes into `addr` as seen through `pml4` - the kernel-
     // mode-caller equivalent of Syscall.copy_to_user_pml4, for code that
-    // isn't reachable through the int 0x80 gate (a kernel task acting as
+    // isn't reachable through the i64 0x80 gate (a kernel task acting as
     // its own IPC client - see ata.llpl) but still needs to deliver a
     // message into some ring-3 peer's own address space.
-    func write_to_pml4(pml4: uint, addr: uint, src: char*, len: uint) -> uint {
-        let i: uint = 0
+    func write_to_pml4(pml4: u64, addr: u64, src: char*, len: u64) -> u64 {
+        let i: u64 = 0
         while i < len {
-            let page: uint = VMM.virt_to_phys(pml4, addr + i)
+            let page: u64 = VMM.virt_to_phys(pml4, addr + i)
             if page == 0 {
                 return i
             }
@@ -408,13 +410,13 @@ namespace Task {
         return cur.state == STATE_DEAD
     }
 
-    func exit_current_with_status(status: uint) {
+    func exit_current_with_status(status: u64) {
         if current_task == 0 {
             return
         }
         let cur: TCB* = current_task as TCB*
         cur.exit_status = status
-        let addr: uint = first_task
+        let addr: u64 = first_task
         let done: bool = first_task == 0
         while !done {
             let t: TCB* = addr as TCB*
@@ -423,7 +425,7 @@ namespace Task {
                     t.state = STATE_ALIVE
                     t.resched_requested = false
                     set_saved_return(t, status)
-                    preferred_next = t as uint
+                    preferred_next = t as u64
                 }
             }
             addr = t.next
@@ -451,7 +453,7 @@ namespace Task {
         cur.resched_requested = true
     }
 
-    func sleep_current(ticks: uint) {
+    func sleep_current(ticks: u64) {
         if current_task == 0 {
             return
         }
@@ -459,7 +461,7 @@ namespace Task {
         cur.state = STATE_SLEEPING
         cur.wake_tick = timer_ticks + ticks
         cur.resched_requested = true
-        EventLog.add2("task", "sleep", cur.id as uint, cur.wake_tick)
+        EventLog.add2("task", "sleep", cur.id as u64, cur.wake_tick)
     }
 
     func should_reschedule_current() -> bool {
@@ -474,17 +476,17 @@ namespace Task {
         if tcb.state == STATE_SLEEPING && timer_ticks >= tcb.wake_tick {
             tcb.state = STATE_ALIVE
             tcb.resched_requested = false
-            EventLog.add1("task", "wake", tcb.id as uint)
+            EventLog.add1("task", "wake", tcb.id as u64)
         }
     }
 
-    func runnable(addr: uint) -> bool {
+    func runnable(addr: u64) -> bool {
         let t: TCB* = addr as TCB*
         refresh_sleep(t)
         return t.state == STATE_ALIVE
     }
 
-    func set_saved_return(tcb: TCB*, value: uint) {
+    func set_saved_return(tcb: TCB*, value: u64) {
         if tcb.saved_rsp == 0 {
             return
         }
@@ -493,7 +495,7 @@ namespace Task {
     }
 
     func switch_cr3_to_task(tcb: TCB*) {
-        let target: uint = tcb.pml4
+        let target: u64 = tcb.pml4
         if target == 0 {
             target = VMM.kernel_pml4
         }
@@ -507,7 +509,7 @@ namespace Task {
     }
 
     func copy_name(tcb: TCB*, name: char*) {
-        let i: int = 0
+        let i: i64 = 0
         while name[i] != 0 && i < 15 {
             tcb.name[i] = name[i]
             i = i + 1
@@ -516,7 +518,7 @@ namespace Task {
     }
 
     func init_handles(tcb: TCB*) {
-        let i: int = 0
+        let i: i64 = 0
         while i < MAX_HANDLES {
             tcb.handle_valid[i] = false
             i = i + 1
@@ -526,8 +528,8 @@ namespace Task {
     // Grants `owner` a fresh handle over `target_id` with the given rights,
     // returning its index (to be handed back to user code as an opaque
     // syscall argument) or -1 if the table is full.
-    func alloc_handle(owner: TCB*, target_id: int, rights: uint) -> int {
-        let i: int = 0
+    func alloc_handle(owner: TCB*, target_id: i64, rights: u64) -> i64 {
+        let i: i64 = 0
         while i < MAX_HANDLES {
             if !owner.handle_valid[i] {
                 owner.handle_valid[i] = true
@@ -544,7 +546,7 @@ namespace Task {
     // `owner` actually holds it and it carries `required_right` - otherwise
     // -1, indistinguishable from a bad handle so a probing task learns
     // nothing about which case it hit.
-    func handle_target(owner: TCB*, handle: int, required_right: uint) -> int {
+    func handle_target(owner: TCB*, handle: i64, required_right: u64) -> i64 {
         if owner == null || handle < 0 || handle >= MAX_HANDLES {
             return -1
         }
@@ -558,11 +560,11 @@ namespace Task {
     }
 
     func install_canary(tcb: TCB*) {
-        let addr: uint = tcb.stack_base + sizeof(TCB)
+        let addr: u64 = tcb.stack_base + sizeof(TCB)
         tcb.canary_addr = addr
         tcb.canary_failed = false
-        let p: uint* = addr as uint*
-        let i: int = 0
+        let p: u64* = addr as u64*
+        let i: i64 = 0
         while i < CANARY_WORDS {
             p[i] = CANARY_VALUE
             i = i + 1
@@ -573,8 +575,8 @@ namespace Task {
         if tcb.canary_addr == 0 {
             return true
         }
-        let p: uint* = tcb.canary_addr as uint*
-        let i: int = 0
+        let p: u64* = tcb.canary_addr as u64*
+        let i: i64 = 0
         while i < CANARY_WORDS {
             if p[i] != CANARY_VALUE {
                 return false
@@ -587,7 +589,7 @@ namespace Task {
     func note_canary_if_bad(tcb: TCB*) {
         if !canary_ok(tcb) && !tcb.canary_failed {
             tcb.canary_failed = true
-            EventLog.add2("stack", "kernel canary corrupt", tcb.id as uint, tcb.canary_addr)
+            EventLog.add2("stack", "kernel canary corrupt", tcb.id as u64, tcb.canary_addr)
         }
     }
 
@@ -595,7 +597,7 @@ namespace Task {
     // Removes the dead task from the circular list, switches to the next
     // alive task, and returns that task's saved RSP. No EOI is sent here
     // because this is not a hardware interrupt.
-    func pick_next(rsp: uint) -> uint {
+    func pick_next(rsp: u64) -> u64 {
         if current_task == 0 {
             return rsp
         }
@@ -633,7 +635,7 @@ namespace Task {
             // healthy task out of the scheduling rotation for good, with no
             // error or crash - it just silently stops being scheduled.
             let prev: TCB* = cur
-            while (prev.next as uint) != current_task {
+            while (prev.next as u64) != current_task {
                 prev = prev.next as TCB*
             }
             prev.next = cur.next
@@ -641,12 +643,12 @@ namespace Task {
                 first_task = cur.next
             }
             if current_task == last_task {
-                last_task = prev as uint
+                last_task = prev as u64
             }
             task_count = task_count - 1
         }
 
-        let nxt: uint = cur.next
+        let nxt: u64 = cur.next
         if preferred_next != 0 && runnable(preferred_next) {
             nxt = preferred_next
             preferred_next = 0
@@ -666,7 +668,7 @@ namespace Task {
         return next.saved_rsp
     }
 
-    func init_frame(frame: TrapFrame*, entry: uint, stack_top: uint, cs: uint, ss: uint, arg0: uint, arg1: uint) {
+    func init_frame(frame: TrapFrame*, entry: u64, stack_top: u64, cs: u64, ss: u64, arg0: u64, arg1: u64) {
         frame.r15 = 0
         frame.r14 = 0
         frame.r13 = 0
@@ -692,15 +694,15 @@ namespace Task {
     // Creates a new kernel task ready to run `entry`, a plain `func() -> void`
     // referenced by bare name. Returns the new task's id, or -1 if the heap is
     // out of memory.
-    func spawn_named(entry: uint, name: char*) -> int {
-        let block: uint = KHeap.kmalloc(STACK_SIZE)
+    func spawn_named(entry: u64, name: char*) -> i64 {
+        let block: u64 = KHeap.kmalloc(STACK_SIZE)
         if block == 0 {
             return -1
         }
 
         let tcb: TCB* = block as TCB*
-        let stack_top: uint = block + STACK_SIZE
-        let frame_addr: uint = stack_top - TRAP_FRAME_SIZE
+        let stack_top: u64 = block + STACK_SIZE
+        let frame_addr: u64 = stack_top - TRAP_FRAME_SIZE
         let frame: TrapFrame* = frame_addr as TrapFrame*
         init_frame(frame, entry, stack_top, 0x08, 0x10, 0, 0)
 
@@ -762,18 +764,18 @@ namespace Task {
         task_count = task_count + 1
         HAL.enable_interrupts()
 
-        EventLog.add2("task", "spawn kernel", tcb.id as uint, entry)
+        EventLog.add2("task", "spawn kernel", tcb.id as u64, entry)
         return tcb.id
     }
 
-    func spawn(entry: uint) -> int {
+    func spawn(entry: u64) -> i64 {
         return spawn_named(entry, "kernel")
     }
 
     // Creates a new ring-3 user task starting at `entry` with its own
     // address space. `stack_top` is the initial user-mode RSP.
-    func spawn_user_with_args_parent(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*, argc: uint, argv: uint, parent_id: int) -> int {
-        let block: uint = KHeap.kmalloc(STACK_SIZE)
+    func spawn_user_with_args_parent(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64, parent_id: i64) -> i64 {
+        let block: u64 = KHeap.kmalloc(STACK_SIZE)
         if block == 0 {
             return -1
         }
@@ -782,10 +784,10 @@ namespace Task {
         }
 
         let tcb: TCB* = block as TCB*
-        let kernel_stack_top: uint = block + STACK_SIZE
-        let frame_addr: uint = kernel_stack_top - TRAP_FRAME_SIZE
+        let kernel_stack_top: u64 = block + STACK_SIZE
+        let frame_addr: u64 = kernel_stack_top - TRAP_FRAME_SIZE
         let frame: TrapFrame* = frame_addr as TrapFrame*
-        init_frame(frame, entry, stack_top, (0x18 as uint) | 3, (0x20 as uint) | 3, argc, argv)
+        init_frame(frame, entry, stack_top, (0x18 as u64) | 3, (0x20 as u64) | 3, argc, argv)
 
         tcb.saved_rsp = frame_addr
         tcb.stack_base = block
@@ -819,7 +821,7 @@ namespace Task {
         // Same splice-safety need as spawn_named above, but this function
         // has a second calling context spawn_named never sees: it's also
         // reached through Syscall.sys_spawn/sys_exec, i.e. from inside the
-        // int 0x80 interrupt gate, which the CPU has *already* made
+        // i64 0x80 interrupt gate, which the CPU has *already* made
         // non-preemptible by clearing IF on entry. A blind
         // HAL.enable_interrupts() there would turn interrupts back on
         // before that syscall handler is done - a nested timer interrupt
@@ -840,7 +842,7 @@ namespace Task {
         // ata.llpl's call() - see its own, longer version of this
         // comment). Each asm block here is internally balanced (net zero
         // RSP effect once it completes).
-        let flags: uint = 0
+        let flags: u64 = 0
         asm("pushfq; popq %0" : "=r"(flags) : : "memory")
         asm("cli")
         if first_task == 0 {
@@ -855,23 +857,23 @@ namespace Task {
         task_count = task_count + 1
         asm("pushq %0; popfq" : : "r"(flags) : "cc", "memory")
 
-        EventLog.add2("task", "spawn user", tcb.id as uint, entry)
+        EventLog.add2("task", "spawn user", tcb.id as u64, entry)
         return tcb.id
     }
 
-    func spawn_user_with_args(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*, argc: uint, argv: uint) -> int {
+    func spawn_user_with_args(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64) -> i64 {
         return spawn_user_with_args_parent(entry, stack_top, aspace, name, argc, argv, current_id())
     }
 
-    func spawn_user_named(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*) -> int {
+    func spawn_user_named(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*) -> i64 {
         return spawn_user_with_args(entry, stack_top, aspace, name, 0, 0)
     }
 
-    func spawn_user(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*) -> int {
+    func spawn_user(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*) -> i64 {
         return spawn_user_with_args(entry, stack_top, aspace, "user", 0, 0)
     }
 
-    func replace_current_user(entry: uint, stack_top: uint, aspace: VMM.AddressSpace*, name: char*, argc: uint, argv: uint) -> bool {
+    func replace_current_user(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64) -> bool {
         let cur: TCB* = current_tcb()
         if cur == null || aspace == null || cur.saved_rsp == 0 {
             return false
@@ -885,7 +887,7 @@ namespace Task {
         cur.state = STATE_ALIVE
         copy_name(cur, name)
         // The *original* syscall-entry trapframe, not cur.saved_rsp: this
-        // runs synchronously, still deep inside the very int 0x80 call
+        // runs synchronously, still deep inside the very i64 0x80 call
         // it's replacing, not after a context switch back into this task.
         // exec's own file read (VFS.read -> ATA.call) forces interrupts on
         // for its wait, so a timer preemption during that read is routine -
@@ -901,18 +903,19 @@ namespace Task {
         // pushing it - see spawn_user_with_args_parent's identical
         // frame_addr computation), regardless of any nesting in between.
         let frame: TrapFrame* = (cur.kernel_stack_top - TRAP_FRAME_SIZE) as TrapFrame*
-        init_frame(frame, entry, stack_top, (0x18 as uint) | 3, (0x20 as uint) | 3, argc, argv)
+        init_frame(frame, entry, stack_top, (0x18 as u64) | 3, (0x20 as u64) | 3, argc, argv)
         switch_cr3_to_task(cur)
         switch_tss_rsp0(cur)
-        EventLog.add2("task", "exec replace", cur.id as uint, entry)
+        EventLog.add2("task", "exec replace", cur.id as u64, entry)
         return true
     }
 
     // Called from timer_isr_entry (boot64.asm) with the just-preempted
     // task's stack pointer; returns the stack pointer to resume.
-    func schedule_next(rsp: uint) -> uint {
+    func schedule_next(rsp: u64) -> u64 {
         HAL.Pic.send_eoi(0)
         timer_ticks = timer_ticks + 1
+        schedule_ticks = schedule_ticks + 1
 
         if !scheduling_enabled || current_task == 0 {
             return rsp
@@ -925,7 +928,7 @@ namespace Task {
         refresh_sleep(cur)
 
         // Advance to the next runnable task, skipping dead or sleeping ones.
-        let nxt: uint = cur.next
+        let nxt: u64 = cur.next
         if preferred_next != 0 && runnable(preferred_next) {
             nxt = preferred_next
             preferred_next = 0
@@ -937,6 +940,7 @@ namespace Task {
             return rsp
         }
         current_task = nxt
+        context_switches_total = context_switches_total + 1
 
         let next: TCB* = current_task as TCB*
         next.switches = next.switches + 1
@@ -955,7 +959,7 @@ namespace Task {
     }
 
     // The running task's id, or -1 before start().
-    func current_id() -> int {
+    func current_id() -> i64 {
         if current_task == 0 {
             return -1
         }
@@ -963,7 +967,7 @@ namespace Task {
         return cur.id
     }
 
-    func current_user_guard_hit(addr: uint) -> bool {
+    func current_user_guard_hit(addr: u64) -> bool {
         if current_task == 0 {
             return false
         }
@@ -981,11 +985,11 @@ namespace Task {
         return current_task as TCB*
     }
 
-    func find_by_id(id: int) -> TCB* {
+    func find_by_id(id: i64) -> TCB* {
         if first_task == 0 {
             return null
         }
-        let addr: uint = first_task
+        let addr: u64 = first_task
         let done: bool = false
         while !done {
             let t: TCB* = addr as TCB*
@@ -1000,11 +1004,11 @@ namespace Task {
         return null
     }
 
-    func exists(id: int) -> bool {
+    func exists(id: i64) -> bool {
         return find_by_id(id) != null
     }
 
-    func aspace_by_id(id: int) -> VMM.AddressSpace* {
+    func aspace_by_id(id: i64) -> VMM.AddressSpace* {
         let t: TCB* = find_by_id(id)
         if t == null {
             return null
@@ -1012,7 +1016,7 @@ namespace Task {
         return t.aspace
     }
 
-    func kill(id: int) -> bool {
+    func kill(id: i64) -> bool {
         let t: TCB* = find_by_id(id)
         if t == null {
             return false
@@ -1033,7 +1037,7 @@ namespace Task {
             t.state = STATE_DEAD
         }
         t.resched_requested = true
-        let addr: uint = first_task
+        let addr: u64 = first_task
         let done: bool = first_task == 0
         while !done {
             let waiter: TCB* = addr as TCB*
@@ -1049,11 +1053,11 @@ namespace Task {
                 done = true
             }
         }
-        EventLog.add1("task", "kill", id as uint)
+        EventLog.add1("task", "kill", id as u64)
         return true
     }
 
-    func block_current_send(peer: int, reply_buf: uint, reply_len: uint, msg: char*, msg_len: uint) {
+    func block_current_send(peer: i64, reply_buf: u64, reply_len: u64, msg: char*, msg_len: u64) {
         let cur: TCB* = current_tcb()
         if cur == null {
             return
@@ -1064,14 +1068,14 @@ namespace Task {
         cur.ipc_reply_buf = reply_buf
         cur.ipc_reply_len = reply_len
         cur.ipc_len = msg_len
-        let i: uint = 0
+        let i: u64 = 0
         while i < msg_len && i < IPC_MAX {
             cur.ipc_msg[i] = msg[i]
             i = i + 1
         }
     }
 
-    func block_current_recv(buf: uint, len: uint) {
+    func block_current_recv(buf: u64, len: u64) {
         let cur: TCB* = current_tcb()
         if cur == null {
             return
@@ -1083,12 +1087,12 @@ namespace Task {
         cur.ipc_recv_len = len
     }
 
-    func mark_reply_blocked(sender: TCB*, receiver_id: int) {
+    func mark_reply_blocked(sender: TCB*, receiver_id: i64) {
         sender.state = STATE_REPLY_BLOCKED
         sender.ipc_peer = receiver_id
     }
 
-    func wake_with_return(tcb: TCB*, value: uint) {
+    func wake_with_return(tcb: TCB*, value: u64) {
         tcb.state = STATE_ALIVE
         tcb.resched_requested = false
         set_saved_return(tcb, value)
@@ -1105,7 +1109,7 @@ namespace Task {
         // as more tasks are spawned - directly why VFS.init() and every
         // sector operation after it currently take so much longer than a
         // direct in-kernel PIO call ever did.
-        preferred_next = tcb as uint
+        preferred_next = tcb as u64
     }
 
     func wake_now(tcb: TCB*) {
@@ -1118,7 +1122,7 @@ namespace Task {
     // exiting and being reaped in a way a stale pointer wouldn't, and
     // first_sender_for below already has to walk the list to relocate it
     // regardless, so nothing is lost by storing the cheaper, safer form.
-    let ipc_scan_cursor_id: int = -1
+    let ipc_scan_cursor_id: i64 = -1
 
     // Finds the next SEND_BLOCKED task waiting to reach `receiver_id`,
     // resuming each call from just after whichever task the *previous*
@@ -1140,13 +1144,13 @@ namespace Task {
     // hang forever with no error, crash, or unusual CPU use anywhere,
     // since the receiver truly is servicing messages the entire time -
     // just always the same one.
-    func first_sender_for(receiver_id: int) -> TCB* {
+    func first_sender_for(receiver_id: i64) -> TCB* {
         if first_task == 0 {
             return null
         }
-        let start: uint = first_task
+        let start: u64 = first_task
         if ipc_scan_cursor_id >= 0 {
-            let addr: uint = first_task
+            let addr: u64 = first_task
             let done: bool = false
             while !done {
                 let t: TCB* = addr as TCB*
@@ -1160,7 +1164,7 @@ namespace Task {
                 }
             }
         }
-        let addr: uint = start
+        let addr: u64 = start
         let done: bool = false
         while !done {
             let t: TCB* = addr as TCB*
@@ -1176,8 +1180,8 @@ namespace Task {
         return null
     }
 
-    func state_name_at(index: int) -> char* {
-        let state: int = state_at(index)
+    func state_name_at(index: i64) -> char* {
+        let state: i64 = state_at(index)
         if state == STATE_ALIVE {
             return "alive"
         }
@@ -1202,7 +1206,7 @@ namespace Task {
         return "dead"
     }
 
-    func block_current_wait(pid: int) {
+    func block_current_wait(pid: i64) {
         let cur: TCB* = current_tcb()
         if cur == null {
             return
@@ -1212,12 +1216,12 @@ namespace Task {
         cur.resched_requested = true
         let child: TCB* = find_by_id(pid)
         if child != null {
-            preferred_next = child as uint
+            preferred_next = child as u64
         }
-        EventLog.add2("task", "wait blocked", cur.id as uint, pid as uint)
+        EventLog.add2("task", "wait blocked", cur.id as u64, pid as u64)
     }
 
-    func reap_zombie(pid: int, status_out: uint*) -> bool {
+    func reap_zombie(pid: i64, status_out: u64*) -> bool {
         let target: TCB* = find_by_id(pid)
         if target == null || target.state != STATE_ZOMBIE {
             return false
@@ -1231,7 +1235,7 @@ namespace Task {
         if status_out != null {
             status_out[0] = target.exit_status
         }
-        if target as uint == current_task {
+        if target as u64 == current_task {
             return false
         }
 
@@ -1240,14 +1244,14 @@ namespace Task {
             prev = prev.next as TCB*
         }
         prev.next = target.next
-        if first_task == target as uint {
+        if first_task == target as u64 {
             first_task = target.next
         }
-        if last_task == target as uint {
-            last_task = prev as uint
+        if last_task == target as u64 {
+            last_task = prev as u64
         }
         task_count = task_count - 1
-        EventLog.add2("task", "reap zombie", pid as uint, target.exit_status)
+        EventLog.add2("task", "reap zombie", pid as u64, target.exit_status)
         if target.aspace != null {
             VMM.free_address_space(target.aspace)
             target.aspace = null
@@ -1256,7 +1260,7 @@ namespace Task {
         return true
     }
 
-    func child_status(pid: int, status_out: uint*) -> int {
+    func child_status(pid: i64, status_out: u64*) -> i64 {
         let t: TCB* = find_by_id(pid)
         if t == null {
             return -1
@@ -1285,18 +1289,18 @@ namespace Task {
         let first: TCB* = first_task as TCB*
         first.switches = first.switches + 1
         first.last_tick = timer_ticks
-        EventLog.add1("task", "scheduler start", first.id as uint)
+        EventLog.add1("task", "scheduler start", first.id as u64)
         switch_cr3_to_task(first)
         switch_tss_rsp0(first)
         start_first_task(first.saved_rsp)
     }
 
-    func nth(index: int) -> TCB* {
+    func nth(index: i64) -> TCB* {
         if index < 0 || index >= task_count || first_task == 0 {
             return null
         }
-        let addr: uint = first_task
-        let i: int = 0
+        let addr: u64 = first_task
+        let i: i64 = 0
         while i < index {
             let t: TCB* = addr as TCB*
             addr = t.next
@@ -1305,7 +1309,7 @@ namespace Task {
         return addr as TCB*
     }
 
-    func id_at(index: int) -> int {
+    func id_at(index: i64) -> i64 {
         let t: TCB* = nth(index)
         if t == null {
             return -1
@@ -1313,7 +1317,7 @@ namespace Task {
         return t.id
     }
 
-    func state_at(index: int) -> int {
+    func state_at(index: i64) -> i64 {
         let t: TCB* = nth(index)
         if t == null {
             return STATE_DEAD
@@ -1321,7 +1325,7 @@ namespace Task {
         return t.state
     }
 
-    func mode_at(index: int) -> int {
+    func mode_at(index: i64) -> i64 {
         let t: TCB* = nth(index)
         if t == null {
             return MODE_KERNEL
@@ -1329,7 +1333,7 @@ namespace Task {
         return t.mode
     }
 
-    func saved_rsp_at(index: int) -> uint {
+    func saved_rsp_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1337,7 +1341,7 @@ namespace Task {
         return t.saved_rsp
     }
 
-    func stack_base_at(index: int) -> uint {
+    func stack_base_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1345,7 +1349,7 @@ namespace Task {
         return t.stack_base
     }
 
-    func pml4_at(index: int) -> uint {
+    func pml4_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1353,7 +1357,7 @@ namespace Task {
         return t.pml4
     }
 
-    func switches_at(index: int) -> uint {
+    func switches_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1361,7 +1365,7 @@ namespace Task {
         return t.switches
     }
 
-    func syscalls_at(index: int) -> uint {
+    func syscalls_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1369,7 +1373,7 @@ namespace Task {
         return t.syscalls
     }
 
-    func last_tick_at(index: int) -> uint {
+    func last_tick_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1377,7 +1381,7 @@ namespace Task {
         return t.last_tick
     }
 
-    func wake_tick_at(index: int) -> uint {
+    func wake_tick_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1385,7 +1389,7 @@ namespace Task {
         return t.wake_tick
     }
 
-    func ipc_peer_at(index: int) -> int {
+    func ipc_peer_at(index: i64) -> i64 {
         let t: TCB* = nth(index)
         if t == null {
             return -1
@@ -1393,7 +1397,7 @@ namespace Task {
         return t.ipc_peer
     }
 
-    func ipc_len_at(index: int) -> uint {
+    func ipc_len_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1401,7 +1405,7 @@ namespace Task {
         return t.ipc_len
     }
 
-    func parent_id_at(index: int) -> int {
+    func parent_id_at(index: i64) -> i64 {
         let t: TCB* = nth(index)
         if t == null {
             return -1
@@ -1409,7 +1413,7 @@ namespace Task {
         return t.parent_id
     }
 
-    func exit_status_at(index: int) -> uint {
+    func exit_status_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1417,7 +1421,7 @@ namespace Task {
         return t.exit_status
     }
 
-    func name_at(index: int) -> char* {
+    func name_at(index: i64) -> char* {
         let t: TCB* = nth(index)
         if t == null {
             return ""
@@ -1425,7 +1429,7 @@ namespace Task {
         return t.name as char*
     }
 
-    func canary_addr_at(index: int) -> uint {
+    func canary_addr_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1433,7 +1437,7 @@ namespace Task {
         return t.canary_addr
     }
 
-    func canary_ok_at(index: int) -> bool {
+    func canary_ok_at(index: i64) -> bool {
         let t: TCB* = nth(index)
         if t == null {
             return true
@@ -1441,7 +1445,7 @@ namespace Task {
         return canary_ok(t)
     }
 
-    func user_stack_base_at(index: int) -> uint {
+    func user_stack_base_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1449,7 +1453,7 @@ namespace Task {
         return t.user_stack_base
     }
 
-    func user_guard_base_at(index: int) -> uint {
+    func user_guard_base_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
             return 0
@@ -1457,9 +1461,9 @@ namespace Task {
         return t.user_guard_base
     }
 
-    func check_all_stacks() -> int {
-        let bad: int = 0
-        let i: int = 0
+    func check_all_stacks() -> i64 {
+        let bad: i64 = 0
+        let i: i64 = 0
         while i < task_count {
             let t: TCB* = nth(i)
             if t != null {

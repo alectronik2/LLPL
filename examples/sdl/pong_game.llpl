@@ -1,24 +1,24 @@
 // Example: Simple Pong game using SDL3
 
-import "../../stdlib/sdl/sdl.llpl"
+import "stdlib/sdl/sdl.llpl"
 
 using namespace std.sdl
 
-const WINDOW_WIDTH: int = 800
-const WINDOW_HEIGHT: int = 600
-const PADDLE_WIDTH: int = 20
-const PADDLE_HEIGHT: int = 100
-const BALL_SIZE: int = 15
+const WINDOW_WIDTH: i64 = 800
+const WINDOW_HEIGHT: i64 = 600
+const PADDLE_WIDTH: i64 = 20
+const PADDLE_HEIGHT: i64 = 100
+const BALL_SIZE: i64 = 15
 const PADDLE_SPEED: float = 300.0
 const BALL_SPEED: float = 250.0
 
 class Paddle {
     let x: float
     let y: float
-    let width: int
-    let height: int
+    let width: i64
+    let height: i64
     let speed: float
-    let score: int
+    let score: i64
 
     constructor(px: float, py: float) {
         self.x = px
@@ -36,7 +36,7 @@ class Paddle {
         }
     }
 
-    func move_down(dt: float, max_y: int) {
+    func move_down(dt: float, max_y: i64) {
         self.y = self.y + self.speed * dt
         if self.y > (max_y - self.height) as float {
             self.y = (max_y - self.height) as float
@@ -63,7 +63,7 @@ class Ball {
     let y: float
     let vx: float
     let vy: float
-    let size: int
+    let size: i64
 
     constructor(px: float, py: float) {
         self.x = px
@@ -143,14 +143,14 @@ class Ball {
     }
 }
 
-func draw_dotted_line(renderer: Renderer, x: int) {
-    for let y: int = 0, y < WINDOW_HEIGHT, y = y + 20 {
+func draw_dotted_line(renderer: Renderer, x: i64) {
+    for let y: i64 = 0, y < WINDOW_HEIGHT, y = y + 20 {
         let rect: SDL_Rect = new SDL_Rect(x, y, 5, 10)
         renderer.fill_rect(rect)
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     // Initialize SDL3
     let init_result: Result<bool, char*> = SDL.init(SDL_INIT_VIDEO)
 
@@ -219,18 +219,18 @@ func main() -> int {
         // Left paddle (W/S keys) - indexed by scancode, not keycode (see
         // sdl_core.llpl's own SDL_SCANCODE_* comment: SDLK_w/SDLK_s here
         // would happen to still be in-bounds, but are the wrong table).
-        if keys[SDL_SCANCODE_W as int] {
+        if keys[SDL_SCANCODE_W as i64] {
             left_paddle.move_up(dt)
         }
-        if keys[SDL_SCANCODE_S as int] {
+        if keys[SDL_SCANCODE_S as i64] {
             left_paddle.move_down(dt, WINDOW_HEIGHT)
         }
 
         // Right paddle (Up/Down arrows)
-        if keys[SDL_SCANCODE_UP as int] {
+        if keys[SDL_SCANCODE_UP as i64] {
             right_paddle.move_up(dt)
         }
-        if keys[SDL_SCANCODE_DOWN as int] {
+        if keys[SDL_SCANCODE_DOWN as i64] {
             right_paddle.move_down(dt, WINDOW_HEIGHT)
         }
 

@@ -11,6 +11,7 @@ import std.path;
 import std.file;
 import ast;
 import errors;
+import grammar;
 
 // Declaration-site info for one top-level symbol (function, class, struct,
 // macro, global var/const/enum-member) or one class method/field (`name`
@@ -135,6 +136,25 @@ class CodeGenerator {
     private bool[string] constVariables; // Names (mangled) of `const`-declared variables
     private FunctionDecl[string] functionRegistry; // Functions, by mangled (namespace-prefixed) name
     private ClassDecl[string] classRegistry; // Classes, by mangled (namespace-prefixed) name
+    // Mangled class name -> true if some other class's (resolved)
+    // baseClassName points at it - populated once, in the base-class
+    // resolution pass in generateMultiple, alongside baseClassName
+    // resolution itself. A class is "polymorphic" (needs the
+    // constructor/destructor _new+_init/_destroy+__destroy_impl split,
+    // and later a vtable) if it has a base OR is itself a base for
+    // something - see isPolymorphic.
+    private bool[string] hasSubclasses;
+    // Mangled base class name -> its direct derived ClassDecls - populated
+    // alongside hasSubclasses, used to walk a hierarchy top-down (e.g.
+    // collectVtableSlots) when all that's known up front is the root.
+    private ClassDecl[][string] subclassesOf;
+    // Full `RootName_VTable ClassName_vtable = { ... };` definitions,
+    // accumulated once per polymorphic class during the main per-class
+    // generation pass and flushed at the very end of the file (see
+    // generateMultiple) - by then every method in every class (regardless
+    // of textual declaration order) is both forward-declared and defined,
+    // so an initializer can safely name any of them.
+    private string[] vtableInstanceDefs;
     private StructDecl[string] structRegistry; // Structs, by mangled (namespace-prefixed) name
     private UnionDecl[string] unionRegistry; // Unions, by mangled (namespace-prefixed) name
     private MacroDecl[string] macroRegistry; // Macros, by mangled (namespace-prefixed) name
@@ -176,6 +196,11 @@ class CodeGenerator {
     private string[] lambdaDecls; // Per-lambda `struct __LambdaEnvN {...};` + trampoline function decls, emitted up front
     private int embeddedFileCounter; // Numbers each embed("path") static blob uniquely
     private string[] embeddedFileDecls; // Static byte arrays emitted before function bodies
+    private bool[string] emittedBoundsCheckHelpers; // Set of C element-type signatures already emitted
+    private string[] boundsCheckHelpers; // Declarations emitted at the top of the C file
+    private bool[string] reachableFunctions; // Set of reachable free-function mangled names
+    private bool[string] originalFreeFunctionKeys; // Free functions from the original programs (not generic instantiations)
+    private bool enableDCE; // Whether dead-code elimination is enabled
 
     // Per-capture context while generating a lambda body: how to read the
     // capture's value (useExpr), how to refer to its storage location
@@ -276,9 +301,265 @@ class CodeGenerator {
     // resolveGenericFunctionCall.
     private string[] deferredFunctionBodies;
 
-    this() {
+    private bool safeMode;
+
+    this(bool safeMode = false, bool enableDCE = true) {
         indentLevel = 0;
         tempVarCounter = 0;
+        this.safeMode = safeMode;
+        this.enableDCE = enableDCE;
+    }
+
+    // Computes a conservative set of reachable free functions. This is the
+    // only kind of DCE implemented in this version; classes, methods,
+    // globals, and structs are kept. Overloaded free functions are also kept
+    // conservatively because call-site resolution needs argument types.
+    private void computeReachableFunctions(Program[] programs) {
+        if (!enableDCE) return;
+
+        // Roots: main / kernel_main / extern functions.
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                auto funcDecl = cast(FunctionDecl)decl;
+                if (funcDecl is null) continue;
+                string key = mangleFreeFunctionName(funcDecl);
+                if (funcDecl.isExtern || funcDecl.name == "main" ||
+                    funcDecl.name == "_start" || funcDecl.name == "kernel_main" ||
+                    isExternalAbiRoot(key)) {
+                    markFunctionReachable(key);
+                }
+            }
+        }
+
+        // Iteratively walk reachable function bodies to find more free calls.
+        // Classes and their methods are kept conservatively by DCE, so method
+        // bodies must take part in reachability too. Otherwise a free helper
+        // used only from a method can lose its prototype while its definition
+        // still appears later in the generated C.
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            foreach (prog; programs) {
+                currentModulePath = prog.modulePath;
+                foreach (decl; prog.declarations) {
+                    if (auto funcDecl = cast(FunctionDecl)decl) {
+                        string key = mangleFreeFunctionName(funcDecl);
+                        if (key !in reachableFunctions) continue;
+                        if (funcDecl.body_ is null) continue;
+                        currentNamespaceSegments = funcDecl.namespaceSegments;
+                        changed |= walkForReachableCalls(funcDecl.body_);
+                    } else if (auto classDecl = cast(ClassDecl)decl) {
+                        currentNamespaceSegments = classDecl.namespaceSegments;
+                        foreach (ctor; classDecl.constructors) {
+                            if (ctor.body_ !is null) changed |= walkForReachableCalls(ctor.body_);
+                        }
+                        if (classDecl.destructor !is null && classDecl.destructor.body_ !is null) {
+                            changed |= walkForReachableCalls(classDecl.destructor.body_);
+                        }
+                        foreach (method; classDecl.methods) {
+                            if (method.body_ !is null) changed |= walkForReachableCalls(method.body_);
+                        }
+                    } else if (auto structDecl = cast(StructDecl)decl) {
+                        currentNamespaceSegments = structDecl.namespaceSegments;
+                        foreach (ctor; structDecl.constructors) {
+                            if (ctor.body_ !is null) changed |= walkForReachableCalls(ctor.body_);
+                        }
+                    } else if (auto unionDecl = cast(UnionDecl)decl) {
+                        currentNamespaceSegments = unionDecl.namespaceSegments;
+                        foreach (ctor; unionDecl.constructors) {
+                            if (ctor.body_ !is null) changed |= walkForReachableCalls(ctor.body_);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private bool markFunctionReachable(string key) {
+        if (key in reachableFunctions) return false;
+        reachableFunctions[key] = true;
+        return true;
+    }
+
+    private bool isExternalAbiRoot(string key) {
+        if (key.startsWith("sys_") || key.startsWith("syscall")) {
+            return true;
+        }
+        switch (key) {
+            case "Task_schedule_next":
+            case "Task_should_reschedule_current":
+            case "Task_pick_next":
+            case "Syscall_dispatch":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Walk a statement or expression and mark any free functions called
+    // from reachable code as reachable. Returns true if anything changed.
+    private bool walkForReachableCalls(ASTNode node) {
+        if (node is null) return false;
+        bool changed = false;
+
+        if (auto block = cast(Block)node) {
+            foreach (stmt; block.statements) changed |= walkForReachableCalls(stmt);
+        } else if (auto exprStmt = cast(ExprStmt)node) {
+            changed |= walkForReachableCalls(exprStmt.expression);
+        } else if (auto varDecl = cast(VarDecl)node) {
+            if (varDecl.initializer) changed |= walkForReachableCalls(varDecl.initializer);
+        } else if (auto ifStmt = cast(IfStmt)node) {
+            changed |= walkForReachableCalls(ifStmt.condition);
+            changed |= walkForReachableCalls(ifStmt.thenBlock);
+            if (ifStmt.elseBlock) changed |= walkForReachableCalls(ifStmt.elseBlock);
+        } else if (auto whileStmt = cast(WhileStmt)node) {
+            changed |= walkForReachableCalls(whileStmt.condition);
+            changed |= walkForReachableCalls(whileStmt.body_);
+        } else if (auto forStmt = cast(ForStmt)node) {
+            if (forStmt.initializer) changed |= walkForReachableCalls(forStmt.initializer);
+            if (forStmt.condition) changed |= walkForReachableCalls(forStmt.condition);
+            if (forStmt.update) changed |= walkForReachableCalls(forStmt.update);
+            changed |= walkForReachableCalls(forStmt.body_);
+        } else if (auto foreachStmt = cast(ForeachStmt)node) {
+            changed |= walkForReachableCalls(foreachStmt.iterable);
+            changed |= walkForReachableCalls(foreachStmt.body_);
+        } else if (auto returnStmt = cast(ReturnStmt)node) {
+            if (returnStmt.value) changed |= walkForReachableCalls(returnStmt.value);
+        } else if (auto deferStmt = cast(DeferStmt)node) {
+            changed |= walkForReachableCalls(deferStmt.statement);
+        } else if (auto tryStmt = cast(TryStmt)node) {
+            changed |= walkForReachableCalls(tryStmt.tryBlock);
+            if (tryStmt.catchBlock) changed |= walkForReachableCalls(tryStmt.catchBlock);
+            if (tryStmt.finallyBlock) changed |= walkForReachableCalls(tryStmt.finallyBlock);
+        } else if (auto throwStmt = cast(ThrowStmt)node) {
+            changed |= walkForReachableCalls(throwStmt.value);
+        } else if (auto assertStmt = cast(AssertStmt)node) {
+            changed |= walkForReachableCalls(assertStmt.condition);
+            if (assertStmt.message) changed |= walkForReachableCalls(assertStmt.message);
+        } else if (auto destructStmt = cast(DestructuringStmt)node) {
+            changed |= walkForReachableCalls(destructStmt.initializer);
+        } else if (auto matchStmt = cast(MatchStmt)node) {
+            changed |= walkForReachableCalls(matchStmt.subject);
+            foreach (case_; matchStmt.cases) {
+                foreach (pattern; case_.patterns) changed |= walkForReachableCalls(pattern);
+                if (case_.body_) changed |= walkForReachableCalls(case_.body_);
+            }
+        } else if (auto deleteStmt = cast(DeleteStmt)node) {
+            changed |= walkForReachableCalls(deleteStmt.value);
+        } else if (auto binaryExpr = cast(BinaryExpr)node) {
+            changed |= walkForReachableCalls(binaryExpr.left);
+            changed |= walkForReachableCalls(binaryExpr.right);
+        } else if (auto unaryExpr = cast(UnaryExpr)node) {
+            changed |= walkForReachableCalls(unaryExpr.operand);
+        } else if (auto callExpr = cast(CallExpr)node) {
+            changed |= markReachableCall(callExpr.callee);
+            foreach (arg; callExpr.args) changed |= walkForReachableCalls(arg);
+        } else if (auto indexExpr = cast(IndexExpr)node) {
+            changed |= walkForReachableCalls(indexExpr.array);
+            changed |= walkForReachableCalls(indexExpr.index);
+        } else if (auto ident = cast(Identifier)node) {
+            changed |= markReachableCall(ident);
+        } else if (auto memberExpr = cast(MemberExpr)node) {
+            changed |= walkForReachableCalls(memberExpr.object);
+            changed |= markReachableCall(memberExpr);
+        } else if (auto castExpr = cast(CastExpr)node) {
+            changed |= walkForReachableCalls(castExpr.expression);
+        } else if (auto newExpr = cast(NewExpr)node) {
+            foreach (arg; newExpr.args) changed |= walkForReachableCalls(arg);
+        } else if (auto arrayLit = cast(ArrayLiteral)node) {
+            foreach (elem; arrayLit.elements) changed |= walkForReachableCalls(elem);
+        } else if (auto structLit = cast(StructLiteral)node) {
+            foreach (value; structLit.fieldValues) changed |= walkForReachableCalls(value);
+        } else if (auto tupleLit = cast(TupleLiteral)node) {
+            foreach (elem; tupleLit.elements) changed |= walkForReachableCalls(elem);
+        } else if (auto lambdaExpr = cast(LambdaExpr)node) {
+            if (lambdaExpr.body_) changed |= walkForReachableCalls(lambdaExpr.body_);
+        } else if (auto ifExpr = cast(IfExpr)node) {
+            changed |= walkForReachableCalls(ifExpr.condition);
+            changed |= walkForReachableCalls(ifExpr.thenBlock);
+            changed |= walkForReachableCalls(ifExpr.elseBlock);
+        } else if (auto sizeOfExpr = cast(SizeofExpr)node) {
+            // No runtime expressions to walk.
+        } else if (auto interpolated = cast(InterpolatedStringLiteral)node) {
+            foreach (expr; interpolated.expressions) changed |= walkForReachableCalls(expr);
+        } else if (auto propagate = cast(PropagateExpr)node) {
+            changed |= walkForReachableCalls(propagate.operand);
+        } else if (auto quoteExpr = cast(QuoteExpr)node) {
+            changed |= walkForReachableCalls(quoteExpr.body);
+        } else if (auto unquoteExpr = cast(UnquoteExpr)node) {
+            changed |= walkForReachableCalls(unquoteExpr.expression);
+        } else if (auto macroInvocation = cast(MacroInvocation)node) {
+            foreach (arg; macroInvocation.args) changed |= walkForReachableCalls(arg);
+        } else if (auto patternExpr = cast(PatternExpr)node) {
+            // PatternExpr wraps a non-AST Pattern hierarchy; it cannot
+            // reference free functions, so nothing to do.
+        } else if (auto rangeExpr = cast(RangeExpr)node) {
+            changed |= walkForReachableCalls(rangeExpr.start);
+            changed |= walkForReachableCalls(rangeExpr.end);
+        }
+
+        return changed;
+    }
+
+    // Marks a function (or all candidates of an overloaded base name) as
+    // reachable if it is an original free function. Returns true if the set
+    // changed.
+    private bool markReachableFunctionRef(string resolvedName) {
+        if (resolvedName.length == 0) return false;
+        if (resolvedName in originalFreeFunctionKeys) {
+            return markFunctionReachable(resolvedName);
+        }
+        if (auto candidates = resolvedName in functionCandidates) {
+            bool changed = false;
+            foreach (candidate; *candidates) {
+                string key = mangleFreeFunctionName(candidate);
+                if (key in originalFreeFunctionKeys) {
+                    changed |= markFunctionReachable(key);
+                }
+            }
+            return changed;
+        }
+        return false;
+    }
+
+    // If a callee expression resolves to an original free function, mark it
+    // reachable. Overloaded calls are resolved conservatively: all overloads
+    // sharing the resolved base name are marked reachable, so DCE never
+    // removes the wrong overload. Methods and generic instantiations are kept
+    // as part of their class/generation pass. Handles both simple identifiers
+    // and qualified paths (module aliases, namespace prefixes, namespace aliases).
+    private bool markReachableCall(ASTNode callee) {
+        if (auto ident = cast(Identifier)callee) {
+            try {
+                string resolved = resolveName(ident.name, (n) => (n in functionRegistry) !is null);
+                if (markReachableFunctionRef(resolved)) return true;
+                resolved = resolveName(ident.name, (n) => (n in functionCandidates) !is null);
+                return markReachableFunctionRef(resolved);
+            } catch (Exception e) {
+                // Ignore resolution failures during reachability; DCE is
+                // conservative and will keep the function.
+            }
+        } else if (auto member = cast(MemberExpr)callee) {
+            try {
+                string resolved = tryResolveQualifiedPath(member, (n) => (n in functionRegistry) !is null);
+                if (markReachableFunctionRef(resolved)) return true;
+                resolved = tryResolveQualifiedPath(member, (n) => (n in functionCandidates) !is null);
+                return markReachableFunctionRef(resolved);
+            } catch (Exception e) {
+                // Ignore resolution failures during reachability.
+            }
+        }
+        return false;
+    }
+
+    private bool isReachableFreeFunction(FunctionDecl funcDecl) {
+        if (!enableDCE) return true;
+        string key = mangleFreeFunctionName(funcDecl);
+        // Overloaded functions, methods, and generic instantiations are kept
+        // conservatively. Only plain, non-overloaded free functions from the
+        // original source are candidates for removal.
+        if (key !in originalFreeFunctionKeys) return true;
+        return (key in reachableFunctions) !is null;
     }
 
     private string indent() {
@@ -355,11 +636,11 @@ class CodeGenerator {
         resolveType(t);
 
         bool isPlainInt = !t.isPointer && !t.isArray &&
-            (t.name == "int" || t.name == "uint" ||
+            (t.name == "i64" || t.name == "u64" ||
              t.name == "int8" || t.name == "uint8" ||
              t.name == "int16" || t.name == "uint16" ||
              t.name == "int32" || t.name == "uint32");
-        bool isUnsigned = t.name == "uint" || t.name == "uint8" || t.name == "uint16" || t.name == "uint32";
+        bool isUnsigned = t.name == "u64" || t.name == "uint8" || t.name == "uint16" || t.name == "uint32";
 
         if (spec.radix.length > 0 || spec.width > 0) {
             if (!isPlainInt) {
@@ -386,8 +667,8 @@ class CodeGenerator {
         if (t.isPointer) return "%p";
 
         switch (t.name) {
-            case "int": case "int8": case "int16": case "int32": return "%d";
-            case "uint": case "uint8": case "uint16": case "uint32": return "%u";
+            case "i64": case "int8": case "int16": case "int32": return "%d";
+            case "u64": case "uint8": case "uint16": case "uint32": return "%u";
             default:
                 throw new CompileError(
                     format("Cannot interpolate a value of type '%s' inside a string - only " ~
@@ -477,6 +758,8 @@ class CodeGenerator {
         string sig = "";
         if (fn.isExtern) sig ~= "extern ";
         if (fn.isInterrupt) sig ~= "interrupt ";
+        if (fn.isVirtual) sig ~= "virtual ";
+        if (fn.isOverride) sig ~= "override ";
         sig ~= "func " ~ displayName ~ "(";
         foreach (i, p; fn.params) {
             if (i > 0) sig ~= ", ";
@@ -494,7 +777,9 @@ class CodeGenerator {
     }
 
     private string classSignature(ClassDecl cls, string displayName) {
-        return format("class %s (%d field(s), %d method(s))", displayName, cls.fields.length, cls.methods.length);
+        string baseSuffix = cls.baseClassName.length > 0 ? " : " ~ cls.baseClassName : "";
+        return format("class %s%s (%d field(s), %d method(s))",
+            displayName, baseSuffix, cls.fields.length, cls.methods.length);
     }
 
     private string structSignature(StructDecl st, string displayName) {
@@ -719,7 +1004,7 @@ class CodeGenerator {
     // over maximally compact output (see e.g. KHeap's arena design).
     private ASTNode[] desugarTaggedEnum(EnumDecl enumDecl) {
         VarDecl[] structFields;
-        structFields ~= new VarDecl("tag", new Type("int"), null, false, enumDecl.line, enumDecl.column);
+        structFields ~= new VarDecl("tag", new Type("i64"), null, false, enumDecl.line, enumDecl.column);
         foreach (variant; enumDecl.variants) {
             foreach (field; variant.fields) {
                 structFields ~= new VarDecl(format("%s_%s", variant.name, field.name), field.type,
@@ -796,6 +1081,9 @@ class CodeGenerator {
             } else if (auto enumDecl = cast(EnumDecl)decl) {
                 enumDecl.namespaceSegments = segments;
                 result ~= enumDecl;
+            } else if (auto grammarDecl = cast(GrammarDecl)decl) {
+                grammarDecl.namespaceSegments = segments;
+                result ~= grammarDecl;
             } else if (auto varDecl = cast(VarDecl)decl) {
                 varDecl.namespaceSegments = segments;
                 result ~= varDecl;
@@ -885,6 +1173,22 @@ class CodeGenerator {
                 }
             }
             prog.declarations = withEnumsDesugared;
+        }
+
+        // Desugar `grammar Name { ... }` blocks into the ClassDecl they
+        // actually compile to (see grammar.d's desugarGrammar) - same
+        // "before anything else looks at prog.declarations" placement and
+        // reasoning as the tagged-enum desugaring just above.
+        foreach (prog; programs) {
+            ASTNode[] withGrammarsDesugared;
+            foreach (decl; prog.declarations) {
+                if (auto grammarDecl = cast(GrammarDecl)decl) {
+                    withGrammarsDesugared ~= desugarGrammar(grammarDecl, prog.modulePath);
+                } else {
+                    withGrammarsDesugared ~= decl;
+                }
+            }
+            prog.declarations = withGrammarsDesugared;
         }
 
         // Pull every generic declaration (typeParams non-empty) out of
@@ -1019,6 +1323,7 @@ class CodeGenerator {
                     functionRegistry[key] = funcDecl;
                     functionModulePath[key] = prog.modulePath;
                     exportsByModule[prog.modulePath][key] = true;
+                    originalFreeFunctionKeys[key] = true;
                 } else if (auto classDecl = cast(ClassDecl)decl) {
                     string key = mangledClass(classDecl);
                     classRegistry[key] = classDecl;
@@ -1051,6 +1356,15 @@ class CodeGenerator {
         // Build per-module import metadata (aliases, selective imports) now
         // that every module's exports are known.
         collectImports(programs);
+
+        // Namespace aliases must be known before reachability analysis runs,
+        // since qualified calls like `hf.greet()` rely on them.
+        collectNamespaceAliases(programs);
+
+        // Compute which free functions are reachable before any code is
+        // emitted, so the forward-decl and definition loops below can skip
+        // the dead ones.
+        computeReachableFunctions(programs);
 
         // Process every parked `impl Trait for Type { ... }` block now
         // that classRegistry/structRegistry are populated (so a
@@ -1102,6 +1416,72 @@ class CodeGenerator {
                         if (field.bitWidth >= 0) {
                             checkBitfield(field);
                         }
+                    }
+                }
+            }
+        }
+
+        // Resolve `class Derived : Base { ... }` base-class references now
+        // that classRegistry is fully populated (line ~1044) - canonicalizes
+        // baseClassName in place (namespace-qualified) the same way an
+        // ordinary field/parameter type name gets resolved via resolveType,
+        // and enforces the scope this feature was built to: single
+        // inheritance only, mutually exclusive with generics (a generic
+        // ClassDecl's manual, non-reflective cloning in
+        // cloneClassDeclWithTypeSubs would otherwise need to also thread
+        // baseClassName through by hand, which it doesn't).
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                if (auto classDecl = cast(ClassDecl)decl) {
+                    if (classDecl.baseClassName.length == 0) continue;
+                    currentNamespaceSegments = classDecl.namespaceSegments;
+                    auto baseType = new Type(classDecl.baseClassName);
+                    resolveType(baseType);
+                    auto basePtr = baseType.name in classRegistry;
+                    if (basePtr is null) {
+                        throw new CompileError(
+                            format("Unknown base class '%s' for class '%s'",
+                                classDecl.baseClassName, classDecl.name),
+                            currentModulePath, classDecl.line, classDecl.column);
+                    }
+                    if (classDecl.typeParams.length > 0 || basePtr.typeParams.length > 0) {
+                        throw new CompileError(
+                            format("Class '%s' cannot inherit from '%s' - inheritance and generics " ~
+                                "are mutually exclusive", classDecl.name, classDecl.baseClassName),
+                            currentModulePath, classDecl.line, classDecl.column);
+                    }
+                    classDecl.baseClassName = baseType.name;
+                }
+            }
+        }
+
+        // Every baseClassName is now resolved/canonicalized - build the
+        // "has subclasses" set (see hasSubclasses' own comment) and, for
+        // every polymorphic class with zero explicit constructors written,
+        // synthesize one implicit trivial constructor (no params, empty
+        // body) so a subclass always has *some* real `_init` to chain
+        // into via `super()` - mutated onto the shared ClassDecl object
+        // itself (from classRegistry), not a local copy, so every other
+        // class's own super()-resolution sees the same synthesized
+        // constructor regardless of per-file generation order.
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto classDecl = cast(ClassDecl)decl) {
+                    if (classDecl.baseClassName.length > 0) {
+                        hasSubclasses[classDecl.baseClassName] = true;
+                        subclassesOf[classDecl.baseClassName] ~= classDecl;
+                    }
+                }
+            }
+        }
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto classDecl = cast(ClassDecl)decl) {
+                    if (classDecl.constructors.length == 0 && isPolymorphic(classDecl)) {
+                        classDecl.constructors ~= new FunctionDecl(
+                            mangledClass(classDecl) ~ "_constructor", [], new Type("void"),
+                            new Block([]), false, false, false, classDecl.line, classDecl.column);
                     }
                 }
             }
@@ -1202,6 +1582,42 @@ class CodeGenerator {
         }
         earlyDeclCode ~= "\n";
 
+        // Shared vtable struct typedef, once per hierarchy root - must be
+        // emitted before any class's own struct layout (the `void*
+        // __vtable` field is untyped precisely so it never needs this) or
+        // vtable-instance definition references it below, regardless of
+        // per-file declaration order (a subclass can be declared textually
+        // before its base). Iterated here, in its own pass straight after
+        // the class/struct/union typedef loop above, rather than inline in
+        // the main per-class forward-decl loop further down, for exactly
+        // that reason - every class's own opaque struct tag already exists
+        // by now, but a root reached only via a later-processed subclass
+        // wouldn't have emitted its typedef yet if this were folded into
+        // that per-class loop instead.
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto classDecl = cast(ClassDecl)decl) {
+                    if (classDecl.baseClassName.length > 0 || !isPolymorphic(classDecl)) continue;
+                    string rootName = mangledClass(classDecl);
+                    currentNamespaceSegments = classDecl.namespaceSegments;
+                    auto slots = collectVtableSlots(classDecl);
+                    earlyDeclCode ~= "typedef struct {\n    void (*destroy)(void*);\n";
+                    foreach (slot; slots) {
+                        Type retType = cloneType(slot.returnType);
+                        resolveType(retType);
+                        string paramTypesC = format("%s*", rootName);
+                        foreach (p; slot.params) {
+                            auto pt = cloneType(p.type);
+                            resolveType(pt);
+                            paramTypesC ~= format(", %s", typeToC(pt));
+                        }
+                        earlyDeclCode ~= format("    %s (*%s)(%s);\n", typeToC(retType), slot.name, paramTypesC);
+                    }
+                    earlyDeclCode ~= format("} %s_VTable;\n\n", rootName);
+                }
+            }
+        }
+
         // Forward declarations for functions and methods from all modules.
         // currentNamespaceSegments is set per-declaration so resolveType
         // resolves unqualified namespaced types exactly the way the real
@@ -1219,6 +1635,7 @@ class CodeGenerator {
             currentModulePath = prog.modulePath;
             foreach (decl; prog.declarations) {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
+                    if (!isReachableFreeFunction(funcDecl)) continue;
                     currentNamespaceSegments = funcDecl.namespaceSegments;
                     if (funcDecl.isExtern) {
                         // An `extern func SDL_Whatever(...)` binds to a
@@ -1290,6 +1707,7 @@ class CodeGenerator {
                     // Constructor forward declaration(s)
                     checkNoDuplicateSignatures(classDecl.constructors, format("constructor of '%s'", cName),
                         classDecl.line, classDecl.column);
+                    bool classIsPolymorphic = isPolymorphic(classDecl);
                     foreach (ctor; classDecl.constructors) {
                         string params = "";
                         foreach (i, param; ctor.params) {
@@ -1298,11 +1716,77 @@ class CodeGenerator {
                             params ~= format("%s %s", typeToC(param.type), param.name);
                         }
                         earlyDeclCode ~= format("%s* %s(%s);\n", cName, mangleConstructorName(classDecl, cName, ctor), params);
+                        // A polymorphic class's constructor also has an
+                        // internal `_init` half (see
+                        // generatePolymorphicConstructor) - a brand-new
+                        // symbol with no pre-existing forward-decl site.
+                        if (classIsPolymorphic) {
+                            string initParams = format("%s* self%s", cName, params.length > 0 ? ", " ~ params : "");
+                            earlyDeclCode ~= format("void %s(%s);\n",
+                                mangleInitName(classDecl, cName, ctor), initParams);
+                        }
                     }
 
-                    // Destructor forward declaration
-                    if (classDecl.destructor) {
+                    // Destructor forward declaration. A polymorphic class
+                    // always gets one regardless of whether it wrote its
+                    // own destructor{} block (see generatePolymorphicDestructor) -
+                    // a base-class-typed field/vtable slot must always
+                    // resolve to something real - plus the internal
+                    // __destroy_impl half.
+                    if (classIsPolymorphic) {
                         earlyDeclCode ~= format("void %s_destroy(void* ptr);\n", cName);
+                        earlyDeclCode ~= format("void %s__destroy_impl(void* ptr);\n", cName);
+                    } else if (classDecl.destructor) {
+                        earlyDeclCode ~= format("void %s_destroy(void* ptr);\n", cName);
+                    }
+
+                    // This class's own concrete vtable instance - one slot
+                    // per distinct virtual/override method name anywhere in
+                    // the whole hierarchy (see collectVtableSlots), each
+                    // filled with whichever implementation this class
+                    // itself actually resolves to (its own override, or the
+                    // nearest ancestor's, via resolveMethodOnHierarchy -
+                    // the same lookup a call site uses). Built here, in the
+                    // same pass as every method's forward declaration, but
+                    // *appended to a separate buffer* rather than
+                    // earlyDeclCode directly and spliced in right after it
+                    // (see generateMultiple) - the initializer can
+                    // reference any class's method by name, including one
+                    // from a class not yet reached by this same loop, and
+                    // needs every prototype to already exist first. A
+                    // function pointer cast is required at each slot
+                    // (rather than changing the method's own C signature)
+                    // because the slot's declared parameter type is the
+                    // hierarchy *root's* pointer type, while the actual
+                    // implementing function's `self` is typed to whichever
+                    // class really declares it - exactly the same
+                    // prefix-compatible-but-nominally-different-types
+                    // situation the `super(...)` chaining call already
+                    // works around with an explicit cast.
+                    if (classIsPolymorphic) {
+                        ClassDecl root = hierarchyRoot(classDecl);
+                        string rootName = mangledClass(root);
+                        auto slots = collectVtableSlots(root);
+                        string vtCode = format("static %s_VTable %s_vtable = {\n", rootName, cName);
+                        vtCode ~= format("    .destroy = %s__destroy_impl,\n", cName);
+                        foreach (slot; slots) {
+                            ClassDecl owner;
+                            auto candidates = resolveMethodOnHierarchy(classDecl, slot.name, owner);
+                            if (candidates.length == 0) continue;
+                            string implSymbol = mangleMethodName(owner, mangledClass(owner), candidates[0]);
+                            Type retType = cloneType(slot.returnType);
+                            resolveType(retType);
+                            string paramTypesC = format("%s*", rootName);
+                            foreach (p; slot.params) {
+                                auto pt = cloneType(p.type);
+                                resolveType(pt);
+                                paramTypesC ~= format(", %s", typeToC(pt));
+                            }
+                            vtCode ~= format("    .%s = (%s (*)(%s))%s,\n",
+                                slot.name, typeToC(retType), paramTypesC, implSymbol);
+                        }
+                        vtCode ~= "};\n\n";
+                        vtableInstanceDefs ~= vtCode;
                     }
 
                     // Method forward declarations
@@ -1560,6 +2044,21 @@ class CodeGenerator {
         // so that generic destructors can call regular class destructors
         code ~= earlyDeclCode;
 
+        // Vtable instance definitions - see their own construction comment
+        // (in the per-class forward-decl loop above) for why these are
+        // spliced in right here rather than folded into earlyDeclCode
+        // itself: every method/constructor/destructor across every class
+        // is now forward-declared (earlyDeclCode just above is complete),
+        // so an initializer here can safely name any of them regardless of
+        // which class it belongs to or where it sits in the source.
+        if (vtableInstanceDefs.length > 0) {
+            code ~= "// Vtable instances - one per concrete polymorphic class\n";
+            foreach (vtDef; vtableInstanceDefs) {
+                code ~= vtDef;
+            }
+            code ~= "\n";
+        }
+
         if (interpBufferDecls.length > 0) {
             code ~= "// String-interpolation scratch buffers (one per `\\(...)` call site)\n";
             foreach (bufDecl; interpBufferDecls) {
@@ -1662,6 +2161,7 @@ class CodeGenerator {
 
     private string generateDeclaration(ASTNode node) {
         if (auto funcDecl = cast(FunctionDecl)node) {
+            if (!isReachableFreeFunction(funcDecl)) return "";
             return generateFunction(funcDecl);
         } else if (auto classDecl = cast(ClassDecl)node) {
             return generateClass(classDecl);
@@ -1709,6 +2209,38 @@ class CodeGenerator {
             return prefix ~ "_" ~ suffix;
         }
         return "";
+    }
+
+    // Like isKnownSymbol, but also includes global variables so alias
+    // collection can run before any function-level variableTypes exist.
+    private bool isKnownSymbolForAlias(string name) {
+        return (name in functionRegistry) !is null || (name in classRegistry) !is null ||
+               (name in structRegistry) !is null || (name in globalVarRegistry) !is null;
+    }
+
+    // Namespace aliases (`alias hf = HAL.Foo`) are needed by dead-code
+    // reachability, which runs before generateAlias is called. Pre-register
+    // them here; generateAlias will re-register them harmlessly when it
+    // emits the alias #defines later.
+    private void collectNamespaceAliases(Program[] programs) {
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                auto aliasDecl = cast(AliasDecl)decl;
+                if (aliasDecl is null) continue;
+                currentNamespaceSegments = aliasDecl.namespaceSegments;
+                string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
+
+                bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
+                    (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
+                if (isTypeAlias) continue;
+
+                string flatTarget = aliasDecl.targetPath.join("_");
+                if (!isKnownSymbolForAlias(flatTarget) && isNamespacePrefix(flatTarget)) {
+                    namespaceAliases[mangledName] = flatTarget;
+                }
+            }
+        }
     }
 
     private bool isKnownSymbol(string name) {
@@ -1943,6 +2475,7 @@ class CodeGenerator {
 
         foreach (name, funcDecl; functionRegistry) {
             if (funcDecl.isExtern) continue;
+            if (name in originalFreeFunctionKeys && (name in reachableFunctions) is null) continue;
             string file = name in functionModulePath ? baseName(functionModulePath[name]) : "?";
             entries ~= format("    { %s, (void*)%s, %s, %d },\n",
                 cStringLiteral(name), name, cStringLiteral(file), funcDecl.line);
@@ -2307,13 +2840,187 @@ class CodeGenerator {
     // `Vector<String>`'s own methods do `sizeof(String)`-style pointer
     // arithmetic and need String's layout complete first, even though
     // Vector_String's *own* layout - just a `String*` field - never did).
+    // Every field declared by `cd`'s ancestors, root-first (the
+    // immediate base's own ancestors before the immediate base's own
+    // fields) - the exact order generateClassLayout needs to flatten
+    // them into a derived struct so that a `Base*` and a `Derived*` agree
+    // on every inherited field's offset. Empty for a class with no base.
+    private VarDecl[] collectAncestorFields(ClassDecl cd) {
+        if (cd.baseClassName.length == 0) return [];
+        auto basePtr = cd.baseClassName in classRegistry;
+        if (basePtr is null) return []; // already validated during the base-class resolution pass
+        return collectAncestorFields(*basePtr) ~ basePtr.fields;
+    }
+
+    // A class that has a base, or is itself a base for something else -
+    // see hasSubclasses' own comment. Only a polymorphic class pays for
+    // the constructor/destructor _new+_init/_destroy+__destroy_impl split
+    // (and, once vtables exist, the dispatch machinery); an ordinary class
+    // with no inheritance relationship at all generates exactly as it did
+    // before this feature existed.
+    private bool isPolymorphic(ClassDecl cd) {
+        return cd.baseClassName.length > 0 || (mangledClass(cd) in hasSubclasses) !is null;
+    }
+
+    // A class only ever gets a real `ClassName_destroy` C symbol generated
+    // if it wrote its own destructor{} block or is polymorphic (see
+    // generateClassMethods/generatePolymorphicDestructor) - a plain class
+    // with neither (an ordinary value-holder like RadioGroup) has no
+    // destructor at all. Every field-release site below (`rc_release(self->
+    // field, <symbol>)`) needs *some* symbol to name regardless, since it
+    // was already assuming one always exists for any class-typed field -
+    // this returns the real one when there is one, or the literal `NULL`
+    // otherwise, which rc_release's own contract already treats as "nothing
+    // to run at zero refcount" (see runtime.c).
+    private string fieldDestructorSymbol(Type fieldType) {
+        auto classDecl = fieldType.name in classRegistry;
+        if (classDecl !is null && (classDecl.destructor !is null || isPolymorphic(*classDecl))) {
+            return format("%s_destroy", fieldType.name);
+        }
+        return "NULL";
+    }
+
+    // Looks up a field by name anywhere in cd's own fields or its ancestor
+    // chain (own fields checked first, so a derived field always wins over
+    // a same-named ancestor one - though generateClassLayout already
+    // rejects that collision at compile time). Needed because the C struct
+    // is flattened (self->x already works for inherited fields with zero
+    // codegen changes) but the LLPL-level AST field list on `cd` itself
+    // only ever holds that class's own declared fields - every "find field
+    // by name for member access/type-inference" site has to walk the
+    // chain explicitly instead of just scanning cd.fields.
+    private VarDecl findFieldOnHierarchy(ClassDecl cd, string fieldName) {
+        ClassDecl owner;
+        return findFieldOnHierarchy(cd, fieldName, owner);
+    }
+
+    // Same lookup, but also reports which class in the chain actually
+    // declares the field (via `owner`) - needed anywhere the caller must
+    // distinguish "found on cd itself" from "inherited from an ancestor",
+    // such as checkMemberAccess's private-field check: `private` is not
+    // inherited-visible (see class ClassDecl comment / plan Scope), so a
+    // private ancestor field must stay inaccessible from a derived class's
+    // own methods, which only holds if the check runs against the field's
+    // true declaring class, not the receiver's static type.
+    private VarDecl findFieldOnHierarchy(ClassDecl cd, string fieldName, out ClassDecl owner) {
+        foreach (field; cd.fields) {
+            if (field.name == fieldName) { owner = cd; return field; }
+        }
+        if (cd.baseClassName.length == 0) return null;
+        auto basePtr = cd.baseClassName in classRegistry;
+        if (basePtr is null) return null;
+        return findFieldOnHierarchy(*basePtr, fieldName, owner);
+    }
+
+    // The topmost ancestor of cd's hierarchy (cd itself if it has no
+    // base) - the class the shared vtable struct type is named after,
+    // since every class in a hierarchy dispatches through the same
+    // struct layout regardless of how deep it sits.
+    private ClassDecl hierarchyRoot(ClassDecl cd) {
+        if (cd.baseClassName.length == 0) return cd;
+        auto basePtr = cd.baseClassName in classRegistry;
+        if (basePtr is null) return cd;
+        return hierarchyRoot(*basePtr);
+    }
+
+    // Finds the method(s) named `name` reachable from `cd`: cd's own
+    // methods first (so an override always wins over whatever it
+    // overrides), else the nearest ancestor that declares one, walking up
+    // via baseClassName exactly like findFieldOnHierarchy. `owner` reports
+    // which class actually declares the returned candidates - callers must
+    // mangle/check-access against `owner`, never against `cd` itself,
+    // since a purely-inherited (non-overridden) method was only ever
+    // generated once, as `owner`'s own C symbol (see mangleMethodName) -
+    // re-mangling it against a receiver's more-derived static class would
+    // name a symbol that was never generated.
+    private FunctionDecl[] resolveMethodOnHierarchy(ClassDecl cd, string name, out ClassDecl owner) {
+        auto candidates = methodCandidatesNamed(cd, name);
+        if (candidates.length > 0) { owner = cd; return candidates; }
+        if (cd.baseClassName.length == 0) return [];
+        auto basePtr = cd.baseClassName in classRegistry;
+        if (basePtr is null) return [];
+        return resolveMethodOnHierarchy(*basePtr, name, owner);
+    }
+
+    // The full, deduped list of virtual/override method slots anywhere in
+    // root's whole hierarchy (root itself plus every descendant, walked
+    // via subclassesOf) - one representative FunctionDecl per distinct
+    // name, used only for that slot's C signature (return + param types)
+    // when emitting the shared vtable struct type. `override` requires an
+    // exact signature match against whatever it overrides (Scope: "no
+    // covariance"), so every declaration sharing a name is expected to
+    // agree; a mismatch is a compile error here rather than silently
+    // picking one arbitrarily.
+    private FunctionDecl[] collectVtableSlots(ClassDecl root) {
+        FunctionDecl[] slots;
+        void visit(ClassDecl cd) {
+            foreach (m; cd.methods) {
+                if (!m.isVirtual && !m.isOverride) continue;
+                bool matched = false;
+                foreach (existing; slots) {
+                    if (existing.name != m.name) continue;
+                    matched = true;
+                    if (!sameParameterTypes(existing.params, m.params) ||
+                            !sameErrorType(existing.returnType, m.returnType)) {
+                        collectedErrors ~= new CompileError(
+                            format("'%s' overrides '%s.%s' with a different signature - " ~
+                                "overrides must match exactly (no covariance)",
+                                mangleMethodName(cd, mangledClass(cd), m), mangledClass(root), m.name),
+                            currentModulePath, m.line, m.column);
+                    }
+                    break;
+                }
+                if (!matched) slots ~= m;
+            }
+            foreach (sub; subclassesOf.get(mangledClass(cd), [])) visit(sub);
+        }
+        visit(root);
+        return slots;
+    }
+
+    // Struct layout is flattened, not nested: a derived class's fields
+    // are `RefCount ref_count; <every ancestor field, root-to-leaf>;
+    // <this class's own fields>;` - literally copied in as plain flat
+    // members (the same textual-flattening style desugarTaggedEnum uses
+    // for its own struct), not a nested `struct Base __base;` member.
+    // This is what lets ordinary field access (`self->x`) work completely
+    // unchanged everywhere else in codegen for an inherited field - it's
+    // indistinguishable from an own field once flattened - and what makes
+    // a `Derived*` safely reinterpretable as a `Base*` (the base's own
+    // fields, including its RefCount, always sit at the same offsets).
     private string generateClassLayout(ClassDecl classDecl) {
         string cName = mangledClass(classDecl);
         currentNamespaceSegments = classDecl.namespaceSegments;
         string code = "";
         code ~= format("struct %s {\n", cName);
         code ~= "    RefCount ref_count;\n";
+        // Every polymorphic class gets this at the same offset (right
+        // after ref_count, before any ancestor/own field) - since it's
+        // added independently here rather than threaded through
+        // collectAncestorFields, a derived class's own `__vtable` line
+        // lines up with its base's regardless of how many fields either
+        // declares. Untyped (void*) rather than a strongly-typed
+        // `RootName_VTable*` because a subclass can be declared textually
+        // before its base (classes are emitted per-file in declaration
+        // order), so the vtable struct type isn't always known yet at
+        // every point a class layout is emitted - every dispatch site
+        // casts it on use instead.
+        if (isPolymorphic(classDecl)) {
+            code ~= "    void* __vtable;\n";
+        }
+        VarDecl[] ancestorFields = collectAncestorFields(classDecl);
+        foreach (field; ancestorFields) {
+            code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
+        }
         foreach (field; classDecl.fields) {
+            foreach (ancestorField; ancestorFields) {
+                if (ancestorField.name == field.name) {
+                    throw new CompileError(
+                        format("Field '%s' in class '%s' is already defined in its base class chain",
+                            field.name, classDecl.name),
+                        currentModulePath, field.line, field.column);
+                }
+            }
             code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
         }
         code ~= "};\n\n";
@@ -2328,11 +3035,15 @@ class CodeGenerator {
         currentNamespaceSegments = classDecl.namespaceSegments;
         string code = "";
 
+        bool polymorphic = isPolymorphic(classDecl);
         foreach (ctor; classDecl.constructors) {
-            code ~= generateConstructor(classDecl, ctor);
+            code ~= polymorphic ? generatePolymorphicConstructor(classDecl, ctor)
+                                 : generateConstructor(classDecl, ctor);
         }
 
-        if (classDecl.destructor) {
+        if (polymorphic) {
+            code ~= generatePolymorphicDestructor(classDecl);
+        } else if (classDecl.destructor) {
             code ~= generateDestructor(classDecl, classDecl.destructor);
         }
 
@@ -2459,6 +3170,147 @@ class CodeGenerator {
         return code;
     }
 
+    // True when `stmt` is `super(args)` - a constructor's own leading
+    // statement chaining into its base class's constructor. `super` is
+    // not a keyword (no TokenType.Super exists) - it parses as a plain
+    // `Identifier("super")`, the same "special contextual name resolved
+    // by codegen convention, not the lexer" pattern `self` already uses,
+    // so this is recognized purely by shape: an ExprStmt wrapping a
+    // CallExpr whose callee is exactly that identifier.
+    private bool isSuperConstructorCall(ASTNode stmt, out ASTNode[] superArgs) {
+        auto exprStmt = cast(ExprStmt)stmt;
+        if (exprStmt is null) return false;
+        auto callExpr = cast(CallExpr)exprStmt.expression;
+        if (callExpr is null) return false;
+        auto ident = cast(Identifier)callExpr.callee;
+        if (ident is null || ident.name != "super") return false;
+        superArgs = callExpr.args;
+        return true;
+    }
+
+    // A polymorphic class's constructor (see isPolymorphic) generates two
+    // C functions instead of generateConstructor's usual one:
+    //
+    //   <cName>_new(args) -> cName*   - allocates via rc_alloc, then hands
+    //                                   off to...
+    //   <cName>_init(self, args)      - a plain void function, no
+    //                                   allocation, running this
+    //                                   constructor's own body against an
+    //                                   already-allocated `self` - first
+    //                                   chaining into the base class's own
+    //                                   `_init` (explicit `super(args)`,
+    //                                   or an implicit zero-arg call if
+    //                                   the constructor didn't write one)
+    //                                   if this class has a base.
+    //
+    // Only ONE rc_alloc ever happens per `new`, in the outermost concrete
+    // class's own `_new` - every ancestor's own `_init` just runs against
+    // that same already-allocated `self`, safe because the flattened
+    // layout (see generateClassLayout) makes a `Derived*` and a `Base*`
+    // agree on every ancestor field's offset.
+    private string generatePolymorphicConstructor(ClassDecl classDecl, FunctionDecl constructor) {
+        string cName = mangledClass(classDecl);
+        string newName = mangleConstructorName(classDecl, cName, constructor);
+        string initName = mangleInitName(classDecl, cName, constructor);
+
+        string prevClassName = currentClassName;
+        currentClassName = cName;
+        currentNamespaceSegments = classDecl.namespaceSegments;
+        variableTypes["self"] = new Type(cName);
+        variableCNames = null;
+        shadowRenameCounter = 0;
+
+        string paramsNoSelf = "";
+        string forwardArgs = "";
+        foreach (i, param; constructor.params) {
+            resolveType(param.type);
+            if (i > 0) { paramsNoSelf ~= ", "; forwardArgs ~= ", "; }
+            paramsNoSelf ~= format("%s %s", typeToC(param.type), param.name);
+            forwardArgs ~= param.name;
+            variableTypes[param.name] = param.type;
+        }
+        string initParams = format("%s* self%s", cName, paramsNoSelf.length > 0 ? ", " ~ paramsNoSelf : "");
+
+        // The outward `_new` - thin: allocate, then delegate to `_init`.
+        string code = "";
+        code ~= format("%s* %s(%s) {\n", cName, newName, paramsNoSelf);
+        indentLevel++;
+        code ~= indent() ~ format("%s* self = (%s*)rc_alloc(sizeof(%s));\n", cName, cName, cName);
+        code ~= indent() ~ "if (!self) return NULL;\n";
+        code ~= indent() ~ "rc_init(&self->ref_count);\n";
+        // Set once, here, in the outermost concrete class's own `_new` -
+        // every ancestor's `_init` below just runs against this same
+        // already-allocated `self` and never touches `__vtable` again.
+        code ~= indent() ~ format("self->__vtable = (void*)&%s_vtable;\n", cName);
+        code ~= indent() ~ format("%s(self%s%s);\n", initName, forwardArgs.length > 0 ? ", " : "", forwardArgs);
+        code ~= indent() ~ "return self;\n";
+        indentLevel--;
+        code ~= "}\n\n";
+
+        // The internal `_init` - this class's own body, plus base
+        // chaining, against an already-allocated `self`.
+        code ~= format("void %s(%s) {\n", initName, initParams);
+        indentLevel++;
+
+        deferredStatements = [];
+
+        ASTNode[] statements = constructor.body_ ? constructor.body_.statements : [];
+        size_t bodyStart = 0;
+        ASTNode[] superArgs;
+        bool hasExplicitSuper = statements.length > 0 && isSuperConstructorCall(statements[0], superArgs);
+        if (hasExplicitSuper) bodyStart = 1;
+
+        string chainCode = "";
+        if (classDecl.baseClassName.length > 0) {
+            try {
+                auto basePtr = classDecl.baseClassName in classRegistry;
+                ClassDecl baseDecl = *basePtr;
+                int chainLine = hasExplicitSuper ? statements[0].line : constructor.line;
+                int chainColumn = hasExplicitSuper ? statements[0].column : constructor.column;
+                string baseDesc = format("constructor of '%s'", baseDecl.name);
+                FunctionDecl baseCtor = resolveOverload(baseDecl.constructors, superArgs, [], baseDesc,
+                    chainLine, chainColumn);
+                ASTNode[] resolvedBaseArgs = applyImplicitArgumentConversions(
+                    resolveCallArguments(baseCtor.params, false, superArgs, [], baseDesc, chainLine, chainColumn),
+                    baseCtor.params);
+                string baseInitName = mangleInitName(baseDecl, mangledClass(baseDecl), baseCtor);
+                string baseArgsCode = "";
+                foreach (i, arg; resolvedBaseArgs) {
+                    if (i > 0) baseArgsCode ~= ", ";
+                    baseArgsCode ~= generateExpression(arg);
+                }
+                chainCode ~= indent() ~ format("%s((%s*)self%s%s);\n", baseInitName, mangledClass(baseDecl),
+                    baseArgsCode.length > 0 ? ", " : "", baseArgsCode);
+            } catch (CompileError e) {
+                collectedErrors ~= e;
+            }
+        } else if (hasExplicitSuper) {
+            collectedErrors ~= new CompileError(
+                format("'super(...)' used in class '%s', which has no base class", classDecl.name),
+                currentModulePath, statements[0].line, statements[0].column);
+        }
+
+        string bodyCode = "";
+        foreach (stmt; statements[bodyStart .. $]) {
+            bodyCode ~= generateBodyStatement(stmt, false);
+        }
+
+        code ~= deferFrameDeclarations();
+        code ~= chainCode;
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+        indentLevel--;
+        code ~= "}\n\n";
+
+        currentClassName = prevClassName;
+        foreach (param; constructor.params) {
+            variableTypes.remove(param.name);
+        }
+        variableTypes.remove("self");
+
+        return code;
+    }
+
     private string generateDestructor(ClassDecl classDecl, FunctionDecl destructor) {
         string cName = mangledClass(classDecl);
         currentNamespaceSegments = classDecl.namespaceSegments;
@@ -2512,8 +3364,8 @@ class CodeGenerator {
         foreach (field; classDecl.fields) {
             if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer && !field.type.isArray &&
                     !isStructTypeName(field.type.name) && !isUnionTypeName(field.type.name)) {
-                code ~= indent() ~ format("if (self->%s) rc_release(self->%s, %s_destroy);\n",
-                    field.name, field.name, field.type.name);
+                code ~= indent() ~ format("if (self->%s) rc_release(self->%s, %s);\n",
+                    field.name, field.name, fieldDestructorSymbol(field.type));
             }
         }
 
@@ -2522,6 +3374,97 @@ class CodeGenerator {
 
         variableTypes.remove("self");
 
+        return code;
+    }
+
+    // A polymorphic class's destructor (see isPolymorphic) is a mirrored
+    // split of generatePolymorphicConstructor, in reverse: construction
+    // runs root-to-leaf via `super(...)` chaining into `_init`; destruction
+    // runs leaf-to-root via `__destroy_impl` cascading into the base's own.
+    //
+    //   <cName>_destroy(void* ptr)         - the exact symbol every
+    //                                         existing rc_release/delete
+    //                                         call site already
+    //                                         interpolates by static type
+    //                                         name; a one-line trampoline
+    //                                         to __destroy_impl. Stage 5
+    //                                         will redirect this trampoline
+    //                                         through the hierarchy's
+    //                                         vtable instead, for genuine
+    //                                         runtime-polymorphic dispatch
+    //                                         (deleting a Widget* that's
+    //                                         actually a Button instance
+    //                                         must run Button's own
+    //                                         cleanup) - until then it's
+    //                                         only correct when destruction
+    //                                         happens through the exact
+    //                                         static type, which is all
+    //                                         that's exercised before
+    //                                         Stage 5 introduces mixed-type
+    //                                         containers.
+    //   <cName>__destroy_impl(void* ptr)   - this class's own destructor
+    //                                         body + own-field releases,
+    //                                         then cascades into
+    //                                         BaseClassName__destroy_impl.
+    private string generatePolymorphicDestructor(ClassDecl classDecl) {
+        string cName = mangledClass(classDecl);
+        currentNamespaceSegments = classDecl.namespaceSegments;
+        variableTypes["self"] = new Type(cName);
+        variableCNames = null;
+        shadowRenameCounter = 0;
+
+        string rootName = mangledClass(hierarchyRoot(classDecl));
+
+        string code = "";
+        // Dispatches through the hierarchy's vtable rather than calling
+        // this class's own __destroy_impl directly - deleting via a
+        // Base*-typed pointer that actually points at a more-derived
+        // instance must still run the derived class's own cleanup first.
+        code ~= format("void %s_destroy(void* ptr) {\n", cName);
+        indentLevel++;
+        code ~= indent() ~ format("%s* self = (%s*)ptr;\n", cName, cName);
+        code ~= indent() ~ format("((%s_VTable*)self->__vtable)->destroy(ptr);\n", rootName);
+        indentLevel--;
+        code ~= "}\n\n";
+
+        code ~= format("void %s__destroy_impl(void* ptr) {\n", cName);
+        indentLevel++;
+        code ~= indent() ~ format("%s* self = (%s*)ptr;\n", cName, cName);
+
+        deferredStatements = [];
+
+        string bodyCode = "";
+        if (classDecl.destructor !is null && classDecl.destructor.body_ !is null) {
+            foreach (stmt; classDecl.destructor.body_.statements) {
+                bodyCode ~= generateBodyStatement(stmt, false);
+            }
+        }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+
+        // See generateDestructor's matching comment.
+        foreach (field; classDecl.fields) {
+            if (!isPrimitiveTypeName(field.type.name) && !field.type.isPointer && !field.type.isArray &&
+                    !isStructTypeName(field.type.name) && !isUnionTypeName(field.type.name)) {
+                code ~= indent() ~ format("if (self->%s) rc_release(self->%s, %s);\n",
+                    field.name, field.name, fieldDestructorSymbol(field.type));
+            }
+        }
+
+        if (classDecl.baseClassName.length > 0) {
+            auto basePtr = classDecl.baseClassName in classRegistry;
+            if (basePtr !is null) {
+                string baseName = mangledClass(*basePtr);
+                code ~= indent() ~ format("%s__destroy_impl((%s*)self);\n", baseName, baseName);
+            }
+        }
+
+        indentLevel--;
+        code ~= "}\n\n";
+
+        variableTypes.remove("self");
         return code;
     }
 
@@ -2835,6 +3778,91 @@ class CodeGenerator {
             a.isArray == b.isArray && a.arraySize == b.arraySize;
     }
 
+    private bool isIntegerType(Type t) {
+        if (t is null || t.isPointer || t.isArray) return false;
+        switch (t.name) {
+            case "i64": case "u64":
+            case "int8": case "uint8":
+            case "int16": case "uint16":
+            case "int32": case "uint32":
+            case "int64": case "uint64":
+            case "char":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool isSignedIntegerType(Type t) {
+        if (!isIntegerType(t)) return false;
+        switch (t.name) {
+            case "u64": case "uint8": case "uint16": case "uint32": case "uint64":
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    private bool isUnsignedIntegerType(Type t) {
+        return isIntegerType(t) && !isSignedIntegerType(t);
+    }
+
+    private bool isFloatType(Type t) {
+        return t !is null && !t.isPointer && !t.isArray &&
+            (t.name == "float" || t.name == "double");
+    }
+
+    private bool isNumericType(Type t) {
+        return isIntegerType(t) || isFloatType(t);
+    }
+
+    private int numericCoercionCost(Type source, Type target) {
+        if (sameErrorType(source, target)) return 0;
+        if (source is null || target is null) return -1;
+        if (source.isPointer || source.isArray || target.isPointer || target.isArray) return -1;
+
+        // Limited implicit numeric conversions: integer values can flow to
+            // float/double, and signed integer values can flow to unsigned
+        // integer parameters/targets. Keep float narrowing and uint->int
+        // explicit; those lose information in ways that are hard to spot at
+        // a call site.
+        if (isIntegerType(source) && isFloatType(target)) return 1;
+        if (isSignedIntegerType(source) && isUnsignedIntegerType(target)) return 1;
+        return -1;
+    }
+
+    private bool canNumericCoerce(Type source, Type target) {
+        return numericCoercionCost(source, target) >= 0;
+    }
+
+    private Type numericBinaryResultType(Type left, Type right) {
+        if (!isNumericType(left) || !isNumericType(right)) return null;
+        if (left.name == "double" || right.name == "double") return new Type("double");
+        if (left.name == "float" || right.name == "float") return new Type("float");
+        if (isUnsignedIntegerType(left) && canNumericCoerce(right, left)) return cloneType(left);
+        if (isUnsignedIntegerType(right) && canNumericCoerce(left, right)) return cloneType(right);
+        return cloneType(left);
+    }
+
+    private ASTNode insertNumericCoercionIfNeeded(ASTNode arg, Type targetType) {
+        Type argType;
+        try {
+            argType = inferType(arg);
+            resolveType(argType);
+        } catch (Exception e) {
+            return arg;
+        }
+        resolveType(targetType);
+        if (!sameErrorType(argType, targetType) && canNumericCoerce(argType, targetType)) {
+            return new CastExpr(cloneType(targetType), arg, arg.line, arg.column);
+        }
+        return arg;
+    }
+
+    private string generateNumericCoercedExpression(ASTNode expr, Type targetType) {
+        return generateExpression(insertNumericCoercionIfNeeded(expr, targetType));
+    }
+
     private int nearestCatchFrameIndex() {
         int i = cast(int)tryFrameStack.length - 1;
         while (i >= 0) {
@@ -3135,6 +4163,17 @@ class CodeGenerator {
             generateExpression(stmt.value), t.name);
     }
 
+    private string generateAssertStmt(AssertStmt stmt) {
+        string condition = generateExpression(stmt.condition);
+        string message = "";
+        if (stmt.message !is null) {
+            message = generateExpression(stmt.message);
+        } else {
+            message = format("\"assertion failed at %s:%d\"", currentModulePath, stmt.line);
+        }
+        return indent() ~ format("if (!(%s)) llpl_panic(%s);\n", condition, message);
+    }
+
     private string generatePropagateExpr(PropagateExpr propExpr) {
         Type operandType;
         try {
@@ -3370,7 +4409,13 @@ class CodeGenerator {
                     // YamlValue.as_string() automatically, the same way
                     // `let s: string = someYamlValue as string` does below.
                     string converted = tryImplicitConversionCall(varDecl.initializer, varDecl.type);
-                    code ~= " = " ~ (converted.length > 0 ? converted : generateExpression(varDecl.initializer));
+                    if (converted.length > 0) {
+                        code ~= " = " ~ converted;
+                    } else {
+                        ASTNode initExpr = insertUpcastIfNeeded(varDecl.initializer, varDecl.type);
+                        initExpr = insertNumericCoercionIfNeeded(initExpr, varDecl.type);
+                        code ~= " = " ~ generateExpression(initExpr);
+                    }
                 }
             } else if (varDecl.type.isNullableSugar) {
                 // No initializer at all (`let x: int?`) - default to an
@@ -3445,7 +4490,12 @@ class CodeGenerator {
                 } else if (auto structLit = cast(StructLiteral)returnStmt.value) {
                     valueCode = generateStructLiteralValue(structLit, currentReturnTypeAsWritten);
                 } else {
-                    valueCode = generateExpression(returnStmt.value);
+                    ASTNode retExpr = returnStmt.value;
+                    if (currentReturnType !is null) {
+                        retExpr = insertUpcastIfNeeded(retExpr, currentReturnType);
+                        retExpr = insertNumericCoercionIfNeeded(retExpr, currentReturnType);
+                    }
+                    valueCode = generateExpression(retExpr);
                 }
                 tempVarCounter++;
                 string retName = format("__llpl_ret%d", tempVarCounter);
@@ -3472,6 +4522,8 @@ class CodeGenerator {
             code ~= generateTryStmt(tryStmt, isDeferred);
         } else if (auto deleteStmt = cast(DeleteStmt)node) {
             code ~= generateDeleteStmt(deleteStmt);
+        } else if (auto assertStmt = cast(AssertStmt)node) {
+            code ~= generateAssertStmt(assertStmt);
         } else if (auto block = cast(Block)node) {
             code ~= indent() ~ "{\n";
             indentLevel++;
@@ -4313,18 +5365,18 @@ class CodeGenerator {
             case "u8": return "uint8";
             case "u16": return "uint16";
             case "u32": return "uint32";
-            case "u64": return "uint";
+            case "u64": return "u64";
             case "i8": return "int8";
             case "i16": return "int16";
             case "i32": return "int32";
-            case "i64": return "int";
+            case "i64": return "i64";
             default: return name;
         }
     }
 
     private bool isPrimitiveTypeName(string name) {
         switch (name) {
-            case "int": case "uint":
+            case "i64": case "u64":
             case "int8": case "uint8":
             case "int16": case "uint16":
             case "int32": case "uint32":
@@ -4341,7 +5393,6 @@ class CodeGenerator {
             case "u8": case "i8":
             case "u16": case "i16":
             case "u32": case "i32":
-            case "u64": case "i64":
             case "char": case "bool": case "void": case "string":
             case "float": case "double":
                 return true;
@@ -4354,7 +5405,7 @@ class CodeGenerator {
     // -1 if the type can't back a bit-field at all (classes, void, ...).
     private int primitiveBitSize(string name) {
         switch (name) {
-            case "int": case "uint": return 64;
+            case "i64": case "u64": return 64;
             case "int32": case "uint32": return 32;
             case "int16": case "uint16": return 16;
             case "int8": case "uint8": return 8;
@@ -5520,6 +6571,67 @@ class CodeGenerator {
         return resolved ~ variadicTail;
     }
 
+    // True if cd provably inherits (directly or transitively) from the
+    // class named ancestorName - used only to decide whether an implicit
+    // upcast cast is safe to insert (see insertUpcastIfNeeded), never to
+    // reject anything: an unrelated pair of types is simply left alone,
+    // whatever existing (lack of) type checking already applies to them.
+    private bool classInheritsFrom(ClassDecl cd, string ancestorName) {
+        if (cd.baseClassName.length == 0) return false;
+        if (cd.baseClassName == ancestorName) return true;
+        auto basePtr = cd.baseClassName in classRegistry;
+        if (basePtr is null) return false;
+        return classInheritsFrom(*basePtr, ancestorName);
+    }
+
+    // If `arg`'s inferred type is a class that provably inherits from
+    // `targetType`'s class, wraps it in an explicit cast to targetType -
+    // C's nominal struct typing would otherwise warn/error on passing a
+    // `Button*` where a `Widget*` is declared/expected, even though the
+    // flattened layout (see generateClassLayout) makes the two safely
+    // prefix-compatible (same reasoning as the explicit cast `super(...)`
+    // chaining and vtable dispatch already insert by hand). Deliberately
+    // narrow, matching the feature's own Scope: this only ever *adds* a
+    // cast to keep already-safe, already-related-type code compiling
+    // cleanly - it never rejects or flags a genuinely unrelated type;
+    // whatever (lack of) checking already applied to `arg` still applies
+    // to it unchanged; only returned as a distinct node (not mutated) when
+    // wrapping actually happens, so a shared AST node used at multiple
+    // sites is never accidentally aliased/mutated for all of them.
+    private ASTNode insertUpcastIfNeeded(ASTNode arg, Type targetType) {
+        if (targetType.pointerDepth != 0 || targetType.isArray) return arg;
+        if ((targetType.name in classRegistry) is null) return arg;
+        Type argType;
+        try {
+            argType = inferType(arg);
+        } catch (Exception e) {
+            return arg;
+        }
+        if (argType.pointerDepth != 0 || argType.isArray) return arg;
+        if (argType.name == targetType.name) return arg;
+        auto argClass = argType.name in classRegistry;
+        if (argClass is null) return arg;
+        if (!classInheritsFrom(*argClass, targetType.name)) return arg;
+        return new CastExpr(cloneType(targetType), arg, arg.line, arg.column);
+    }
+
+    // Applies insertUpcastIfNeeded across a final, already-resolved
+    // argument list against the callee's own declared parameter types -
+    // called only once each call site has settled on its one true target
+    // FunctionDecl (never inside resolveOverload's own trial resolution:
+    // an implicit cast there would make inferType report the *target*
+    // type for every trial, defeating the exact-type matching overload
+    // resolution depends on to disambiguate candidates).
+    private ASTNode[] applyImplicitArgumentConversions(ASTNode[] args, Parameter[] params) {
+        ASTNode[] result = args.dup;
+        foreach (i, param; params) {
+            if (i >= result.length) break;
+            result[i] = insertUpcastIfNeeded(result[i], param.type);
+            result[i] = insertNumericCoercionIfNeeded(result[i], param.type);
+        }
+        return result;
+    }
+
     // "(Type1, Type2)" - the parameter-types half of a human-readable
     // signature, for overload error messages (no matching overload,
     // ambiguous call, duplicate signature).
@@ -5578,6 +6690,7 @@ class CodeGenerator {
         if (candidates.length == 1) return candidates[0];
 
         FunctionDecl[] fits;
+        int bestScore = int.max;
         foreach (candidate; candidates) {
             ASTNode[] resolved;
             try {
@@ -5587,21 +6700,33 @@ class CodeGenerator {
                 continue;
             }
             bool matches = true;
+            int score = 0;
             foreach (i, param; candidate.params) {
                 if (i >= resolved.length) { matches = false; break; }
                 Type argType;
                 try {
                     argType = inferType(resolved[i]);
+                    resolveType(argType);
+                    resolveType(param.type);
                 } catch (Exception e) {
                     matches = false;
                     break;
                 }
-                if (!sameErrorType(argType, param.type)) {
+                int cost = numericCoercionCost(argType, param.type);
+                if (cost < 0) {
                     matches = false;
                     break;
                 }
+                score += cost;
             }
-            if (matches) fits ~= candidate;
+            if (matches) {
+                if (fits.length == 0 || score < bestScore) {
+                    fits = [candidate];
+                    bestScore = score;
+                } else if (score == bestScore) {
+                    fits ~= candidate;
+                }
+            }
         }
 
         if (fits.length == 1) return fits[0];
@@ -5650,6 +6775,16 @@ class CodeGenerator {
     private string mangleConstructorName(ClassDecl cd, string cName, FunctionDecl ctor) {
         if (cd.constructors.length <= 1) return format("%s_new", cName);
         return format("%s_new%s", cName, overloadSuffix(ctor.params));
+    }
+
+    // Same overload-suffix convention as mangleConstructorName just
+    // above, for a polymorphic class's internal "_init" half (see
+    // generatePolymorphicConstructor) - keyed off the same
+    // cd.constructors overload set, so an overloaded constructor's `_new`
+    // and `_init` always agree on which suffix names which overload.
+    private string mangleInitName(ClassDecl cd, string cName, FunctionDecl ctor) {
+        if (cd.constructors.length <= 1) return format("%s_init", cName);
+        return format("%s_init%s", cName, overloadSuffix(ctor.params));
     }
 
     // Same convention as the ClassDecl overload above - a struct
@@ -5837,7 +6972,7 @@ class CodeGenerator {
         code ~= indent() ~ format("while (%s < %s) {\n", foreachStmt.varName, endName);
         indentLevel++;
 
-        variableTypes[foreachStmt.varName] = new Type("int");
+        variableTypes[foreachStmt.varName] = new Type("i64");
         foreach (stmt; foreachStmt.body_.statements) {
             code ~= generateStatement(stmt, isDeferred);
         }
@@ -5970,10 +7105,13 @@ class CodeGenerator {
     // meaningful to produce either way.
     private string generateAsStringValue(Type objType, ASTNode objectExpr, int line, int column) {
         if (auto classDecl = objType.name in classRegistry) {
-            foreach (m; classDecl.methods) {
-                if (m.name == "as_string" && m.params.length == 0) {
+            ClassDecl owner;
+            auto candidates = resolveMethodOnHierarchy(*classDecl, "as_string", owner);
+            foreach (m; candidates) {
+                if (m.params.length == 0) {
                     recordUsage(objType.name ~ ".as_string", line, column);
-                    string call = format("%s_as_string(%s)", objType.name, generateExpression(objectExpr));
+                    string call = format("%s(%s)",
+                        mangleMethodName(owner, mangledClass(owner), m), generateExpression(objectExpr));
                     return bridgeStringReturnToCharPtr(m.returnType, call);
                 }
             }
@@ -6059,7 +7197,7 @@ class CodeGenerator {
         if (target.name == "char" && target.pointerDepth == 1) return "string";
         if (target.pointerDepth != 0) return "";
         switch (target.name) {
-            case "int": case "uint": case "int8": case "uint8":
+            case "i64": case "u64": case "int8": case "uint8":
             case "int16": case "uint16": case "int32": case "uint32":
             case "int64": case "uint64":
                 return "int";
@@ -6116,9 +7254,11 @@ class CodeGenerator {
         auto classDecl = sourceType.name in classRegistry;
         if (classDecl is null) return "";
         string methodName = "as_" ~ kind;
-        foreach (method; classDecl.methods) {
-            if (method.name == methodName && method.params.length == 0) {
-                return format("%s(%s)", mangleMethodName(*classDecl, mangledClass(*classDecl), method),
+        ClassDecl owner;
+        auto candidates = resolveMethodOnHierarchy(*classDecl, methodName, owner);
+        foreach (method; candidates) {
+            if (method.params.length == 0) {
+                return format("%s(%s)", mangleMethodName(owner, mangledClass(owner), method),
                     generateExpression(expr));
             }
         }
@@ -6158,7 +7298,8 @@ class CodeGenerator {
             // Only look for operator overloads on non-pointer, non-array types
             if (selfType.pointerDepth == 0 && !selfType.isArray) {
                 if (auto classDecl = selfType.name in classRegistry) {
-                    auto candidates = methodCandidatesNamed(*classDecl, methodName);
+                    ClassDecl owner;
+                    auto candidates = resolveMethodOnHierarchy(*classDecl, methodName, owner);
                     if (candidates.length == 1) return candidates[0];
                     if (candidates.length > 1 && rightOperand !is null) {
                         try {
@@ -6207,8 +7348,14 @@ class CodeGenerator {
             Type selfType = inferType(selfOperand);
             resolveType(selfType);
             if (auto classDecl = selfType.name in classRegistry) {
-                if (methodCandidatesNamed(*classDecl, methodName).length > 1) {
-                    return format("%s_%s%s", mangleTypeArg(selfType), methodName, overloadSuffix(matched.params));
+                ClassDecl owner;
+                auto candidates = resolveMethodOnHierarchy(*classDecl, methodName, owner);
+                if (candidates.length > 0) {
+                    string ownerName = mangledClass(owner);
+                    if (candidates.length > 1) {
+                        return format("%s_%s%s", ownerName, methodName, overloadSuffix(matched.params));
+                    }
+                    return format("%s_%s", ownerName, methodName);
                 }
             }
             return format("%s_%s", mangleTypeArg(selfType), methodName);
@@ -6240,6 +7387,38 @@ class CodeGenerator {
         if (callName.length == 0) return "";
         return format("%s(%s, %s)", callName,
             generateExpression(indexExpr.array), generateExpression(indexExpr.index));
+    }
+
+    // When --safe is enabled, fixed-size array indexing (T[N]) is wrapped
+    // with a runtime bounds check. The helper returns a void* pointing at
+    // the element, which the generated code casts back to a T* and
+    // dereferences - this works for both reads and assignments because the
+    // dereferenced pointer is a valid C lvalue.
+    private string generateCheckedIndexExpr(IndexExpr indexExpr) {
+        try {
+            Type arrType = inferType(indexExpr.array);
+            resolveType(arrType);
+            if (!arrType.isArray || arrType.arraySize <= 0) {
+                // Fall back to raw indexing if the array isn't a fixed-size array
+                // (e.g. a pointer or dynamic array).
+                return format("%s[%s]", generateExpression(indexExpr.array),
+                    generateExpression(indexExpr.index));
+            }
+
+            Type elemType = inferType(indexExpr);
+            resolveType(elemType);
+            string elemTypeC = typeToC(elemType);
+            string arrCode = generateExpression(indexExpr.array);
+            string idxCode = generateExpression(indexExpr.index);
+
+            return format("*(%s*)__llpl_check_index(%s, %s, %d, sizeof(%s))",
+                elemTypeC, arrCode, idxCode, arrType.arraySize, elemTypeC);
+        } catch (Exception e) {
+            // If we can't infer the array type (e.g. a global array), fall back
+            // to raw indexing rather than failing compilation.
+            return format("%s[%s]", generateExpression(indexExpr.array),
+                generateExpression(indexExpr.index));
+        }
     }
 
     // Tries to resolve a dotted chain as a namespace-qualified reference
@@ -6684,12 +7863,30 @@ class CodeGenerator {
                     if (converted.length > 0) {
                         return generateExpression(binExpr.left) ~ " = " ~ converted;
                     }
+                    ASTNode coerced = insertNumericCoercionIfNeeded(binExpr.right, leftType);
+                    if (coerced !is binExpr.right) {
+                        return generateExpression(binExpr.left) ~ " = " ~ generateExpression(coerced);
+                    }
                 }
                 return generateExpression(binExpr.left) ~ " = " ~ generateExpression(binExpr.right);
             }
             string overloadCall = tryBinaryOperatorOverloadCall(binExpr);
             if (overloadCall.length > 0) {
                 return overloadCall;
+            }
+            Type binaryResult = null;
+            try {
+                Type leftType = inferType(binExpr.left);
+                Type rightType = inferType(binExpr.right);
+                resolveType(leftType);
+                resolveType(rightType);
+                binaryResult = numericBinaryResultType(leftType, rightType);
+            } catch (Exception e) {
+                binaryResult = null;
+            }
+            if (binaryResult !is null) {
+                return "(" ~ generateNumericCoercedExpression(binExpr.left, binaryResult) ~ " " ~
+                    binExpr.op ~ " " ~ generateNumericCoercedExpression(binExpr.right, binaryResult) ~ ")";
             }
             return "(" ~ generateExpression(binExpr.left) ~ " " ~ binExpr.op ~ " " ~
                    generateExpression(binExpr.right) ~ ")";
@@ -6760,8 +7957,10 @@ class CodeGenerator {
                 // realistic use calls through a closure-typed variable,
                 // parameter or field, none of which have side effects to
                 // duplicate.
-                ASTNode[] resolvedArgs = resolveCallArguments(closureType.closureParams, false,
-                    callExpr.args, callExpr.argNames, "this closure", callExpr.line, callExpr.column);
+                ASTNode[] resolvedArgs = applyImplicitArgumentConversions(
+                    resolveCallArguments(closureType.closureParams, false,
+                        callExpr.args, callExpr.argNames, "this closure", callExpr.line, callExpr.column),
+                    closureType.closureParams);
                 string cargs = format("(%s).env", calleeCode);
                 foreach (arg; resolvedArgs) {
                     cargs ~= ", " ~ generateExpression(arg);
@@ -6811,9 +8010,11 @@ class CodeGenerator {
                         format("function '%s'", qualifiedName), callExpr.line, callExpr.column);
                     string qualifiedFunc = mangleFreeFunctionName(qualifiedDecl);
                     recordUsage(qualifiedFunc, memberExpr.line, memberExpr.column);
-                    ASTNode[] resolvedArgs = resolveCallArguments(qualifiedDecl.params, qualifiedDecl.isVariadic,
-                        callExpr.args, callExpr.argNames, format("function '%s'", qualifiedName),
-                        callExpr.line, callExpr.column);
+                    ASTNode[] resolvedArgs = applyImplicitArgumentConversions(
+                        resolveCallArguments(qualifiedDecl.params, qualifiedDecl.isVariadic,
+                            callExpr.args, callExpr.argNames, format("function '%s'", qualifiedName),
+                            callExpr.line, callExpr.column),
+                        qualifiedDecl.params);
                     string qargs = "";
                     foreach (i, arg; resolvedArgs) {
                         if (i > 0) qargs ~= ", ";
@@ -6829,9 +8030,11 @@ class CodeGenerator {
                 if (externFunc.length > 0) {
                     recordUsage(externFunc, memberExpr.line, memberExpr.column);
                     FunctionDecl qualifiedDecl = functionRegistry[externFunc];
-                    ASTNode[] resolvedArgs = resolveCallArguments(qualifiedDecl.params, qualifiedDecl.isVariadic,
-                        callExpr.args, callExpr.argNames, format("function '%s'", externFunc),
-                        callExpr.line, callExpr.column);
+                    ASTNode[] resolvedArgs = applyImplicitArgumentConversions(
+                        resolveCallArguments(qualifiedDecl.params, qualifiedDecl.isVariadic,
+                            callExpr.args, callExpr.argNames, format("function '%s'", externFunc),
+                            callExpr.line, callExpr.column),
+                        qualifiedDecl.params);
                     string qargs = "";
                     foreach (i, arg; resolvedArgs) {
                         if (i > 0) qargs ~= ", ";
@@ -6849,7 +8052,8 @@ class CodeGenerator {
                     string resolvedClassName = resolveName(classNameIdent.name, (n) => (n in classRegistry) !is null);
                     if (resolvedClassName in classRegistry) {
                         ClassDecl cd = classRegistry[resolvedClassName];
-                        FunctionDecl[] candidates = methodCandidatesNamed(cd, memberExpr.member);
+                        ClassDecl staticOwner;
+                        FunctionDecl[] candidates = resolveMethodOnHierarchy(cd, memberExpr.member, staticOwner);
                         // Filter for static methods only
                         FunctionDecl[] staticCandidates;
                         foreach (candidate; candidates) {
@@ -6861,11 +8065,14 @@ class CodeGenerator {
                             string calleeDescription = format("static method '%s.%s'", resolvedClassName, memberExpr.member);
                             FunctionDecl methodDecl = resolveOverload(staticCandidates, callExpr.args, callExpr.argNames,
                                 calleeDescription, callExpr.line, callExpr.column);
-                            checkMemberAccess(methodDecl.isPrivate, resolvedClassName, calleeDescription,
+                            string ownerName = mangledClass(staticOwner);
+                            checkMemberAccess(methodDecl.isPrivate, ownerName, calleeDescription,
                                 callExpr.line, callExpr.column);
-                            ASTNode[] resolvedArgs = resolveCallArguments(methodDecl.params, false, callExpr.args,
-                                callExpr.argNames, calleeDescription, callExpr.line, callExpr.column);
-                            string methodSymbol = mangleMethodName(cd, resolvedClassName, methodDecl);
+                            ASTNode[] resolvedArgs = applyImplicitArgumentConversions(
+                                resolveCallArguments(methodDecl.params, false, callExpr.args,
+                                    callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
+                                methodDecl.params);
+                            string methodSymbol = mangleMethodName(staticOwner, ownerName, methodDecl);
 
                             // Static methods don't receive 'self' parameter
                             string args = "";
@@ -6914,16 +8121,17 @@ class CodeGenerator {
                 // string-built C call.
                 ClassDecl cd = className.length > 0 && className in classRegistry
                     ? classRegistry[className] : null;
-                FunctionDecl[] candidates = cd !is null ? methodCandidatesNamed(cd, methodName) : [];
+                ClassDecl owner;
+                FunctionDecl[] candidates = cd !is null ? resolveMethodOnHierarchy(cd, methodName, owner) : [];
                 string calleeDescription = format("method '%s.%s'", className, methodName);
                 ASTNode[] resolvedArgs;
                 FunctionDecl methodDecl = null;
-                // Blind fallback for a method that isn't in cd.methods at
-                // all (e.g. impl-block-provided trait methods, generated
-                // separately by processImplBlock under this exact name) -
-                // matches this compiler's existing behavior of trusting
-                // that mechanism rather than requiring every method to be
-                // registered here.
+                // Blind fallback for a method that isn't found anywhere in
+                // cd's own hierarchy (e.g. impl-block-provided trait
+                // methods, generated separately by processImplBlock under
+                // this exact name) - matches this compiler's existing
+                // behavior of trusting that mechanism rather than requiring
+                // every method to be registered here.
                 string methodSymbol = className.length > 0 ? format("%s_%s", className, methodName) : "";
                 if (candidates.length == 0) {
                     if (hasNamedArgs(callExpr.argNames)) {
@@ -6936,11 +8144,39 @@ class CodeGenerator {
                 } else {
                     methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
                         calleeDescription, callExpr.line, callExpr.column);
-                    checkMemberAccess(methodDecl.isPrivate, className, calleeDescription,
+                    checkMemberAccess(methodDecl.isPrivate, mangledClass(owner), calleeDescription,
                         callExpr.line, callExpr.column);
-                    resolvedArgs = resolveCallArguments(methodDecl.params, false, callExpr.args,
-                        callExpr.argNames, calleeDescription, callExpr.line, callExpr.column);
-                    methodSymbol = mangleMethodName(cd, className, methodDecl);
+                    resolvedArgs = applyImplicitArgumentConversions(
+                        resolveCallArguments(methodDecl.params, false, callExpr.args,
+                            callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
+                        methodDecl.params);
+                    methodSymbol = mangleMethodName(owner, mangledClass(owner), methodDecl);
+                }
+
+                // A virtual/overridden method dispatches through the
+                // hierarchy's vtable instead of calling methodSymbol
+                // directly - the receiver's *static* type (className/cd)
+                // might not be its actual runtime type (e.g. a Widget*
+                // holding a Button), so only the vtable, filled in at
+                // construction time with each concrete class's own
+                // resolveMethodOnHierarchy result (see the vtable-instance
+                // construction comment), knows which override to run.
+                // Reading `->__vtable` needs no cast (same flattened offset
+                // for every class in the hierarchy - see generateClassLayout);
+                // casting the vtable pointer itself and the `self` argument
+                // to the hierarchy root's type is the same explicit-cast
+                // trick `super(...)` chaining and __destroy_impl cascading
+                // already use for this exact prefix-compatible-but-nominally-
+                // different-types situation.
+                if (methodDecl !is null && (methodDecl.isVirtual || methodDecl.isOverride)) {
+                    string rootName = mangledClass(hierarchyRoot(cd));
+                    string vtableExpr = format("((%s_VTable*)(%s)->__vtable)", rootName, objectExpr);
+                    string vArgs = format("(%s*)(%s)", rootName, objectExpr);
+                    foreach (arg; resolvedArgs) {
+                        vArgs ~= ", " ~ generateExpression(arg);
+                    }
+                    recordUsage(className ~ "." ~ methodName, memberExpr.line, memberExpr.column);
+                    return format("%s->%s(%s)", vtableExpr, methodName, vArgs);
                 }
 
                 // Generate method call with object as first parameter (except for static methods)
@@ -6976,6 +8212,28 @@ class CodeGenerator {
                         currentModulePath, memberExpr.line, memberExpr.column);
                 }
             } else {
+                // `Calc(text)` - calling a `grammar Calc { ... }`-generated
+                // class's own name directly, with no `new` and no method
+                // call - desugars to `(new Calc(text)).parse_<firstRule>()`.
+                // Checked before the ordinary functionCandidates lookup
+                // below since a grammar-generated class is never itself a
+                // function; synthesizing the equivalent MemberExpr/NewExpr
+                // and recursing through the ordinary codegen path (rather
+                // than hand-emitting C here) reuses all of `new`'s and a
+                // method call's own existing argument-resolution/mangling
+                // logic for free.
+                if (auto calleeIdent = cast(Identifier)callExpr.callee) {
+                    string grammarClass = resolveName(calleeIdent.name,
+                        (n) => (n in grammar.grammarStartRule) !is null);
+                    if (auto startMethod = grammarClass in grammar.grammarStartRule) {
+                        auto newExpr = new NewExpr(new Type(calleeIdent.name), callExpr.args,
+                            callExpr.line, callExpr.column, callExpr.argNames);
+                        auto startCall = new CallExpr(new MemberExpr(newExpr, *startMethod,
+                            callExpr.line, callExpr.column), [], callExpr.line, callExpr.column);
+                        return generateExpression(startCall);
+                    }
+                }
+
                 // A plain identifier resolving to a *known* function (by
                 // its pre-overload-suffix name) has to be resolved here,
                 // overload-aware, rather than through the ordinary
@@ -7001,9 +8259,11 @@ class CodeGenerator {
                         format("function '%s'", resolvedName), callExpr.line, callExpr.column);
                     callee = mangleFreeFunctionName(calleeDecl);
                     recordUsage(callee, callExpr.callee.line, callExpr.callee.column);
-                    resolvedArgs = resolveCallArguments(calleeDecl.params, calleeDecl.isVariadic,
-                        callExpr.args, callExpr.argNames, format("function '%s'", resolvedName),
-                        callExpr.line, callExpr.column);
+                    resolvedArgs = applyImplicitArgumentConversions(
+                        resolveCallArguments(calleeDecl.params, calleeDecl.isVariadic,
+                            callExpr.args, callExpr.argNames, format("function '%s'", resolvedName),
+                            callExpr.line, callExpr.column),
+                        calleeDecl.params);
                 } else {
                     // Not a plain identifier resolving to a known function
                     // (a qualified/generic/closure call already handled
@@ -7016,9 +8276,11 @@ class CodeGenerator {
                     callee = generateExpression(callExpr.callee);
                     calleeDecl = resolveCalledFunction(callExpr.callee);
                     if (calleeDecl !is null) {
-                        resolvedArgs = resolveCallArguments(calleeDecl.params, calleeDecl.isVariadic,
-                            callExpr.args, callExpr.argNames, format("function '%s'", calleeDecl.name),
-                            callExpr.line, callExpr.column);
+                        resolvedArgs = applyImplicitArgumentConversions(
+                            resolveCallArguments(calleeDecl.params, calleeDecl.isVariadic,
+                                callExpr.args, callExpr.argNames, format("function '%s'", calleeDecl.name),
+                                callExpr.line, callExpr.column),
+                            calleeDecl.params);
                     } else {
                         if (hasNamedArgs(callExpr.argNames)) {
                             throw new CompileError(
@@ -7133,15 +8395,14 @@ class CodeGenerator {
             if (memberObjType !is null) {
                 if (auto classDecl = memberObjType.name in classRegistry) {
                     string ownerClassName = mangledClass(*classDecl);
-                    VarDecl matchedField = null;
-                    foreach (field; classDecl.fields) {
-                        if (field.name == memberExpr.member) { matchedField = field; break; }
-                    }
+                    ClassDecl fieldOwner;
+                    VarDecl matchedField = findFieldOnHierarchy(*classDecl, memberExpr.member, fieldOwner);
                     if (matchedField !is null) {
-                        checkMemberAccess(matchedField.isPrivate, ownerClassName,
+                        checkMemberAccess(matchedField.isPrivate, mangledClass(fieldOwner),
                             format("field '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
                     } else {
-                        auto candidates = methodCandidatesNamed(*classDecl, memberExpr.member);
+                        ClassDecl methodOwner;
+                        auto candidates = resolveMethodOnHierarchy(*classDecl, memberExpr.member, methodOwner);
                         if (candidates.length > 1) {
                             throw new CompileError(
                                 format("'%s' is ambiguous - %s has %d overloads named '%s'; a bare " ~
@@ -7150,9 +8411,10 @@ class CodeGenerator {
                                 currentModulePath, memberExpr.line, memberExpr.column);
                         }
                         if (candidates.length == 1) {
-                            checkMemberAccess(candidates[0].isPrivate, ownerClassName,
+                            string methodOwnerName = mangledClass(methodOwner);
+                            checkMemberAccess(candidates[0].isPrivate, methodOwnerName,
                                 format("method '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
-                            return mangleMethodName(*classDecl, ownerClassName, candidates[0]);
+                            return mangleMethodName(methodOwner, methodOwnerName, candidates[0]);
                         }
                         string implKey = ownerClassName ~ "_" ~ memberExpr.member;
                         if (implKey in functionRegistry) {
@@ -7177,6 +8439,9 @@ class CodeGenerator {
             string overloadCall = tryIndexOperatorOverloadCall(indexExpr);
             if (overloadCall.length > 0) {
                 return overloadCall;
+            }
+            if (safeMode) {
+                return generateCheckedIndexExpr(indexExpr);
             }
             return format("%s[%s]", generateExpression(indexExpr.array),
                          generateExpression(indexExpr.index));
@@ -7243,8 +8508,10 @@ class CodeGenerator {
             } else {
                 FunctionDecl ctor = resolveOverload(ctors, newExpr.args, newExpr.argNames, calleeDescription,
                     newExpr.line, newExpr.column);
-                resolvedArgs = resolveCallArguments(ctor.params, false, newExpr.args, newExpr.argNames,
-                    calleeDescription, newExpr.line, newExpr.column);
+                resolvedArgs = applyImplicitArgumentConversions(
+                    resolveCallArguments(ctor.params, false, newExpr.args, newExpr.argNames,
+                        calleeDescription, newExpr.line, newExpr.column),
+                    ctor.params);
                 ctorSymbol = cd !is null ? mangleConstructorName(cd, newExpr.type.name, ctor)
                     : (sd !is null ? mangleConstructorName(sd, newExpr.type.name, ctor)
                                    : mangleConstructorName(ud, newExpr.type.name, ctor));
@@ -7293,7 +8560,7 @@ class CodeGenerator {
 
     private Type inferType(ASTNode expr) {
         if (cast(IntLiteral)expr) {
-            return new Type("int");
+            return new Type("i64");
         } else if (auto floatLit = cast(FloatLiteral)expr) {
             // Check suffix to determine float vs double
             string val = floatLit.value;
@@ -7322,7 +8589,7 @@ class CodeGenerator {
             checkNotStruct(newExpr);
             return new Type(newExpr.type.name);
         } else if (cast(SizeofExpr)expr) {
-            return new Type("uint");
+            return new Type("u64");
         } else if (auto structLit = cast(StructLiteral)expr) {
             string mangledName;
             resolveStructLiteralTarget(structLit, null, mangledName); // throws for a generic one with no context
@@ -7364,7 +8631,7 @@ class CodeGenerator {
                 return new Type("char", true);
             }
             if (memberExpr.member == "sizeof") {
-                return new Type("uint");
+                return new Type("u64");
             }
             string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
             if (qualifiedVar.length > 0) {
@@ -7373,13 +8640,12 @@ class CodeGenerator {
 
             Type objType = inferType(memberExpr.object);
             if (auto classDecl = objType.name in classRegistry) {
-                foreach (field; classDecl.fields) {
-                    if (field.name == memberExpr.member) {
-                        if (field.type is null) {
-                            field.type = inferType(field.initializer);
-                        }
-                        return field.type;
+                auto field = findFieldOnHierarchy(*classDecl, memberExpr.member);
+                if (field !is null) {
+                    if (field.type is null) {
+                        field.type = inferType(field.initializer);
                     }
+                    return field.type;
                 }
             }
             if (auto structDecl = objType.name in structRegistry) {
@@ -7419,7 +8685,8 @@ class CodeGenerator {
 
                 Type objType = inferType(memberCallee.object);
                 if (auto classDecl = objType.name in classRegistry) {
-                    auto candidates = methodCandidatesNamed(*classDecl, memberCallee.member);
+                    ClassDecl unusedOwner;
+                    auto candidates = resolveMethodOnHierarchy(*classDecl, memberCallee.member, unusedOwner);
                     if (candidates.length > 0) {
                         auto methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
                             format("method '%s.%s'", objType.name, memberCallee.member),
@@ -7429,6 +8696,16 @@ class CodeGenerator {
                 }
                 throw inferError(expr, format("Cannot infer type: unknown method '%s'", memberCallee.member));
             } else if (auto calleeIdent = cast(Identifier)callExpr.callee) {
+                // `Calc(text)` - see generateExpression's own identical
+                // check/comment. Every grammar-generated rule method
+                // returns ParseNode (see grammar.d's codegen), so that's
+                // always the right answer here without needing to look up
+                // the actual (synthesized) method declaration.
+                string grammarClass = resolveName(calleeIdent.name,
+                    (n) => (n in grammar.grammarStartRule) !is null);
+                if (grammarClass in grammar.grammarStartRule) {
+                    return new Type("ParseNode");
+                }
                 string resolvedVar = resolveName(calleeIdent.name, (n) => (n in variableTypes) !is null);
                 if (resolvedVar in variableTypes && variableTypes[resolvedVar].closureReturnType !is null) {
                     return variableTypes[resolvedVar].closureReturnType;
@@ -7465,7 +8742,13 @@ class CodeGenerator {
                 case "&&": case "||":
                     return new Type("bool");
                 default:
-                    return inferType(binExpr.left);
+                    Type leftType = inferType(binExpr.left);
+                    Type rightType = inferType(binExpr.right);
+                    resolveType(leftType);
+                    resolveType(rightType);
+                    Type numericResult = numericBinaryResultType(leftType, rightType);
+                    if (numericResult !is null) return numericResult;
+                    return leftType;
             }
         } else if (auto unaryExpr = cast(UnaryExpr)expr) {
             FunctionDecl unaryOpMethod = findOperatorMethodDecl(unaryExpr.operand, unaryExpr.op, true);
@@ -7533,8 +8816,8 @@ class CodeGenerator {
 
     private string primitiveToC(string name) {
         switch (name) {
-            case "int": return "int64_t";    // 64-bit integer
-            case "uint": return "uint64_t";  // 64-bit unsigned
+            case "i64": return "int64_t";    // 64-bit signed
+            case "u64": return "uint64_t";   // 64-bit unsigned
             case "int8": return "int8_t";
             case "uint8": return "uint8_t";
             case "int16": return "int16_t";

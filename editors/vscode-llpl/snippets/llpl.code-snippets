@@ -53,6 +53,24 @@
         ],
         "description": "Generic class with constructor and destructor"
     },
+    "Inherited Class": {
+        "prefix": "classinherit",
+        "body": [
+            "class ${1:Name} : ${2:Base} {",
+            "\tlet ${3:field}: ${4:int}",
+            "",
+            "\tconstructor(${3:field}: ${4:int}) {",
+            "\t\tsuper()",
+            "\t\tself.${3:field} = ${3:field}",
+            "\t}",
+            "",
+            "\tvirtual func ${5:method}() {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Class inheriting from a base class, with super() chaining and a virtual method"
+    },
     "Namespace": {
         "prefix": "namespace",
         "body": [

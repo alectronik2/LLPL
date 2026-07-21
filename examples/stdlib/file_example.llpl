@@ -1,18 +1,18 @@
 // Example: File I/O operations using the standard library
 
-import "../../stdlib/text/string_utils.llpl"
-import "../../stdlib/io/file.llpl"
-import "../../stdlib/net/socket.llpl"
+import "stdlib/text/string_utils.llpl"
+import "stdlib/io/file.llpl"
+import "stdlib/net/socket.llpl"
 
 using namespace std.text
 using namespace std.io
 using namespace std.net
 
-func main() -> int {
+func main() -> i64 {
     // Example 1: Write and read a file
     let content: String = new String("Hello from LLPL!\nThis is line 2.\n")
 
-    let write_result: Result<int, char*> = std.io.write_file("test_output.txt", content)
+    let write_result: Result<i64, char*> = std.io.write_file("test_output.txt", content)
     if !write_result.is_ok() {
         return 1
     }
@@ -37,9 +37,9 @@ func main() -> int {
         f.write_string(new String("Line 3\n"))
 
         // Get file size
-        let size_result: Result<int, char*> = f.size()
+        let size_result: Result<i64, char*> = f.size()
         if size_result.is_ok() {
-            let file_size: int = size_result.unwrap()
+            let file_size: i64 = size_result.unwrap()
             // File size is available here
         }
 
@@ -64,10 +64,10 @@ func main() -> int {
     let chunk_file: File = new File("renamed_output.txt", std.io.O_RDONLY)
     if chunk_file.is_valid() {
         let buffer: char[128]
-        let bytes_result: Result<int, char*> = chunk_file.read_bytes(buffer, 128)
+        let bytes_result: Result<i64, char*> = chunk_file.read_bytes(buffer, 128)
 
         if bytes_result.is_ok() {
-            let bytes_read: int = bytes_result.unwrap()
+            let bytes_read: i64 = bytes_result.unwrap()
             // Process buffer with bytes_read bytes
         }
     }

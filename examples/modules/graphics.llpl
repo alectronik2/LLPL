@@ -2,13 +2,13 @@
 
 import input  // Circular import with input module
 
-let VGA_BUFFER: uint = 753664  // 0xB8000
-let VGA_WIDTH: int = 80
-let VGA_HEIGHT: int = 25
+let VGA_BUFFER: u64 = 753664  // 0xB8000
+let VGA_WIDTH: i64 = 80
+let VGA_HEIGHT: i64 = 25
 
 class Screen {
-    let row: int
-    let col: int
+    let row: i64
+    let col: i64
     let color: char
 
     constructor(color: char) {
@@ -23,8 +23,8 @@ class Screen {
 
     func clear() {
         let buffer: char* = VGA_BUFFER as char*
-        let total: int = VGA_WIDTH * VGA_HEIGHT * 2
-        for let i: int = 0, i < total, i = i + 2 {
+        let total: i64 = VGA_WIDTH * VGA_HEIGHT * 2
+        for let i: i64 = 0, i < total, i = i + 2 {
             buffer[i] = 0
             buffer[i + 1] = self.color
         }
@@ -43,7 +43,7 @@ class Screen {
         }
 
         let buffer: char* = VGA_BUFFER as char*
-        let index: int = (self.row * VGA_WIDTH + self.col) * 2
+        let index: i64 = (self.row * VGA_WIDTH + self.col) * 2
 
         buffer[index] = c
         buffer[index + 1] = self.color
@@ -52,7 +52,7 @@ class Screen {
     }
 
     func write(str: char*) {
-        let i: int = 0
+        let i: i64 = 0
         while str[i] != 0 {
             self.putchar(str[i])
             i = i + 1

@@ -10,11 +10,11 @@ import "../user_runtime"
 
 const BULK_LEN = 600
 
-func _start(argc: uint, argv: uint*) {
+func _start(argc: u64, argv: u64*) {
     sys_putln("shmclient")
 
-    let handle: uint = RT_SYS_ERR
-    let tries: uint = 0
+    let handle: u64 = RT_SYS_ERR
+    let tries: u64 = 0
     while handle == RT_SYS_ERR && tries < 50 {
         handle = sys_lookup("shmsvc")
         if handle == RT_SYS_ERR {
@@ -44,14 +44,14 @@ func _start(argc: uint, argv: uint*) {
     // (see ipcdemo.llpl's same precaution).
     let poke: char[16]
     sys_strcpy(poke as char*, "poke")
-    let n: uint = sys_msg_send(handle, poke as char*, 5)
+    let n: u64 = sys_msg_send(handle, poke as char*, 5)
     if n == RT_SYS_ERR {
         sys_putln("shmclient send=fail")
         rt_exit(1)
     }
 
     let ok: bool = true
-    let i: uint = 0
+    let i: u64 = 0
     while i < BULK_LEN {
         let expected: char = (65 + (i % 26)) as char
         if shm[i] != expected {

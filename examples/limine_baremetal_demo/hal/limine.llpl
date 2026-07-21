@@ -1,8 +1,8 @@
 packed struct LimineFramebuffer {
-    let address: uint
-    let width: uint
-    let height: uint
-    let pitch: uint
+    let address: u64
+    let width: u64
+    let height: u64
+    let pitch: u64
     let bpp: uint16
     let memory_model: char
     let red_mask_size: char
@@ -12,51 +12,51 @@ packed struct LimineFramebuffer {
     let blue_mask_size: char
     let blue_mask_shift: char
     let unused: char[7]
-    let edid_size: uint
-    let edid: uint
-    let mode_count: uint
-    let modes: uint
+    let edid_size: u64
+    let edid: u64
+    let mode_count: u64
+    let modes: u64
 }
 
 packed struct LimineFramebufferRequest {
-    let id: uint[4]
-    let revision: uint
+    let id: u64[4]
+    let revision: u64
     let response: LimineFramebufferResponse*
 }
 
 packed struct LimineFramebufferResponse {
-    let revision: uint
-    let framebuffer_count: uint
-    let framebuffers: uint*
+    let revision: u64
+    let framebuffer_count: u64
+    let framebuffers: u64*
 }
 
 packed struct LimineMemmapEntry {
-    let base: uint
-    let length: uint
-    let entry_type: uint
+    let base: u64
+    let length: u64
+    let entry_type: u64
 }
 
 packed struct LimineMemmapRequest {
-    let id: uint[4]
-    let revision: uint
+    let id: u64[4]
+    let revision: u64
     let response: LimineMemmapResponse*
 }
 
 packed struct LimineMemmapResponse {
-    let revision: uint
-    let entry_count: uint
-    let entries: uint
+    let revision: u64
+    let entry_count: u64
+    let entries: u64
 }
 
 packed struct LimineHhdmRequest {
-    let id: uint[4]
-    let revision: uint
+    let id: u64[4]
+    let revision: u64
     let response: LimineHhdmResponse*
 }
 
 packed struct LimineHhdmResponse {
-    let revision: uint
-    let offset: uint
+    let revision: u64
+    let offset: u64
 }
 
 // Limine's fixed protocol magic numbers - see the Limine boot protocol

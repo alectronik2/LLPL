@@ -23,6 +23,8 @@ void main(string[] args) {
     string ccOverride;
     bool keepC = false;
     string lspSymbolsFile;
+    bool safeMode = false;
+    bool enableDCE = true;
 
     auto helpInfo = getopt(
         args,
@@ -35,6 +37,9 @@ void main(string[] args) {
         "keep-c", "Keep the intermediate .c file in --binary mode even on a successful build",
             &keepC,
         "v|verbose", "Verbose output", &verbose,
+        "safe", "Enable runtime safety checks (currently: bounds-check fixed-size array indexing)",
+            &safeMode,
+        "dce", "Enable dead-code elimination (default: true)", &enableDCE,
         "lsp-symbols", "Analyze <file> and dump diagnostics/symbols/usages as JSON (for editor tooling)",
             &lspSymbolsFile
     );
@@ -81,7 +86,7 @@ void main(string[] args) {
         }
 
         // Code generation for all modules
-        auto codegen = new CodeGenerator();
+        auto codegen = new CodeGenerator(safeMode, enableDCE);
         string cCode = codegen.generateMultiple(programs);
 
         if (verbose) {

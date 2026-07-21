@@ -8,6 +8,16 @@ LIBSYS_1.0 {
     llpl_strcmp;
     llpl_strlen;
     llpl_memcpy;
+    llpl_alloc;
+    llpl_free;
+    rc_alloc;
+    rc_free;
+    rc_init;
+    rc_retain;
+    rc_release;
+    rc_weak_retain;
+    rc_weak_release;
+    rc_is_alive;
   local:
     *;
 };

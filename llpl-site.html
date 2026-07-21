@@ -1,0 +1,830 @@
+<style>
+  /* ---------- Tokens ---------- */
+  :root {
+    --bg: #f3f5f1;
+    --surface: #e8ede6;
+    --surface-2: #dde5da;
+    --ink: #131a16;
+    --muted: #4f6156;
+    --accent: #256b46;
+    --accent-ink: #ffffff;
+    --copper: #9c5f2a;
+    --border: #c9d3c5;
+    --code-bg: #101a15;
+    --code-ink: #d7e4da;
+    --code-muted: #6f8a7a;
+    --shadow: 0 1px 2px rgba(20, 30, 24, 0.06), 0 8px 24px rgba(20, 30, 24, 0.06);
+    --mono: "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1310;
+      --surface: #121c17;
+      --surface-2: #16211b;
+      --ink: #e8ece5;
+      --muted: #8aa093;
+      --accent: #57bb87;
+      --accent-ink: #06110c;
+      --copper: #dc9a5c;
+      --border: #24322a;
+      --code-bg: #0a120e;
+      --code-ink: #d7e4da;
+      --code-muted: #5d7869;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1310; --surface: #121c17; --surface-2: #16211b; --ink: #e8ece5;
+    --muted: #8aa093; --accent: #57bb87; --accent-ink: #06110c; --copper: #dc9a5c;
+    --border: #24322a; --code-bg: #0a120e; --code-ink: #d7e4da; --code-muted: #5d7869;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+  :root[data-theme="light"] {
+    --bg: #f3f5f1; --surface: #e8ede6; --surface-2: #dde5da; --ink: #131a16;
+    --muted: #4f6156; --accent: #256b46; --accent-ink: #ffffff; --copper: #9c5f2a;
+    --border: #c9d3c5; --code-bg: #101a15; --code-ink: #d7e4da; --code-muted: #6f8a7a;
+    --shadow: 0 1px 2px rgba(20, 30, 24, 0.06), 0 8px 24px rgba(20, 30, 24, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 1.5rem; }
+  @media (max-width: 640px) { .wrap { padding-inline: 1.25rem; } }
+
+  h1, h2, h3 { font-family: var(--mono); font-weight: 700; text-wrap: balance; margin: 0; }
+  p { margin: 0; }
+  a { color: inherit; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--copper);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6em;
+  }
+  .eyebrow::before { content: ""; width: 1.1em; height: 1px; background: var(--copper); display: inline-block; }
+
+  code, pre, .mono { font-family: var(--mono); }
+
+  /* ---------- Header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: saturate(140%) blur(10px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav { display: flex; align-items: center; justify-content: space-between; padding-block: 0.9rem; }
+  .brand { font-family: var(--mono); font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; display: flex; align-items: center; gap: 0.55rem; }
+  .brand .dot { width: 0.55em; height: 0.55em; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+  nav.links { display: flex; gap: 1.6rem; font-family: var(--mono); font-size: 0.85rem; }
+  nav.links a { text-decoration: none; color: var(--muted); transition: color 0.15s ease; }
+  nav.links a:hover, nav.links a:focus-visible { color: var(--ink); }
+  @media (max-width: 720px) { nav.links { display: none; } }
+
+  /* ---------- Hero ---------- */
+  .hero { position: relative; overflow: hidden; padding-block: clamp(3rem, 8vw, 6rem) clamp(2.5rem, 6vw, 4rem); }
+  .hero canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.5; pointer-events: none; }
+  .hero-inner { position: relative; z-index: 1; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: clamp(2rem, 5vw, 3.5rem); align-items: center; }
+  @media (max-width: 940px) { .hero-inner { grid-template-columns: 1fr; } }
+
+  .headline {
+    font-size: clamp(2.3rem, 5.2vw, 3.6rem);
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    margin-block: 0.9rem 1.1rem;
+  }
+  .headline .accent { color: var(--accent); }
+  .sub { font-size: 1.08rem; color: var(--muted); max-width: 46ch; }
+
+  .cta-row { display: flex; gap: 0.9rem; margin-top: 1.8rem; flex-wrap: wrap; }
+  .btn {
+    font-family: var(--mono); font-size: 0.9rem; text-decoration: none;
+    padding: 0.7rem 1.15rem; border-radius: 3px; border: 1px solid transparent;
+    display: inline-flex; align-items: center; gap: 0.5em;
+    transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-ghost { border-color: var(--border); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--copper); }
+
+  /* ---------- Code panel (diagnostic-style) ---------- */
+  .code-card {
+    background: var(--code-bg); color: var(--code-ink);
+    border-radius: 6px; border: 1px solid color-mix(in srgb, var(--copper) 25%, transparent);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .code-card .titlebar {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.6rem 0.9rem; border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-family: var(--mono); font-size: 0.78rem; color: var(--code-muted);
+  }
+  .code-card .titlebar .chip { width: 0.6em; height: 0.6em; border-radius: 999px; background: currentColor; opacity: 0.35; }
+  .code-card pre { margin: 0; padding: 1.1rem 1.2rem; font-size: 0.86rem; line-height: 1.65; overflow-x: auto; }
+  .code-card .ln { color: var(--code-muted); user-select: none; display: inline-block; width: 1.6em; text-align: right; margin-right: 1em; }
+  .kw { color: var(--accent, #57bb87); }
+  .str { color: var(--copper); }
+  .cm { color: var(--code-muted); font-style: italic; }
+  .ty { color: #8fb8d6; }
+  .hash, .at { color: var(--copper); }
+
+  .note {
+    margin-top: 0; border-top: 1px dashed rgba(255,255,255,0.12);
+    font-family: var(--mono); font-size: 0.8rem; color: var(--code-muted); padding: 0.85rem 1.2rem 1rem;
+  }
+  .note .gutter { color: var(--copper); }
+  .note b { color: var(--code-ink); font-weight: 600; }
+
+  /* ---------- Sections ---------- */
+  section { padding-block: clamp(3rem, 7vw, 5.5rem); }
+  .section-head { max-width: 60ch; margin-bottom: 2.4rem; }
+  .section-head h2 { font-size: clamp(1.6rem, 3.4vw, 2.2rem); letter-spacing: -0.01em; margin-top: 0.6rem; }
+  .section-head p { color: var(--muted); margin-top: 0.7rem; font-size: 1.02rem; }
+
+  hr.rule { border: none; border-top: 1px solid var(--border); margin: 0; }
+
+  /* Two worlds */
+  .worlds { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; }
+  @media (max-width: 820px) { .worlds { grid-template-columns: 1fr; } }
+  .world {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1.6rem; display: flex; flex-direction: column; gap: 1rem;
+  }
+  .world h3 { font-size: 1.15rem; display: flex; align-items: center; gap: 0.55rem; }
+  .world .tag { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--border); padding: 0.15em 0.6em; border-radius: 999px; }
+  .world p { color: var(--muted); font-size: 0.98rem; }
+  .world .code-card pre { font-size: 0.82rem; }
+
+  /* Samples */
+  .samples { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  @media (max-width: 820px) { .samples { grid-template-columns: 1fr; } }
+  .sample { display: flex; flex-direction: column; gap: 0.6rem; }
+  .sample .cap { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; }
+  .sample .cap h3 { font-size: 0.98rem; }
+  .sample .cap span { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
+  .sample .code-card pre { font-size: 0.82rem; padding: 1rem 1.1rem; }
+
+  /* Pipeline */
+  .pipeline { display: flex; align-items: center; gap: 0; overflow-x: auto; padding-block: 0.5rem; }
+  .pnode { flex: 1 0 auto; min-width: 130px; text-align: center; padding: 1.1rem 0.8rem; }
+  .pnode .k { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .pnode .v { font-family: var(--mono); font-weight: 700; font-size: 1.05rem; margin-top: 0.35rem; }
+  .parrow { flex: 0 0 auto; width: clamp(28px, 6vw, 64px); height: 1px; background: repeating-linear-gradient(90deg, var(--copper) 0 6px, transparent 6px 10px); position: relative; }
+  .parrow::after { content: "›"; position: absolute; right: -0.3em; top: 50%; transform: translateY(-55%); color: var(--copper); font-family: var(--mono); }
+
+  /* Feature grid */
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.1rem; }
+  @media (max-width: 900px) { .grid3 { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 620px) { .grid3 { grid-template-columns: 1fr; } }
+  .feature {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1.4rem; display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  .feature.spotlight { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+  .feature .top { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+  .feature h3 { font-size: 1.02rem; }
+  .feature p { color: var(--muted); font-size: 0.93rem; }
+  .pill { font-family: var(--mono); font-size: 0.65rem; letter-spacing: 0.08em; text-transform: uppercase; background: var(--accent); color: var(--accent-ink); padding: 0.2em 0.55em; border-radius: 999px; white-space: nowrap; }
+
+  /* Reference / docs */
+  #reference { background: var(--surface); border-block: 1px solid var(--border); }
+  .docs-inner { display: grid; grid-template-columns: 200px 1fr; gap: 3rem; align-items: start; }
+  @media (max-width: 900px) { .docs-inner { grid-template-columns: 1fr; } }
+  .docs-nav {
+    position: sticky; top: 4.2rem; display: flex; flex-direction: column; gap: 0.15rem;
+    font-family: var(--mono); font-size: 0.82rem; max-height: calc(100vh - 6rem); overflow-y: auto;
+  }
+  @media (max-width: 900px) {
+    .docs-nav { position: static; flex-direction: row; overflow-x: auto; max-height: none; gap: 1.1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 0.5rem; }
+  }
+  .docs-nav a { text-decoration: none; color: var(--muted); padding: 0.35rem 0; white-space: nowrap; border-left: 2px solid transparent; padding-left: 0.7rem; transition: color 0.15s ease, border-color 0.15s ease; }
+  @media (max-width: 900px) { .docs-nav a { border-left: none; border-bottom: 2px solid transparent; padding-left: 0; } }
+  .docs-nav a:hover, .docs-nav a:focus-visible { color: var(--ink); }
+  .docs-nav a.active { color: var(--accent); border-color: var(--accent); }
+
+  .docs-content { display: flex; flex-direction: column; gap: 3rem; min-width: 0; }
+  .doc-group { scroll-margin-top: 4.5rem; display: flex; flex-direction: column; gap: 0.9rem; }
+  .doc-group .gh { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; }
+  .doc-group h3 { font-size: 1.2rem; }
+  .doc-group .gh span { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
+  .doc-group > p { color: var(--muted); font-size: 0.98rem; max-width: 62ch; }
+  .doc-group .code-card pre { font-size: 0.82rem; }
+
+  .sig-list { display: flex; flex-direction: column; gap: 0.5rem; background: var(--code-bg); border-radius: 6px; padding: 1rem 1.2rem; border: 1px solid color-mix(in srgb, var(--copper) 20%, transparent); }
+  .sig-list .row { display: grid; grid-template-columns: minmax(160px, auto) 1fr; gap: 1rem; font-family: var(--mono); font-size: 0.82rem; align-items: baseline; }
+  @media (max-width: 560px) { .sig-list .row { grid-template-columns: 1fr; gap: 0.15rem; } }
+  .sig-list .row code { color: var(--code-ink); }
+  .sig-list .row .d { color: var(--code-muted); font-family: var(--sans); font-size: 0.88rem; }
+
+  /* Get started */
+  .term {
+    background: #0a120e; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow);
+    border: 1px solid color-mix(in srgb, var(--copper) 20%, transparent);
+  }
+  .term .bar { display: flex; gap: 0.4rem; padding: 0.7rem 0.9rem; background: rgba(255,255,255,0.03); }
+  .term .bar span { width: 0.7em; height: 0.7em; border-radius: 999px; background: rgba(255,255,255,0.18); }
+  .term pre { margin: 0; padding: 1.3rem 1.4rem 1.5rem; color: #d7e4da; font-size: 0.92rem; line-height: 1.9; overflow-x: auto; }
+  .term .prompt { color: #5d7869; }
+  .term .cmt { color: #5d7869; }
+  .term .out { color: #8fb8d6; }
+
+  footer { border-top: 1px solid var(--border); padding-block: 2.2rem; }
+  footer .wrap { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  footer .fmono { font-family: var(--mono); font-size: 0.82rem; color: var(--muted); }
+
+  :focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+</style>
+
+<header>
+  <div class="wrap nav">
+    <div class="brand"><span class="dot"></span>LLPL</div>
+    <nav class="links">
+      <a href="#worlds">Two Worlds</a>
+      <a href="#samples">Samples</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#features">Features</a>
+      <a href="#reference">Reference</a>
+      <a href="#start">Get Started</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <canvas id="traceCanvas" aria-hidden="true"></canvas>
+  <div class="wrap hero-inner">
+    <div>
+      <span class="eyebrow">source → AST → C → binary</span>
+      <h1 class="headline">Classes, generics, and pattern&nbsp;matching —<br>compiled straight to <span class="accent">C</span>.</h1>
+      <p class="sub">LLPL is a systems language that transpiles to plain C. Write with reference-counted classes, traits, and tagged enums; run anywhere from a <code>Vector&lt;T&gt;</code> down to a VGA text buffer at <code>0xB8000</code>.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#start">Read the syntax</a>
+        <a class="btn btn-ghost" href="#worlds">See it boot a kernel</a>
+      </div>
+    </div>
+    <div class="code-card">
+      <div class="titlebar"><span class="chip"></span> calc.llpl — grammar { } parser generator</div>
+      <pre><span class="ln">1</span><span class="kw">grammar</span> Calc {
+<span class="ln">2</span>    expr   : expr <span class="str">'+'</span> term
+<span class="ln">3</span>           | expr <span class="str">'-'</span> term
+<span class="ln">4</span>           | term
+<span class="ln">5</span>           ;
+<span class="ln">6</span>    term   : term <span class="str">'*'</span> factor
+<span class="ln">7</span>           | term <span class="str">'/'</span> factor
+<span class="ln">8</span>           | factor
+<span class="ln">9</span>           ;
+<span class="ln">10</span>    factor : <span class="str">'('</span> expr <span class="str">')'</span> | NUMBER ;
+<span class="ln">11</span>    NUMBER : [0-9]+ ;
+<span class="ln">12</span>}
+<span class="ln">13</span>
+<span class="ln">14</span><span class="ty">let</span> tree: ParseNode = Calc(<span class="kw">new</span> String(<span class="str">"1 + 2 * 3"</span>))</pre>
+      <div class="note"><span class="gutter">note:</span> <b>direct left recursion</b> in <code>expr</code>/<code>term</code> — resolved into a precedence-climbing parse at compile time, with ambiguous grammars rejected before they ever run.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<section id="worlds">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">One language, two targets</span>
+      <h2>The same syntax, hosted or freestanding.</h2>
+      <p>Write an ordinary program against the standard library, or drop straight onto hardware with interrupt handlers and no libc — LLPL doesn't ask you to choose a different language for either.</p>
+    </div>
+    <div class="worlds">
+      <div class="world">
+        <h3>Hosted<span class="tag">Result&lt;T,E&gt; · match</span></h3>
+        <p>Tagged enums carry their own fields per variant; <code>match</code> destructures them directly, and the same pattern doubles as clean error handling.</p>
+        <div class="code-card">
+          <pre><span class="cm">// enum Shape { Circle(radius: int), Rectangle(width: int, height: int), Triangle(base: int, height: int) }</span>
+<span class="kw">func</span> area(s: Shape) -&gt; <span class="ty">int</span> {
+    <span class="kw">match</span> s {
+        <span class="kw">case</span> Shape.Circle(radius) =&gt; {
+            <span class="kw">return</span> 3 * radius * radius
+        }
+        <span class="kw">case</span> Shape.Rectangle(width, height) =&gt; {
+            <span class="kw">return</span> width * height
+        }
+        <span class="kw">case</span> Shape.Triangle(base, height) =&gt; {
+            <span class="kw">return</span> (base * height) / 2
+        }
+    }
+}</pre>
+        </div>
+      </div>
+      <div class="world">
+        <h3>Bare metal<span class="tag">no libc · freestanding</span></h3>
+        <p>A class is still just a struct with methods — cheap enough to wrap a raw hardware address directly, no allocator required.</p>
+        <div class="code-card">
+          <pre><span class="kw">class</span> Screen {
+    <span class="kw">let</span> buffer: <span class="ty">char</span>*
+
+    constructor() {
+        self.buffer = <span class="str">0xB8000</span> <span class="kw">as</span> <span class="ty">char</span>*
+    }
+
+    <span class="kw">func</span> write(msg: <span class="ty">char</span>*) {
+        <span class="cm">// writes straight into video memory</span>
+    }
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<section id="samples">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">More of the syntax</span>
+      <h2>Small enough to read in one pass.</h2>
+      <p>Four more corners of the language — none of it needs a paragraph of explanation first.</p>
+    </div>
+    <div class="samples">
+      <div class="sample">
+        <div class="cap"><h3>Error handling</h3><span>the <code>?</code> operator</span></div>
+        <div class="code-card">
+          <pre><span class="kw">func</span> safe_div(a: <span class="ty">int</span>, b: <span class="ty">int</span>) -&gt; Result&lt;<span class="ty">int</span>, <span class="ty">int</span>&gt; {
+    <span class="kw">let</span> r: Result&lt;<span class="ty">int</span>, <span class="ty">int</span>&gt; = <span class="kw">new</span> Result&lt;<span class="ty">int</span>, <span class="ty">int</span>&gt;()
+    <span class="kw">if</span> b == 0 {
+        r.set_err(-1)
+        <span class="kw">return</span> r
+    }
+    r.set_ok(a / b)
+    <span class="kw">return</span> r
+}
+
+<span class="cm">// unwraps on Ok, or returns Err straight out of main()</span>
+<span class="kw">let</span> x: <span class="ty">int</span> = safe_div(10, 2)?</pre>
+        </div>
+      </div>
+      <div class="sample">
+        <div class="cap"><h3>Closures</h3><span>explicit captures</span></div>
+        <div class="code-card">
+          <pre><span class="cm">// captures `n` by value at creation time</span>
+<span class="kw">func</span> make_adder(n: <span class="ty">int</span>) -&gt; (<span class="ty">int</span>) -&gt; <span class="ty">int</span> {
+    <span class="kw">return</span> <span class="kw">func</span>[n](x: <span class="ty">int</span>) -&gt; <span class="ty">int</span> {
+        <span class="kw">return</span> x + n
+    }
+}
+
+<span class="kw">let</span> add5 = make_adder(5)
+<span class="kw">let</span> total: <span class="ty">int</span> = add5(10) <span class="cm">// 15</span></pre>
+        </div>
+      </div>
+      <div class="sample">
+        <div class="cap"><h3>String interpolation</h3><span>implicit <code>as_string</code></span></div>
+        <div class="code-card">
+          <pre><span class="kw">let</span> name: String = <span class="kw">new</span> String(<span class="str">"Ada"</span>)
+<span class="kw">let</span> queued: <span class="ty">int</span> = 3
+
+puts(<span class="str">"hello, \(name) — \(queued) items queued"</span>)
+<span class="cm">// hello, Ada — 3 items queued</span></pre>
+        </div>
+      </div>
+      <div class="sample">
+        <div class="cap"><h3>Stdlib &amp; generics</h3><span>built-in JSON parser</span></div>
+        <div class="code-card">
+          <pre><span class="kw">import</span> <span class="str">"stdlib/json/json_parser.llpl"</span>
+<span class="kw">using</span> <span class="kw">namespace</span> std.json
+
+<span class="kw">let</span> doc: JsonValue = parse(<span class="kw">new</span> String(<span class="str">"{\"port\": 8080}"</span>))
+<span class="kw">let</span> port: <span class="ty">int</span> = doc.get_or(<span class="kw">new</span> String(<span class="str">"port"</span>), JsonValue.make_int(0)).as_int()</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<section id="pipeline">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">How a build actually runs</span>
+      <h2>Every stage is a real, inspectable artifact.</h2>
+      <p>Nothing is hidden inside a black-box backend — the generated C is there to read, and a build can stop at any stage.</p>
+    </div>
+    <div class="pipeline">
+      <div class="pnode"><div class="k">Write</div><div class="v">.llpl source</div></div>
+      <div class="parrow"></div>
+      <div class="pnode"><div class="k">Parse</div><div class="v">AST</div></div>
+      <div class="parrow"></div>
+      <div class="pnode"><div class="k">Generate</div><div class="v">plain C</div></div>
+      <div class="parrow"></div>
+      <div class="pnode"><div class="k">Compile</div><div class="v">native binary</div></div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">What's in the language</span>
+      <h2>Built for real programs, not toy syntax.</h2>
+    </div>
+    <div class="grid3">
+      <div class="feature spotlight">
+        <div class="top"><h3>grammar { }</h3><span class="pill">new</span></div>
+        <p>An ANTLR-style grammar block compiled at build time into a real recursive-descent parser — left recursion and precedence handled automatically, ambiguity caught before runtime.</p>
+      </div>
+      <div class="feature">
+        <h3>Ref-counted classes</h3>
+        <p>Classes are heap-allocated and reference-counted automatically; structs and unions stay plain value types with no overhead.</p>
+      </div>
+      <div class="feature">
+        <h3>Generics &amp; traits</h3>
+        <p><code>Vector&lt;T&gt;</code>, <code>Result&lt;T,E&gt;</code>, <code>HashMap&lt;K,V&gt;</code> and your own — bounded by traits like <code>Hashable</code>, resolved at compile time.</p>
+      </div>
+      <div class="feature">
+        <h3>Tagged enums &amp; match</h3>
+        <p>Sum types with per-variant fields, destructured with <code>match</code> — the same mechanism doubles as ergonomic error handling.</p>
+      </div>
+      <div class="feature">
+        <h3>A real standard library</h3>
+        <p>Linked lists, trees, heaps, hash maps, tries and graphs; YAML and JSON parsers; string, file, and socket I/O.</p>
+      </div>
+      <div class="feature">
+        <h3>Freestanding-ready</h3>
+        <p>Interrupt handlers, inline assembly, <code>volatile</code>, and zero libc dependency — the same compiler builds a toy kernel.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<section id="reference">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Language reference</span>
+      <h2>Every feature, in one pass.</h2>
+      <p>Not a curated highlight reel this time — the full surface of the language, grouped by what you reach for at the same time.</p>
+    </div>
+    <div class="docs-inner">
+      <nav class="docs-nav" id="docsNav">
+        <a href="#doc-types">Types &amp; values</a>
+        <a href="#doc-vars">Variables &amp; functions</a>
+        <a href="#doc-pipe">Pipe operator</a>
+        <a href="#doc-classes">Classes, structs, unions</a>
+        <a href="#doc-generics">Generics &amp; traits</a>
+        <a href="#doc-enums">Enums &amp; pattern matching</a>
+        <a href="#doc-errors">Error handling</a>
+        <a href="#doc-closures">Closures &amp; iteration</a>
+        <a href="#doc-flow">Control-flow extras</a>
+        <a href="#doc-modules">Modules &amp; namespaces</a>
+        <a href="#doc-macros">Macros</a>
+        <a href="#doc-grammar">grammar { }</a>
+        <a href="#doc-memory">Memory model</a>
+        <a href="#doc-systems">Systems &amp; interop</a>
+      </nav>
+
+      <div class="docs-content">
+
+        <div class="doc-group" id="doc-types">
+          <div class="gh"><h3>Types &amp; values</h3><span>primitives · arrays · casts</span></div>
+          <p>Sized integers, a float, bool, char, and a plain <code>char*</code> string alias — fixed arrays are <code>T[N]</code>; growable ones are <code>Vector&lt;T&gt;</code> from the standard library, not a built-in array type.</p>
+          <div class="sig-list">
+            <div class="row"><code>int, uint</code><span class="d">64-bit signed / unsigned</span></div>
+            <div class="row"><code>int8/16/32/64, uint8/16/32/64</code><span class="d">explicitly sized integers (aliases <code>i8..i64</code>, <code>u8..u64</code>)</span></div>
+            <div class="row"><code>float, bool, char</code><span class="d">32-bit float, boolean, one byte</span></div>
+            <div class="row"><code>string</code><span class="d">alias for <code>char*</code> — no distinct string type at the ABI level</span></div>
+            <div class="row"><code>T[N]</code><span class="d">fixed-size array, e.g. <code>char[256]</code></span></div>
+            <div class="row"><code>expr as T</code><span class="d">explicit cast</span></div>
+            <div class="row"><code>sizeof(T), expr.sizeof</code><span class="d">compile-time size in bytes</span></div>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-vars">
+          <div class="gh"><h3>Variables &amp; functions</h3><span>let · const · func</span></div>
+          <p>Bindings are type-inferred or explicitly annotated; a later <code>let</code> may shadow an earlier one in the same scope. Functions take default parameter values, a trailing variadic parameter, and overload by parameter shape.</p>
+          <div class="code-card">
+            <pre><span class="kw">let</span> count = 0                     <span class="cm">// inferred as int</span>
+<span class="kw">const</span> MAX: <span class="ty">int</span> = 100
+<span class="kw">volatile</span> <span class="kw">let</span> ready: <span class="ty">bool</span> = <span class="kw">false</span>    <span class="cm">// never cached in a register</span>
+
+<span class="kw">func</span> greet(name: <span class="ty">char</span>*, loud: <span class="ty">bool</span> = <span class="kw">false</span>) -&gt; <span class="ty">char</span>* { ... }
+<span class="kw">func</span> total(values: <span class="ty">int</span>...) -&gt; <span class="ty">int</span> { ... }</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-pipe">
+          <div class="gh"><h3>Pipe operator</h3><span>|&gt;</span></div>
+          <p><code>x |&gt; f</code> desugars to <code>f(x)</code>, and <code>x |&gt; f(a, b)</code> to <code>f(x, a, b)</code> — the piped-in value always lands as the first argument. Chains read left to right, and it binds looser than every other operator, so <code>a + b |&gt; f</code> is <code>f(a + b)</code>, not <code>a + f(b)</code>.</p>
+          <div class="code-card">
+            <pre><span class="kw">func</span> double_it(x: <span class="ty">int</span>) -&gt; <span class="ty">int</span> { <span class="kw">return</span> x * 2 }
+<span class="kw">func</span> add_one(x: <span class="ty">int</span>) -&gt; <span class="ty">int</span> { <span class="kw">return</span> x + 1 }
+<span class="kw">func</span> add(a: <span class="ty">int</span>, b: <span class="ty">int</span>) -&gt; <span class="ty">int</span> { <span class="kw">return</span> a + b }
+
+<span class="kw">let</span> piped: <span class="ty">int</span> = 5 |&gt; double_it |&gt; add_one   <span class="cm">// (5*2)+1 = 11</span>
+<span class="kw">let</span> with_args: <span class="ty">int</span> = 5 |&gt; add(10)          <span class="cm">// add(5, 10) = 15</span>
+<span class="kw">let</span> precedence: <span class="ty">int</span> = 2 + 3 |&gt; double_it   <span class="cm">// (2+3) |> double_it = 10</span></pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-classes">
+          <div class="gh"><h3>Classes, structs &amp; unions</h3><span>three ways to shape data</span></div>
+          <p>A <code>class</code> is always heap-allocated and reference-counted, with overloadable constructors and a destructor. A <code>struct</code> is a plain value type — no ref-counting, optionally <code>packed</code> for an exact C layout. A <code>union</code> overlaps its fields the same way C's does.</p>
+          <div class="code-card">
+            <pre><span class="kw">class</span> Counter {
+    <span class="kw">private</span> <span class="kw">let</span> value: <span class="ty">int</span>
+
+    constructor(start: <span class="ty">int</span>) { self.value = start }
+    destructor() {}
+
+    <span class="kw">func</span> increment() { self.value = self.value + 1 }
+    <span class="kw">static</span> <span class="kw">func</span> zero() -&gt; Counter { <span class="kw">return</span> <span class="kw">new</span> Counter(0) }
+}
+
+<span class="kw">packed</span> <span class="kw">struct</span> Header {
+    <span class="kw">let</span> magic: uint32
+    <span class="kw">let</span> version: uint8
+}</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-generics">
+          <div class="gh"><h3>Generics &amp; traits</h3><span>&lt;T: Bound&gt;</span></div>
+          <p>Classes, structs, and functions all take type parameters, optionally bounded by a trait — a compile-time-only contract satisfied by an <code>impl</code> block elsewhere.</p>
+          <div class="code-card">
+            <pre><span class="kw">trait</span> Hashable {
+    <span class="kw">func</span> hash() -&gt; uint
+    <span class="kw">func</span> equals(other: Self) -&gt; <span class="ty">bool</span>
+}
+
+<span class="kw">class</span> HashSet&lt;T: Hashable&gt; { ... }
+
+<span class="kw">impl</span> Hashable <span class="kw">for</span> <span class="ty">int</span> {
+    <span class="kw">func</span> hash() -&gt; uint { <span class="kw">return</span> self <span class="kw">as</span> uint }
+    <span class="kw">func</span> equals(other: <span class="ty">int</span>) -&gt; <span class="ty">bool</span> { <span class="kw">return</span> self == other }
+}</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-enums">
+          <div class="gh"><h3>Enums &amp; pattern matching</h3><span>tagged unions · match/case</span></div>
+          <p>A tagged enum variant carries its own fields and is constructed by calling it, e.g. <code>Shape.Circle(3)</code>. <code>match</code> destructures a variant's fields directly into fresh bindings; a plain <code>match</code> on tuples and structs works the same way.</p>
+          <div class="code-card">
+            <pre><span class="cm">// enum Shape { Circle(radius: int), Square(side: int), Point }</span>
+<span class="kw">match</span> shape {
+    <span class="kw">case</span> Shape.Circle(radius) =&gt; { ... }
+    <span class="kw">case</span> Shape.Square(side) =&gt; { ... }
+    <span class="kw">default</span> =&gt; { ... }
+}
+
+<span class="kw">match</span> point {
+    <span class="kw">case</span> (0, 0) =&gt; puts(<span class="str">"origin"</span>)
+    <span class="kw">case</span> (x, y) =&gt; print_int(<span class="str">"x"</span>, x)
+}</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-errors">
+          <div class="gh"><h3>Error handling</h3><span>Optional&lt;T&gt; · Result&lt;T,E&gt; · try/catch</span></div>
+          <p><code>expr?</code> unwraps an <code>Optional&lt;T&gt;</code>/<code>Result&lt;T,E&gt;</code> on success, or returns a matching empty/error value straight out of the enclosing function. Wrapped in <code>try</code>, that same early-exit is redirected to <code>catch</code> instead — plain generated control flow, not stack unwinding.</p>
+          <div class="code-card">
+            <pre><span class="kw">try</span> {
+    <span class="kw">let</span> x: <span class="ty">int</span> = safe_div(10, 0)?
+} <span class="kw">catch</span> (e) {
+    print_int(<span class="str">"caught"</span>, e)
+} <span class="kw">finally</span> {
+    puts(<span class="str">"always runs"</span>)
+}</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-closures">
+          <div class="gh"><h3>Closures &amp; iteration</h3><span>func[captures] · foreach</span></div>
+          <p>A lambda's captures are listed explicitly — copied by value at creation time, or by reference with <code>&amp;</code>. <code>foreach</code> works over a fixed array or anything implementing the two-method <code>Iterator&lt;T&gt;</code> protocol.</p>
+          <div class="code-card">
+            <pre><span class="kw">func</span> make_adder(n: <span class="ty">int</span>) -&gt; (<span class="ty">int</span>) -&gt; <span class="ty">int</span> {
+    <span class="kw">return</span> <span class="kw">func</span>[n](x: <span class="ty">int</span>) -&gt; <span class="ty">int</span> { <span class="kw">return</span> x + n }
+}
+
+<span class="kw">foreach</span> <span class="kw">let</span> item <span class="kw">in</span> my_vector {
+    puts(item)
+}</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-flow">
+          <div class="gh"><h3>Control-flow extras</h3><span>unless · defer</span></div>
+          <p>Beyond the usual <code>if</code>/<code>while</code>/<code>for</code>: a trailing <code>unless</code> modifier reads as a guard clause, and <code>defer</code> schedules a statement to run when its enclosing scope exits, in reverse order for multiple defers.</p>
+          <div class="code-card">
+            <pre>log(<span class="str">"skipped"</span>) <span class="kw">unless</span> is_valid   <span class="cm">// if !is_valid { log(...) }</span>
+
+<span class="kw">func</span> read_all() {
+    <span class="kw">let</span> f = open_file()
+    <span class="kw">defer</span> f.close()             <span class="cm">// runs on every exit path</span>
+    ...
+}</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-modules">
+          <div class="gh"><h3>Modules &amp; namespaces</h3><span>import · using · alias</span></div>
+          <p>A bare, dotted import resolves to a file path (<code>drivers.serial</code> → <code>drivers/serial.llpl</code>); a quoted one is for paths that aren't valid identifiers. <code>using namespace</code> brings a namespace's names into scope unqualified; <code>$LLPL_HOME</code> lets <code>stdlib/...</code> imports resolve the same way regardless of where the importing file lives.</p>
+          <div class="code-card">
+            <pre><span class="kw">import</span> stdlib.collections.hashmap
+<span class="kw">import</span> <span class="str">"stdlib/json/json_parser.llpl"</span>
+
+<span class="kw">using</span> <span class="kw">namespace</span> std.collections
+<span class="kw">alias</span> Map = EnhancedHashMap&lt;String, <span class="ty">int</span>&gt;</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-macros">
+          <div class="gh"><h3>Macros</h3><span>quote / unquote</span></div>
+          <p>A hygienic macro quotes ordinary LLPL syntax and splices arguments in with <code>unquote</code> — the quoted body is parsed with the same grammar as everything else, not a separate template language.</p>
+          <div class="code-card">
+            <pre><span class="kw">macro</span> assert_positive(x) {
+    <span class="kw">quote</span> {
+        <span class="kw">if</span> unquote(x) &lt; 0 {
+            llpl_panic(<span class="str">"expected a positive value"</span>)
+        }
+    }
+}</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-grammar">
+          <div class="gh"><h3>grammar { }</h3><span class="pill">new</span></div>
+          <p>Covered up top — an ANTLR-style grammar block compiled into a real recursive-descent parser at build time. Direct left recursion becomes a precedence-climbing loop automatically; every decision point is checked for ambiguity at compile time, never guessed at runtime. <code>Name(text)</code> is sugar for constructing the generated class and calling its first rule; every match becomes a walkable <code>ParseNode</code>.</p>
+        </div>
+
+        <div class="doc-group" id="doc-memory">
+          <div class="gh"><h3>Memory model</h3><span>ref counting · Weak&lt;T&gt; · raw pointers</span></div>
+          <p>A class instance's lifetime is reference-counted automatically. <code>Weak&lt;T&gt;</code> holds a non-owning reference for exactly the cases where two objects would otherwise keep each other alive forever. Manual allocation is still available underneath for anything managing its own memory by hand.</p>
+          <div class="code-card">
+            <pre><span class="kw">let</span> a: MyClass = <span class="kw">new</span> MyClass()               <span class="cm">// ref-counted</span>
+<span class="kw">let</span> w: Weak&lt;MyClass&gt; = <span class="kw">new</span> Weak&lt;MyClass&gt;(a)  <span class="cm">// doesn't keep it alive</span>
+
+<span class="kw">let</span> raw: <span class="ty">char</span>* = llpl_alloc(64)                <span class="cm">// manual buffer</span>
+llpl_free(raw)</pre>
+          </div>
+        </div>
+
+        <div class="doc-group" id="doc-systems">
+          <div class="gh"><h3>Systems &amp; interop</h3><span>extern · interrupt · asm · attributes</span></div>
+          <p>Binding a C library is an <code>extern func</code> declaration plus a <code>#link</code> directive; a bare-metal target adds interrupt handlers, inline assembly, and placement attributes for linker sections and alignment.</p>
+          <div class="code-card">
+            <pre><span class="hash">#link</span> <span class="str">"SDL3"</span>
+<span class="kw">extern</span> <span class="kw">func</span> SDL_Init(flags: uint32) -&gt; <span class="ty">int</span>
+
+<span class="kw">interrupt</span> <span class="kw">func</span> isr_divide_by_zero() { ... }
+
+<span class="at">@section</span>(<span class="str">".boot"</span>)
+<span class="at">@align</span>(16)
+<span class="kw">let</span> boot_stack: <span class="ty">char</span>[4096]</pre>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<section id="start">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Get started</span>
+      <h2>Two commands to a native binary.</h2>
+    </div>
+    <div class="term">
+      <div class="bar"><span></span><span></span><span></span></div>
+      <pre><span class="prompt">$</span> dub build                          <span class="cmt"># builds the llpl compiler itself</span>
+<span class="prompt">$</span> ./llpl calc.llpl -b -o calc        <span class="cmt"># .llpl -&gt; C -&gt; native binary, in one step</span>
+<span class="prompt">$</span> ./calc
+<span class="out">7</span></pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>LLPL</div>
+    <div class="fmono">a systems language that compiles to C</div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var canvas = document.getElementById('traceCanvas');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    function isDark() {
+      var t = document.documentElement.getAttribute('data-theme');
+      if (t === 'dark') return true;
+      if (t === 'light') return false;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+
+    function traceColor(alpha) {
+      return isDark() ? 'rgba(220,154,92,' + alpha + ')' : 'rgba(156,95,42,' + alpha + ')';
+    }
+    function greenColor(alpha) {
+      return isDark() ? 'rgba(87,187,135,' + alpha + ')' : 'rgba(37,107,70,' + alpha + ')';
+    }
+
+    function draw() {
+      var rect = canvas.parentElement.getBoundingClientRect();
+      var w = rect.width, h = rect.height;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      var grid = 34;
+      var seed = 7;
+      function rand() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+
+      var traceCount = Math.max(5, Math.floor(w / 220));
+      for (var t = 0; t < traceCount; t++) {
+        var x = Math.round((rand() * w) / grid) * grid;
+        var y = Math.round((rand() * h) / grid) * grid;
+        var segments = 3 + Math.floor(rand() * 4);
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.strokeStyle = t % 3 === 0 ? greenColor(0.22) : traceColor(0.22);
+        ctx.lineWidth = 1;
+        var pts = [[x, y]];
+        for (var s = 0; s < segments; s++) {
+          var horizontal = rand() > 0.5;
+          var len = grid * (1 + Math.floor(rand() * 3));
+          if (horizontal) { x += (rand() > 0.5 ? 1 : -1) * len; } else { y += (rand() > 0.5 ? 1 : -1) * len; }
+          x = Math.max(0, Math.min(w, x));
+          y = Math.max(0, Math.min(h, y));
+          ctx.lineTo(x, y);
+          pts.push([x, y]);
+        }
+        ctx.stroke();
+        for (var p = 1; p < pts.length - 1; p++) {
+          ctx.beginPath();
+          ctx.arc(pts[p][0], pts[p][1], 2, 0, Math.PI * 2);
+          ctx.fillStyle = t % 3 === 0 ? greenColor(0.35) : traceColor(0.35);
+          ctx.fill();
+        }
+      }
+    }
+
+    draw();
+    var resizeTimer;
+    window.addEventListener('resize', function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(draw, 150);
+    });
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', draw);
+    var mo = new MutationObserver(draw);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  })();
+
+  (function () {
+    var navLinks = Array.prototype.slice.call(document.querySelectorAll('#docsNav a'));
+    var groups = navLinks.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); });
+    if (!navLinks.length || !('IntersectionObserver' in window)) return;
+
+    function setActive(id) {
+      navLinks.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === '#' + id); });
+    }
+
+    var observer = new IntersectionObserver(function (entries) {
+      var visible = entries.filter(function (e) { return e.isIntersecting; })
+        .sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+      if (visible.length) setActive(visible[0].target.id);
+    }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+
+    groups.forEach(function (g) { if (g) observer.observe(g); });
+  })();
+</script>

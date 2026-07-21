@@ -5,7 +5,7 @@ namespace std {
 namespace sdl {
 
 // Audio format constants - SDL_AudioFormat is a plain C enum (defaults to
-// a 4-byte `int`, not Uint16 - see this file's own SDL_AudioSpec comment)
+// a 4-byte `i64`, not Uint16 - see this file's own SDL_AudioSpec comment)
 const SDL_AUDIO_U8: i32 = 0x0008
 const SDL_AUDIO_S8: i32 = 0x8008
 const SDL_AUDIO_U16LSB: i32 = 0x0010
@@ -21,7 +21,7 @@ alias SDL_AudioStream = void
 
 // Audio spec structure - `struct`, not `class` (see sdl_core.llpl's own
 // header comment on why every SDL3 plain-data FFI type here is): real
-// SDL_AudioSpec is `{ SDL_AudioFormat format; int channels; int freq; }` -
+// SDL_AudioSpec is `{ SDL_AudioFormat format; i64 channels; i64 freq; }` -
 // three 4-byte fields, format included (a plain C enum, not Uint16).
 struct SDL_AudioSpec {
     let format: i32

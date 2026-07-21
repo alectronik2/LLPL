@@ -12,6 +12,13 @@ enum TokenType {
     Char,
     String,
     Regex,
+    // Raw interior text of a `grammar { }` block's `[...]` character class
+    // (e.g. `[0-9]`, `[^\n]`) - only ever produced while the lexer is inside
+    // a grammar block (see Lexer.insideGrammar); everywhere else `[`/`]`
+    // still tokenize as plain LeftBracket/RightBracket, exactly as before.
+    // Unescaping and range-splitting happens in parser.d's grammar-atom
+    // parser, not here.
+    CharClass,
     Identifier,
 
     // Keywords
@@ -21,6 +28,7 @@ enum TokenType {
     Class,
     Struct,
     Union,
+    Grammar,
     Packed,
     Interrupt,
     Constructor,
@@ -30,6 +38,8 @@ enum TokenType {
     Volatile,
     Private,
     Static,
+    Virtual,
+    Override,
     If,
     Else,
     While,
@@ -68,6 +78,7 @@ enum TokenType {
     Finally,
     Throw,
     Delete,
+    Assert,
 
     // Operators
     Plus,
@@ -120,6 +131,13 @@ enum TokenType {
     DotDot,
     Ellipsis,
     Colon,
+    // `;` - unused by the ordinary (newline-terminated) LLPL statement
+    // grammar; reserved solely to terminate one rule inside a
+    // `grammar { }` block (`rule : alt | alt ;`), matching ANTLR's own
+    // convention. Falls through to the "Unexpected character" case
+    // everywhere else, same as before this token existed - no code
+    // anywhere in stdlib/ or the test suite used a bare `;` before now.
+    Semicolon,
     At,
     Hash, // `#`, for compiler directives (`#link "SDL3"`)
 
@@ -154,6 +172,22 @@ class Lexer {
     private TokenType previousTokenType;
     private bool hasPreviousToken;
 
+    // Tracks whether `[` should raw-scan a grammar character class
+    // (TokenType.CharClass) instead of tokenizing as plain LeftBracket -
+    // true only between a `grammar Name {` block's opening brace and its
+    // matching closing one. `grammarKwSeen`/`grammarNameSeen` track the
+    // short `Grammar Identifier {` lead-in sequence that arms this;
+    // `braceDepth` is the overall (context-independent) brace nesting
+    // level everywhere in the file, and `grammarExitDepth` is the depth
+    // `insideGrammar` turns back off at once a RightBrace brings
+    // `braceDepth` down to it (i.e. the depth *outside* the grammar
+    // block's own opening brace).
+    private bool insideGrammar;
+    private bool grammarKwSeen;
+    private bool grammarNameSeen;
+    private int braceDepth;
+    private int grammarExitDepth = -1;
+
     private static string[string] keywords;
 
     static this() {
@@ -164,6 +198,7 @@ class Lexer {
             "class": "Class",
             "struct": "Struct",
             "union": "Union",
+            "grammar": "Grammar",
             "packed": "Packed",
             "interrupt": "Interrupt",
             "constructor": "Constructor",
@@ -173,6 +208,8 @@ class Lexer {
             "volatile": "Volatile",
             "private": "Private",
             "static": "Static",
+            "virtual": "Virtual",
+            "override": "Override",
             "if": "If",
             "else": "Else",
             "while": "While",
@@ -209,7 +246,8 @@ class Lexer {
             "catch": "Catch",
             "finally": "Finally",
             "throw": "Throw",
-            "delete": "Delete"
+            "delete": "Delete",
+            "assert": "Assert"
         ];
     }
 
@@ -590,6 +628,86 @@ class Lexer {
         return Token(TokenType.Regex, pattern, startLine, startColumn);
     }
 
+    // Raw-scans a `grammar { }` block's `[...]` character class - same
+    // shape as regex_()'s own raw scan (escape-aware, delimiter-terminated,
+    // `.value` is the untouched interior text including a leading `^` if
+    // present) - only ever called while `insideGrammar` is true (see
+    // nextToken()'s `[` case). Unescaping and splitting into individual
+    // chars/ranges happens later, in parser.d's grammar-atom parser.
+    private Token charClass_() {
+        int startLine = line;
+        int startColumn = column;
+        advance(); // skip opening '['
+
+        string content = "";
+        bool escaped = false;
+        while (current != '\0') {
+            if (escaped) {
+                content ~= '\\';
+                content ~= current;
+                escaped = false;
+                advance();
+                continue;
+            }
+            if (current == '\\') {
+                escaped = true;
+                advance();
+                continue;
+            }
+            if (current == ']') {
+                advance();
+                return Token(TokenType.CharClass, content, startLine, startColumn);
+            }
+            content ~= current;
+            advance();
+        }
+
+        return Token(TokenType.CharClass, content, startLine, startColumn);
+    }
+
+    // Raw-scans a `grammar { }` block's single-quoted terminal literal
+    // (`'if'`, `'+'`, `'=='`) - unlike the ordinary single-quoted char_()
+    // literal elsewhere in the language (always exactly one character),
+    // ANTLR-style grammar terminals are routinely multi-character, so this
+    // (like charClass_() above) raw-scans to the matching unescaped closing
+    // quote instead of expecting exactly one character. Emitted as a plain
+    // TokenType.String (not a new token type) so parser.d's grammar-atom
+    // parser can accept single- and double-quoted terminals identically.
+    private Token grammarLiteral_() {
+        int startLine = line;
+        int startColumn = column;
+        advance(); // skip opening quote
+
+        string content = "";
+        bool escaped = false;
+        while (current != '\0') {
+            if (escaped) {
+                switch (current) {
+                    case 'n': content ~= '\n'; break;
+                    case 't': content ~= '\t'; break;
+                    case 'r': content ~= '\r'; break;
+                    default: content ~= current; break;
+                }
+                escaped = false;
+                advance();
+                continue;
+            }
+            if (current == '\\') {
+                escaped = true;
+                advance();
+                continue;
+            }
+            if (current == '\'') {
+                advance();
+                return Token(TokenType.String, content, startLine, startColumn);
+            }
+            content ~= current;
+            advance();
+        }
+
+        return Token(TokenType.String, content, startLine, startColumn);
+    }
+
     private Token identifier() {
         int startLine = line;
         int startColumn = column;
@@ -610,6 +728,7 @@ class Lexer {
                 case "Class": type = TokenType.Class; break;
                 case "Struct": type = TokenType.Struct; break;
                 case "Union": type = TokenType.Union; break;
+                case "Grammar": type = TokenType.Grammar; break;
                 case "Packed": type = TokenType.Packed; break;
                 case "Interrupt": type = TokenType.Interrupt; break;
                 case "Constructor": type = TokenType.Constructor; break;
@@ -619,6 +738,8 @@ class Lexer {
                 case "Volatile": type = TokenType.Volatile; break;
                 case "Private": type = TokenType.Private; break;
                 case "Static": type = TokenType.Static; break;
+                case "Virtual": type = TokenType.Virtual; break;
+                case "Override": type = TokenType.Override; break;
                 case "If": type = TokenType.If; break;
                 case "Else": type = TokenType.Else; break;
                 case "While": type = TokenType.While; break;
@@ -656,6 +777,7 @@ class Lexer {
                 case "Finally": type = TokenType.Finally; break;
                 case "Throw": type = TokenType.Throw; break;
                 case "Delete": type = TokenType.Delete; break;
+                case "Assert": type = TokenType.Assert; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);
@@ -695,7 +817,13 @@ class Lexer {
                 return string_();
             }
 
-            // Character literals
+            // Character literals - grammar mode uses the same quote for
+            // (routinely multi-character) terminal literals instead, so
+            // check insideGrammar first (see grammarLiteral_()'s own
+            // comment).
+            if (current == '\'' && insideGrammar) {
+                return grammarLiteral_();
+            }
             if (current == '\'') {
                 return char_();
             }
@@ -704,6 +832,13 @@ class Lexer {
             // still tokenizes as Slash in positions like `a / b`.
             if (current == '/' && regexLiteralAllowed()) {
                 return regex_();
+            }
+
+            // Grammar character class - context-sensitive the same way, so
+            // `[` still tokenizes as plain LeftBracket (array types/literals/
+            // indexing) everywhere outside a `grammar { }` block's body.
+            if (current == '[' && insideGrammar) {
+                return charClass_();
             }
 
             // Identifiers and keywords
@@ -894,6 +1029,9 @@ class Lexer {
                 case ':':
                     advance();
                     return Token(TokenType.Colon, ":", startLine, startColumn);
+                case ';':
+                    advance();
+                    return Token(TokenType.Semicolon, ";", startLine, startColumn);
                 case '@':
                     advance();
                     return Token(TokenType.At, "@", startLine, startColumn);
@@ -910,10 +1048,53 @@ class Lexer {
         return Token(TokenType.EOF, "", line, column);
     }
 
+    // Advances the `grammar Name { ... }` lead-in/brace-depth state machine
+    // by one just-produced token - see insideGrammar's own comment. Called
+    // from tokenize() for every token (including Newlines, unlike the
+    // previousTokenType/hasPreviousToken bookkeeping just below, since brace
+    // depth must stay correct regardless of what tokenize() itself chooses
+    // to keep).
+    private void advanceGrammarState(TokenType type) {
+        if (type == TokenType.LeftBrace) {
+            braceDepth++;
+            if (grammarNameSeen) {
+                insideGrammar = true;
+                grammarExitDepth = braceDepth - 1;
+                grammarKwSeen = false;
+                grammarNameSeen = false;
+            }
+            return;
+        }
+        if (type == TokenType.RightBrace) {
+            braceDepth--;
+            if (insideGrammar && braceDepth == grammarExitDepth) {
+                insideGrammar = false;
+                grammarExitDepth = -1;
+            }
+            return;
+        }
+        if (type == TokenType.Grammar) {
+            grammarKwSeen = true;
+            grammarNameSeen = false;
+            return;
+        }
+        if (grammarKwSeen && type == TokenType.Identifier) {
+            grammarNameSeen = true;
+            grammarKwSeen = false;
+            return;
+        }
+        // Any other token seen mid-lead-in means it wasn't actually
+        // `Grammar Identifier {` (malformed source) - reset defensively so
+        // a stray `Grammar` elsewhere can't wedge insideGrammar on.
+        grammarKwSeen = false;
+        grammarNameSeen = false;
+    }
+
     Token[] tokenize() {
         Token[] tokens;
         while (true) {
             Token tok = nextToken();
+            advanceGrammarState(tok.type);
             if (tok.type != TokenType.Newline) { // Skip newlines for now
                 tokens ~= tok;
                 if (tok.type != TokenType.EOF) {

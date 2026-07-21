@@ -6,17 +6,17 @@ namespace collections {
 
 // Graph edge
 class Edge {
-    let from_vertex: int
-    let to_vertex: int
-    let weight: int
+    let from_vertex: i64
+    let to_vertex: i64
+    let weight: i64
 
-    constructor(f: int, t: int, w: int) {
+    constructor(f: i64, t: i64, w: i64) {
         self.from_vertex = f
         self.to_vertex = t
         self.weight = w
     }
 
-    constructor(f: int, t: int) {
+    constructor(f: i64, t: i64) {
         self.from_vertex = f
         self.to_vertex = t
         self.weight = 1
@@ -25,11 +25,11 @@ class Edge {
 
 // Adjacency list node
 class AdjListNode {
-    let vertex: int
-    let weight: int
+    let vertex: i64
+    let weight: i64
     let next: AdjListNode*
 
-    constructor(v: int, w: int) {
+    constructor(v: i64, w: i64) {
         self.vertex = v
         self.weight = w
         self.next = null
@@ -39,24 +39,24 @@ class AdjListNode {
 // Graph using adjacency list representation
 class Graph {
     let adjacency_list: AdjListNode**
-    let vertex_count: int
-    let edge_count: int
+    let vertex_count: i64
+    let edge_count: i64
     let is_directed: bool
 
-    constructor(vertices: int, directed: bool) {
+    constructor(vertices: i64, directed: bool) {
         self.vertex_count = vertices
         self.edge_count = 0
         self.is_directed = directed
         self.adjacency_list = llpl_alloc(vertices * sizeof(AdjListNode*)) as AdjListNode**
 
-        for let i: int = 0, i < vertices, i = i + 1 {
+        for let i: i64 = 0, i < vertices, i = i + 1 {
             self.adjacency_list[i] = null
         }
     }
 
     destructor() {
         if self.adjacency_list != null {
-            for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
                 let current: AdjListNode* = self.adjacency_list[i]
                 while current != null {
                     let next: AdjListNode* = (*current).next
@@ -68,7 +68,7 @@ class Graph {
         }
     }
 
-    func add_edge(from_v: int, to_v: int, weight: int) -> bool {
+    func add_edge(from_v: i64, to_v: i64, weight: i64) -> bool {
         if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
             return false
         }
@@ -99,11 +99,11 @@ class Graph {
         return true
     }
 
-    func add_edge_unweighted(from_v: int, to_v: int) -> bool {
+    func add_edge_unweighted(from_v: i64, to_v: i64) -> bool {
         return self.add_edge(from_v, to_v, 1)
     }
 
-    func has_edge(from_v: int, to_v: int) -> bool {
+    func has_edge(from_v: i64, to_v: i64) -> bool {
         if from_v < 0 || from_v >= self.vertex_count {
             return false
         }
@@ -119,8 +119,8 @@ class Graph {
         return false
     }
 
-    func get_neighbors(vertex: int) -> Vector<int> {
-        let result: Vector<int> = new Vector<int>()
+    func get_neighbors(vertex: i64) -> Vector<i64> {
+        let result: Vector<i64> = new Vector<i64>()
 
         if vertex < 0 || vertex >= self.vertex_count {
             return result
@@ -135,7 +135,7 @@ class Graph {
         return result
     }
 
-    func get_edges(vertex: int) -> Vector<Edge> {
+    func get_edges(vertex: i64) -> Vector<Edge> {
         let result: Vector<Edge> = new Vector<Edge>()
 
         if vertex < 0 || vertex >= self.vertex_count {
@@ -151,12 +151,12 @@ class Graph {
         return result
     }
 
-    func get_degree(vertex: int) -> int {
+    func get_degree(vertex: i64) -> i64 {
         if vertex < 0 || vertex >= self.vertex_count {
             return 0
         }
 
-        let degree: int = 0
+        let degree: i64 = 0
         let current: AdjListNode* = self.adjacency_list[vertex]
 
         while current != null {
@@ -168,34 +168,34 @@ class Graph {
     }
 
     // Breadth-first search
-    func bfs(start: int) -> Vector<int> {
-        let result: Vector<int> = new Vector<int>()
+    func bfs(start: i64) -> Vector<i64> {
+        let result: Vector<i64> = new Vector<i64>()
 
         if start < 0 || start >= self.vertex_count {
             return result
         }
 
         let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             visited[i] = false
         }
 
-        let queue: Queue<int> = new Queue<int>()
+        let queue: Queue<i64> = new Queue<i64>()
         queue.enqueue(start)
         visited[start] = true
 
         while !queue.is_empty() {
-            let v_result: Result<int, char*> = queue.dequeue()
+            let v_result: Result<i64, char*> = queue.dequeue()
             if !v_result.is_ok() {
                 break
             }
 
-            let v: int = v_result.unwrap()
+            let v: i64 = v_result.unwrap()
             result.push(v)
 
             let current: AdjListNode* = self.adjacency_list[v]
             while current != null {
-                let neighbor: int = (*current).vertex
+                let neighbor: i64 = (*current).vertex
                 if !visited[neighbor] {
                     visited[neighbor] = true
                     queue.enqueue(neighbor)
@@ -209,15 +209,15 @@ class Graph {
     }
 
     // Depth-first search
-    func dfs(start: int) -> Vector<int> {
-        let result: Vector<int> = new Vector<int>()
+    func dfs(start: i64) -> Vector<i64> {
+        let result: Vector<i64> = new Vector<i64>()
 
         if start < 0 || start >= self.vertex_count {
             return result
         }
 
         let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             visited[i] = false
         }
 
@@ -227,13 +227,13 @@ class Graph {
         return result
     }
 
-    func dfs_helper(vertex: int, visited: bool*, result: Vector<int>) {
+    func dfs_helper(vertex: i64, visited: bool*, result: Vector<i64>) {
         visited[vertex] = true
         result.push(vertex)
 
         let current: AdjListNode* = self.adjacency_list[vertex]
         while current != null {
-            let neighbor: int = (*current).vertex
+            let neighbor: i64 = (*current).vertex
             if !visited[neighbor] {
                 self.dfs_helper(neighbor, visited, result)
             }
@@ -247,26 +247,26 @@ class Graph {
             return true
         }
 
-        let visited: Vector<int> = self.bfs(0)
+        let visited: Vector<i64> = self.bfs(0)
         return visited.len() == self.vertex_count
     }
 
     // Topological sort (for directed acyclic graphs)
-    func topological_sort() -> Result<Vector<int>, char*> {
-        let result_container: Result<Vector<int>, char*> = new Result<Vector<int>, char*>()
+    func topological_sort() -> Result<Vector<i64>, char*> {
+        let result_container: Result<Vector<i64>, char*> = new Result<Vector<i64>, char*>()
 
         if !self.is_directed {
             result_container.set_err("Graph must be directed")
             return result_container
         }
 
-        let in_degree: int* = llpl_alloc(self.vertex_count * sizeof(int)) as int*
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+        let in_degree: i64* = llpl_alloc(self.vertex_count * sizeof(i64)) as i64*
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             in_degree[i] = 0
         }
 
         // Calculate in-degrees
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             let current: AdjListNode* = self.adjacency_list[i]
             while current != null {
                 in_degree[(*current).vertex] = in_degree[(*current).vertex] + 1
@@ -274,27 +274,27 @@ class Graph {
             }
         }
 
-        let queue: Queue<int> = new Queue<int>()
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+        let queue: Queue<i64> = new Queue<i64>()
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             if in_degree[i] == 0 {
                 queue.enqueue(i)
             }
         }
 
-        let result: Vector<int> = new Vector<int>()
+        let result: Vector<i64> = new Vector<i64>()
 
         while !queue.is_empty() {
-            let v_result: Result<int, char*> = queue.dequeue()
+            let v_result: Result<i64, char*> = queue.dequeue()
             if !v_result.is_ok() {
                 break
             }
 
-            let v: int = v_result.unwrap()
+            let v: i64 = v_result.unwrap()
             result.push(v)
 
             let current: AdjListNode* = self.adjacency_list[v]
             while current != null {
-                let neighbor: int = (*current).vertex
+                let neighbor: i64 = (*current).vertex
                 in_degree[neighbor] = in_degree[neighbor] - 1
                 if in_degree[neighbor] == 0 {
                     queue.enqueue(neighbor)
@@ -319,12 +319,12 @@ class Graph {
         let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
         let rec_stack: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
 
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             visited[i] = false
             rec_stack[i] = false
         }
 
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             if !visited[i] {
                 if self.has_cycle_directed_helper(i, visited, rec_stack) {
                     llpl_free(visited as char*)
@@ -339,13 +339,13 @@ class Graph {
         return false
     }
 
-    func has_cycle_directed_helper(vertex: int, visited: bool*, rec_stack: bool*) -> bool {
+    func has_cycle_directed_helper(vertex: i64, visited: bool*, rec_stack: bool*) -> bool {
         visited[vertex] = true
         rec_stack[vertex] = true
 
         let current: AdjListNode* = self.adjacency_list[vertex]
         while current != null {
-            let neighbor: int = (*current).vertex
+            let neighbor: i64 = (*current).vertex
 
             if !visited[neighbor] {
                 if self.has_cycle_directed_helper(neighbor, visited, rec_stack) {
@@ -369,22 +369,22 @@ class Graph {
 // ClassDecl has no notion of a class-level const (see e.g. rbtree.llpl's
 // RB_RED/RB_BLACK, which use this same namespace-level-const pattern for
 // exactly this reason).
-const GRAPH_INFINITY: int = 999999
+const GRAPH_INFINITY: i64 = 999999
 
 // Weighted graph using adjacency matrix
 class GraphMatrix {
-    let matrix: int**
-    let vertex_count: int
+    let matrix: i64**
+    let vertex_count: i64
     let is_directed: bool
 
-    constructor(vertices: int, directed: bool) {
+    constructor(vertices: i64, directed: bool) {
         self.vertex_count = vertices
         self.is_directed = directed
-        self.matrix = llpl_alloc(vertices * sizeof(int*)) as int**
+        self.matrix = llpl_alloc(vertices * sizeof(i64*)) as i64**
 
-        for let i: int = 0, i < vertices, i = i + 1 {
-            self.matrix[i] = llpl_alloc(vertices * sizeof(int)) as int*
-            for let j: int = 0, j < vertices, j = j + 1 {
+        for let i: i64 = 0, i < vertices, i = i + 1 {
+            self.matrix[i] = llpl_alloc(vertices * sizeof(i64)) as i64*
+            for let j: i64 = 0, j < vertices, j = j + 1 {
                 if i == j {
                     self.matrix[i][j] = 0
                 } else {
@@ -396,7 +396,7 @@ class GraphMatrix {
 
     destructor() {
         if self.matrix != null {
-            for let i: int = 0, i < self.vertex_count, i = i + 1 {
+            for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
                 if self.matrix[i] != null {
                     llpl_free(self.matrix[i] as char*)
                 }
@@ -405,7 +405,7 @@ class GraphMatrix {
         }
     }
 
-    func add_edge(from_v: int, to_v: int, weight: int) -> bool {
+    func add_edge(from_v: i64, to_v: i64, weight: i64) -> bool {
         if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
             return false
         }
@@ -419,7 +419,7 @@ class GraphMatrix {
         return true
     }
 
-    func has_edge(from_v: int, to_v: int) -> bool {
+    func has_edge(from_v: i64, to_v: i64) -> bool {
         if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
             return false
         }
@@ -427,7 +427,7 @@ class GraphMatrix {
         return self.matrix[from_v][to_v] != GRAPH_INFINITY
     }
 
-    func get_weight(from_v: int, to_v: int) -> int {
+    func get_weight(from_v: i64, to_v: i64) -> i64 {
         if from_v < 0 || from_v >= self.vertex_count || to_v < 0 || to_v >= self.vertex_count {
             return GRAPH_INFINITY
         }
@@ -436,21 +436,21 @@ class GraphMatrix {
     }
 
     // Floyd-Warshall algorithm for all-pairs shortest paths
-    func floyd_warshall() -> int** {
-        let dist: int** = llpl_alloc(self.vertex_count * sizeof(int*)) as int**
+    func floyd_warshall() -> i64** {
+        let dist: i64** = llpl_alloc(self.vertex_count * sizeof(i64*)) as i64**
 
         // Initialize distance matrix
-        for let i: int = 0, i < self.vertex_count, i = i + 1 {
-            dist[i] = llpl_alloc(self.vertex_count * sizeof(int)) as int*
-            for let j: int = 0, j < self.vertex_count, j = j + 1 {
+        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+            dist[i] = llpl_alloc(self.vertex_count * sizeof(i64)) as i64*
+            for let j: i64 = 0, j < self.vertex_count, j = j + 1 {
                 dist[i][j] = self.matrix[i][j]
             }
         }
 
         // Floyd-Warshall algorithm
-        for let k: int = 0, k < self.vertex_count, k = k + 1 {
-            for let i: int = 0, i < self.vertex_count, i = i + 1 {
-                for let j: int = 0, j < self.vertex_count, j = j + 1 {
+        for let k: i64 = 0, k < self.vertex_count, k = k + 1 {
+            for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+                for let j: i64 = 0, j < self.vertex_count, j = j + 1 {
                     if dist[i][k] + dist[k][j] < dist[i][j] {
                         dist[i][j] = dist[i][k] + dist[k][j]
                     }

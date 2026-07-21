@@ -1,0 +1,57 @@
+PageAlloc: 64888/65407 pages free
+TmpFS: 29 boot module(s) found
+[32mTMPFS_SELFTEST: PASS
+[0m[36mLLPL Bare-Metal Demo
+[0m[36m=====================
+[0mcolors: [31mred[0m [32mgreen[0m [33myellow[0m [36mcyan[0m - a single log() call, tags inline
+[37mLoading a fresh GDT from LLPL...
+[0m[32mGDT reloaded: base=0x0000000000163a00 limit=0x37
+[0m[37mInstalling IDT and remapping the PIC...
+[0m[32mIDT installed (timer on IRQ0, keyboard on IRQ1).
+[0m[33mTriggering a breakpoint exception (int3)...
+[0mBreakpoint (int3) handled, resuming...
+Backtrace:
+  #00 rbp=0x0000000000135fb0 rip=0x0000000000118533 isr_invalid_opcode (idt.llpl:52)
+  <stopped: unaligned frame pointer>
+[32m...resumed after the fault handler returned via iretq.
+[0m[37mEnabling interrupts...
+[0m[32mInterrupts enabled.
+[0m[37mSpawning tasks (shell + a background counter) and starting the scheduler...
+[0m[32mspawned user task 2 from [0matad.elf[32m (entry=0x1000004d0)
+[0m[32mspawned user task 3 from [0mwm.elf[32m (entry=0x100003370)
+[0m[32mspawned user task 4 from [0mnetd.elf[32m (entry=0x100002070)
+[0mwm: starting
+[36mStarting the shell. Type 'help' for a list of commands.
+[0m[32mllpl[0m [37m$[0m atad: Bus Master DMA enabled
+netd: e1000 up, mac=wm: loading wallpaper...
+wm: loading cursor...
+wm: ready
+52:54:00:12:34:56
+[32mATA: primary master detected (via atad); VFS mounted (self-formats on first boot)
+[0m[36mVFS: no /selftest/proof.txt yet (first boot on this disk)
+[0m[33mPERSISTENCE: SKIP (first boot)
+[0mnetd: DHCP ok, ip=10.0.2.15 gw=10.0.2.2
+[32mSELFTEST: PASS
+[0m[32minstalled [0mlibsys.so[32m to [0m/lib/libsys.so
+[32minstalled [0mdyn_userapp.elf[32m to [0m/bin/dyn_userapp.elf
+[32minstalled [0mmemtest.elf[32m to [0m/bin/memtest.elf
+[32minstalled [0mcat.elf[32m to [0m/bin/cat.elf
+[32minstalled [0mspawnwait.elf[32m to [0m/bin/spawnwait.elf
+[32minstalled [0mexecchain.elf[32m to [0m/bin/execchain.elf
+[32minstalled [0mechoserver.elf[32m to [0m/bin/echoserver.elf
+[32minstalled [0mipcdemo.elf[32m to [0m/bin/ipcdemo.elf
+[32minstalled [0mechod.elf[32m to [0m/bin/echod.elf
+[32minstalled [0mechoclient.elf[32m to [0m/bin/echoclient.elf
+[32minstalled [0mshmserver.elf[32m to [0m/bin/shmserver.elf
+[32minstalled [0mshmclient.elf[32m to [0m/bin/shmclient.elf
+[32minstalled [0mtetris.elf[32m to [0m/bin/tetris.elf
+[32minstalled [0mwinball1.elf[32m to [0m/bin/winball1.elf
+[32minstalled [0mwinball2.elf[32m to [0m/bin/winball2.elf
+[32minstalled [0mfilebrowser.elf[32m to [0m/bin/filebrowser.elf
+[32minstalled [0meditor.elf[32m to [0m/bin/editor.elf
+[32minstalled [0mterminal.elf[32m to [0m/bin/terminal.elf
+[32minstalled [0mui_demo.elf[32m to [0m/bin/ui_demo.elf
+run /boot/pingview.elf
+[32mspawned user task 6 from [0m/boot/pingview.elf[32m (entry=0x1000015e0)
+[0m[37mpid 6
+[0m[32mllpl[0m [37m$[0m 
