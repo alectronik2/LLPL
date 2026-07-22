@@ -16,7 +16,7 @@ func main() -> i64 {
     }
 
     // Connect to localhost (127.0.0.1) on port 8080
-    let connect_result: Result<bool, char*> = client.connect_to_host(127 as uint8, 0 as uint8, 0 as uint8, 1 as uint8, 8080 as uint16)
+    let connect_result: Result<bool, u8*> = client.connect_to_host(127 as uint8, 0 as uint8, 0 as uint8, 1 as uint8, 8080 as uint16)
 
     if !connect_result.is_ok() {
         // Connection failed
@@ -25,7 +25,7 @@ func main() -> i64 {
 
     // Send message to server
     let message: String = new String("Hello, Server!")
-    let send_result: Result<i64, char*> = client.send_message(message)
+    let send_result: Result<i64, u8*> = client.send_message(message)
 
     if !send_result.is_ok() {
         client.close_connection()
@@ -33,7 +33,7 @@ func main() -> i64 {
     }
 
     // Receive response from server
-    let recv_result: Result<String, char*> = client.recv_message(1024)
+    let recv_result: Result<String, u8*> = client.recv_message(1024)
 
     if recv_result.is_ok() {
         let response: String = recv_result.unwrap()

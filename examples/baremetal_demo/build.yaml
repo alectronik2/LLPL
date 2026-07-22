@@ -21,11 +21,17 @@ common_cflags:
   - -nostdlib
   - -nostdinc
   - -fno-builtin
+  - -funsigned-char
   - -fno-stack-protector
   - -fno-omit-frame-pointer
   - -fno-optimize-sibling-calls
   - -Wall
   - -Wextra
+  # Generated LLPL C intentionally emits empty destructors/default methods and
+  # uses mutable u8* for string literals because LLPL has no pointer-to-const.
+  - -Wno-unused-parameter
+  - -Wno-unused-variable
+  - -Wno-discarded-qualifiers
   - -I.
   - -mcmodel=kernel
   - -fno-pie
@@ -399,6 +405,30 @@ extra_links:
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
       objects: [build/ui_demo.o, build/libsys.so]
+  - name: taskmgr
+    llpl_sources:
+      - src: userapp/taskmgr.llpl
+        c_output: build/taskmgr.c
+        output: build/taskmgr.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: build/taskmgr.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [build/taskmgr.o, build/libsys.so]
+  - name: settings
+    llpl_sources:
+      - src: userapp/settings.llpl
+        c_output: build/settings.c
+        output: build/settings.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: build/settings.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [build/settings.o, build/libsys.so]
 
 # Includes two small files loaded as multiboot2 modules (grub.cfg's
 # `module2` directive) purely to give tmpfs.llpl something real to
@@ -435,12 +465,25 @@ package:
     - copy: {from: build/editor.elf, to: isodir/boot/editor.elf}
     - copy: {from: build/terminal.elf, to: isodir/boot/terminal.elf}
     - copy: {from: build/ui_demo.elf, to: isodir/boot/ui_demo.elf}
+    - copy: {from: build/taskmgr.elf, to: isodir/boot/taskmgr.elf}
+    - copy: {from: build/settings.elf, to: isodir/boot/settings.elf}
     - write:
         to: isodir/boot/hello.txt
         content: "Hello from a GRUB module!"
     - write:
         to: isodir/boot/readme.txt
         content: "This file was never written to the VFS disk - TmpFS reads it directly out of the memory GRUB already loaded it into."
+    - write:
+        to: isodir/boot/apps.txt
+        content: |
+          terminal.elf|Terminal|terminal|1
+          filebrowser.elf|Files|file|1
+          editor.elf|Editor|file|1
+          tetris.elf|Tetris|app|1
+          pingview.elf|Ping|app|1
+          taskmgr.elf|Tasks|app|1
+          settings.elf|Settings|app|1
+          ui_demo.elf|Widgets|app|0
     - write:
         to: isodir/boot/grub/grub.cfg
         content: |
@@ -450,6 +493,7 @@ package:
               multiboot2 /boot/kernel.bin
               module2 /boot/hello.txt hello.txt
               module2 /boot/readme.txt readme.txt
+              module2 /boot/apps.txt apps.txt
               module2 /boot/userapp.elf userapp.elf
               module2 /boot/llpl_userapp.elf llpl_userapp.elf
               module2 /boot/libsys.so libsys.so
@@ -477,6 +521,8 @@ package:
               module2 /boot/editor.elf editor.elf
               module2 /boot/terminal.elf terminal.elf
               module2 /boot/ui_demo.elf ui_demo.elf
+              module2 /boot/taskmgr.elf taskmgr.elf
+              module2 /boot/settings.elf settings.elf
           }
     - run: "grub-mkrescue -o kernel.iso isodir"
       allow_failure: true

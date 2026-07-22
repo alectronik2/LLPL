@@ -43,6 +43,16 @@ const SYS_OUTL = 34
 const SYS_BMIDE_BASE = 35
 const SYS_VIRT_TO_PHYS = 36
 const SYS_NIC_MMAP = 37
+const SYS_TASK_INFO = 38
+const SYS_PTY_CREATE = 39
+const SYS_PTY_SPAWN_SHELL = 40
+const SYS_PTY_WRITE = 41
+const SYS_PTY_READ = 42
+const SYS_PTY_CLOSE = 43
+const SYS_CRASH_REPORT = 44
+const SYS_MKDIR = 45
+const SYS_RM = 46
+const SYS_SYSTEM_INFO = 47
 
 const SYS_ERR = 0xFFFFFFFFFFFFFFFF
 const O_RDONLY = 0
@@ -50,25 +60,25 @@ const O_CREATE = 1
 
 func syscall0(number: u64) -> u64 {
     let ret: u64 = 0
-    asm("i64 $0x80" : "=a"(ret) : "a"(number) : "memory")
+    asm("int $0x80" : "=a"(ret) : "a"(number) : "memory")
     return ret
 }
 
 func syscall1(number: u64, a: u64) -> u64 {
     let ret: u64 = 0
-    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
     return ret
 }
 
 func syscall2(number: u64, a: u64, b: u64) -> u64 {
     let ret: u64 = 0
-    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
     return ret
 }
 
 func syscall3(number: u64, a: u64, b: u64, c: u64) -> u64 {
     let ret: u64 = 0
-    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
     return ret
 }
 
@@ -260,6 +270,44 @@ func sys_virt_to_phys(virt: u64) -> u64 {
 // I/O: this is direct hardware access, not a general facility.
 func sys_nic_mmap() -> u8* {
     return syscall0(SYS_NIC_MMAP) as u8*
+}
+
+// Copies one 96-byte task snapshot record into out_buf; see syscall.llpl
+// for the exact field layout.
+func sys_task_info(index: u64, out_buf: u8*) -> u64 {
+    return syscall2(SYS_TASK_INFO, index, out_buf as u64)
+}
+
+func sys_pty_create() -> u64 {
+    return syscall0(SYS_PTY_CREATE)
+}
+
+func sys_pty_spawn_shell(pty_id: u64) -> u64 {
+    return syscall1(SYS_PTY_SPAWN_SHELL, pty_id)
+}
+
+func sys_pty_write(pty_id: u64, buf: u8*, len: u64) -> u64 {
+    return syscall3(SYS_PTY_WRITE, pty_id, buf as u64, len)
+}
+
+func sys_pty_read(pty_id: u64, out_buf: u8*, len: u64) -> u64 {
+    return syscall3(SYS_PTY_READ, pty_id, out_buf as u64, len)
+}
+
+func sys_pty_close(pty_id: u64) -> u64 {
+    return syscall1(SYS_PTY_CLOSE, pty_id)
+}
+
+func sys_mkdir(path: u8*) -> u64 {
+    return syscall1(SYS_MKDIR, path as u64)
+}
+
+func sys_rm(path: u8*) -> u64 {
+    return syscall1(SYS_RM, path as u64)
+}
+
+func sys_system_info(out_buf: u64*) -> u64 {
+    return syscall1(SYS_SYSTEM_INFO, out_buf as u64)
 }
 
 // Fills `out[0..2]` with {width, height, pitch} (pixels/bytes, 32bpp

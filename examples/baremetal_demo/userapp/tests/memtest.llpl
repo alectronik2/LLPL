@@ -7,19 +7,19 @@ func _start(argc: u64, argv: u64*) {
     sys_putln("memtest")
     rt_put_uint_line("argc=", argc)
 
-    let large: char* = sys_malloc(5000)
+    let large: u8* = sys_malloc(5000)
     if large != null {
-        large[0] = 65 as char
-        large[4999] = 90 as char
+        large[0] = 65 as u8
+        large[4999] = 90 as u8
         rt_put_uint_line("large=", sys_free(large))
     } else {
         sys_putln("large=fail")
     }
 
-    let small1: char* = sys_malloc(64)
-    let small2: char* = null
+    let small1: u8* = sys_malloc(64)
+    let small2: u8* = null
     if small1 != null {
-        small1[0] = 49 as char
+        small1[0] = 49 as u8
         rt_put_uint_line("small=", sys_free(small1))
         small2 = sys_malloc(32)
     }

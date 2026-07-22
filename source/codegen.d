@@ -570,6 +570,20 @@ class CodeGenerator {
         return result;
     }
 
+    private string sourceLineDirective(ASTNode node) {
+        if (node is null || node.line <= 0 || currentModulePath.length == 0) {
+            return "";
+        }
+        return format("#line %d \"%s\"\n", node.line, escapeCString(currentModulePath));
+    }
+
+    private string withSourceLine(ASTNode node, string code) {
+        if (code.length == 0) {
+            return code;
+        }
+        return sourceLineDirective(node) ~ code;
+    }
+
     // Builds the compiler-internal tuple type `__LLPL_TupleN<T1, ..., Tn>`.
     // Arities outside 2..8 are rejected here; the parser already enforces the
     // same limit for user-written tuple syntax.
@@ -637,10 +651,12 @@ class CodeGenerator {
 
         bool isPlainInt = !t.isPointer && !t.isArray &&
             (t.name == "i64" || t.name == "u64" ||
+             t.name == "u8" ||
              t.name == "int8" || t.name == "uint8" ||
              t.name == "int16" || t.name == "uint16" ||
              t.name == "int32" || t.name == "uint32");
-        bool isUnsigned = t.name == "u64" || t.name == "uint8" || t.name == "uint16" || t.name == "uint32";
+        bool isUnsigned = t.name == "u64" || t.name == "u8" ||
+            t.name == "uint8" || t.name == "uint16" || t.name == "uint32";
 
         if (spec.radix.length > 0 || spec.width > 0) {
             if (!isPlainInt) {
@@ -661,18 +677,18 @@ class CodeGenerator {
             }
         }
 
-        if (t.isPointer && t.name == "char") return "%s";
-        if (!t.isPointer && !t.isArray && t.name == "char") return "%c";
+        if (t.isPointer && t.name == "u8") return "%s";
+        if (!t.isPointer && !t.isArray && t.name == "u8") return "%c";
         if (!t.isPointer && !t.isArray && t.name == "bool") return "%d";
         if (t.isPointer) return "%p";
 
         switch (t.name) {
             case "i64": case "int8": case "int16": case "int32": return "%d";
-            case "u64": case "uint8": case "uint16": case "uint32": return "%u";
+            case "u64": case "u8": case "uint8": case "uint16": case "uint32": return "%u";
             default:
                 throw new CompileError(
                     format("Cannot interpolate a value of type '%s' inside a string - only " ~
-                        "integers, char, bool, char* and other pointers are supported", t.toString()),
+                        "integers, u8, bool, u8* and other pointers are supported", t.toString()),
                     currentModulePath, expr.line, expr.column);
         }
     }
@@ -1032,7 +1048,8 @@ class CodeGenerator {
                         format("%s_%s", variant.name, field.name), variant.line, variant.column),
                     new Identifier(field.name, variant.line, variant.column), variant.line, variant.column));
             }
-            bodyStmts ~= new ReturnStmt(new Identifier("__enum_result", variant.line, variant.column));
+            bodyStmts ~= new ReturnStmt(new Identifier("__enum_result", variant.line, variant.column),
+                variant.line, variant.column);
 
             auto ctor = new FunctionDecl(variant.name, variant.fields, resultType, new Block(bodyStmts),
                 false, false, false, variant.line, variant.column);
@@ -1372,7 +1389,8 @@ class CodeGenerator {
         // field-resolution pass just below - the earliest point a generic
         // instantiation's trait-bound check could otherwise fire, which
         // needs traitImplemented already populated (see processImplBlock).
-        foreach (impl; pendingImpls) {
+        foreach (i, impl; pendingImpls) {
+            currentModulePath = pendingImplModulePaths[i];
             currentNamespaceSegments = impl.namespaceSegments;
             processImplBlock(impl);
         }
@@ -2162,17 +2180,17 @@ class CodeGenerator {
     private string generateDeclaration(ASTNode node) {
         if (auto funcDecl = cast(FunctionDecl)node) {
             if (!isReachableFreeFunction(funcDecl)) return "";
-            return generateFunction(funcDecl);
+            return withSourceLine(node, generateFunction(funcDecl));
         } else if (auto classDecl = cast(ClassDecl)node) {
-            return generateClass(classDecl);
+            return withSourceLine(node, generateClass(classDecl));
         } else if (auto structDecl = cast(StructDecl)node) {
-            return generateStruct(structDecl);
+            return withSourceLine(node, generateStruct(structDecl));
         } else if (auto unionDecl = cast(UnionDecl)node) {
-            return generateUnion(unionDecl);
+            return withSourceLine(node, generateUnion(unionDecl));
         } else if (auto varDecl = cast(VarDecl)node) {
-            return generateGlobalVar(varDecl);
+            return withSourceLine(node, generateGlobalVar(varDecl));
         } else if (auto aliasDecl = cast(AliasDecl)node) {
-            return generateAlias(aliasDecl);
+            return withSourceLine(node, generateAlias(aliasDecl));
         }
         return "";
     }
@@ -3103,7 +3121,7 @@ class CodeGenerator {
         auto exprStmt = cast(ExprStmt)statements[$ - 1];
         if (exprStmt is null) return statements;
         auto result = statements.dup;
-        result[$ - 1] = new ReturnStmt(exprStmt.expression);
+        result[$ - 1] = new ReturnStmt(exprStmt.expression, exprStmt.line, exprStmt.column);
         return result;
     }
 
@@ -3680,6 +3698,7 @@ class CodeGenerator {
         shadowRenameCounter = 0;
 
         string params = "void* __frame";
+        variableTypes["__frame"] = new Type("void", true);
         if (funcDecl.params.length == 1) {
             Parameter param = funcDecl.params[0];
             resolveType(param.type);
@@ -3705,6 +3724,11 @@ class CodeGenerator {
 
         indentLevel--;
         code ~= "}\n";
+
+        variableTypes.remove("__frame");
+        if (funcDecl.params.length == 1) {
+            variableTypes.remove(funcDecl.params[0].name);
+        }
 
         return code;
     }
@@ -3786,7 +3810,6 @@ class CodeGenerator {
             case "int16": case "uint16":
             case "int32": case "uint32":
             case "int64": case "uint64":
-            case "char":
                 return true;
             default:
                 return false;
@@ -3796,7 +3819,7 @@ class CodeGenerator {
     private bool isSignedIntegerType(Type t) {
         if (!isIntegerType(t)) return false;
         switch (t.name) {
-            case "u64": case "uint8": case "uint16": case "uint32": case "uint64":
+            case "u64": case "u8": case "uint8": case "uint16": case "uint32": case "uint64":
                 return false;
             default:
                 return true;
@@ -4344,7 +4367,7 @@ class CodeGenerator {
     }
 
     private string generateStatement(ASTNode node, bool isDeferred) {
-        string code = "";
+        string code = sourceLineDirective(node);
 
         if (auto varDecl = cast(VarDecl)node) {
             if (varDecl.bitWidth >= 0) {
@@ -4715,7 +4738,8 @@ class CodeGenerator {
             return new RangeExpr(cloneNode(rangeExpr.start, subs, typeSubs), cloneNode(rangeExpr.end, subs, typeSubs),
                 rangeExpr.line, rangeExpr.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
-            return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs));
+            return new ReturnStmt(cloneNode(returnStmt.value, subs, typeSubs),
+                returnStmt.line, returnStmt.column);
         } else if (auto continueStmt = cast(ContinueStmt)node) {
             return new ContinueStmt(continueStmt.line, continueStmt.column);
         } else if (auto breakStmt = cast(BreakStmt)node) {
@@ -4918,7 +4942,8 @@ class CodeGenerator {
             return new RangeExpr(expandQuotedNode(rangeExpr.start, subs), expandQuotedNode(rangeExpr.end, subs),
                 rangeExpr.line, rangeExpr.column);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
-            return new ReturnStmt(expandQuotedNode(returnStmt.value, subs));
+            return new ReturnStmt(expandQuotedNode(returnStmt.value, subs),
+                returnStmt.line, returnStmt.column);
         } else if (auto continueStmt = cast(ContinueStmt)node) {
             return new ContinueStmt(continueStmt.line, continueStmt.column);
         } else if (auto breakStmt = cast(BreakStmt)node) {
@@ -5119,7 +5144,7 @@ class CodeGenerator {
     private string generateMatch(MatchStmt matchStmt, bool isDeferred) {
         Type subjectType = inferType(matchStmt.subject);
         resolveType(subjectType);
-        bool isString = subjectType.isPointer && subjectType.name == "char";
+        bool isString = subjectType.isPointer && subjectType.name == "u8";
 
         tempVarCounter++;
         string tmpName = format("__match%d", tempVarCounter);
@@ -5362,7 +5387,7 @@ class CodeGenerator {
     // rewrite applied again here.
     private static string canonicalIntTypeName(string name) {
         switch (name) {
-            case "u8": return "uint8";
+            case "u8": return "u8";
             case "u16": return "uint16";
             case "u32": return "uint32";
             case "u64": return "u64";
@@ -5377,6 +5402,7 @@ class CodeGenerator {
     private bool isPrimitiveTypeName(string name) {
         switch (name) {
             case "i64": case "u64":
+            case "u8":
             case "int8": case "uint8":
             case "int16": case "uint16":
             case "int32": case "uint32":
@@ -5390,10 +5416,10 @@ class CodeGenerator {
             // written. Recognized here too so a short-form alias target
             // is still correctly treated as a type alias, not an unknown
             // symbol reference.
-            case "u8": case "i8":
+            case "i8":
             case "u16": case "i16":
             case "u32": case "i32":
-            case "char": case "bool": case "void": case "string":
+            case "bool": case "void": case "string":
             case "float": case "double":
                 return true;
             default:
@@ -5408,8 +5434,7 @@ class CodeGenerator {
             case "i64": case "u64": return 64;
             case "int32": case "uint32": return 32;
             case "int16": case "uint16": return 16;
-            case "int8": case "uint8": return 8;
-            case "char": return 8;
+            case "u8": case "int8": case "uint8": return 8;
             case "bool": return 8; // backed by C `_Bool` (1 byte)
             default: return -1;
         }
@@ -6118,6 +6143,10 @@ class CodeGenerator {
             if (isClass) {
                 auto clone = cloneClassDeclWithTypeSubs(genericClassTemplates[templateKey], typeSubs, mangledName);
                 classRegistry[mangledName] = clone;
+                string templateModulePath = currentModulePath;
+                if (auto modulePath = templateKey in genericTemplateModulePath) {
+                    templateModulePath = *modulePath;
+                }
                 // The template's own namespace, kept alive (via
                 // currentGenericTemplateNamespace, not currentNamespaceSegments -
                 // see that field's own comment) through field resolution,
@@ -6202,14 +6231,21 @@ class CodeGenerator {
                 // cleanup would otherwise delete a same-named live binding
                 // the caller still needs.
                 Type[string] savedVarTypes = variableTypes.dup;
+                string savedModulePath = currentModulePath;
+                currentModulePath = templateModulePath;
                 string classBody = generateClass(clone);
                 genericInstanceDecls ~= classBody;
                 genericClassInstances ~= classBody;
+                currentModulePath = savedModulePath;
                 variableTypes = savedVarTypes;
                 currentGenericTemplateNamespace = savedGenericNamespace;
             } else {
                 auto clone = cloneStructDeclWithTypeSubs(genericStructTemplates[templateKey], typeSubs, mangledName);
                 structRegistry[mangledName] = clone;
+                string templateModulePath = currentModulePath;
+                if (auto modulePath = templateKey in genericTemplateModulePath) {
+                    templateModulePath = *modulePath;
+                }
                 // See the matching comment in the isClass branch above.
                 string[] savedGenericNamespace = currentGenericTemplateNamespace;
                 currentGenericTemplateNamespace = genericStructTemplates[templateKey].namespaceSegments;
@@ -6217,9 +6253,12 @@ class CodeGenerator {
                     if (field.type is null) field.type = inferType(field.initializer);
                     resolveType(field.type);
                 }
+                string savedModulePath = currentModulePath;
+                currentModulePath = templateModulePath;
                 string structBody = generateStruct(clone);
                 genericInstanceDecls ~= structBody;
                 genericStructInstances ~= structBody;
+                currentModulePath = savedModulePath;
                 currentGenericTemplateNamespace = savedGenericNamespace;
             }
         }
@@ -6301,6 +6340,10 @@ class CodeGenerator {
             Type[string] typeSubs;
             foreach (i, tp; tmpl.typeParams) typeSubs[tp] = typeArgs[i];
             auto clone = cloneFunctionDeclWithTypeSubs(tmpl, typeSubs, mangledName);
+            string templateModulePath = currentModulePath;
+            if (auto modulePath = templateKey in genericTemplateModulePath) {
+                templateModulePath = *modulePath;
+            }
 
             // Forward-declare the concrete signature immediately (before
             // the body is generated) - resolves the common case of mutual
@@ -6345,7 +6388,10 @@ class CodeGenerator {
             // isolates this instantiation's variable scope from whatever
             // the caller had before, regardless of name collisions.
             Type[string] savedVarTypes = variableTypes.dup;
+            string savedModulePath = currentModulePath;
+            currentModulePath = templateModulePath;
             deferredFunctionBodies ~= generateFunction(clone);
+            currentModulePath = savedModulePath;
             variableTypes = savedVarTypes;
         }
 
@@ -6399,7 +6445,7 @@ class CodeGenerator {
         // keys, operator lookup and C type emission see it, so every existing
         // char* feature also applies to string.
         if (t.name == "string") {
-            t.name = "char";
+            t.name = "u8";
             t.pointerDepth += 1;
         }
 
@@ -6825,7 +6871,7 @@ class CodeGenerator {
         Type t = fn.params[0].type;
         if (!t.isArray || t.arraySize != 0) return false;
         if (t.name == "string" && t.pointerDepth == 0) return true;
-        if (t.name == "char" && t.pointerDepth == 1) return true;
+        if (t.name == "u8" && t.pointerDepth == 1) return true;
         return false;
     }
 
@@ -7194,7 +7240,7 @@ class CodeGenerator {
     // name "char", pointerDepth 1 (see resolveType's own comment on that).
     private string implicitConversionKind(Type target) {
         if (target.isArray || target.pointerDepth > 1) return "";
-        if (target.name == "char" && target.pointerDepth == 1) return "string";
+        if (target.name == "u8" && target.pointerDepth == 1) return "string";
         if (target.pointerDepth != 0) return "";
         switch (target.name) {
             case "i64": case "u64": case "int8": case "uint8":
@@ -8569,13 +8615,13 @@ class CodeGenerator {
             }
             return new Type("double"); // default to double
         } else if (cast(CharLiteral)expr) {
-            return new Type("char");
+            return new Type("u8");
         } else if (cast(StringLiteral)expr) {
-            return new Type("char", true);
+            return new Type("u8", true);
         } else if (cast(RegexLiteral)expr) {
             return new Type("Regex");
         } else if (cast(InterpolatedStringLiteral)expr) {
-            return new Type("char", true);
+            return new Type("u8", true);
         } else if (cast(BoolLiteral)expr) {
             return new Type("bool");
         } else if (cast(NullLiteral)expr) {
@@ -8583,7 +8629,7 @@ class CodeGenerator {
         } else if (cast(ArrayLiteral)expr) {
             throw inferError(expr,
                 "Cannot infer type of an array literal; declare an explicit array type " ~
-                "(e.g. 'let arr: char[3] = [1, 2, 3]')");
+                "(e.g. 'let arr: u8[3] = [1, 2, 3]')");
         } else if (auto newExpr = cast(NewExpr)expr) {
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
@@ -8628,7 +8674,7 @@ class CodeGenerator {
             throw inferError(expr, format("Cannot infer type: unknown variable '%s'", ident.name));
         } else if (auto memberExpr = cast(MemberExpr)expr) {
             if (memberExpr.member == "as_string") {
-                return new Type("char", true);
+                return new Type("u8", true);
             }
             if (memberExpr.member == "sizeof") {
                 return new Type("u64");
@@ -8819,6 +8865,7 @@ class CodeGenerator {
             case "i64": return "int64_t";    // 64-bit signed
             case "u64": return "uint64_t";   // 64-bit unsigned
             case "int8": return "int8_t";
+            case "u8": return "char";
             case "uint8": return "uint8_t";
             case "int16": return "int16_t";
             case "uint16": return "uint16_t";
@@ -8837,7 +8884,6 @@ class CodeGenerator {
             // in a generated SDL binding).
             case "int64": return "int64_t";
             case "uint64": return "uint64_t";
-            case "char": return "char";
             case "string": return "char*";
             case "bool": return "bool"; // real C99 boolean (<stdbool.h>,
                                         // included below in generateMultiple) -

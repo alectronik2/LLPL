@@ -180,6 +180,7 @@ int64_t llpl_symbol_line(char* symbol);
 // Panic: print a message (hosted) or hand it to weak hooks (freestanding),
 // then halt. An optional handler is called first so user code can log/cleanup.
 void llpl_set_panic_handler(void (*handler)(char*));
+void llpl_panic_backtrace(void);
 void llpl_panic(char* msg);
 void* __llpl_check_index(void* arr, int64_t idx, int64_t size, uint64_t elem_size);
 

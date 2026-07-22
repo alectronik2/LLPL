@@ -4,14 +4,14 @@ packed struct LimineFramebuffer {
     let height: u64
     let pitch: u64
     let bpp: uint16
-    let memory_model: char
-    let red_mask_size: char
-    let red_mask_shift: char
-    let green_mask_size: char
-    let green_mask_shift: char
-    let blue_mask_size: char
-    let blue_mask_shift: char
-    let unused: char[7]
+    let memory_model: u8
+    let red_mask_size: u8
+    let red_mask_shift: u8
+    let green_mask_size: u8
+    let green_mask_shift: u8
+    let blue_mask_size: u8
+    let blue_mask_shift: u8
+    let unused: u8[7]
     let edid_size: u64
     let edid: u64
     let mode_count: u64

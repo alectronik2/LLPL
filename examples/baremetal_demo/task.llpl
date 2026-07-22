@@ -104,6 +104,7 @@ namespace Task {
         let wake_tick: u64
         let resched_requested: bool
         let parent_id: i64
+        let pty_id: i64
         let wait_pid: i64
         let exit_status: u64
         let ipc_peer: i64
@@ -112,8 +113,8 @@ namespace Task {
         let ipc_reply_len: u64
         let ipc_recv_buf: u64
         let ipc_recv_len: u64
-        let ipc_msg: char[128]
-        let name: char[16]
+        let ipc_msg: u8[128]
+        let name: u8[16]
         let handle_valid: bool[8]
         let handle_target: i64[8]
         let handle_rights: u64[8]
@@ -130,12 +131,12 @@ namespace Task {
     packed struct ServiceEntry {
         let used: bool
         let pid: i64
-        let name: char[16]
+        let name: u8[16]
     }
 
     let registry: ServiceEntry[8]
 
-    func name_eq(a: char*, b: char*) -> bool {
+    func name_eq(a: u8*, b: u8*) -> bool {
         let i: i64 = 0
         while true {
             if a[i] != b[i] {
@@ -149,7 +150,7 @@ namespace Task {
         return false
     }
 
-    func name_copy(dst: char*, src: char*) {
+    func name_copy(dst: u8*, src: u8*) {
         let i: i64 = 0
         while src[i] != 0 && i < SERVICE_NAME_MAX - 1 {
             dst[i] = src[i]
@@ -178,13 +179,13 @@ namespace Task {
     // One name names at most one owner at a time; a pid can register more
     // than one name. Fails if the caller isn't boot-spawned, the name is
     // already taken by a live service, or the registry is full.
-    func register_service(pid: i64, name: char*) -> bool {
+    func register_service(pid: i64, name: u8*) -> bool {
         if !is_boot_spawned(pid) {
             return false
         }
         let i: i64 = 0
         while i < MAX_SERVICES {
-            if registry[i].used && name_eq(registry[i].name as char*, name) {
+            if registry[i].used && name_eq(registry[i].name as u8*, name) {
                 if exists(registry[i].pid) {
                     return false
                 }
@@ -197,7 +198,7 @@ namespace Task {
             if !registry[i].used {
                 registry[i].used = true
                 registry[i].pid = pid
-                name_copy(registry[i].name as char*, name)
+                name_copy(registry[i].name as u8*, name)
                 return true
             }
             i = i + 1
@@ -208,10 +209,10 @@ namespace Task {
     // Returns the registered owner's pid, or -1 if no live service holds
     // that name (also clearing a stale entry left by one that died without
     // ever unregistering - this demo has no explicit unregister syscall).
-    func lookup_service(name: char*) -> i64 {
+    func lookup_service(name: u8*) -> i64 {
         let i: i64 = 0
         while i < MAX_SERVICES {
-            if registry[i].used && name_eq(registry[i].name as char*, name) {
+            if registry[i].used && name_eq(registry[i].name as u8*, name) {
                 if exists(registry[i].pid) {
                     return registry[i].pid
                 }
@@ -231,14 +232,11 @@ namespace Task {
     // small IPC message only to synchronize ("data's ready"), not to carry
     // the data itself.
     const MAX_SHM = 8
-    // Raised from 16 (65536 bytes) to fit wm.llpl's compositor arena once
-    // its windows grew from 104x52 ball-bouncer demos to 320x200 app
-    // windows (editor/filebrowser) - see wm_protocol.llpl's own WIN_BYTES/
-    // MAX_WINDOWS comment for the exact math. Physical memory is nowhere
-    // near a constraint (PageAlloc reports tens of thousands of free
-    // pages at boot); this cap exists only to keep one careless
-    // sys_shm_create call from grabbing an unreasonable fraction of it.
-    const SHM_MAX_PAGES = 256
+    // Large enough for wm.llpl's shared compositor arena. Physical memory is
+    // nowhere near a constraint (PageAlloc reports tens of thousands of free
+    // pages at boot); this cap exists only to keep one careless sys_shm_create
+    // call from grabbing an unreasonable fraction of it.
+    const SHM_MAX_PAGES = 512
 
     packed struct ShmRegion {
         let used: bool
@@ -251,10 +249,9 @@ namespace Task {
         // exactly the kind of overflow that corrupted memory well past
         // this struct the one time these two were allowed to drift apart
         // (phys[16] left over from when SHM_MAX_PAGES was still 16,
-        // silently overrun by a 250-page sys_shm_create call once it was
-        // raised to 256 for wm.llpl's bigger arena - see SHM_MAX_PAGES's
+        // silently overrun once the window-manager arena grew - see SHM_MAX_PAGES's
         // own comment).
-        let phys: u64[256]
+        let phys: u64[512]
     }
 
     let shm_regions: ShmRegion[8]
@@ -380,14 +377,14 @@ namespace Task {
     // isn't reachable through the i64 0x80 gate (a kernel task acting as
     // its own IPC client - see ata.llpl) but still needs to deliver a
     // message into some ring-3 peer's own address space.
-    func write_to_pml4(pml4: u64, addr: u64, src: char*, len: u64) -> u64 {
+    func write_to_pml4(pml4: u64, addr: u64, src: u8*, len: u64) -> u64 {
         let i: u64 = 0
         while i < len {
             let page: u64 = VMM.virt_to_phys(pml4, addr + i)
             if page == 0 {
                 return i
             }
-            let ptr: char* = page as char*
+            let ptr: u8* = page as u8*
             ptr[(addr + i) & 0xFFF] = src[i]
             i = i + 1
         }
@@ -443,6 +440,11 @@ namespace Task {
 
     func exit_current() {
         exit_current_with_status(0)
+    }
+
+    func crash_current(status: u64) {
+        exit_current_with_status(status)
+        EventLog.add2("task", "crash current", current_id() as u64, status)
     }
 
     func yield_current() {
@@ -508,7 +510,7 @@ namespace Task {
         set_tss_rsp0(tcb.kernel_stack_top)
     }
 
-    func copy_name(tcb: TCB*, name: char*) {
+    func copy_name(tcb: TCB*, name: u8*) {
         let i: i64 = 0
         while name[i] != 0 && i < 15 {
             tcb.name[i] = name[i]
@@ -694,7 +696,7 @@ namespace Task {
     // Creates a new kernel task ready to run `entry`, a plain `func() -> void`
     // referenced by bare name. Returns the new task's id, or -1 if the heap is
     // out of memory.
-    func spawn_named(entry: u64, name: char*) -> i64 {
+    func spawn_named_arg(entry: u64, name: u8*, arg0: u64) -> i64 {
         let block: u64 = KHeap.kmalloc(STACK_SIZE)
         if block == 0 {
             return -1
@@ -704,7 +706,7 @@ namespace Task {
         let stack_top: u64 = block + STACK_SIZE
         let frame_addr: u64 = stack_top - TRAP_FRAME_SIZE
         let frame: TrapFrame* = frame_addr as TrapFrame*
-        init_frame(frame, entry, stack_top, 0x08, 0x10, 0, 0)
+        init_frame(frame, entry, stack_top, 0x08, 0x10, arg0, 0)
 
         tcb.saved_rsp = frame_addr
         tcb.stack_base = block
@@ -722,6 +724,7 @@ namespace Task {
         tcb.wake_tick = 0
         tcb.resched_requested = false
         tcb.parent_id = current_id()
+        tcb.pty_id = -1
         tcb.wait_pid = -1
         tcb.exit_status = 0
         tcb.ipc_peer = -1
@@ -768,13 +771,17 @@ namespace Task {
         return tcb.id
     }
 
+    func spawn_named(entry: u64, name: u8*) -> i64 {
+        return spawn_named_arg(entry, name, 0)
+    }
+
     func spawn(entry: u64) -> i64 {
         return spawn_named(entry, "kernel")
     }
 
     // Creates a new ring-3 user task starting at `entry` with its own
     // address space. `stack_top` is the initial user-mode RSP.
-    func spawn_user_with_args_parent(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64, parent_id: i64) -> i64 {
+    func spawn_user_with_args_parent(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*, argc: u64, argv: u64, parent_id: i64) -> i64 {
         let block: u64 = KHeap.kmalloc(STACK_SIZE)
         if block == 0 {
             return -1
@@ -805,6 +812,7 @@ namespace Task {
         tcb.wake_tick = 0
         tcb.resched_requested = false
         tcb.parent_id = parent_id
+        tcb.pty_id = -1
         tcb.wait_pid = -1
         tcb.exit_status = 0
         tcb.ipc_peer = -1
@@ -861,11 +869,11 @@ namespace Task {
         return tcb.id
     }
 
-    func spawn_user_with_args(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64) -> i64 {
+    func spawn_user_with_args(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*, argc: u64, argv: u64) -> i64 {
         return spawn_user_with_args_parent(entry, stack_top, aspace, name, argc, argv, current_id())
     }
 
-    func spawn_user_named(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*) -> i64 {
+    func spawn_user_named(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*) -> i64 {
         return spawn_user_with_args(entry, stack_top, aspace, name, 0, 0)
     }
 
@@ -873,7 +881,7 @@ namespace Task {
         return spawn_user_with_args(entry, stack_top, aspace, "user", 0, 0)
     }
 
-    func replace_current_user(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64) -> bool {
+    func replace_current_user(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*, argc: u64, argv: u64) -> bool {
         let cur: TCB* = current_tcb()
         if cur == null || aspace == null || cur.saved_rsp == 0 {
             return false
@@ -985,6 +993,21 @@ namespace Task {
         return current_task as TCB*
     }
 
+    func bind_current_pty(pty_id: i64) {
+        let cur: TCB* = current_tcb()
+        if cur != null {
+            cur.pty_id = pty_id
+        }
+    }
+
+    func current_pty_id() -> i64 {
+        let cur: TCB* = current_tcb()
+        if cur == null {
+            return -1
+        }
+        return cur.pty_id
+    }
+
     func find_by_id(id: i64) -> TCB* {
         if first_task == 0 {
             return null
@@ -1057,7 +1080,7 @@ namespace Task {
         return true
     }
 
-    func block_current_send(peer: i64, reply_buf: u64, reply_len: u64, msg: char*, msg_len: u64) {
+    func block_current_send(peer: i64, reply_buf: u64, reply_len: u64, msg: u8*, msg_len: u64) {
         let cur: TCB* = current_tcb()
         if cur == null {
             return
@@ -1180,7 +1203,7 @@ namespace Task {
         return null
     }
 
-    func state_name_at(index: i64) -> char* {
+    func state_name_at(index: i64) -> u8* {
         let state: i64 = state_at(index)
         if state == STATE_ALIVE {
             return "alive"
@@ -1421,12 +1444,12 @@ namespace Task {
         return t.exit_status
     }
 
-    func name_at(index: i64) -> char* {
+    func name_at(index: i64) -> u8* {
         let t: TCB* = nth(index)
         if t == null {
             return ""
         }
-        return t.name as char*
+        return t.name as u8*
     }
 
     func canary_addr_at(index: i64) -> u64 {

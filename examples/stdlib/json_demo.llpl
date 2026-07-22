@@ -13,7 +13,7 @@ func demo_config_roundtrip() {
     let config: String = new String("{\"name\": \"demo-app\", \"version\": 3, \"debug\": false, \"server\": {\"host\": \"0.0.0.0\", \"port\": 8080}, \"tags\": [\"web\", \"api\", \"backend\"], \"admin\": null}")
     std.io.write_file("config.json", config)
 
-    let read_result: Result<String, char*> = std.io.read_file("config.json")
+    let read_result: Result<String, u8*> = std.io.read_file("config.json")
     if !read_result.is_ok() {
         return
     }

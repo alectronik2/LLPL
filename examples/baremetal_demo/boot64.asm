@@ -56,7 +56,7 @@ stack_top:
 ; switches to when a ring-3 task is interrupted. The kernel updates RSP0 on
 ; every context switch so it always points to the current task's own kernel
 ; stack. The rest of the TSS is zero.
-align 16
+alignb 16
 tss:
     resb 104
 
@@ -238,7 +238,7 @@ long_mode_entry:
     ; argument in RDI. `mov edi, ...` zero-extends into RDI, which is
     ; correct here since multiboot_ptr is always a 32-bit physical address.
     xor rbp, rbp
-    mov edi, [multiboot_ptr]
+    mov edi, [rel multiboot_ptr]
     call kernel_main
 
     ; Hang

@@ -217,7 +217,7 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
 
     if found {
         let probe_virt = hhdm.offset + probe_phys
-        let p = probe_virt as char*
+        let p = probe_virt as u8*
         let value = p[0] as u64
         hs.write("HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n")
     } else {

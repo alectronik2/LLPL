@@ -40,10 +40,12 @@ import ata
 import vfs
 import tmpfs
 import task
+import pty
 import shell
 import vmm
 import syscall
 import eventlog
+import crashlog
 import ldso
 
 const VERIFY_VFS_INSTALL = false
@@ -70,7 +72,12 @@ let last_spawned_user_id: i64 = -1
 // framebuffer copy once something else legitimately owns the display.
 let wm_active: bool = false
 
-func print(msg: char*) {
+func print(msg: u8*) {
+    let pty_id: i64 = Task.current_pty_id()
+    if pty_id >= 0 {
+        Pty.write_cstring(pty_id, msg)
+        return
+    }
     if screen != null && !wm_active {
         screen.write(msg)
     }
@@ -81,7 +88,12 @@ func print(msg: char*) {
 // in `vga_color`/`ansi_code`; otherwise writes it plainly (no VGA attribute
 // override, no ANSI escapes), leaving the screen's current default color
 // alone.
-func emit(s: string, colored: bool, vga_color: char, ansi_code: string) {
+func emit(s: string, colored: bool, vga_color: u8, ansi_code: string) {
+    let pty_id: i64 = Task.current_pty_id()
+    if pty_id >= 0 {
+        Pty.write_cstring(pty_id, s)
+        return
+    }
     if colored {
         if screen != null && !wm_active {
             screen.write_colored(s, vga_color)
@@ -97,13 +109,13 @@ func emit(s: string, colored: bool, vga_color: char, ansi_code: string) {
 
 struct TagColor {
     let colored: bool
-    let vga_color: char
-    let ansi_code: char*
+    let vga_color: u8
+    let ansi_code: u8*
 }
 
 // Maps a `<NAME>` tag to its VGA/ANSI colors. `</>` (tag text "/") and any
 // unrecognized tag both reset to the default (untagged) color.
-func resolve_tag(tag: char*) -> TagColor {
+func resolve_tag(tag: u8*) -> TagColor {
     let result: TagColor
     result.colored = true
 
@@ -147,14 +159,14 @@ func resolve_tag(tag: char*) -> TagColor {
 
 // Parses `<NAME>...</>` tags out of `msg`, flushing each run of text
 // through emit() in whatever color is active at that point in the string.
-func log(msg: char*) {
+func log(msg: u8*) {
     let colored: bool = false
-    let vga_color: char = 0
-    let ansi_code: char* = null
+    let vga_color: u8 = 0
+    let ansi_code: u8* = null
 
-    let seg: char[128]
+    let seg: u8[128]
     let seg_len: i64 = 0
-    let tag: char[16]
+    let tag: u8[16]
     let tag_len: i64 = 0
 
     let i: i64 = 0
@@ -180,7 +192,7 @@ func log(msg: char*) {
                 i = i + 1
             }
 
-            let tc: TagColor = resolve_tag(tag as char*)
+            let tc: TagColor = resolve_tag(tag as u8*)
             colored = tc.colored
             vga_color = tc.vga_color
             ansi_code = tc.ansi_code
@@ -195,7 +207,7 @@ func log(msg: char*) {
 
     if seg_len > 0 {
         seg[seg_len] = 0
-        emit(seg as char*, colored, vga_color, ansi_code)
+        emit(seg as u8*, colored, vga_color, ansi_code)
     }
 }
 
@@ -212,7 +224,7 @@ func log(msg: char*) {
 // bounds checks (prelude.llpl) can now genuinely trigger - would vanish
 // silently and hang forever: not acceptable for something meant to be
 // debuggable. Mirrors both outputs log()/emit() already write to.
-func llpl_panic_putc(c: char) {
+func llpl_panic_putc(c: u8) {
     HAL.Serial.write_char(c)
     if screen != null {
         screen.putchar(c)
@@ -283,7 +295,7 @@ func idle_task_entry() {
 }
 
 packed struct Elf64Header {
-    let ident: char[16]
+    let ident: u8[16]
     let elf_type: uint16
     let machine: uint16
     let version: uint32
@@ -338,17 +350,17 @@ func align_up_page(addr: u64) -> u64 {
     return (addr + 4095) & ~4095
 }
 
-func validate_elf64(file: char*, size: u64) -> bool {
+func validate_elf64(file: u8*, size: u64) -> bool {
     if size < sizeof(Elf64Header) {
         return false
     }
 
     let hdr = file as Elf64Header*
-    if hdr.ident[0] != 0x7F as char || hdr.ident[1] != 69 as char ||
-       hdr.ident[2] != 76 as char || hdr.ident[3] != 70 as char {
+    if hdr.ident[0] != 0x7F as u8 || hdr.ident[1] != 69 as u8 ||
+       hdr.ident[2] != 76 as u8 || hdr.ident[3] != 70 as u8 {
         return false
     }
-    if hdr.ident[4] != 2 as char || hdr.ident[5] != 1 as char {
+    if hdr.ident[4] != 2 as u8 || hdr.ident[5] != 1 as u8 {
         return false // ELFCLASS64, little-endian
     }
     if hdr.elf_type != ELF_ET_EXEC as uint16 || hdr.machine != ELF_EM_X86_64 as uint16 {
@@ -364,8 +376,8 @@ func validate_elf64(file: char*, size: u64) -> bool {
     return true
 }
 
-func copy_elf_page(file: char*, file_size: u64, ph: Elf64ProgramHeader*, page_vaddr: u64, phys: u64) -> bool {
-    let dst: char* = phys as char*
+func copy_elf_page(file: u8*, file_size: u64, ph: Elf64ProgramHeader*, page_vaddr: u64, phys: u64) -> bool {
+    let dst: u8* = phys as u8*
 
     let j: i64 = 0
     while j < 4096 {
@@ -404,7 +416,7 @@ func copy_elf_page(file: char*, file_size: u64, ph: Elf64ProgramHeader*, page_va
     return true
 }
 
-func load_elf64_user(file: char*, size: u64, aspace: VMM.AddressSpace*) -> u64 {
+func load_elf64_user(file: u8*, size: u64, aspace: VMM.AddressSpace*) -> u64 {
     if !validate_elf64(file, size) {
         return 0
     }
@@ -456,7 +468,7 @@ func load_elf64_user(file: char*, size: u64, aspace: VMM.AddressSpace*) -> u64 {
     return hdr.entry
 }
 
-func str_len(s: char*) -> u64 {
+func str_len(s: u8*) -> u64 {
     let i: u64 = 0
     while s[i] != 0 {
         i = i + 1
@@ -464,14 +476,14 @@ func str_len(s: char*) -> u64 {
     return i
 }
 
-func skip_spaces(s: char*) -> char* {
+func skip_spaces(s: u8*) -> u8* {
     while s[0] == 32 {
         s = s + 1
     }
     return s
 }
 
-func token_len(s: char*) -> u64 {
+func token_len(s: u8*) -> u64 {
     let i: u64 = 0
     while s[i] != 0 && s[i] != 32 {
         i = i + 1
@@ -479,7 +491,7 @@ func token_len(s: char*) -> u64 {
     return i
 }
 
-func copy_bytes(dst: char*, src: char*, len: u64) {
+func copy_bytes(dst: u8*, src: u8*, len: u64) {
     let i: u64 = 0
     while i < len {
         dst[i] = src[i]
@@ -487,20 +499,20 @@ func copy_bytes(dst: char*, src: char*, len: u64) {
     }
 }
 
-func write_u64(base: char*, offset: u64, value: u64) {
+func write_u64(base: u8*, offset: u64, value: u64) {
     let p: u64* = (base + offset) as u64*
     p[0] = value
 }
 
-func push_arg_string(stack: char*, sp_off: u64, src: char*, len: u64) -> u64 {
+func push_arg_string(stack: u8*, sp_off: u64, src: u8*, len: u64) -> u64 {
     sp_off = sp_off - (len + 1)
     copy_bytes(stack + sp_off, src, len)
     stack[sp_off + len] = 0
     return sp_off
 }
 
-func build_user_stack(stack_phys: u64, label: char*, args: char*) -> UserStackSetup {
-    let stack: char* = stack_phys as char*
+func build_user_stack(stack_phys: u64, label: u8*, args: u8*) -> UserStackSetup {
+    let stack: u8* = stack_phys as u8*
     let setup: UserStackSetup
     setup.argc = 0
     setup.argv = 0
@@ -521,7 +533,7 @@ func build_user_stack(stack_phys: u64, label: char*, args: char*) -> UserStackSe
     arg_ptrs[0] = VMM.USER_STACK_BASE + sp_off
     setup.argc = 1
 
-    let p: char* = skip_spaces(args)
+    let p: u8* = skip_spaces(args)
     while p[0] != 0 && setup.argc < USER_ARG_MAX {
         let len: u64 = token_len(p)
         if len > 0 {
@@ -579,7 +591,7 @@ func build_user_stack(stack_phys: u64, label: char*, args: char*) -> UserStackSe
     return setup
 }
 
-func load_user_image_with_args(file: char*, size: u64, label: char*, args: char*) -> LoadedUserImage {
+func load_user_image_with_args(file: u8*, size: u64, label: u8*, args: u8*) -> LoadedUserImage {
     let image: LoadedUserImage
     image.ok = false
     image.entry = 0
@@ -629,7 +641,7 @@ func load_user_image_with_args(file: char*, size: u64, label: char*, args: char*
     return image
 }
 
-func spawn_user_elf_with_args_parent(file: char*, size: u64, label: char*, args: char*, parent_id: i64) -> bool {
+func spawn_user_elf_with_args_parent(file: u8*, size: u64, label: u8*, args: u8*, parent_id: i64) -> bool {
     let image: LoadedUserImage = load_user_image_with_args(file, size, label, args)
     if !image.ok {
         return false
@@ -650,22 +662,22 @@ func spawn_user_elf_with_args_parent(file: char*, size: u64, label: char*, args:
     return true
 }
 
-func spawn_user_elf_with_args(file: char*, size: u64, label: char*, args: char*) -> bool {
+func spawn_user_elf_with_args(file: u8*, size: u64, label: u8*, args: u8*) -> bool {
     return spawn_user_elf_with_args_parent(file, size, label, args, Task.current_id())
 }
 
-func spawn_user_elf(file: char*, size: u64, label: char*) -> bool {
+func spawn_user_elf(file: u8*, size: u64, label: u8*) -> bool {
     return spawn_user_elf_with_args(file, size, label, "")
 }
 
-func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i64) -> bool {
+func run_user_executable_with_args_parent(path: u8*, args: u8*, parent_id: i64) -> bool {
     match VFS.resolve(path) {
         case VFS.Node.TmpfsFile(idx) => {
             let size: u64 = TmpFS.size_at(idx)
             if size == 0 {
                 return false
             }
-            let tmp: char* = KHeap.kmalloc(size) as char*
+            let tmp: u8* = KHeap.kmalloc(size) as u8*
             if tmp == null {
                 log("<RED>failed to allocate executable buffer\n</>")
                 return false
@@ -684,7 +696,7 @@ func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i
             if size == 0 {
                 return false
             }
-            let tmp: char* = KHeap.kmalloc(size) as char*
+            let tmp: u8* = KHeap.kmalloc(size) as u8*
             if tmp == null {
                 log("<RED>failed to allocate executable buffer\n</>")
                 return false
@@ -708,15 +720,15 @@ func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i
     return false
 }
 
-func run_user_executable_with_args(path: char*, args: char*) -> bool {
+func run_user_executable_with_args(path: u8*, args: u8*) -> bool {
     return run_user_executable_with_args_parent(path, args, Task.current_id())
 }
 
-func run_user_executable(path: char*) -> bool {
+func run_user_executable(path: u8*) -> bool {
     return run_user_executable_with_args(path, "")
 }
 
-func exec_user_buffer_with_args(file: char*, size: u64, label: char*, args: char*) -> bool {
+func exec_user_buffer_with_args(file: u8*, size: u64, label: u8*, args: u8*) -> bool {
     let old_aspace: VMM.AddressSpace* = Task.get_current_aspace()
     let image: LoadedUserImage = load_user_image_with_args(file, size, label, args)
     if !image.ok {
@@ -733,14 +745,14 @@ func exec_user_buffer_with_args(file: char*, size: u64, label: char*, args: char
     return true
 }
 
-func exec_user_executable_with_args(path: char*, args: char*) -> bool {
+func exec_user_executable_with_args(path: u8*, args: u8*) -> bool {
     match VFS.resolve(path) {
         case VFS.Node.TmpfsFile(idx) => {
             let size: u64 = TmpFS.size_at(idx)
             if size == 0 {
                 return false
             }
-            let tmp: char* = KHeap.kmalloc(size) as char*
+            let tmp: u8* = KHeap.kmalloc(size) as u8*
             if tmp == null {
                 return false
             }
@@ -757,7 +769,7 @@ func exec_user_executable_with_args(path: char*, args: char*) -> bool {
             if size == 0 {
                 return false
             }
-            let tmp: char* = KHeap.kmalloc(size) as char*
+            let tmp: u8* = KHeap.kmalloc(size) as u8*
             if tmp == null {
                 return false
             }
@@ -785,7 +797,7 @@ func exec_user_executable_with_args(path: char*, args: char*) -> bool {
 // registration and I/O port access, so a boot module spawned this way
 // needs to read as boot-spawned no matter which kernel task technically
 // issues the spawn.
-func spawn_boot_user_module(name: char*) {
+func spawn_boot_user_module(name: u8*) {
     let idx: i64 = TmpFS.find(name)
     if idx < 0 {
         log("<YELLOW>")
@@ -799,7 +811,7 @@ func spawn_boot_user_module(name: char*) {
         return
     }
 
-    let tmp: char* = KHeap.kmalloc(size) as char*
+    let tmp: u8* = KHeap.kmalloc(size) as u8*
     if tmp == null {
         log("<RED>failed to allocate user executable buffer\n</>")
         return
@@ -809,7 +821,7 @@ func spawn_boot_user_module(name: char*) {
     KHeap.kfree(tmp as u64)
 }
 
-func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
+func install_boot_module_to_vfs(module_name: u8*, dst_path: u8*) {
     let idx: i64 = TmpFS.find(module_name)
     if idx < 0 {
         return
@@ -818,7 +830,7 @@ func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
     if size == 0 {
         return
     }
-    let tmp: char* = KHeap.kmalloc(size) as char*
+    let tmp: u8* = KHeap.kmalloc(size) as u8*
     if tmp == null {
         log("<YELLOW>could not stage boot module for VFS install: </>")
         emit(module_name, false, 0, null)
@@ -831,7 +843,7 @@ func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
     match VFS.resolve(dst_path) {
         case VFS.Node.Disk(existing_idx) => {
             if VFS.inode_kind(existing_idx) == VFS.KIND_FILE && VFS.inode_size(existing_idx) == size {
-                let existing: char* = KHeap.kmalloc(size) as char*
+                let existing: u8* = KHeap.kmalloc(size) as u8*
                 if existing != null {
                     let n: i64 = VFS.read(dst_path, existing, size)
                     if n >= 0 && (n as u64) == size {
@@ -867,7 +879,7 @@ func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
         log("<GREEN> to </>")
         emit(dst_path, false, 0, null)
         if VERIFY_VFS_INSTALL {
-            let verify: char* = KHeap.kmalloc(size) as char*
+            let verify: u8* = KHeap.kmalloc(size) as u8*
             let src_sum: u64 = 0
             let dst_sum: u64 = 0
             let si: u64 = 0
@@ -901,6 +913,8 @@ func install_boot_module_to_vfs(module_name: char*, dst_path: char*) {
 func install_userland_to_vfs() {
     VFS.mkdir("/lib")
     VFS.mkdir("/bin")
+    VFS.mkdir("/etc")
+    install_boot_module_to_vfs("apps.txt", "/etc/apps.txt")
     install_boot_module_to_vfs("libsys.so", "/lib/libsys.so")
     install_boot_module_to_vfs("dyn_userapp.elf", "/bin/dyn_userapp.elf")
     install_boot_module_to_vfs("memtest.elf", "/bin/memtest.elf")
@@ -920,6 +934,7 @@ func install_userland_to_vfs() {
     install_boot_module_to_vfs("editor.elf", "/bin/editor.elf")
     install_boot_module_to_vfs("terminal.elf", "/bin/terminal.elf")
     install_boot_module_to_vfs("ui_demo.elf", "/bin/ui_demo.elf")
+    install_boot_module_to_vfs("taskmgr.elf", "/bin/taskmgr.elf")
 }
 
 // Runs as its own scheduled kernel task (spawned from kernel_main, after

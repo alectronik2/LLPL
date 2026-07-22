@@ -249,7 +249,7 @@ struct SDL_MouseButtonEvent {
 // bothered declaring one for every real member.
 union SDL_Event {
     let type: u32
-    let padding: char[128]
+    let padding: u8[128]
 
     // Zero-init is automatic (see generateUnionConstructor - `self` here
     // starts as `SDL_Event self = {0};`, zeroing every byte of the union,
@@ -268,19 +268,19 @@ union SDL_Event {
 // not just a style mismatch.
 extern func SDL_Init(flags: u32) -> bool
 extern func SDL_Quit()
-extern func SDL_GetError() -> char*
+extern func SDL_GetError() -> u8*
 
 // Window Management
-extern func SDL_CreateWindow(title: char*, w: i32, h: i32, flags: u64) -> SDL_Window*
+extern func SDL_CreateWindow(title: u8*, w: i32, h: i32, flags: u64) -> SDL_Window*
 extern func SDL_DestroyWindow(window: SDL_Window*)
-extern func SDL_SetWindowTitle(window: SDL_Window*, title: char*) -> bool
+extern func SDL_SetWindowTitle(window: SDL_Window*, title: u8*) -> bool
 extern func SDL_GetWindowSize(window: SDL_Window*, w: i32*, h: i32*) -> bool
 extern func SDL_SetWindowSize(window: SDL_Window*, w: i32, h: i32) -> bool
 extern func SDL_ShowWindow(window: SDL_Window*) -> bool
 extern func SDL_HideWindow(window: SDL_Window*) -> bool
 
 // Renderer Management
-extern func SDL_CreateRenderer(window: SDL_Window*, name: char*) -> SDL_Renderer*
+extern func SDL_CreateRenderer(window: SDL_Window*, name: u8*) -> SDL_Renderer*
 extern func SDL_DestroyRenderer(renderer: SDL_Renderer*)
 extern func SDL_RenderClear(renderer: SDL_Renderer*) -> bool
 extern func SDL_RenderPresent(renderer: SDL_Renderer*) -> bool
@@ -309,7 +309,7 @@ extern func SDL_SetTextureAlphaMod(texture: SDL_Texture*, alpha: u8) -> bool
 extern func SDL_SetTextureColorMod(texture: SDL_Texture*, r: u8, g: u8, b: u8) -> bool
 
 // Surface Management
-extern func SDL_LoadBMP(file: char*) -> SDL_Surface*
+extern func SDL_LoadBMP(file: u8*) -> SDL_Surface*
 extern func SDL_DestroySurface(surface: SDL_Surface*)
 
 // Event Handling
@@ -328,8 +328,8 @@ extern func SDL_Delay(ms: u32)
 
 // High-level wrapper class
 namespace SDL {
-    func init(flags: u32) -> Result<bool, char*> {
-        let result: Result<bool, char*> = new Result<bool, char*>()
+    func init(flags: u32) -> Result<bool, u8*> {
+        let result: Result<bool, u8*> = new Result<bool, u8*>()
 
         if SDL_Init(flags) {
             result.set_ok(true)

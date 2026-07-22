@@ -5,8 +5,8 @@ namespace std {
 namespace text {
 
 // Helper function to create a string from a single character
-func char_to_string(c: char) -> String {
-    let buf: char* = llpl_alloc(2)
+func char_to_string(c: u8) -> String {
+    let buf: u8* = llpl_alloc(2)
     buf[0] = c
     buf[1] = 0
     let result: String = new String(buf)
@@ -17,13 +17,13 @@ func char_to_string(c: char) -> String {
 // String manipulation utilities
 class StringUtils {
     // Split string by delimiter
-    static func split(s: String, delimiter: char) -> Vector<String> {
+    static func split(s: String, delimiter: u8) -> Vector<String> {
         let result: Vector<String> = new Vector<String>()
         let current: String = new String("")
         let len: i64 = s.len()
 
         for let i: i64 = 0, i < len, i = i + 1 {
-            let c: char = s[i]
+            let c: u8 = s[i]
             if c == delimiter {
                 if current.len() > 0 {
                     result.push(current)
@@ -99,7 +99,7 @@ class StringUtils {
         let start: i64 = 0
 
         for start = 0, start < len, start = start + 1 {
-            let c: char = s[start]
+            let c: u8 = s[start]
             if c != 32 && c != 9 && c != 10 && c != 13 {
                 break
             }
@@ -114,7 +114,7 @@ class StringUtils {
         let end: i64 = len
 
         for end = len, end > 0, end = end - 1 {
-            let c: char = s[end - 1]
+            let c: u8 = s[end - 1]
             if c != 32 && c != 9 && c != 10 && c != 13 {
                 break
             }
@@ -134,7 +134,7 @@ class StringUtils {
         let len: i64 = s.len()
 
         for let i: i64 = 0, i < len, i = i + 1 {
-            let c: char = s[i]
+            let c: u8 = s[i]
             if c >= 97 && c <= 122 {
                 c = c - 32
             }
@@ -150,7 +150,7 @@ class StringUtils {
         let len: i64 = s.len()
 
         for let i: i64 = 0, i < len, i = i + 1 {
-            let c: char = s[i]
+            let c: u8 = s[i]
             if c >= 65 && c <= 90 {
                 c = c + 32
             }
@@ -282,7 +282,7 @@ class StringUtils {
                 result = result + new_substr.c_str()
                 i = i + old_len - 1
             } else {
-                let c: char = s[i]
+                let c: u8 = s[i]
                 result = result + char_to_string(c).c_str()
             }
         }
@@ -304,7 +304,7 @@ class StringUtils {
     }
 
     // Pad string to length with character
-    static func pad_left(s: String, length: i64, pad_char: char) -> String {
+    static func pad_left(s: String, length: i64, pad_char: u8) -> String {
         let current_len: i64 = s.len()
         if current_len >= length {
             return s
@@ -321,7 +321,7 @@ class StringUtils {
         return result
     }
 
-    static func pad_right(s: String, length: i64, pad_char: char) -> String {
+    static func pad_right(s: String, length: i64, pad_char: u8) -> String {
         let current_len: i64 = s.len()
         if current_len >= length {
             return s
@@ -343,7 +343,7 @@ class StringUtils {
         let result: String = new String("")
 
         for let i: i64 = len - 1, i >= 0, i = i - 1 {
-            let c: char = s[i]
+            let c: u8 = s[i]
             result = result + char_to_string(c).c_str()
         }
 
@@ -370,7 +370,7 @@ class StringUtils {
         }
 
         for let i: i64 = 0, i < len, i = i + 1 {
-            let c: char = s[i]
+            let c: u8 = s[i]
             if c != 32 && c != 9 && c != 10 && c != 13 {
                 return 0
             }
@@ -395,7 +395,7 @@ class StringBuilder {
         self.total_length = self.total_length + s.len()
     }
 
-    func append_char(c: char) {
+    func append_char(c: u8) {
         self.append(char_to_string(c))
     }
 
@@ -406,13 +406,13 @@ class StringBuilder {
             value = -value
         }
 
-        let digits: Vector<char> = new Vector<char>()
+        let digits: Vector<u8> = new Vector<u8>()
 
         if value == 0 {
             digits.push(48)
         } else {
             while value > 0 {
-                let digit: char = (48 + (value % 10)) as char
+                let digit: u8 = (48 + (value % 10)) as u8
                 digits.push(digit)
                 value = value / 10
             }
@@ -453,7 +453,7 @@ class Format {
 
         let i: i64 = 0
         for i = 0, i < len, i = i + 1 {
-            let c: char = template[i]
+            let c: u8 = template[i]
 
             if c == 123 && i + 1 < len && template[i + 1] == 125 {
                 if arg_idx < args_size {
@@ -472,38 +472,38 @@ class Format {
 
 // Character utilities
 class CharUtils {
-    static func is_alpha(c: char) -> bool {
+    static func is_alpha(c: u8) -> bool {
         return (c >= 97 && c <= 122) || (c >= 65 && c <= 90)
     }
 
-    static func is_digit(c: char) -> bool {
+    static func is_digit(c: u8) -> bool {
         return c >= 48 && c <= 57
     }
 
-    static func is_alphanumeric(c: char) -> bool {
+    static func is_alphanumeric(c: u8) -> bool {
         return CharUtils.is_alpha(c) || CharUtils.is_digit(c)
     }
 
-    static func is_whitespace(c: char) -> bool {
+    static func is_whitespace(c: u8) -> bool {
         return c == 32 || c == 9 || c == 10 || c == 13
     }
 
-    static func is_upper(c: char) -> bool {
+    static func is_upper(c: u8) -> bool {
         return c >= 65 && c <= 90
     }
 
-    static func is_lower(c: char) -> bool {
+    static func is_lower(c: u8) -> bool {
         return c >= 97 && c <= 122
     }
 
-    static func to_upper(c: char) -> char {
+    static func to_upper(c: u8) -> u8 {
         if CharUtils.is_lower(c) {
             return c - 32
         }
         return c
     }
 
-    static func to_lower(c: char) -> char {
+    static func to_lower(c: u8) -> u8 {
         if CharUtils.is_upper(c) {
             return c + 32
         }

@@ -29,7 +29,7 @@ namespace PageAlloc {
     const MAX_PAGES = 1048576 // 4GB / 4KB - matches boot64.asm's 4GB identity map
 
     // One bit per page, MAX_PAGES/8 bytes.
-    let bitmap: char[131072]
+    let bitmap: u8[131072]
 
     // total_pages: pages the firmware reported as available RAM (set once
     // during init). free_pages: how many of those are currently unused.
@@ -52,7 +52,7 @@ namespace PageAlloc {
         if (cur & (1 << bit)) != 0 {
             free_pages = free_pages - 1
         }
-        bitmap[byte] = (cur & ~(1 << bit)) as char
+        bitmap[byte] = (cur & ~(1 << bit)) as u8
     }
 
     func set_free(page: u64) {
@@ -62,7 +62,7 @@ namespace PageAlloc {
         if (cur & (1 << bit)) == 0 {
             free_pages = free_pages + 1
         }
-        bitmap[byte] = (cur | (1 << bit)) as char
+        bitmap[byte] = (cur | (1 << bit)) as u8
     }
 
     func is_free(page: u64) -> bool {

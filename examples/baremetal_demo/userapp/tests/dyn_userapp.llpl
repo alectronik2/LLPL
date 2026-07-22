@@ -5,10 +5,10 @@
 import "../../libsys/imports"
 
 func print_digit(n: u64) {
-    let buf: char[2]
-    buf[0] = (48 + n) as char
+    let buf: u8[2]
+    buf[0] = (48 + n) as u8
     buf[1] = 0
-    sys_puts(buf as char*)
+    sys_puts(buf as u8*)
 }
 
 func print_uint(n: u64) {
@@ -29,15 +29,15 @@ func _start(argc: u64, argv: u64*) {
     let i: u64 = 0
     while i < argc {
         sys_puts(" ")
-        sys_puts(argv[i] as char*)
+        sys_puts(argv[i] as u8*)
         i = i + 1
     }
     sys_puts("\n")
 
-    let block: char* = sys_malloc(5000)
+    let block: u8* = sys_malloc(5000)
     if block != null {
-        block[0] = 65 as char
-        block[4999] = 90 as char
+        block[0] = 65 as u8
+        block[4999] = 90 as u8
         sys_puts("large free=")
         print_uint(sys_free(block))
         sys_puts("\n")
@@ -46,10 +46,10 @@ func _start(argc: u64, argv: u64*) {
     }
 
     sys_puts("small alloc1...\n")
-    let small1: char* = sys_malloc(64)
-    let small2: char* = null
+    let small1: u8* = sys_malloc(64)
+    let small2: u8* = null
     if small1 != null {
-        small1[0] = 49 as char
+        small1[0] = 49 as u8
         sys_puts("small free1=")
         print_uint(sys_free(small1))
         sys_puts("\n")

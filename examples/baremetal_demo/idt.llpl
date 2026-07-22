@@ -12,10 +12,19 @@ import mouse
 import backtrace
 import task
 import eventlog
+import crashlog
 
 alias hsw = HAL.Serial.write
 
 let timer_ticks: u64 = 0
+
+packed struct InterruptFrame {
+    let rip: u64
+    let cs: u64
+    let rflags: u64
+    let rsp: u64
+    let ss: u64
+}
 
 // The three fault handlers below all do the same thing: report what
 // happened, then halt for good (there's no recovering from a fault this
@@ -33,11 +42,46 @@ macro haltWithFault(msg) {
     }
 }
 
+func park_crashed_user() {
+    HAL.enable_interrupts()
+    while true {
+        HAL.halt()
+    }
+}
+
+func handle_user_fault(kind: u8*, status: u64, fault_addr: u64, error_code: u64, frame: InterruptFrame*) -> bool {
+    if frame == null {
+        return false
+    }
+    if (frame.cs & 3) != 3 {
+        return false
+    }
+
+    CrashLog.record(kind, true, fault_addr, error_code, frame.rip, 0, frame.rsp)
+    EventLog.add2("fault", kind, Task.current_id() as u64, frame.rip)
+    HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
+                      "USER FAULT: %s - killing task %d\n",
+                      kind, Task.current_id())
+    HAL.Log.flush()
+    HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
+                      "  rip=0x%016x rsp=0x%016x err=0x%x\n",
+                      frame.rip, frame.rsp, error_code)
+    HAL.Log.flush()
+    Task.crash_current(status)
+    park_crashed_user()
+    return true
+}
+
 // Handlers are defined before `namespace IDT` references their addresses:
 // LLPL doesn't forward-declare plain functions yet, so this file's order is
 // its C declaration order too.
 
 interrupt func isr_divide_by_zero() {
+    let frame: InterruptFrame* = __frame as InterruptFrame*
+    if handle_user_fault("divide by zero", 0x80, 0, 0, frame) {
+        return
+    }
+    CrashLog.record("divide by zero", false, 0, 0, frame.rip, 0, 0)
     EventLog.add0("fault", "divide by zero")
     haltWithFault!("FAULT: divide by zero (#DE) - halting\n")
 }
@@ -50,20 +94,35 @@ interrupt func isr_breakpoint() {
 }
 
 interrupt func isr_invalid_opcode() {
+    let frame: InterruptFrame* = __frame as InterruptFrame*
+    if handle_user_fault("invalid opcode", 0x86, 0, 0, frame) {
+        return
+    }
+    CrashLog.record("invalid opcode", false, 0, 0, frame.rip, 0, 0)
     EventLog.add0("fault", "invalid opcode")
     haltWithFault!("FAULT: invalid opcode (#UD) - halting\n")
 }
 
 interrupt func isr_general_protection(error_code: u64) {
+    let frame: InterruptFrame* = __frame as InterruptFrame*
+    if handle_user_fault("general protection", 0x8D, 0, error_code, frame) {
+        return
+    }
+    CrashLog.record("general protection", false, 0, error_code, frame.rip, 0, 0)
     EventLog.add1("fault", "general protection", error_code)
     haltWithFault!("FAULT: general protection (#GP) - halting\n")
 }
 
 interrupt func isr_page_fault(error_code: u64) {
+    let frame: InterruptFrame* = __frame as InterruptFrame*
     let addr: u64 = HAL.read_cr2()
+    if handle_user_fault("page fault", 0x8E, addr, error_code, frame) {
+        return
+    }
+    CrashLog.record("page fault", false, addr, error_code, frame.rip, 0, 0)
     EventLog.add2("fault", "page fault", addr, error_code)
     hsw("FAULT: page fault (#PF) - halting\n")
-    HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
+    HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
                       "  cr2=0x%016x error=0x%x task=%d\n",
                       addr, error_code, Task.current_id())
     HAL.Log.flush()
@@ -93,13 +152,13 @@ interrupt func isr_page_fault(error_code: u64) {
 }
 
 interrupt func isr_keyboard() {
-    let scancode: char = HAL.inb(0x60)
+    let scancode: u8 = HAL.inb(0x60)
     Keyboard.on_scancode(scancode)
     HAL.Pic.send_eoi(1)
 }
 
 interrupt func isr_mouse() {
-    let data: char = HAL.inb(0x60)
+    let data: u8 = HAL.inb(0x60)
     Mouse.on_byte(data)
     HAL.Pic.send_eoi(12)
 }
@@ -109,8 +168,8 @@ namespace IDT {
     packed struct Entry {
         let offset_low: uint16
         let selector: uint16
-        let ist: char
-        let type_attr: char
+        let ist: u8
+        let type_attr: u8
         let offset_mid: uint16
         let offset_high: uint32
         let zero: uint32
@@ -127,7 +186,7 @@ namespace IDT {
     extern func syscall_isr_entry() -> void
 
     // flags: 0x8E = present, ring 0, 64-bit interrupt gate.
-    func set_gate_ist(vector: i64, handler_addr: u64, selector: u64, flags: char, ist: char) {
+    func set_gate_ist(vector: i64, handler_addr: u64, selector: u64, flags: u8, ist: u8) {
         entries[vector].offset_low = (handler_addr & 0xFFFF) as uint16
         entries[vector].selector = selector as uint16
         entries[vector].ist = ist
@@ -137,7 +196,7 @@ namespace IDT {
         entries[vector].zero = 0
     }
 
-    func set_gate(vector: i64, handler_addr: u64, selector: u64, flags: char) {
+    func set_gate(vector: i64, handler_addr: u64, selector: u64, flags: u8) {
         set_gate_ist(vector, handler_addr, selector, flags, 0)
     }
 

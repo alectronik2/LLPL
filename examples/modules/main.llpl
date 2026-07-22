@@ -6,7 +6,7 @@ import input
 let screen: Screen = null
 let keyboard: Keyboard = null
 
-func print(msg: char*) {
+func print(msg: u8*) {
     if screen != null {
         screen.write(msg)
     }
@@ -14,7 +14,7 @@ func print(msg: char*) {
 
 func kernel_main() {
     // Initialize graphics
-    let color: char = 15  // White on black
+    let color: u8 = 15  // White on black
     screen = new Screen(color)
     screen.clear()
 

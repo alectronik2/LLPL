@@ -234,7 +234,7 @@ func looks_like_number(s: String) -> bool {
     }
     let has_digit: bool = false
     while i < len {
-        let c: char = s.byte_at(i)
+        let c: u8 = s.byte_at(i)
         if c >= '0' && c <= '9' {
             has_digit = true
             i = i + 1
@@ -251,7 +251,7 @@ func is_integer_literal(s: String) -> bool {
     let len: i64 = s.byte_len()
     let i: i64 = 0
     while i < len {
-        let c: char = s.byte_at(i)
+        let c: u8 = s.byte_at(i)
         if c == '.' || c == 'e' || c == 'E' {
             return false
         }
@@ -270,7 +270,7 @@ func parse_int_from_string(s: String) -> i64 {
     }
     let value: i64 = 0
     while i < len {
-        let c: char = s.byte_at(i)
+        let c: u8 = s.byte_at(i)
         if c >= '0' && c <= '9' {
             value = value * 10 + ((c as i64) - ('0' as i64))
         }
@@ -340,10 +340,10 @@ func unescape_double_quoted(raw: String) -> String {
     let sb: StringBuilder = new StringBuilder()
     let i: i64 = 1
     while i < len - 1 {
-        let c: char = raw.byte_at(i)
+        let c: u8 = raw.byte_at(i)
         if c == '\\' && i + 1 < len - 1 {
             i = i + 1
-            let e: char = raw.byte_at(i)
+            let e: u8 = raw.byte_at(i)
             if e == 'n' {
                 sb.append_char('\n')
             } else if e == 't' {
@@ -371,7 +371,7 @@ func unescape_single_quoted(raw: String) -> String {
     let sb: StringBuilder = new StringBuilder()
     let i: i64 = 1
     while i < len - 1 {
-        let c: char = raw.byte_at(i)
+        let c: u8 = raw.byte_at(i)
         if c == '\'' && i + 1 < len - 1 && raw.byte_at(i + 1) == '\'' {
             sb.append_char('\'')
             i = i + 2
@@ -405,7 +405,7 @@ func parse_scalar(raw: String) -> YamlValue {
         return YamlValue.make_null()
     }
 
-    let c0: char = trimmed.byte_at(0)
+    let c0: u8 = trimmed.byte_at(0)
     if c0 == '"' {
         return YamlValue.make_string(unescape_double_quoted(trimmed))
     }
@@ -462,7 +462,7 @@ class YamlFlowParser {
         if self.pos >= self.len {
             return YamlValue.make_null()
         }
-        let c: char = self.text.byte_at(self.pos)
+        let c: u8 = self.text.byte_at(self.pos)
         if c == '[' {
             return self.parse_sequence()
         }
@@ -581,7 +581,7 @@ class YamlFlowParser {
     func parse_bare_key() -> String {
         let start: i64 = self.pos
         while self.pos < self.len {
-            let c: char = self.text.byte_at(self.pos)
+            let c: u8 = self.text.byte_at(self.pos)
             if c == ':' || c == ',' || c == ']' || c == '}' {
                 break
             }
@@ -593,7 +593,7 @@ class YamlFlowParser {
     func parse_bare_value() -> String {
         let start: i64 = self.pos
         while self.pos < self.len {
-            let c: char = self.text.byte_at(self.pos)
+            let c: u8 = self.text.byte_at(self.pos)
             if c == ',' || c == ']' || c == '}' {
                 break
             }
@@ -646,7 +646,7 @@ class YamlParser {
         let in_single: bool = false
         let in_double: bool = false
         while i < len {
-            let c: char = line.byte_at(i)
+            let c: u8 = line.byte_at(i)
             if in_double {
                 if c == '\\' {
                     i = i + 1
@@ -696,7 +696,7 @@ class YamlParser {
         let in_double: bool = false
         let depth: i64 = 0
         while i < len {
-            let c: char = line.byte_at(i)
+            let c: u8 = line.byte_at(i)
             if in_double {
                 if c == '\\' {
                     i = i + 1

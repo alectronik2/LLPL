@@ -52,7 +52,7 @@ namespace ATA {
     const CACHE_SLOTS = 16
     let cache_valid: bool[16]
     let cache_lba: u64[16]
-    let cache_data: char[8192] // CACHE_SLOTS * SECTOR_SIZE
+    let cache_data: u8[8192] // CACHE_SLOTS * SECTOR_SIZE
 
     // Guards atad's one shared sector buffer across a whole request+copy
     // cycle - not just the request itself. atad's own loop never waits for
@@ -117,19 +117,19 @@ namespace ATA {
         return false
     }
 
-    func shm_ptr() -> char* {
-        return Task.shm_phys_at(shm_region, 0) as char*
+    func shm_ptr() -> u8* {
+        return Task.shm_phys_at(shm_region, 0) as u8*
     }
 
     func cache_index(lba: u64) -> i64 {
         return (lba % (CACHE_SLOTS as u64)) as i64
     }
 
-    func cache_slot_ptr(idx: i64) -> char* {
-        return (cache_data as char*) + idx * SECTOR_SIZE
+    func cache_slot_ptr(idx: i64) -> u8* {
+        return (cache_data as u8*) + idx * SECTOR_SIZE
     }
 
-    func cache_read(lba: u64, buf: char*) -> bool {
+    func cache_read(lba: u64, buf: u8*) -> bool {
         let idx: i64 = cache_index(lba)
         if cache_valid[idx] && cache_lba[idx] == lba {
             llpl_memcpy(buf, cache_slot_ptr(idx), SECTOR_SIZE as u64)
@@ -140,7 +140,7 @@ namespace ATA {
         return false
     }
 
-    func cache_store(lba: u64, src: char*) {
+    func cache_store(lba: u64, src: u8*) {
         let idx: i64 = cache_index(lba)
         cache_valid[idx] = true
         cache_lba[idx] = lba
@@ -169,12 +169,12 @@ namespace ATA {
             return 0xFFFFFFFFFFFFFFFF
         }
 
-        let raw: char[24]
-        let req: u64* = (raw as char*) as u64*
+        let raw: u8[24]
+        let req: u64* = (raw as u8*) as u64*
         req[0] = op
         req[1] = lba
         req[2] = count
-        let bytes: char* = raw as char*
+        let bytes: u8* = raw as u8*
         let len: u64 = REQ_SIZE
 
         // Waking atad directly when it's already receive-blocked isn't
@@ -278,7 +278,7 @@ namespace ATA {
         }
         asm("pushq %0; popfq" : : "r"(flags) : "cc", "memory")
 
-        let result: u64* = (raw as char*) as u64*
+        let result: u64* = (raw as u8*) as u64*
         return result[0]
     }
 
@@ -293,11 +293,11 @@ namespace ATA {
         return present
     }
 
-    func read_sector(lba: u64, buf: char*) -> bool {
+    func read_sector(lba: u64, buf: u8*) -> bool {
         return read_sectors(lba, 1, buf)
     }
 
-    func write_sector(lba: u64, buf: char*) -> bool {
+    func write_sector(lba: u64, buf: u8*) -> bool {
         return write_sectors(lba, 1, buf)
     }
 
@@ -313,7 +313,7 @@ namespace ATA {
     // per sector - one full round trip each - which made anything more
     // than a handful of sectors impractically slow (see vfs.llpl's own
     // header comment on real indirect-block-sized files).
-    func read_sectors(lba: u64, count: u64, buf: char*) -> bool {
+    func read_sectors(lba: u64, count: u64, buf: u8*) -> bool {
         read_ops = read_ops + 1
         read_sectors_total = read_sectors_total + count
         if count == 1 {
@@ -333,7 +333,7 @@ namespace ATA {
             acquire_ata()
             let ok: bool = call(OP_READ, lba + done, chunk) == 0
             if ok {
-                let src: char* = shm_ptr()
+                let src: u8* = shm_ptr()
                 let bytes: u64 = chunk * (SECTOR_SIZE as u64)
                 let base: i64 = (done * (SECTOR_SIZE as u64)) as i64
                 llpl_memcpy(buf + base, src, bytes as u64)
@@ -353,7 +353,7 @@ namespace ATA {
         return true
     }
 
-    func write_sectors(lba: u64, count: u64, buf: char*) -> bool {
+    func write_sectors(lba: u64, count: u64, buf: u8*) -> bool {
         write_ops = write_ops + 1
         write_sectors_total = write_sectors_total + count
         let done: u64 = 0
@@ -363,7 +363,7 @@ namespace ATA {
                 chunk = MAX_BATCH as u64
             }
             acquire_ata()
-            let dst: char* = shm_ptr()
+            let dst: u8* = shm_ptr()
             let bytes: u64 = chunk * (SECTOR_SIZE as u64)
             let base: i64 = (done * (SECTOR_SIZE as u64)) as i64
             llpl_memcpy(dst, buf + base, bytes as u64)

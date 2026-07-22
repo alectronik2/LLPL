@@ -15,6 +15,8 @@ import "user_runtime"
 import "wm_protocol"
 import "wm_client"
 import "font"
+import "png_decoder"
+import "embedded_images"
 
 const MAX_ENTRIES = 48
 const ENTRY_SIZE = 48
@@ -32,14 +34,26 @@ const VFS_KIND_DIR = 2
 const SCROLLBAR_W = 4
 const SCROLLBAR_TRACK: uint32 = 0x202020
 const SCROLLBAR_THUMB: uint32 = 0x506080
+const ICON_X = 4
+const ICON_TEXT_X = 24
+const ICON_SIZE = 16
 
-let cur_path: char[96]
-let entries: char[2304] // MAX_ENTRIES(48) * ENTRY_SIZE(48)
+let cur_path: u8[96]
+let entries: u8[2304] // MAX_ENTRIES(48) * ENTRY_SIZE(48)
 let entry_count: i64 = 0
 let selected: i64 = 0
 let scroll: i64 = 0
+let icon_terminal: EmbeddedImage
+let icon_file: EmbeddedImage
+let icon_app: EmbeddedImage
+let op_counter: u64 = 1
+let status: u8[64]
+let clipboard_path: u8[160]
+let clipboard_name: u8[32]
+let clipboard_valid: bool = false
+let copy_buf: u8[4096]
 
-func path_len(p: char*) -> u64 {
+func path_len(p: u8*) -> u64 {
     let i: u64 = 0
     while p[i] != 0 {
         i = i + 1
@@ -47,8 +61,8 @@ func path_len(p: char*) -> u64 {
     return i
 }
 
-func entry_at(i: i64) -> char* {
-    return (entries as char*) + i * ENTRY_SIZE
+func entry_at(i: i64) -> u8* {
+    return (entries as u8*) + i * ENTRY_SIZE
 }
 
 func entry_kind(i: i64) -> u64 {
@@ -61,11 +75,98 @@ func entry_size(i: i64) -> u64 {
     return fields[1]
 }
 
+func name_starts_with(name: u8*, prefix: u8*) -> bool {
+    let i: i64 = 0
+    while prefix[i] != 0 {
+        if name[i] != prefix[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+func has_elf_suffix(name: u8*) -> bool {
+    let len: i64 = 0
+    while name[len] != 0 {
+        len = len + 1
+    }
+    if len < 4 {
+        return false
+    }
+    return name[len - 4] == 46 && name[len - 3] == 101 && name[len - 2] == 108 && name[len - 1] == 102
+}
+
+func open_file(path: u8*, name: u8*) {
+    if has_elf_suffix(name) {
+        sys_spawn(path, "" as u8*)
+    } else {
+        sys_spawn("/bin/editor.elf", path)
+    }
+}
+
+func set_status(s: u8*) {
+    let i: i64 = 0
+    while i < 63 && s[i] != 0 {
+        status[i] = s[i]
+        i = i + 1
+    }
+    status[i] = 0
+}
+
+func append_dec(dst: u8*, pos: u64, n: u64) -> u64 {
+    if n >= 10 {
+        pos = append_dec(dst, pos, n / 10)
+    }
+    dst[pos] = ((n % 10) + 48) as u8
+    return pos + 1
+}
+
+func make_generated_name(dst: u8*, prefix: u8*, suffix: u8*) {
+    let pos: u64 = 0
+    let i: u64 = 0
+    while prefix[i] != 0 && pos < 31 {
+        dst[pos] = prefix[i]
+        pos = pos + 1
+        i = i + 1
+    }
+    pos = append_dec(dst, pos, op_counter)
+    let j: u64 = 0
+    while suffix[j] != 0 && pos < 31 {
+        dst[pos] = suffix[j]
+        pos = pos + 1
+        j = j + 1
+    }
+    dst[pos] = 0
+    op_counter = op_counter + 1
+}
+
+func selected_path(dst: u8*) {
+    if entry_count <= 0 {
+        dst[0] = 0
+        return
+    }
+    join_path(dst, cur_path as u8*, entry_at(selected))
+}
+
+func icon_for_entry(name: u8*, kind: u64) -> EmbeddedImage {
+    if kind == VFS_KIND_DIR {
+        return icon_file
+    }
+    if name_starts_with(name, "terminal" as u8*) {
+        return icon_terminal
+    }
+    if has_elf_suffix(name) {
+        return icon_app
+    }
+    return icon_file
+}
+
 // Appends "/name" (or just "name" if base already ends in '/') to base,
 // writing the result into dst - safe to call with dst == base (every
 // byte written past position path_len(base) never aliases a byte still
 // being read).
-func join_path(dst: char*, base: char*, name: char*) {
+func join_path(dst: u8*, base: u8*, name: u8*) {
     let base_len: u64 = path_len(base)
     let i: u64 = 0
     while i < base_len {
@@ -87,7 +188,7 @@ func join_path(dst: char*, base: char*, name: char*) {
 }
 
 func go_up() {
-    let len: u64 = path_len(cur_path as char*)
+    let len: u64 = path_len(cur_path as u8*)
     if len <= 1 {
         return
     }
@@ -110,12 +211,12 @@ func refresh_listing() {
     let i: u64 = 0
     let done: bool = false
     while (i as i64) < MAX_ENTRIES && !done {
-        let buf: char[48]
-        let ok: u64 = sys_readdir(cur_path as char*, i, buf as char*)
+        let buf: u8[48]
+        let ok: u64 = sys_readdir(cur_path as u8*, i, buf as u8*)
         if ok == RT_SYS_ERR {
             done = true
         } else {
-            let dst: char* = entry_at(entry_count)
+            let dst: u8* = entry_at(entry_count)
             let j: i64 = 0
             while j < 48 {
                 dst[j] = buf[j]
@@ -138,6 +239,27 @@ func fill_row(buf: uint32*, y: u64, color: uint32) {
             rx = rx + 1
         }
         ry = ry + 1
+    }
+}
+
+func draw_icon(buf: uint32*, img: EmbeddedImage, x0: i64, y0: i64) {
+    let y: u32 = 0
+    while y < img.height {
+        let x: u32 = 0
+        while x < img.width {
+            let alpha: u32 = get_pixel_alpha(img, x, y)
+            if alpha != 0 {
+                let px: i64 = x0 + (x as i64)
+                let py: i64 = y0 + (y as i64)
+                if px >= 0 && py >= 0 && px < (Wm.WIN_W as i64) && py < (Wm.WIN_H as i64) {
+                    let fg: u32 = get_pixel(img, x, y)
+                    let bg: u32 = buf[(py as u64) * (Wm.WIN_W as u64) + (px as u64)]
+                    buf[(py as u64) * (Wm.WIN_W as u64) + (px as u64)] = blend_alpha(fg, bg, alpha)
+                }
+            }
+            x = x + 1
+        }
+        y = y + 1
     }
 }
 
@@ -194,7 +316,8 @@ func render() {
     let buf: uint32* = wm_buffer()
     let win_w: u64 = Wm.WIN_W as u64
     let win_h: u64 = Wm.WIN_H as u64
-    Font.draw_string(buf, win_w, win_h, 4, 4, cur_path as char*, HEADER_COLOR, BG_COLOR)
+    draw_icon(buf, icon_file, ICON_X, 4)
+    Font.draw_string(buf, win_w, win_h, ICON_TEXT_X, 4, cur_path as u8*, HEADER_COLOR, BG_COLOR)
 
     let row: i64 = 0
     while row < ROWS_VISIBLE {
@@ -212,20 +335,15 @@ func render() {
                 bg = SEL_BG
                 fill_row(buf, y, bg)
             }
-            let prefix: char[3]
-            if kind == VFS_KIND_DIR {
-                prefix[0] = 100 // 'd'
-            } else {
-                prefix[0] = 102 // 'f'
-            }
-            prefix[1] = 32 // ' '
-            prefix[2] = 0
-            Font.draw_string(buf, win_w, win_h, 4, y, prefix as char*, fg, bg)
-            Font.draw_string(buf, win_w, win_h, 20, y, entry_at(idx), fg, bg)
+            let icon: EmbeddedImage = icon_for_entry(entry_at(idx), kind)
+            draw_icon(buf, icon, ICON_X, y as i64)
+            Font.draw_string(buf, win_w, win_h, ICON_TEXT_X, y, entry_at(idx), fg, bg)
         }
         row = row + 1
     }
     draw_scrollbar()
+    fill_row(buf, 184, 0x151922)
+    Font.draw_string(buf, win_w, win_h, 8, 184, status as u8*, FILE_COLOR, 0x151922)
     wm_present()
 }
 
@@ -247,6 +365,111 @@ func move_selection_down() {
     }
 }
 
+func create_generated_file() {
+    let name: u8[32]
+    let full: u8[160]
+    make_generated_name(name as u8*, "file" as u8*, ".txt" as u8*)
+    join_path(full as u8*, cur_path as u8*, name as u8*)
+    let text: u8* = "" as u8*
+    if sys_write_all(full as u8*, text, 0) == RT_SYS_ERR {
+        set_status("create file failed" as u8*)
+    } else {
+        set_status("file created" as u8*)
+    }
+    refresh_listing()
+}
+
+func create_generated_folder() {
+    let name: u8[32]
+    let full: u8[160]
+    make_generated_name(name as u8*, "folder" as u8*, "" as u8*)
+    join_path(full as u8*, cur_path as u8*, name as u8*)
+    if sys_mkdir(full as u8*) == RT_SYS_ERR {
+        set_status("create folder failed" as u8*)
+    } else {
+        set_status("folder created" as u8*)
+    }
+    refresh_listing()
+}
+
+func delete_selected() {
+    if entry_count <= 0 {
+        return
+    }
+    let full: u8[160]
+    selected_path(full as u8*)
+    if sys_rm(full as u8*) == RT_SYS_ERR {
+        set_status("delete failed" as u8*)
+    } else {
+        set_status("deleted" as u8*)
+    }
+    refresh_listing()
+}
+
+func copy_selected() {
+    if entry_count <= 0 || entry_kind(selected) == VFS_KIND_DIR {
+        set_status("copy failed" as u8*)
+        return
+    }
+    selected_path(clipboard_path as u8*)
+    let name: u8* = entry_at(selected)
+    let i: i64 = 0
+    while i < 31 && name[i] != 0 {
+        clipboard_name[i] = name[i]
+        i = i + 1
+    }
+    clipboard_name[i] = 0
+    clipboard_valid = true
+    set_status("copied" as u8*)
+}
+
+func paste_file(prefix: u8*) -> bool {
+    if !clipboard_valid {
+        set_status("paste failed" as u8*)
+        return false
+    }
+    let n: u64 = sys_read_all(clipboard_path as u8*, copy_buf as u8*, 4096)
+    if n == RT_SYS_ERR {
+        set_status("read failed" as u8*)
+        return false
+    }
+    let name: u8[32]
+    let full: u8[160]
+    make_generated_name(name as u8*, prefix, ".txt" as u8*)
+    join_path(full as u8*, cur_path as u8*, name as u8*)
+    if sys_write_all(full as u8*, copy_buf as u8*, n) == RT_SYS_ERR {
+        set_status("write failed" as u8*)
+        return false
+    }
+    set_status("pasted" as u8*)
+    refresh_listing()
+    return true
+}
+
+func rename_selected() {
+    if entry_count <= 0 || entry_kind(selected) == VFS_KIND_DIR {
+        set_status("rename failed" as u8*)
+        return
+    }
+    copy_selected()
+    let old: u8[160]
+    selected_path(old as u8*)
+    if paste_file("renamed" as u8*) {
+        sys_rm(old as u8*)
+        set_status("renamed" as u8*)
+        refresh_listing()
+    }
+}
+
+func open_selected_with_terminal() {
+    if entry_count <= 0 {
+        return
+    }
+    let full: u8[160]
+    selected_path(full as u8*)
+    sys_spawn("/bin/terminal.elf" as u8*, full as u8*)
+}
+
 func _start(argc: u64, argv: u64*) {
     sys_putln("filebrowser: starting")
     if !wm_connect() {
@@ -258,8 +481,13 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
+    icon_terminal = load_embedded_image(load_start_icon_terminal())
+    icon_file = load_embedded_image(load_start_icon_file())
+    icon_app = load_embedded_image(load_start_icon_app())
+
     cur_path[0] = 47
     cur_path[1] = 0
+    set_status("ready" as u8*)
     refresh_listing()
 
     while true {
@@ -278,20 +506,40 @@ func _start(argc: u64, argv: u64*) {
             move_selection_down()
         } else if key == 10 {
             if entry_count > 0 {
-                let name: char* = entry_at(selected)
+                let name: u8* = entry_at(selected)
                 let kind: u64 = entry_kind(selected)
                 if kind == VFS_KIND_DIR {
-                    join_path(cur_path as char*, cur_path as char*, name)
+                    join_path(cur_path as u8*, cur_path as u8*, name)
                     refresh_listing()
                 } else {
-                    let full: char[160]
-                    join_path(full as char*, cur_path as char*, name)
-                    sys_spawn("/bin/editor.elf", full as char*)
+                    let full: u8[160]
+                    join_path(full as u8*, cur_path as u8*, name)
+                    open_file(full as u8*, name)
                 }
             }
         } else if key == (KEY_ESC as u64) {
             go_up()
             refresh_listing()
+        } else if key == 102 || key == 70 {
+            create_generated_file()
+        } else if key == 110 || key == 78 {
+            create_generated_folder()
+        } else if key == 100 || key == 68 {
+            delete_selected()
+        } else if key == 99 || key == 67 {
+            copy_selected()
+        } else if key == 118 || key == 86 {
+            paste_file("copy" as u8*)
+        } else if key == 114 || key == 82 {
+            rename_selected()
+        } else if key == 101 || key == 69 {
+            if entry_count > 0 {
+                let full: u8[160]
+                selected_path(full as u8*)
+                sys_spawn("/bin/editor.elf" as u8*, full as u8*)
+            }
+        } else if key == 120 || key == 88 {
+            open_selected_with_terminal()
         }
 
         // Mouse wheel: one notch moves the selection exactly like a

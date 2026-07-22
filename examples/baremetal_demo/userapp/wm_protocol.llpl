@@ -4,7 +4,7 @@
 //
 // Every request is {op, slot} (or just {op} for OP_CREATE, where `slot`
 // is unused) packed as two u64 fields (16 bytes) into the same
-// char[16]-style buffer ata.llpl/ipcdemo.llpl already use for small,
+// u8[16]-style buffer ata.llpl/ipcdemo.llpl already use for small,
 // fixed-shape IPC messages - well under IPC_MAX (128 bytes). Replies are
 // {status, a, b, c, d}: OP_CREATE fills all five (slot, offset, x, y);
 // OP_POLL_INPUT reuses the second field for the polled key; everything
@@ -15,23 +15,22 @@ namespace Wm {
     const OP_PRESENT = 2
     const OP_POLL_INPUT = 3
     const OP_CLOSE = 4
+    const OP_PRESENT_RECT = 5
+    const OP_NOTIFY = 6
+    const OP_STATS = 7
 
     const STATUS_OK = 0
     const STATUS_FAIL = 1
 
-    // Fixed window geometry - simplest possible allocator (one shared arena
-    // sliced into MAX_WINDOWS equal, fixed-size pieces, see wm.llpl) at the
-    // cost of every window being the same size. Sized for real app windows
-    // (editor/filebrowser) now, not just the original ball-bouncer demos -
-    // 320x200 is enough for a usable 40-column x 12-row text grid at the
-    // client-side Font module's 8x16 glyphs (see userapp/font.llpl).
+    // Fixed backing canvas geometry - the visible window can be smaller
+    // (and resized by wm.llpl), but every client still draws into one
+    // fixed-size arena slice.
     // WIN_W * WIN_H * 4 bytes/pixel * MAX_WINDOWS must not exceed
     // Task.SHM_MAX_PAGES * 4096 (the whole-region cap on a single
-    // sys_shm_create call) - 320*200*4*4 = 1024000 bytes, just under the
-    // 1048576-byte (256-page) ceiling task.llpl's SHM_MAX_PAGES was raised
-    // to for exactly this.
+    // sys_shm_create call) - 400*256*4*4 = 1638400 bytes, exactly 400 pages,
+    // under task.llpl's SHM_MAX_PAGES cap.
     const MAX_WINDOWS = 4
-    const WIN_W = 320
-    const WIN_H = 200
-    const WIN_BYTES = 256000 // WIN_W(320) * WIN_H(200) * 4
+    const WIN_W = 400
+    const WIN_H = 256
+    const WIN_BYTES = 409600 // WIN_W(400) * WIN_H(256) * 4
 }

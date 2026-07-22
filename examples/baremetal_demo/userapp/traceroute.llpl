@@ -28,7 +28,7 @@ const PING_STATUS_ERROR = 3
 const TIMEOUT_ITERS = 2000000 // see netd.llpl's own header comment
 
 func _start(argc: u64, argv: u64*) {
-    let ip_str: char* = rt_arg(argc, argv, 1, "10.0.2.2")
+    let ip_str: u8* = rt_arg(argc, argv, 1, "10.0.2.2")
     let dest_ip: u64 = rt_parse_ip(ip_str)
     if dest_ip == RT_IP_INVALID {
         sys_puts("traceroute: bad address: ")
@@ -36,7 +36,7 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    let max_ttl_str: char* = rt_arg(argc, argv, 2, "30")
+    let max_ttl_str: u8* = rt_arg(argc, argv, 2, "30")
     let max_ttl: u64 = 0
     let i: i64 = 0
     while max_ttl_str[i] != 0 {
@@ -62,8 +62,8 @@ func _start(argc: u64, argv: u64*) {
     let ttl: u64 = 1
     let reached: bool = false
     while ttl <= max_ttl && !reached {
-        let req: char[48]
-        let req_word: u64* = (req as char*) as u64*
+        let req: u8[48]
+        let req_word: u64* = (req as u8*) as u64*
         req_word[0] = OP_PING
         req_word[1] = dest_ip
         req_word[2] = ttl
@@ -76,10 +76,10 @@ func _start(argc: u64, argv: u64*) {
 
         // See ping.llpl's identical comment: the reply lands back in
         // this same send buffer, no separate sys_msg_recv.
-        if sys_msg_send(handle, req as char*, 48) == RT_SYS_ERR {
+        if sys_msg_send(handle, req as u8*, 48) == RT_SYS_ERR {
             sys_putln("(send failed)")
         } else {
-            let reply_word: u64* = (req as char*) as u64*
+            let reply_word: u64* = (req as u8*) as u64*
             let status: u64 = reply_word[0]
             let from_ip: u64 = reply_word[1]
             let rtt: u64 = reply_word[2]

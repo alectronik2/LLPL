@@ -16,7 +16,7 @@ namespace Mouse {
     const CTRL_PORT: u64 = 0x64
     const DATA_PORT: u64 = 0x60
 
-    let packet: char[4]
+    let packet: u8[4]
     let packet_index: i64 = 0
     // 3 unless enable_wheel (called from init, below) gets a real "yes,
     // I understand the Intellimouse extension" reply from the device -
@@ -70,12 +70,12 @@ namespace Mouse {
         }
     }
 
-    func write_command(cmd: char) {
+    func write_command(cmd: u8) {
         wait_input_clear()
         HAL.outb(CTRL_PORT, cmd)
     }
 
-    func write_data(data: char) {
+    func write_data(data: u8) {
         wait_input_clear()
         HAL.outb(DATA_PORT, data)
     }
@@ -83,8 +83,8 @@ namespace Mouse {
     // 0xD4 tells the controller "the next data byte is for the mouse,
     // not the keyboard" - the only way to address the aux device at all,
     // since both share the same data port.
-    func write_aux(data: char) {
-        write_command(0xD4 as char)
+    func write_aux(data: u8) {
+        write_command(0xD4 as u8)
         write_data(data)
     }
 
@@ -101,8 +101,8 @@ namespace Mouse {
                            // with a single 0xFA ack byte we don't need
     }
 
-    func set_sample_rate(rate: char) {
-        write_aux(0xF3 as char)
+    func set_sample_rate(rate: u8) {
+        write_aux(0xF3 as u8)
         read_ack()
         write_aux(rate)
         read_ack()
@@ -118,11 +118,11 @@ namespace Mouse {
     // read one before this would just desync packet framing against a
     // mouse still sending 3-byte packets.
     func enable_wheel() {
-        set_sample_rate(200 as char)
-        set_sample_rate(100 as char)
-        set_sample_rate(80 as char)
+        set_sample_rate(200 as u8)
+        set_sample_rate(100 as u8)
+        set_sample_rate(80 as u8)
 
-        write_aux(0xF2 as char) // "get device ID"
+        write_aux(0xF2 as u8) // "get device ID"
         read_ack()
         wait_output_full()
         let id: i64 = (HAL.inb(DATA_PORT) as i64) & 255
@@ -132,21 +132,21 @@ namespace Mouse {
     }
 
     func init() {
-        write_command(0xA8 as char) // enable the auxiliary (mouse) port
+        write_command(0xA8 as u8) // enable the auxiliary (mouse) port
 
-        write_command(0x20 as char) // "read controller configuration byte"
+        write_command(0x20 as u8) // "read controller configuration byte"
         wait_output_full()
-        let config: char = HAL.inb(DATA_PORT)
-        config = (config as i64 | 2) as char // bit 1: enable IRQ12 on aux data
-        write_command(0x60 as char) // "write controller configuration byte"
+        let config: u8 = HAL.inb(DATA_PORT)
+        config = (config as i64 | 2) as u8 // bit 1: enable IRQ12 on aux data
+        write_command(0x60 as u8) // "write controller configuration byte"
         write_data(config)
 
-        write_aux(0xF6 as char) // set defaults
+        write_aux(0xF6 as u8) // set defaults
         read_ack()
 
         enable_wheel()
 
-        write_aux(0xF4 as char) // enable packet streaming
+        write_aux(0xF4 as u8) // enable packet streaming
         read_ack()
     }
 
@@ -169,7 +169,7 @@ namespace Mouse {
     // all motion from then on); bits 0/1 are left/right button state;
     // bits 4/5 are the sign bits for the 9-bit signed dx/dy that follow
     // in bytes 1/2.
-    func on_byte(b: char) {
+    func on_byte(b: u8) {
         if packet_index == 0 && (((b as i64) & 255) & 8) == 0 {
             return
         }

@@ -1030,8 +1030,8 @@ class ForeachStmt : ASTNode {
 class ReturnStmt : ASTNode {
     ASTNode value;
 
-    this(ASTNode value = null) {
-        super(NodeType.ReturnStmt);
+    this(ASTNode value = null, int line = 0, int column = 0) {
+        super(NodeType.ReturnStmt, line, column);
         this.value = value;
     }
 }

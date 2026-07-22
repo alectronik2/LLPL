@@ -10,7 +10,7 @@ using namespace std.net
 
 func handle_client(client: Socket) {
     // Receive data from client
-    let recv_result: Result<String, char*> = client.recv_string(1024)
+    let recv_result: Result<String, u8*> = client.recv_string(1024)
 
     if recv_result.is_ok() {
         let message: String = recv_result.unwrap()
@@ -26,7 +26,7 @@ func main() -> i64 {
     let server: TcpServer = new TcpServer(8080)
 
     // Start the server with backlog of 10
-    let start_result: Result<bool, char*> = server.start_server(10)
+    let start_result: Result<bool, u8*> = server.start_server(10)
 
     if !start_result.is_ok() {
         // Failed to start server
@@ -44,7 +44,7 @@ func main() -> i64 {
     // Main server loop
     while true {
         // Accept incoming connections
-        let client_result: Result<Socket, char*> = server.accept_client()
+        let client_result: Result<Socket, u8*> = server.accept_client()
 
         if client_result.is_ok() {
             let client: Socket = client_result.unwrap()

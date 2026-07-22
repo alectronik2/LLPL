@@ -109,6 +109,25 @@ func wm_present() -> bool {
     return true
 }
 
+func wm_present_rect(x: u64, y: u64, w: u64, h: u64) -> bool {
+    let req: u8[48]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_PRESENT_RECT as u64
+    r[1] = wm_slot as u64
+    r[2] = x
+    r[3] = y
+    r[4] = w
+    r[5] = h
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 48)
+    if n == RT_SYS_ERR {
+        return false
+    }
+    if r[0] != (Wm.STATUS_OK as u64) {
+        rt_exit(0)
+    }
+    return true
+}
+
 // Non-blocking, same convention as sys_kbd_poll: 0 if nothing is pending
 // for this window right now (also 0 if it isn't the focused window - see
 // wm.llpl's own doc comment on why an unfocused poll can't steal a
@@ -179,6 +198,57 @@ func wm_close() {
     r[0] = Wm.OP_CLOSE as u64
     r[1] = wm_slot as u64
     sys_msg_send(wm_handle, req as u8*, 16)
+}
+
+func wm_copy_field(dst: u8*, src: u8*, max_len: u64) {
+    let i: u64 = 0
+    while i + 1 < max_len && src[i] != 0 {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
+    i = i + 1
+    while i < max_len {
+        dst[i] = 0
+        i = i + 1
+    }
+}
+
+func wm_notify(title: u8*, body: u8*, kind: u64) -> bool {
+    if wm_handle == RT_SYS_ERR {
+        return false
+    }
+    let req: u8[112]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_NOTIFY as u64
+    r[1] = kind
+    wm_copy_field((req as u8*) + 16, title, 32)
+    wm_copy_field((req as u8*) + 48, body, 64)
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 112)
+    if n == RT_SYS_ERR {
+        return false
+    }
+    return r[0] == (Wm.STATUS_OK as u64)
+}
+
+func wm_stats(out_buf: u64*) -> bool {
+    if wm_handle == RT_SYS_ERR {
+        return false
+    }
+    let req: u8[48]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_STATS as u64
+    r[1] = wm_slot as u64
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 48)
+    if n == RT_SYS_ERR || r[0] != (Wm.STATUS_OK as u64) {
+        return false
+    }
+    let i: i64 = 0
+    while i < 5 {
+        out_buf[i] = r[i + 1]
+        i = i + 1
+    }
+    return true
 }
 
 // Convenience functions

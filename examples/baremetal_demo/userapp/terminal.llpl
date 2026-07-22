@@ -39,7 +39,7 @@ const MAX_LS_ENTRIES = 48
 const ENTRY_SIZE = 48
 const PATH_MAX = 128
 
-let buf: char[8192] // SCROLLBACK_CAP
+let buf: u8[8192] // SCROLLBACK_CAP
 let buf_len: u64 = 0
 let top_line: u64 = 0
 // Offset into `buf` where the line currently being typed starts (right
@@ -47,11 +47,13 @@ let top_line: u64 = 0
 // refuses to erase anything before it, so a command's own already-
 // printed prompt can never be clobbered by an eager backspace.
 let input_start: u64 = 0
-let cur_dir: char[96]
-let term_path: char[128]
-let exec_probe: char[1]
+let cur_dir: u8[96]
+let term_path: u8[128]
+let exec_probe: u8[1]
+let pty_id: u64 = RT_SYS_ERR
+let pty_drain_full: bool = false
 
-func path_len(p: char*) -> u64 {
+func path_len(p: u8*) -> u64 {
     let i: u64 = 0
     while p[i] != 0 {
         i = i + 1
@@ -59,7 +61,7 @@ func path_len(p: char*) -> u64 {
     return i
 }
 
-func str_copy(dst: char*, src: char*) {
+func str_copy(dst: u8*, src: u8*) {
     let i: u64 = 0
     while src[i] != 0 {
         dst[i] = src[i]
@@ -68,7 +70,7 @@ func str_copy(dst: char*, src: char*) {
     dst[i] = 0
 }
 
-func str_copy_limit(dst: char*, src: char*, max_len: u64) {
+func str_copy_limit(dst: u8*, src: u8*, max_len: u64) {
     let i: u64 = 0
     while src[i] != 0 && i + 1 < max_len {
         dst[i] = src[i]
@@ -77,7 +79,7 @@ func str_copy_limit(dst: char*, src: char*, max_len: u64) {
     dst[i] = 0
 }
 
-func starts_with(s: char*, prefix: char*) -> bool {
+func starts_with(s: u8*, prefix: u8*) -> bool {
     let i: u64 = 0
     while prefix[i] != 0 {
         if s[i] != prefix[i] {
@@ -88,7 +90,7 @@ func starts_with(s: char*, prefix: char*) -> bool {
     return true
 }
 
-func str_append(dst: char*, dst_len: u64, src: char*) -> u64 {
+func str_append(dst: u8*, dst_len: u64, src: u8*) -> u64 {
     let i: u64 = dst_len
     let j: u64 = 0
     while src[j] != 0 && i + 1 < PATH_MAX {
@@ -103,7 +105,7 @@ func str_append(dst: char*, dst_len: u64, src: char*) -> u64 {
 // Same append-only "/base" + "name" join filebrowser.llpl's own
 // join_path uses - see that copy's doc comment for why writing through
 // dst == base is safe here too.
-func join_path(dst: char*, base: char*, name: char*) {
+func join_path(dst: u8*, base: u8*, name: u8*) {
     let base_len: u64 = path_len(base)
     let i: u64 = 0
     while i < base_len {
@@ -125,7 +127,7 @@ func join_path(dst: char*, base: char*, name: char*) {
 }
 
 func go_up_dir() {
-    let len: u64 = path_len(cur_dir as char*)
+    let len: u64 = path_len(cur_dir as u8*)
     if len <= 1 {
         return
     }
@@ -147,7 +149,7 @@ func go_up_dir() {
 // against cur_dir, writing the absolute result into `dst` - "/x" is
 // already absolute, anything else is joined onto cur_dir the same way
 // filebrowser.llpl resolves a selected entry's name.
-func resolve_path(dst: char*, arg: char*) {
+func resolve_path(dst: u8*, arg: u8*) {
     if arg[0] == 0 {
         let i: u64 = 0
         while cur_dir[i] != 0 {
@@ -163,25 +165,25 @@ func resolve_path(dst: char*, arg: char*) {
         }
         dst[i] = 0
     } else {
-        join_path(dst, cur_dir as char*, arg)
+        join_path(dst, cur_dir as u8*, arg)
     }
 }
 
-func cmd_path(arg: char*) {
+func cmd_path(arg: u8*) {
     if arg[0] == 0 {
-        append_str(term_path as char*)
+        append_str(term_path as u8*)
         append_char(10)
         return
     }
-    str_copy_limit(term_path as char*, arg, PATH_MAX as u64)
+    str_copy_limit(term_path as u8*, arg, PATH_MAX as u64)
 }
 
-func file_exists(path: char*) -> bool {
-    let n: u64 = sys_read_all(path, exec_probe as char*, 1)
+func file_exists(path: u8*) -> bool {
+    let n: u64 = sys_read_all(path, exec_probe as u8*, 1)
     return n != RT_SYS_ERR
 }
 
-func append_elf(dst: char*) {
+func append_elf(dst: u8*) {
     let n: u64 = path_len(dst)
     if n >= 4 && dst[n - 4] == 46 && dst[n - 3] == 101 && dst[n - 2] == 108 && dst[n - 1] == 102 {
         return
@@ -195,10 +197,10 @@ func append_elf(dst: char*) {
     }
 }
 
-func build_path_candidate(dst: char*, dir: char*, dir_len: u64, name: char*) {
+func build_path_candidate(dst: u8*, dir: u8*, dir_len: u64, name: u8*) {
     let n: u64 = 0
     if dir_len == 1 && dir[0] == 46 {
-        n = str_append(dst, 0, cur_dir as char*)
+        n = str_append(dst, 0, cur_dir as u8*)
     } else {
         let i: u64 = 0
         while i < dir_len && n + 1 < PATH_MAX {
@@ -209,12 +211,12 @@ func build_path_candidate(dst: char*, dir: char*, dir_len: u64, name: char*) {
         dst[n] = 0
     }
     if n == 0 || dst[n - 1] != 47 {
-        n = str_append(dst, n, "/" as char*)
+        n = str_append(dst, n, "/" as u8*)
     }
     str_append(dst, n, name)
 }
 
-func path_lookup(name: char*, out: char*) -> bool {
+func path_lookup(name: u8*, out: u8*) -> bool {
     if name[0] == 47 {
         str_copy_limit(out, name, PATH_MAX as u64)
         if file_exists(out) {
@@ -233,7 +235,7 @@ func path_lookup(name: char*, out: char*) -> bool {
         return file_exists(out)
     }
 
-    let path: char* = term_path as char*
+    let path: u8* = term_path as u8*
     let i: u64 = 0
     while path[i] != 0 {
         let start: u64 = i
@@ -242,15 +244,15 @@ func path_lookup(name: char*, out: char*) -> bool {
         }
         let seg_len: u64 = i - start
         if seg_len > 0 {
-            let candidate: char[128]
-            build_path_candidate(candidate as char*, path + start, seg_len, name)
-            if file_exists(candidate as char*) {
-                str_copy(out, candidate as char*)
+            let candidate: u8[128]
+            build_path_candidate(candidate as u8*, path + start, seg_len, name)
+            if file_exists(candidate as u8*) {
+                str_copy(out, candidate as u8*)
                 return true
             }
-            append_elf(candidate as char*)
-            if file_exists(candidate as char*) {
-                str_copy(out, candidate as char*)
+            append_elf(candidate as u8*)
+            if file_exists(candidate as u8*) {
+                str_copy(out, candidate as u8*)
                 return true
             }
         }
@@ -270,10 +272,11 @@ func ensure_space(extra: u64) {
     if buf_len + extra >= (SCROLLBACK_CAP as u64) {
         buf_len = 0
         top_line = 0
+        pty_drain_full = true
     }
 }
 
-func append_str(s: char*) {
+func append_str(s: u8*) {
     let i: u64 = 0
     while s[i] != 0 {
         ensure_space(1)
@@ -283,21 +286,81 @@ func append_str(s: char*) {
     }
 }
 
-func append_char(c: char) {
+func append_char(c: u8) {
     ensure_space(1)
     buf[buf_len] = c
     buf_len = buf_len + 1
+    if c == 10 {
+        pty_drain_full = true
+    }
+}
+
+func terminal_put_char(c: u8) {
+    if c == 8 {
+        if buf_len > 0 && buf[buf_len - 1] != 10 {
+            buf_len = buf_len - 1
+        }
+        return
+    }
+    if c == 13 {
+        return
+    }
+    append_char(c)
+    input_start = buf_len
+}
+
+func drain_pty_output() -> bool {
+    if pty_id == RT_SYS_ERR {
+        return false
+    }
+    pty_drain_full = false
+    let out: u8[512]
+    let any: bool = false
+    let keep_reading: bool = true
+    while keep_reading {
+        let n: u64 = sys_pty_read(pty_id, out as u8*, 512)
+        if n == RT_SYS_ERR || n == 0 {
+            keep_reading = false
+        } else {
+            any = true
+            let i: u64 = 0
+            while i < n {
+                terminal_put_char(out[i])
+                i = i + 1
+            }
+            if n < 512 {
+                keep_reading = false
+            }
+        }
+    }
+    return any
+}
+
+func pty_send_char(c: u8) {
+    if pty_id != RT_SYS_ERR {
+        let b: u8[1]
+        b[0] = c
+        sys_pty_write(pty_id, b as u8*, 1)
+    }
+}
+
+func pty_send_str(s: u8*) {
+    let i: u64 = 0
+    while s[i] != 0 {
+        pty_send_char(s[i])
+        i = i + 1
+    }
 }
 
 func append_uint(n: u64) {
     if n >= 10 {
         append_uint(n / 10)
     }
-    append_char(((n % 10) + 48) as char)
+    append_char(((n % 10) + 48) as u8)
 }
 
 func print_prompt() {
-    append_str(cur_dir as char*)
+    append_str(cur_dir as u8*)
     append_str("> ")
     input_start = buf_len
 }
@@ -305,7 +368,7 @@ func print_prompt() {
 // Splits `line` in place on the first space into (word, rest) - `rest`
 // points just past that space (or at line's own NUL if there was no
 // space, i.e. no arguments at all).
-func split_first_word(line: char*) -> char* {
+func split_first_word(line: u8*) -> u8* {
     let i: u64 = 0
     while line[i] != 0 && line[i] != 32 {
         i = i + 1
@@ -317,20 +380,20 @@ func split_first_word(line: char*) -> char* {
     return line + i
 }
 
-func cmd_ls(arg: char*) {
-    let target: char[96]
-    resolve_path(target as char*, arg)
+func cmd_ls(arg: u8*) {
+    let target: u8[96]
+    resolve_path(target as u8*, arg)
     let i: u64 = 0
     let done: bool = false
     let any: bool = false
     while (i as i64) < MAX_LS_ENTRIES && !done {
-        let rec: char[48]
-        let ok: u64 = sys_readdir(target as char*, i, rec as char*)
+        let rec: u8[48]
+        let ok: u64 = sys_readdir(target as u8*, i, rec as u8*)
         if ok == RT_SYS_ERR {
             done = true
         } else {
             any = true
-            let fields: u64* = (rec as char* + 32) as u64*
+            let fields: u64* = (rec as u8* + 32) as u64*
             let kind: u64 = fields[0]
             if kind == VFS_KIND_DIR {
                 append_char(100) // 'd'
@@ -338,7 +401,7 @@ func cmd_ls(arg: char*) {
                 append_char(102) // 'f'
             }
             append_char(32)
-            append_str(rec as char*)
+            append_str(rec as u8*)
             append_char(10)
             i = i + 1
         }
@@ -354,31 +417,31 @@ func cmd_ls(arg: char*) {
 // above aren't locals either. A local here faulted immediately in
 // testing: a plain "cat <file>" walked straight through the stack
 // guard page before sys_read_all even got a chance to return.
-let cat_filebuf: char[4096]
+let cat_filebuf: u8[4096]
 
-func cmd_cat(arg: char*) {
+func cmd_cat(arg: u8*) {
     if arg[0] == 0 {
         append_str("usage: cat <path>\n")
         return
     }
-    let target: char[96]
-    resolve_path(target as char*, arg)
-    let filebuf: char* = cat_filebuf as char*
-    let n: u64 = sys_read_all(target as char*, filebuf, 4095)
+    let target: u8[96]
+    resolve_path(target as u8*, arg)
+    let filebuf: u8* = cat_filebuf as u8*
+    let n: u64 = sys_read_all(target as u8*, filebuf, 4095)
     if n == RT_SYS_ERR {
         append_str("cat: cannot read '")
-        append_str(target as char*)
+        append_str(target as u8*)
         append_str("'\n")
         return
     }
     filebuf[n] = 0
-    append_str(filebuf as char*)
+    append_str(filebuf as u8*)
     if n == 0 || filebuf[n - 1] != 10 {
         append_char(10)
     }
 }
 
-func cmd_cd(arg: char*) {
+func cmd_cd(arg: u8*) {
     if arg[0] == 0 || sys_streq(arg, "/") {
         cur_dir[0] = 47
         cur_dir[1] = 0
@@ -392,32 +455,32 @@ func cmd_cd(arg: char*) {
         }
         cur_dir[i] = 0
     } else {
-        join_path(cur_dir as char*, cur_dir as char*, arg)
+        join_path(cur_dir as u8*, cur_dir as u8*, arg)
     }
 }
 
-func cmd_run(word: char*, arg: char*) {
-    let path: char[128]
-    if !path_lookup(word, path as char*) {
+func cmd_run(word: u8*, arg: u8*) {
+    let path: u8[128]
+    if !path_lookup(word, path as u8*) {
         append_str("command not found: ")
         append_str(word)
         append_char(10)
         return
     }
-    let handle: u64 = sys_spawn(path as char*, arg)
+    let handle: u64 = sys_spawn(path as u8*, arg)
     if handle == RT_SYS_ERR {
         append_str("spawn failed: ")
-        append_str(path as char*)
+        append_str(path as u8*)
         append_char(10)
     } else {
         append_str("started ")
-        append_str(path as char*)
+        append_str(path as u8*)
         append_char(10)
     }
 }
 
-func run_command(line: char*) {
-    let arg: char* = split_first_word(line)
+func run_command(line: u8*) {
+    let arg: u8* = split_first_word(line)
     if line[0] == 0 {
         return
     }
@@ -431,7 +494,7 @@ func run_command(line: char*) {
         buf_len = 0
         top_line = 0
     } else if sys_streq(line, "pwd") {
-        append_str(cur_dir as char*)
+        append_str(cur_dir as u8*)
         append_char(10)
     } else if sys_streq(line, "ls") {
         cmd_ls(arg)
@@ -444,7 +507,7 @@ func run_command(line: char*) {
     } else if sys_streq(line, "export") && starts_with(arg, "PATH=") {
         cmd_path(arg + 5)
     } else if sys_streq(line, "run") {
-        let run_arg: char* = split_first_word(arg)
+        let run_arg: u8* = split_first_word(arg)
         if arg[0] == 0 {
             append_str("usage: run <path> [args...]\n")
         } else {
@@ -543,6 +606,75 @@ func scroll_down_one() {
     }
 }
 
+func fill_rect(bufp: uint32*, x: u64, y: u64, w: u64, h: u64, color: uint32) {
+    let dy: u64 = 0
+    while dy < h {
+        let dx: u64 = 0
+        while dx < w {
+            if x + dx < (Wm.WIN_W as u64) && y + dy < (Wm.WIN_H as u64) {
+                bufp[(y + dy) * (Wm.WIN_W as u64) + x + dx] = color
+            }
+            dx = dx + 1
+        }
+        dy = dy + 1
+    }
+}
+
+func render_input_line_fast() -> bool {
+    let cur_line: u64 = line_number_of(buf_len)
+    let old_top: u64 = top_line
+    if cur_line < top_line {
+        top_line = cur_line
+    }
+    if cur_line >= top_line + (VISIBLE_ROWS as u64) {
+        top_line = cur_line - (VISIBLE_ROWS as u64) + 1
+    }
+    if top_line != old_top {
+        return false
+    }
+    if cur_line < top_line {
+        return false
+    }
+    let row_of_end: u64 = cur_line - top_line
+    if row_of_end >= (VISIBLE_ROWS as u64) {
+        return false
+    }
+
+    let win_buf: uint32* = wm_buffer()
+    let win_w: u64 = Wm.WIN_W as u64
+    let win_h: u64 = Wm.WIN_H as u64
+    let y: u64 = (TOP as u64) + row_of_end * ROW_H
+    fill_rect(win_buf, 0, y, Wm.WIN_W as u64, ROW_H as u64, BG_COLOR)
+
+    let line_start: u64 = line_start_at_or_before(buf_len)
+    let linebuf: u8[40]
+    let col: u64 = 0
+    let p: u64 = line_start
+    while p < buf_len && buf[p] != 10 && col < (MAX_COLS as u64) {
+        linebuf[col] = buf[p]
+        col = col + 1
+        p = p + 1
+    }
+    linebuf[col] = 0
+    Font.draw_string(win_buf, win_w, win_h, 4, y, linebuf as u8*, PROMPT_COLOR, BG_COLOR)
+
+    let caret_col: u64 = buf_len - line_start
+    if caret_col > (MAX_COLS as u64) {
+        caret_col = MAX_COLS as u64
+    }
+    let cx: u64 = 4 + caret_col * 8
+    if cx + 1 < win_w {
+        let dy: u64 = 0
+        while dy < ROW_H {
+            win_buf[(y + dy) * win_w + cx] = CARET_COLOR
+            win_buf[(y + dy) * win_w + cx + 1] = CARET_COLOR
+            dy = dy + 1
+        }
+    }
+    wm_present_rect(0, y, Wm.WIN_W as u64, ROW_H as u64)
+    return true
+}
+
 func render() {
     wm_fill(BG_COLOR)
     let win_buf: uint32* = wm_buffer()
@@ -569,7 +701,7 @@ func render() {
                 line_end = line_end + 1
             }
             let y: u64 = (TOP as u64) + row * ROW_H
-            let linebuf: char[40]
+            let linebuf: u8[40]
             let col: u64 = 0
             let p: u64 = offset
             while p < line_end && col < (MAX_COLS as u64) {
@@ -583,7 +715,7 @@ func render() {
             if is_prompt_line {
                 fg = PROMPT_COLOR
             }
-            Font.draw_string(win_buf, win_w, win_h, 4, y, linebuf as char*, fg, BG_COLOR)
+            Font.draw_string(win_buf, win_w, win_h, 4, y, linebuf as u8*, fg, BG_COLOR)
             if line_end < buf_len {
                 offset = line_end + 1
             } else {
@@ -624,7 +756,7 @@ func _start(argc: u64, argv: u64*) {
     sys_putln("terminal: starting")
     cur_dir[0] = 47
     cur_dir[1] = 0
-    str_copy(term_path as char*, "/boot:/bin:.")
+    str_copy(term_path as u8*, "/boot:/bin:.")
 
     if !wm_connect() {
         sys_putln("terminal: wm_connect failed")
@@ -635,40 +767,54 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    append_str("LLPL terminal - 'help' for commands\n")
-    print_prompt()
+    pty_id = sys_pty_create()
+    if pty_id == RT_SYS_ERR {
+        append_str("pty_create failed\n")
+        wm_notify("Terminal" as u8*, "PTY creation failed" as u8*, 2)
+    } else if sys_pty_spawn_shell(pty_id) == RT_SYS_ERR {
+        append_str("pty_spawn_shell failed\n")
+        wm_notify("Terminal" as u8*, "Could not start PTY shell" as u8*, 2)
+    } else {
+        append_str("connected to kernel shell pty\n")
+        wm_notify("Terminal" as u8*, "Connected to kernel shell" as u8*, 1)
+        let first_arg: u8* = rt_arg(argc, argv, 1, "" as u8*)
+        if first_arg[0] != 0 && !sys_streq(first_arg, "--gui-new" as u8*) {
+            pty_send_str("cat " as u8*)
+            pty_send_str(first_arg)
+            pty_send_char(10 as u8)
+        }
+    }
+    drain_pty_output()
+    render()
 
     while true {
         let input: WmInput = wm_poll_input()
         let key: u64 = input.key as u64
+        let dirty_full: bool = false
         if key == (KEY_CLOSE_REQ as u64) {
+            if pty_id != RT_SYS_ERR {
+                sys_pty_close(pty_id)
+            }
             wm_close()
             rt_exit(0)
         } else if key == 10 {
-            let line: char[128]
-            let n: u64 = buf_len - input_start
-            if n > 127 {
-                n = 127
-            }
-            let i: u64 = 0
-            while i < n {
-                line[i] = buf[input_start + i]
-                i = i + 1
-            }
-            line[n] = 0
-            append_char(10)
-            run_command(line as char*)
-            print_prompt()
+            pty_send_char(10 as u8)
         } else if key == 8 {
-            if buf_len > input_start {
-                buf_len = buf_len - 1
-            }
+            pty_send_char(8 as u8)
         } else if key == (KEY_UP as u64) {
-            scroll_up_one()
+            pty_send_char(KEY_UP as u8)
         } else if key == (KEY_DOWN as u64) {
-            scroll_down_one()
+            pty_send_char(KEY_DOWN as u8)
+        } else if key == (KEY_LEFT as u64) {
+            pty_send_char(KEY_LEFT as u8)
+        } else if key == (KEY_RIGHT as u64) {
+            pty_send_char(KEY_RIGHT as u8)
+        } else if key == (KEY_ESC as u64) {
+            pty_send_char(27 as u8)
+        } else if key > 0 && key < 32 {
+            pty_send_char(key as u8)
         } else if key != 0 && key >= 32 && key < 127 {
-            append_char(key as char)
+            pty_send_char(key as u8)
         }
 
         let wheel: i64 = wm_wheel_delta()
@@ -680,13 +826,25 @@ func _start(argc: u64, argv: u64*) {
         while wheel > 0 {
             scroll_up_one()
             wheel = wheel - 1
+            dirty_full = true
         }
         while wheel < 0 {
             scroll_down_one()
             wheel = wheel + 1
+            dirty_full = true
         }
 
-        render()
-        sys_sleep(15)
+        if drain_pty_output() {
+            if pty_drain_full {
+                dirty_full = true
+            } else if !render_input_line_fast() {
+                dirty_full = true
+            }
+        }
+
+        if dirty_full {
+            render()
+        }
+        sys_sleep(2)
     }
 }

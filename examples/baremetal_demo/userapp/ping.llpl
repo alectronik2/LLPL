@@ -27,7 +27,7 @@ const TIMEOUT_ITERS = 500000 // see netd.llpl's own header comment on
                                // wall-clock timeout
 
 func _start(argc: u64, argv: u64*) {
-    let ip_str: char* = rt_arg(argc, argv, 1, "10.0.2.2")
+    let ip_str: u8* = rt_arg(argc, argv, 1, "10.0.2.2")
     let dest_ip: u64 = rt_parse_ip(ip_str)
     if dest_ip == RT_IP_INVALID {
         sys_puts("ping: bad address: ")
@@ -35,7 +35,7 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    let count_str: char* = rt_arg(argc, argv, 2, "4")
+    let count_str: u8* = rt_arg(argc, argv, 2, "4")
     let count: u64 = 0
     let i: i64 = 0
     while count_str[i] != 0 {
@@ -60,8 +60,8 @@ func _start(argc: u64, argv: u64*) {
     let received: u64 = 0
     let seq: u64 = 1
     while seq <= count {
-        let req: char[48]
-        let req_word: u64* = (req as char*) as u64*
+        let req: u8[48]
+        let req_word: u64* = (req as u8*) as u64*
         req_word[0] = OP_PING
         req_word[1] = dest_ip
         req_word[2] = DEFAULT_TTL
@@ -77,10 +77,10 @@ func _start(argc: u64, argv: u64*) {
         // on the client side of a request/reply exchange like this one -
         // confirmed against echoclient.llpl, the existing precedent for
         // exactly this call shape.
-        if sys_msg_send(handle, req as char*, 48) == RT_SYS_ERR {
+        if sys_msg_send(handle, req as u8*, 48) == RT_SYS_ERR {
             sys_putln("ping: send failed")
         } else {
-            let reply_word: u64* = (req as char*) as u64*
+            let reply_word: u64* = (req as u8*) as u64*
             let status: u64 = reply_word[0]
             let from_ip: u64 = reply_word[1]
             let rtt: u64 = reply_word[2]

@@ -539,7 +539,7 @@ private ASTNode[] generateAltCore(string ruleName, GrammarAlt alt, RuleInfo[stri
     string startVar = format("__s%d", tempCounter++);
     ASTNode[] stmts;
     stmts ~= wsPrefix();
-    stmts ~= new VarDecl(startVar, new Type("int"), selfField("pos"));
+    stmts ~= new VarDecl(startVar, new Type("i64"), selfField("pos"));
     stmts ~= new VarDecl(nodeVar, new Type("ParseNode"), new NewExpr(new Type("ParseNode"), []));
     stmts ~= assign(member(ident(nodeVar), "rule_name"), new NewExpr(new Type("String"), [strLit(ruleName)]));
     foreach (elem; alt.elements) {
@@ -571,7 +571,7 @@ private FunctionDecl generateNonRecursiveMethod(RuleInfo info, RuleInfo[string] 
 private FunctionDecl[] generateLeftRecursiveMethods(RuleInfo info, RuleInfo[string] infos) {
     ASTNode[] body;
     string spanStartVar = format("__s%d", tempCounter++);
-    body ~= new VarDecl(spanStartVar, new Type("int"), selfField("pos"));
+    body ~= new VarDecl(spanStartVar, new Type("i64"), selfField("pos"));
     body ~= new VarDecl("left", new Type("ParseNode"), new NullLiteral());
     foreach (alt; info.primaryAlts) {
         body ~= wsPrefix();
@@ -625,7 +625,7 @@ private FunctionDecl[] generateLeftRecursiveMethods(RuleInfo info, RuleInfo[stri
     body ~= new WhileStmt(boolLit(true), blk(loopBody));
     body ~= new ReturnStmt(ident("left"));
 
-    auto precParam = [new Parameter("min_prec", new Type("int"))];
+    auto precParam = [new Parameter("min_prec", new Type("i64"))];
     auto precMethod = new FunctionDecl("parse_" ~ info.name ~ "_prec", precParam, new Type("ParseNode"), blk(body));
 
     ASTNode[] entryBody = [new ReturnStmt(selfMethodCall("parse_" ~ info.name ~ "_prec", [intLit(0)]))];
@@ -663,8 +663,8 @@ private FunctionDecl[] sharedHelperMethods() {
     ];
     result ~= new FunctionDecl("__match_one_char", [], new Type("ParseNode"), blk(oneCharBody));
 
-    // func __match_literal(lit: char*, lit_len: int) -> ParseNode
-    auto litParams = [new Parameter("lit", new Type("char", 1)), new Parameter("lit_len", new Type("int"))];
+    // func __match_literal(lit: u8*, lit_len: i64) -> ParseNode
+    auto litParams = [new Parameter("lit", new Type("u8", 1)), new Parameter("lit_len", new Type("i64"))];
     ASTNode[] litBody = [
         new IfStmt(new UnaryExpr("!",
                 new BinaryExpr("==",
@@ -680,18 +680,18 @@ private FunctionDecl[] sharedHelperMethods() {
     ];
     result ~= new FunctionDecl("__match_literal", litParams, new Type("ParseNode"), blk(litBody));
 
-    // func __parse_error(expected: char*)
-    auto errParams = [new Parameter("expected", new Type("char", 1))];
+    // func __parse_error(expected: u8*)
+    auto errParams = [new Parameter("expected", new Type("u8", 1))];
     ASTNode[] errBody = [
-        new VarDecl("buf", new Type("char", 0, true, 256)),
+        new VarDecl("buf", new Type("u8", 0, true, 256)),
         new ExprStmt(call(ident("ksnprintf"), [
-            new CastExpr(new Type("char", 1), ident("buf")),
+            new CastExpr(new Type("u8", 1), ident("buf")),
             intLit(256),
             strLit("Parse error at position %d: expected %s"),
             selfField("pos"),
             ident("expected"),
         ])),
-        new ExprStmt(call(ident("llpl_panic"), [new CastExpr(new Type("char", 1), ident("buf"))])),
+        new ExprStmt(call(ident("llpl_panic"), [new CastExpr(new Type("u8", 1), ident("buf"))])),
     ];
     result ~= new FunctionDecl("__parse_error", errParams, new Type("void"), blk(errBody));
 
@@ -740,8 +740,8 @@ ASTNode[] desugarGrammar(GrammarDecl decl, string modulePath) {
 
     VarDecl[] fields = [
         new VarDecl("text", new Type("String"), null, false, decl.line, decl.column),
-        new VarDecl("pos", new Type("int"), null, false, decl.line, decl.column),
-        new VarDecl("len", new Type("int"), null, false, decl.line, decl.column),
+        new VarDecl("pos", new Type("i64"), null, false, decl.line, decl.column),
+        new VarDecl("len", new Type("i64"), null, false, decl.line, decl.column),
     ];
 
     auto ctorParams = [new Parameter("text", new Type("String"))];

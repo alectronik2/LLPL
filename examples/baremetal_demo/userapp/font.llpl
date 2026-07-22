@@ -13,7 +13,7 @@ namespace Font {
     // Row-major, GLYPH_HEIGHT bytes per glyph, one glyph per printable
     // ASCII code point (32 ' ' through 126 '~') - see fb.llpl's own copy
     // of this table for the full per-glyph comments.
-    let font_data: char[1520] = [
+    let font_data: u8[1520] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 32 ' '
         0, 0, 0, 24, 24, 24, 24, 24, 24, 0, 0, 24, 24, 0, 0, 0, // 33 '!'
         0, 0, 36, 36, 36, 36, 36, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 34 '"'
@@ -117,7 +117,7 @@ namespace Font {
     // so a glyph straddling the buffer's right/bottom edge just clips
     // instead of writing out of bounds. Anything outside the printable
     // ASCII range (32-126) draws as a blank cell rather than garbage.
-    func draw_char(buf: uint32*, buf_w: u64, buf_h: u64, x: u64, y: u64, c: char, fg: uint32, bg: uint32) {
+    func draw_char(buf: uint32*, buf_w: u64, buf_h: u64, x: u64, y: u64, c: u8, fg: uint32, bg: uint32) {
         let code: i64 = c as i64
         if code < 32 || code > 126 {
             code = 32
@@ -128,7 +128,7 @@ namespace Font {
         while row < GLYPH_HEIGHT {
             let py: i64 = (y as i64) + row
             if py >= 0 && py < (buf_h as i64) {
-                // `& 255` undoes char's signedness before testing bits - a
+                // `& 255` undoes u8's signedness before testing bits - a
                 // glyph row byte like 254 would otherwise read back
                 // negative and corrupt every bit test below.
                 let bits: i64 = (font_data[glyph_offset + row] as i64) & 255
@@ -150,7 +150,7 @@ namespace Font {
         }
     }
 
-    func draw_string(buf: uint32*, buf_w: u64, buf_h: u64, x: u64, y: u64, str: char*, fg: uint32, bg: uint32) {
+    func draw_string(buf: uint32*, buf_w: u64, buf_h: u64, x: u64, y: u64, str: u8*, fg: uint32, bg: uint32) {
         let i: i64 = 0
         let cur_x: u64 = x
         while str[i] != 0 {

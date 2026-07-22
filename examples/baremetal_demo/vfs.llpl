@@ -74,7 +74,7 @@ namespace VFS {
     const MOUNT_PREFIX = "/boot"
 
     const MAX_NAME = 32
-    const MAX_INODES = 64
+    const MAX_INODES = 256
     const MAX_DIRECT_BLOCKS = 64
     const ROOT_INODE = 0
 
@@ -97,15 +97,11 @@ namespace VFS {
     // (icons, wallpaper, ...) now that files aren't capped at 32KB.
     const DISK_SECTORS = 131072
 
-    // "LLPFS3" in ASCII, as one 64-bit constant - bumped from LLPFS2
-    // when Inode gained real indirect blocks (narrower uint32 block
-    // pointers, two new fields - see the Inode struct below), so an
-    // old-format disk correctly triggers a fresh reformat instead of
-    // being misread through the new, differently-sized layout. Wrong or
-    // absent on disk means "not our filesystem" either way, triggering a
-    // fresh format instead of trying to interpret garbage as a
-    // superblock.
-    const MAGIC = 0x4C4C50465333
+    // "LLPFS4" in ASCII, as one 64-bit constant - bumped whenever the
+    // fixed on-disk inode table layout/capacity changes, so an older disk
+    // reformats instead of being interpreted with the wrong geometry.
+    // Wrong or absent on disk means "not our filesystem" either way.
+    const MAGIC = 0x4C4C50465334
 
     packed struct Superblock {
         let magic: u64
@@ -117,7 +113,7 @@ namespace VFS {
     }
 
     packed struct Inode {
-        let name: char[32]
+        let name: u8[32]
         let kind: u64          // KIND_FREE/KIND_FILE/KIND_DIR
         let size: u64          // file: bytes in use
         let parent: i64         // inode-table index, -1 for root
@@ -134,9 +130,9 @@ namespace VFS {
                                      // (0 = none allocated yet)
     }
 
-    let sb_buf: char[512]       // block 0, viewed through superblock() below
-    let bitmap: char* = null    // kmalloc'd, bitmap_blocks * 512 bytes
-    let inode_table: char* = null // kmalloc'd, inode_table_blocks * 512 bytes
+    let sb_buf: u8[512]       // block 0, viewed through superblock() below
+    let bitmap: u8* = null    // kmalloc'd, bitmap_blocks * 512 bytes
+    let inode_table: u8* = null // kmalloc'd, inode_table_blocks * 512 bytes
     let bitmap_blocks: u64 = 0
     let inode_table_blocks: u64 = 0
 
@@ -164,16 +160,16 @@ namespace VFS {
     }
 
     func superblock() -> Superblock* {
-        let p: char* = sb_buf as char*
+        let p: u8* = sb_buf as u8*
         return p as Superblock*
     }
 
     func inode_at(idx: i64) -> Inode* {
-        let p: char* = inode_table + (idx as u64) * sizeof(Inode)
+        let p: u8* = inode_table + (idx as u64) * sizeof(Inode)
         return p as Inode*
     }
 
-    func cstrlen(s: char*) -> u64 {
+    func cstrlen(s: u8*) -> u64 {
         let i: u64 = 0
         while s[i] != 0 {
             i = i + 1
@@ -181,7 +177,7 @@ namespace VFS {
         return i
     }
 
-    func str_eq(a: char*, b: char*) -> bool {
+    func str_eq(a: u8*, b: u8*) -> bool {
         let i: i64 = 0
         while a[i] != 0 && b[i] != 0 {
             if a[i] != b[i] {
@@ -192,7 +188,7 @@ namespace VFS {
         return a[i] == b[i]
     }
 
-    func inode_name_eq(node: Inode*, name: char*) -> bool {
+    func inode_name_eq(node: Inode*, name: u8*) -> bool {
         let i: i64 = 0
         while name[i] != 0 {
             if node.name[i] != name[i] {
@@ -203,7 +199,7 @@ namespace VFS {
         return node.name[i] == 0
     }
 
-    func set_inode_name(node: Inode*, name: char*) {
+    func set_inode_name(node: Inode*, name: u8*) {
         let i: i64 = 0
         while name[i] != 0 && i < MAX_NAME - 1 {
             node.name[i] = name[i]
@@ -226,14 +222,14 @@ namespace VFS {
         let byte: u64 = block / 8
         let bit: i64 = (block % 8) as i64
         let cur: i64 = (bitmap[byte] as i64) & 255
-        bitmap[byte] = (cur | (1 << bit)) as char
+        bitmap[byte] = (cur | (1 << bit)) as u8
     }
 
     func set_block_used(block: u64) {
         let byte: u64 = block / 8
         let bit: i64 = (block % 8) as i64
         let cur: i64 = (bitmap[byte] as i64) & 255
-        bitmap[byte] = (cur & ~(1 << bit)) as char
+        bitmap[byte] = (cur & ~(1 << bit)) as u8
     }
 
     // First-fit scan over the data region only - the superblock/bitmap/
@@ -297,13 +293,13 @@ namespace VFS {
     // its slots read back as "0 = no pointer yet", not garbage left over
     // from whatever this block last held.
     func zero_block(b: u64) {
-        let buf: char[512]
+        let buf: u8[512]
         let i: i64 = 0
         while i < 512 {
             buf[i] = 0
             i = i + 1
         }
-        ATA.write_sector(b, buf as char*)
+        ATA.write_sector(b, buf as u8*)
     }
 
     // A tiny write-back cache for indirect-block I/O - without it,
@@ -338,45 +334,45 @@ namespace VFS {
     // touched before returning" discipline, just batched at the whole-
     // operation level for indirect blocks instead of per slot.
     let top_cache_block: u64 = 0
-    let top_cache_buf: char[512]
+    let top_cache_buf: u8[512]
     let top_cache_dirty: bool = false
     let leaf_cache_block: u64 = 0
-    let leaf_cache_buf: char[512]
+    let leaf_cache_buf: u8[512]
     let leaf_cache_dirty: bool = false
 
     func flush_indirect_caches() {
         if top_cache_block != 0 && top_cache_dirty {
-            ATA.write_sector(top_cache_block, top_cache_buf as char*)
+            ATA.write_sector(top_cache_block, top_cache_buf as u8*)
             top_cache_dirty = false
         }
         if leaf_cache_block != 0 && leaf_cache_dirty {
-            ATA.write_sector(leaf_cache_block, leaf_cache_buf as char*)
+            ATA.write_sector(leaf_cache_block, leaf_cache_buf as u8*)
             leaf_cache_dirty = false
         }
     }
 
-    func ensure_top_cache(block_num: u64) -> char* {
+    func ensure_top_cache(block_num: u64) -> u8* {
         if top_cache_block != block_num {
             if top_cache_block != 0 && top_cache_dirty {
-                ATA.write_sector(top_cache_block, top_cache_buf as char*)
+                ATA.write_sector(top_cache_block, top_cache_buf as u8*)
             }
-            ATA.read_sector(block_num, top_cache_buf as char*)
+            ATA.read_sector(block_num, top_cache_buf as u8*)
             top_cache_block = block_num
             top_cache_dirty = false
         }
-        return top_cache_buf as char*
+        return top_cache_buf as u8*
     }
 
-    func ensure_leaf_cache(block_num: u64) -> char* {
+    func ensure_leaf_cache(block_num: u64) -> u8* {
         if leaf_cache_block != block_num {
             if leaf_cache_block != 0 && leaf_cache_dirty {
-                ATA.write_sector(leaf_cache_block, leaf_cache_buf as char*)
+                ATA.write_sector(leaf_cache_block, leaf_cache_buf as u8*)
             }
-            ATA.read_sector(block_num, leaf_cache_buf as char*)
+            ATA.read_sector(block_num, leaf_cache_buf as u8*)
             leaf_cache_block = block_num
             leaf_cache_dirty = false
         }
-        return leaf_cache_buf as char*
+        return leaf_cache_buf as u8*
     }
 
     // Reads `block_num` (already a real, allocated block) through the
@@ -393,7 +389,7 @@ namespace VFS {
     // case, itself being interpreted as another array of pointers by the
     // caller's own next indirect_slot() call.
     func indirect_slot(block_num: u64, slot: u64, create: bool, is_leaf: bool) -> u64 {
-        let buf: char*
+        let buf: u8*
         if is_leaf {
             buf = ensure_leaf_cache(block_num)
         } else {
@@ -491,8 +487,8 @@ namespace VFS {
     // when `two_level` is true - then frees the pointer-array block
     // itself.
     func free_indirect_block(block_num: u64, two_level: bool) {
-        let buf: char[512]
-        ATA.read_sector(block_num, buf as char*)
+        let buf: u8[512]
+        ATA.read_sector(block_num, buf as u8*)
         let ptrs: uint32* = buf as uint32*
         let i: i64 = 0
         while i < PTRS_PER_INDIRECT {
@@ -579,7 +575,7 @@ namespace VFS {
         let byte: u64 = b / 8
         let end_byte: u64 = DISK_SECTORS / 8
         while byte < end_byte {
-            bitmap[byte] = 0xFF as char
+            bitmap[byte] = 0xFF as u8
             byte = byte + 1
         }
         b = byte * 8
@@ -608,7 +604,7 @@ namespace VFS {
         s.inode_table_block = 1 + bitmap_blocks
         s.data_start_block = data_start
 
-        ATA.write_sector(0, sb_buf as char*)
+        ATA.write_sector(0, sb_buf as u8*)
         ATA.write_sectors(1, bitmap_blocks, bitmap)
         flush_inode_table()
     }
@@ -623,14 +619,14 @@ namespace VFS {
         inode_table_blocks = (MAX_INODES * sizeof(Inode) + 511) / 512
         let data_start: u64 = 1 + bitmap_blocks + inode_table_blocks
 
-        bitmap = KHeap.kmalloc(bitmap_blocks * 512) as char*
-        inode_table = KHeap.kmalloc(inode_table_blocks * 512) as char*
+        bitmap = KHeap.kmalloc(bitmap_blocks * 512) as u8*
+        inode_table = KHeap.kmalloc(inode_table_blocks * 512) as u8*
         if bitmap == null || inode_table == null {
             ready = false
             return false
         }
 
-        ATA.read_sector(0, sb_buf as char*)
+        ATA.read_sector(0, sb_buf as u8*)
         let s: Superblock* = superblock()
 
         if s.magic != MAGIC {
@@ -647,7 +643,7 @@ namespace VFS {
 
     // ---- Path resolution ----
 
-    func find_slash_or_end(path: char*, start: i64) -> i64 {
+    func find_slash_or_end(path: u8*, start: i64) -> i64 {
         let i: i64 = start
         while path[i] != 0 && path[i] != 47 { // 47 = '/'
             i = i + 1
@@ -655,7 +651,7 @@ namespace VFS {
         return i
     }
 
-    func find_child(parent: i64, name: char*) -> i64 {
+    func find_child(parent: i64, name: u8*) -> i64 {
         let child: i64 = inode_at(parent).first_child
         while child != -1 {
             if inode_name_eq(inode_at(child), name) {
@@ -672,7 +668,7 @@ namespace VFS {
     // is looked up among the current directory's children. Returns -1 if
     // any component isn't found, or if a non-final component isn't a
     // directory.
-    func resolve_from(start: i64, path: char*) -> i64 {
+    func resolve_from(start: i64, path: u8*) -> i64 {
         let cur: i64 = start
         let i: i64 = 0
         if path[0] == 47 {
@@ -680,7 +676,7 @@ namespace VFS {
             i = 1
         }
 
-        let comp: char[32]
+        let comp: u8[32]
         while path[i] != 0 {
             let end: i64 = find_slash_or_end(path, i)
             let len: i64 = end - i
@@ -695,9 +691,9 @@ namespace VFS {
                 }
                 comp[len] = 0
 
-                if str_eq(comp as char*, ".") {
+                if str_eq(comp as u8*, ".") {
                     // no-op
-                } else if str_eq(comp as char*, "..") {
+                } else if str_eq(comp as u8*, "..") {
                     if cur != ROOT_INODE {
                         cur = inode_at(cur).parent
                     }
@@ -705,7 +701,7 @@ namespace VFS {
                     if inode_at(cur).kind != KIND_DIR {
                         return -1
                     }
-                    let found: i64 = find_child(cur, comp as char*)
+                    let found: i64 = find_child(cur, comp as u8*)
                     if found == -1 {
                         return -1
                     }
@@ -725,7 +721,7 @@ namespace VFS {
     // least MAX_NAME bytes) - what mkdir/touch/write need: the parent
     // must already exist (and be a directory), and the leaf is the new
     // name being created there.
-    func resolve_parent(start: i64, path: char*, leaf_out: char*) -> i64 {
+    func resolve_parent(start: i64, path: u8*, leaf_out: u8*) -> i64 {
         let total_len: i64 = 0
         let last_slash: i64 = -1
         let i: i64 = 0
@@ -759,20 +755,20 @@ namespace VFS {
             return ROOT_INODE
         }
 
-        let parent_path: char[128]
+        let parent_path: u8[128]
         let k2: i64 = 0
         while k2 < last_slash {
             parent_path[k2] = path[k2]
             k2 = k2 + 1
         }
         parent_path[last_slash] = 0
-        return resolve_from(start, parent_path as char*)
+        return resolve_from(start, parent_path as u8*)
     }
 
     // Disk-only (see resolve() for the mount-aware entry point shell.llpl
     // actually calls now) - still used internally by selftest() below,
     // which only ever deals with on-disk paths.
-    func resolve_dir(path: char*) -> i64 {
+    func resolve_dir(path: u8*) -> i64 {
         let idx: i64 = resolve_from(cwd_disk_index(), path)
         if idx == -1 || inode_at(idx).kind != KIND_DIR {
             return -1
@@ -789,16 +785,16 @@ namespace VFS {
 
     // ---- Directory/file operations ----
 
-    func mkdir(path: char*) -> bool {
+    func mkdir(path: u8*) -> bool {
         if !ready {
             return false
         }
-        let leaf: char[32]
-        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
+        let leaf: u8[32]
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as u8*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
-        if find_child(parent, leaf as char*) != -1 {
+        if find_child(parent, leaf as u8*) != -1 {
             return false // already exists
         }
         let idx: i64 = alloc_inode()
@@ -810,22 +806,22 @@ namespace VFS {
         node.size = 0
         node.parent = parent
         node.first_child = -1
-        set_inode_name(node, leaf as char*)
+        set_inode_name(node, leaf as u8*)
         link_child(parent, idx)
         flush_inode_table()
         return true
     }
 
-    func touch(path: char*) -> bool {
+    func touch(path: u8*) -> bool {
         if !ready {
             return false
         }
-        let leaf: char[32]
-        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
+        let leaf: u8[32]
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as u8*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
-        if find_child(parent, leaf as char*) != -1 {
+        if find_child(parent, leaf as u8*) != -1 {
             return false // already exists
         }
         let idx: i64 = alloc_inode()
@@ -838,7 +834,7 @@ namespace VFS {
         node.parent = parent
         node.first_child = -1
         init_empty_blocks(node)
-        set_inode_name(node, leaf as char*)
+        set_inode_name(node, leaf as u8*)
         link_child(parent, idx)
         flush_inode_table()
         return true
@@ -848,17 +844,17 @@ namespace VFS {
     // currently owns, then allocates exactly enough fresh ones) - creates
     // the file first if it doesn't exist yet. Fails if `len` needs more
     // than MAX_FILE_BLOCKS blocks (~8.1MB - see resolve_block).
-    func write(path: char*, text: char*, len: u64) -> bool {
+    func write(path: u8*, text: u8*, len: u64) -> bool {
         if !ready {
             return false
         }
-        let leaf: char[32]
-        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
+        let leaf: u8[32]
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as u8*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
 
-        let idx: i64 = find_child(parent, leaf as char*)
+        let idx: i64 = find_child(parent, leaf as u8*)
         if idx == -1 {
             idx = alloc_inode()
             if idx == -1 {
@@ -870,7 +866,7 @@ namespace VFS {
             node.parent = parent
             node.first_child = -1
             init_empty_blocks(node)
-            set_inode_name(node, leaf as char*)
+            set_inode_name(node, leaf as u8*)
             link_child(parent, idx)
         }
 
@@ -898,7 +894,7 @@ namespace VFS {
         // not a local array - at MAX_BATCH*512 bytes (64KB) it would
         // blow well past a task's 16KB stack (see task.llpl's
         // STACK_SIZE).
-        let batch_buf: char* = KHeap.kmalloc((ATA.MAX_BATCH as u64) * 512) as char*
+        let batch_buf: u8* = KHeap.kmalloc((ATA.MAX_BATCH as u64) * 512) as u8*
         if batch_buf == null {
             return false
         }
@@ -926,7 +922,7 @@ namespace VFS {
             if run_len == 0 {
                 run_start = b
             }
-            let dst: char* = batch_buf + (run_len * 512) as i64
+            let dst: u8* = batch_buf + (run_len * 512) as i64
             let k: u64 = 0
             while k < chunk {
                 dst[k] = text[written + k]
@@ -967,7 +963,7 @@ namespace VFS {
     // many bytes were copied, or -1 if `path` doesn't resolve to a file.
     // Silently truncates if `max_len` is smaller than the file (the
     // caller can compare the return value against what it expected).
-    func read(path: char*, out_buf: char*, max_len: u64) -> i64 {
+    func read(path: u8*, out_buf: u8*, max_len: u64) -> i64 {
         if !ready {
             return -1
         }
@@ -990,7 +986,7 @@ namespace VFS {
         // case, and ata.llpl's own comment on why the distinction
         // matters at all. batch_buf is heap-allocated for the same
         // stack-size reason write() explains.
-        let batch_buf: char* = KHeap.kmalloc((ATA.MAX_BATCH as u64) * 512) as char*
+        let batch_buf: u8* = KHeap.kmalloc((ATA.MAX_BATCH as u64) * 512) as u8*
         if batch_buf == null {
             return -1
         }
@@ -1016,7 +1012,7 @@ namespace VFS {
                 if chunk > 512 {
                     chunk = 512
                 }
-                let src: char* = batch_buf + (i * 512) as i64
+                let src: u8* = batch_buf + (i * 512) as i64
                 let k: u64 = 0
                 while k < chunk {
                     out_buf[copied + k] = src[k]
@@ -1032,7 +1028,7 @@ namespace VFS {
         return copied as i64
     }
 
-    func rm(path: char*) -> bool {
+    func rm(path: u8*) -> bool {
         if !ready {
             return false
         }
@@ -1068,7 +1064,7 @@ namespace VFS {
         return true
     }
 
-    func str_prefix(s: char*, prefix: char*) -> bool {
+    func str_prefix(s: u8*, prefix: u8*) -> bool {
         let i: i64 = 0
         while prefix[i] != 0 {
             if s[i] != prefix[i] {
@@ -1081,7 +1077,7 @@ namespace VFS {
 
     // "/boot" exactly, or "/boot/..." - not e.g. "/bootleg", which would
     // otherwise false-positive on a plain str_prefix check.
-    func is_boot_path(path: char*) -> bool {
+    func is_boot_path(path: u8*) -> bool {
         if !str_prefix(path, MOUNT_PREFIX) {
             return false
         }
@@ -1094,8 +1090,8 @@ namespace VFS {
     // resolved from the disk *root* (see resolve()'s Disk(cur) branch
     // below - a "boot" found deeper in the on-disk tree is just an
     // ordinary name, not the mount).
-    func is_boot_path_relative(path: char*) -> bool {
-        let name: char* = MOUNT_PREFIX + 1 // "boot", without the leading '/'
+    func is_boot_path_relative(path: u8*) -> bool {
+        let name: u8* = MOUNT_PREFIX + 1 // "boot", without the leading '/'
         if !str_prefix(path, name) {
             return false
         }
@@ -1106,8 +1102,8 @@ namespace VFS {
     // The mount's bare display name ("boot", no leading slash) - what a
     // directory listing of the disk root shows for the one virtual mount,
     // alongside its real on-disk entries (see shell.llpl's cmd_ls).
-    func mount_name(out_buf: char*) {
-        let name: char* = MOUNT_PREFIX + 1
+    func mount_name(out_buf: u8*) {
+        let name: u8* = MOUNT_PREFIX + 1
         let i: i64 = 0
         while name[i] != 0 {
             out_buf[i] = name[i]
@@ -1119,7 +1115,7 @@ namespace VFS {
     // `rest` is everything after "/boot" itself - "" for exactly "/boot",
     // or "/NAME" (leading '/' guaranteed by is_boot_path's own check) for
     // "/boot/NAME".
-    func resolve_in_tmpfs(rest: char*) -> Node {
+    func resolve_in_tmpfs(rest: u8*) -> Node {
         if rest[0] == 0 {
             return Node.TmpfsRoot()
         }
@@ -1134,7 +1130,7 @@ namespace VFS {
     // flat, so the only meaningful components are "."/".." and a bare
     // module name; ".." returns to the disk root (where /boot "lives"
     // from the on-disk tree's perspective).
-    func resolve_in_tmpfs_relative(path: char*) -> Node {
+    func resolve_in_tmpfs_relative(path: u8*) -> Node {
         while path[0] == 46 && path[1] == 47 { // "./"
             path = path + 2
         }
@@ -1160,7 +1156,7 @@ namespace VFS {
     // resolved against whichever filesystem `cwd` is currently inside, so
     // `cd /boot` really does move into tmpfs for subsequent relative
     // commands, and `cd ..` from inside it correctly returns to disk.
-    func resolve(path: char*) -> Node {
+    func resolve(path: u8*) -> Node {
         if path[0] == 47 {
             if is_boot_path(path) {
                 return resolve_in_tmpfs(path + (cstrlen(MOUNT_PREFIX) as i64))
@@ -1195,7 +1191,7 @@ namespace VFS {
         }
     }
 
-    func cd(path: char*) -> bool {
+    func cd(path: u8*) -> bool {
         if !ready {
             return false
         }
@@ -1220,7 +1216,7 @@ namespace VFS {
     // Reconstructs the full "/a/b/c" path of `idx` into `out_buf` (at
     // least `max_len` bytes) by walking the `parent` chain back to root,
     // then printing root-to-leaf.
-    func path_of(idx: i64, out_buf: char*, max_len: u64) {
+    func path_of(idx: i64, out_buf: u8*, max_len: u64) {
         if idx == ROOT_INODE {
             out_buf[0] = 47
             out_buf[1] = 0
@@ -1256,7 +1252,7 @@ namespace VFS {
     // pwd's underlying helper - path_of() only handles the on-disk tree
     // (it walks real inode `parent` pointers), so this adds the one other
     // state `cwd` can be in.
-    func current_path(out_buf: char*, max_len: u64) {
+    func current_path(out_buf: u8*, max_len: u64) {
         match cwd {
             case Node.Disk(idx) => {
                 path_of(idx, out_buf, max_len)
@@ -1292,7 +1288,7 @@ namespace VFS {
         return inode_at(idx).size
     }
 
-    func inode_name(idx: i64, out_buf: char*) {
+    func inode_name(idx: i64, out_buf: u8*) {
         let node: Inode* = inode_at(idx)
         let i: i64 = 0
         while node.name[i] != 0 {
@@ -1315,12 +1311,12 @@ namespace VFS {
             return
         }
 
-        let prev_buf: char[64]
-        let prev_len: i64 = read("/selftest/proof.txt", prev_buf as char*, 63)
+        let prev_buf: u8[64]
+        let prev_len: i64 = read("/selftest/proof.txt", prev_buf as u8*, 63)
         if prev_len > 0 {
             prev_buf[prev_len] = 0
             log("<CYAN>VFS: /selftest/proof.txt survived from a previous boot: </>")
-            log(prev_buf as char*)
+            log(prev_buf as u8*)
             log("\n")
             log("<LIGHT_GREEN>PERSISTENCE: PASS\n</>")
         } else {
@@ -1336,16 +1332,16 @@ namespace VFS {
         pass = pass && touch("/selftest/hello.txt")
         pass = pass && write("/selftest/hello.txt", "hi", cstrlen("hi"))
 
-        let readbuf: char[16]
-        let n: i64 = read("/selftest/hello.txt", readbuf as char*, 15)
+        let readbuf: u8[16]
+        let n: i64 = read("/selftest/hello.txt", readbuf as u8*, 15)
         pass = pass && (n == 2) && (readbuf[0] == "hi"[0]) && (readbuf[1] == "hi"[1])
 
         pass = pass && (first_child(resolve_dir("/selftest")) != -1)
 
         pass = pass && cd("/selftest")
-        let pb: char[64]
-        current_path(pb as char*, 64)
-        pass = pass && str_eq(pb as char*, "/selftest")
+        let pb: u8[64]
+        current_path(pb as u8*, 64)
+        pass = pass && str_eq(pb as u8*, "/selftest")
         pass = pass && cd("..")
         pass = pass && (cwd_disk_index() == ROOT_INODE)
 
@@ -1364,12 +1360,12 @@ namespace VFS {
         // real asset) so correctness can be checked byte-for-byte
         // without embedding a literal blob this size in source.
         let big_size: u64 = 100000
-        let big_buf: char* = KHeap.kmalloc(big_size) as char*
-        let read_buf: char* = KHeap.kmalloc(big_size) as char*
+        let big_buf: u8* = KHeap.kmalloc(big_size) as u8*
+        let read_buf: u8* = KHeap.kmalloc(big_size) as u8*
         if big_buf != null && read_buf != null {
             let i: u64 = 0
             while i < big_size {
-                big_buf[i] = (i % 251) as char
+                big_buf[i] = (i % 251) as u8
                 i = i + 1
             }
             pass = pass && write("/selftest/big.bin", big_buf, big_size)
@@ -1405,9 +1401,9 @@ namespace VFS {
             }
         }
         if TmpFS.count() > 0 {
-            let namebuf: char[32]
-            TmpFS.name_at(0, namebuf as char*)
-            let full: char[64]
+            let namebuf: u8[32]
+            TmpFS.name_at(0, namebuf as u8*)
+            let full: u8[64]
             full[0] = 47
             full[1] = 98
             full[2] = 111
@@ -1420,7 +1416,7 @@ namespace VFS {
                 k = k + 1
             }
             full[6 + k] = 0
-            match resolve(full as char*) {
+            match resolve(full as u8*) {
                 case Node.TmpfsFile(idx) => {
                     pass = pass && (idx == 0)
                 }
@@ -1430,9 +1426,9 @@ namespace VFS {
             }
         }
         pass = pass && cd("/boot")
-        let mp: char[64]
-        current_path(mp as char*, 64)
-        pass = pass && str_eq(mp as char*, "/boot")
+        let mp: u8[64]
+        current_path(mp as u8*, 64)
+        pass = pass && str_eq(mp as u8*, "/boot")
         pass = pass && cd("..")
         pass = pass && (cwd_disk_index() == ROOT_INODE)
 

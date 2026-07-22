@@ -133,8 +133,8 @@ func demo_char_utils() {
     let lower: bool = CharUtils.is_lower('a')           // true
 
     // Character conversion
-    let to_lower: char = CharUtils.to_lower('A')        // 'a'
-    let to_upper: char = CharUtils.to_upper('b')        // 'B'
+    let to_lower: u8 = CharUtils.to_lower('A')        // 'a'
+    let to_upper: u8 = CharUtils.to_upper('b')        // 'B'
 }
 
 func demo_csv_parser() {

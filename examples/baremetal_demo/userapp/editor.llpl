@@ -153,6 +153,9 @@ func save_file() {
     let n: u64 = sys_write_all(path as string, text as string, text_len)
     if n != RT_SYS_ERR {
         modified = false
+        wm_notify("Editor" as u8*, "Saved file" as u8*, 1)
+    } else {
+        wm_notify("Editor" as u8*, "Save failed" as u8*, 2)
     }
 }
 
@@ -213,6 +216,69 @@ func draw_scrollbar(buf: u32*, win_w: u64) {
         }
         ty2 = ty2 + 1
     }
+}
+
+func fill_rect(bufp: u32*, x: u64, y: u64, w: u64, h: u64, color: u32) {
+    let dy: u64 = 0
+    while dy < h {
+        let dx: u64 = 0
+        while dx < w {
+            if x + dx < (Wm.WIN_W as u64) && y + dy < (Wm.WIN_H as u64) {
+                bufp[(y + dy) * (Wm.WIN_W as u64) + x + dx] = color
+            }
+            dx = dx + 1
+        }
+        dy = dy + 1
+    }
+}
+
+func render_cursor_line_fast() -> bool {
+    let cursor_line: u64 = line_number_of(cursor)
+    let old_top: u64 = top_line
+    if cursor_line < top_line {
+        top_line = cursor_line
+    }
+    if cursor_line >= top_line + (VISIBLE_ROWS as u64) {
+        top_line = cursor_line - (VISIBLE_ROWS as u64) + 1
+    }
+    if top_line != old_top {
+        return false
+    }
+    if cursor_line < top_line {
+        return false
+    }
+    let cur_row: u64 = cursor_line - top_line
+    if cur_row >= (VISIBLE_ROWS as u64) {
+        return false
+    }
+
+    let buf: u32* = wm_buffer()
+    let win_w: u64 = Wm.WIN_W as u64
+    let win_h: u64 = Wm.WIN_H as u64
+    let y: u64 = (TEXT_TOP as u64) + cur_row * ROW_H
+    fill_rect(buf, 0, y, Wm.WIN_W as u64, ROW_H as u64, BG_COLOR)
+
+    let line_start: u64 = line_start_at_or_before(cursor)
+    let line_end: u64 = line_end_at_or_after(cursor)
+    let linebuf: u8[40]
+    let col: u64 = 0
+    let p: u64 = line_start
+    while p < line_end && col < (MAX_COLS as u64) {
+        linebuf[col] = text[p]
+        col = col + 1
+        p = p + 1
+    }
+    linebuf[col] = 0
+    Font.draw_string(buf, win_w, win_h, 4, y, linebuf as string, TEXT_COLOR, BG_COLOR)
+
+    let cur_col: u64 = cursor - line_start
+    if cur_col > (MAX_COLS as u64) {
+        cur_col = MAX_COLS as u64
+    }
+    let cx: u64 = 4 + cur_col * 8
+    draw_caret(buf, win_w, cx, y)
+    wm_present_rect(0, y, Wm.WIN_W as u64, ROW_H as u64)
+    return true
 }
 
 func render() {
@@ -322,10 +388,13 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("editor: create_window failed")
         rt_exit(1)
     }
+    render()
 
     while true {
         let input: WmInput = wm_poll_input()
         let key: u64 = input.key
+        let dirty_full: bool = false
+        let dirty_line: bool = false
         if confirm_quit {
             // Only these two keys mean anything while the prompt is up -
             // everything else (including ordinary typing) is ignored so
@@ -335,32 +404,53 @@ func _start(argc: u64, argv: u64*) {
                 rt_exit(0)
             } else if key == (KEY_ESC as u64) {
                 confirm_quit = false
+                dirty_full = true
             }
         } else if key == (KEY_UP as u64) {
             move_up()
+            dirty_full = true
         } else if key == (KEY_DOWN as u64) {
             move_down()
+            dirty_full = true
         } else if key == (KEY_LEFT as u64) {
             if cursor > 0 {
                 cursor = cursor - 1
+                dirty_full = true
             }
         } else if key == (KEY_RIGHT as u64) {
             if cursor < text_len {
                 cursor = cursor + 1
+                dirty_full = true
             }
         } else if key == (KEY_ESC as u64) || key == (KEY_CLOSE_REQ as u64) {
             if modified {
                 confirm_quit = true
+                dirty_full = true
             } else {
                 wm_close()
                 rt_exit(0)
             }
         } else if key == (KEY_F2 as u64) {
             save_file()
+            dirty_full = true
         } else if key == 8 {
+            let old_line: u64 = line_number_of(cursor)
+            let was_modified: bool = modified
             delete_before_cursor()
+            if was_modified && old_line == line_number_of(cursor) {
+                dirty_line = true
+            } else {
+                dirty_full = true
+            }
         } else if key != 0 && key < 128 {
+            let old_line: u64 = line_number_of(cursor)
+            let was_modified: bool = modified
             insert_u8(key as u8)
+            if was_modified && key != 10 && old_line == line_number_of(cursor) {
+                dirty_line = true
+            } else {
+                dirty_full = true
+            }
         }
 
         // Mouse wheel: same effect as UP/DOWN arrow presses, one line
@@ -377,14 +467,22 @@ func _start(argc: u64, argv: u64*) {
             while wheel > 0 {
                 move_up()
                 wheel = wheel - 1
+                dirty_full = true
             }
             while wheel < 0 {
                 move_down()
                 wheel = wheel + 1
+                dirty_full = true
             }
         }
 
-        render()
-        sys_sleep(15)
+        if dirty_full {
+            render()
+        } else if dirty_line {
+            if !render_cursor_line_fast() {
+                render()
+            }
+        }
+        sys_sleep(2)
     }
 }

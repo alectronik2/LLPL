@@ -17,6 +17,9 @@ import fb
 import kbd
 import mouse
 import pci
+import pty
+import shell
+import crashlog
 
 namespace Syscall {
     const SYS_EXIT  = 0
@@ -57,6 +60,16 @@ namespace Syscall {
     const SYS_BMIDE_BASE = 35
     const SYS_VIRT_TO_PHYS = 36
     const SYS_NIC_MMAP = 37
+    const SYS_TASK_INFO = 38
+    const SYS_PTY_CREATE = 39
+    const SYS_PTY_SPAWN_SHELL = 40
+    const SYS_PTY_WRITE = 41
+    const SYS_PTY_READ = 42
+    const SYS_PTY_CLOSE = 43
+    const SYS_CRASH_REPORT = 44
+    const SYS_MKDIR = 45
+    const SYS_RM = 46
+    const SYS_SYSTEM_INFO = 47
 
     const MAX_FDS = 16
     const FD_PATH_MAX = 96
@@ -66,7 +79,7 @@ namespace Syscall {
         let used: bool
         let owner: i64
         let offset: u64
-        let path: char[96]
+        let path: u8[96]
     }
 
     let fds: FileDesc[16]
@@ -201,34 +214,71 @@ namespace Syscall {
         if number == SYS_NIC_MMAP {
             return sys_nic_mmap()
         }
+        if number == SYS_TASK_INFO {
+            return sys_task_info(a, b)
+        }
+        if number == SYS_PTY_CREATE {
+            return sys_pty_create()
+        }
+        if number == SYS_PTY_SPAWN_SHELL {
+            return sys_pty_spawn_shell(a)
+        }
+        if number == SYS_PTY_WRITE {
+            return sys_pty_write(a, b, c)
+        }
+        if number == SYS_PTY_READ {
+            return sys_pty_read(a, b, c)
+        }
+        if number == SYS_PTY_CLOSE {
+            return sys_pty_close(a)
+        }
+        if number == SYS_CRASH_REPORT {
+            return sys_crash_report(a, b, c)
+        }
+        if number == SYS_MKDIR {
+            return sys_mkdir(a)
+        }
+        if number == SYS_RM {
+            return sys_rm(a)
+        }
+        if number == SYS_SYSTEM_INFO {
+            return sys_system_info(a)
+        }
         EventLog.add1("syscall", "unknown", number)
         return 0
     }
 
-    func user_read_byte(pml4: u64, addr: u64, out: char*) -> bool {
+    func terminate_current(status: u64) {
+        LdSo.cleanup_aspace(Task.get_current_aspace())
+        close_owner(Task.current_id())
+        Task.shm_release(Task.current_id())
+        Task.exit_current_with_status(status)
+    }
+
+    func user_read_byte(pml4: u64, addr: u64, out: u8*) -> bool {
         let page: u64 = VMM.virt_to_phys(pml4, addr)
         if page == 0 {
             return false
         }
-        let ptr: char* = page as char*
+        let ptr: u8* = page as u8*
         out[0] = ptr[addr & 0xFFF]
         return true
     }
 
-    func user_write_byte(pml4: u64, addr: u64, value: char) -> bool {
+    func user_write_byte(pml4: u64, addr: u64, value: u8) -> bool {
         let page: u64 = VMM.virt_to_phys(pml4, addr)
         if page == 0 {
             return false
         }
-        let ptr: char* = page as char*
+        let ptr: u8* = page as u8*
         ptr[addr & 0xFFF] = value
         return true
     }
 
-    func copy_user_string(user_addr: u64, out: char*, max_len: i64) -> bool {
+    func copy_user_string(user_addr: u64, out: u8*, max_len: i64) -> bool {
         let pml4: u64 = Task.get_current_pml4()
         let i: i64 = 0
-        let ch: char = 0
+        let ch: u8 = 0
         while i < max_len - 1 {
             if !user_read_byte(pml4, user_addr + (i as u64), &ch) {
                 out[0] = 0
@@ -244,10 +294,25 @@ namespace Syscall {
         return true
     }
 
-    func copy_from_user(user_addr: u64, out: char*, len: u64) -> u64 {
+    func sys_crash_report(msg_addr: u64, rip: u64, rbp: u64) -> u64 {
+        let msg: u8[96]
+        if !copy_user_string(msg_addr, msg as u8*, 96) {
+            msg[0] = 0
+        }
+        CrashLog.record_with_message("panic", msg as u8*, true, 0, 0, rip, rbp, 0)
+        EventLog.add2("fault", "user panic", Task.current_id() as u64, rip)
+        HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
+                          "USER PANIC: task %d: %s\n",
+                          Task.current_id(), msg as u8*)
+        HAL.Log.flush()
+        terminate_current(0x90)
+        return 0
+    }
+
+    func copy_from_user(user_addr: u64, out: u8*, len: u64) -> u64 {
         let pml4: u64 = Task.get_current_pml4()
         let i: u64 = 0
-        let ch: char = 0
+        let ch: u8 = 0
         while i < len {
             if !user_read_byte(pml4, user_addr + i, &ch) {
                 return i
@@ -258,12 +323,12 @@ namespace Syscall {
         return i
     }
 
-    func copy_to_user(user_addr: u64, src: char*, len: u64) -> u64 {
+    func copy_to_user(user_addr: u64, src: u8*, len: u64) -> u64 {
         let pml4: u64 = Task.get_current_pml4()
         return copy_to_user_pml4(pml4, user_addr, src, len)
     }
 
-    func copy_to_user_pml4(pml4: u64, user_addr: u64, src: char*, len: u64) -> u64 {
+    func copy_to_user_pml4(pml4: u64, user_addr: u64, src: u8*, len: u64) -> u64 {
         let i: u64 = 0
         while i < len {
             if !user_write_byte(pml4, user_addr + i, src[i]) {
@@ -281,7 +346,7 @@ namespace Syscall {
         return b
     }
 
-    func path_copy(dst: char*, src: char*) {
+    func path_copy(dst: u8*, src: u8*) {
         let i: i64 = 0
         while src[i] != 0 && i < FD_PATH_MAX - 1 {
             dst[i] = src[i]
@@ -317,7 +382,7 @@ namespace Syscall {
             if page == 0 {
                 break
             }
-            let ptr: char* = page as char*
+            let ptr: u8* = page as u8*
             let offset: u64 = (buf + i) & 0xFFF
             HAL.Serial.write_char(ptr[offset])
             i = i + 1
@@ -348,12 +413,12 @@ namespace Syscall {
     }
 
     func sys_open(path_addr: u64, mode: u64) -> u64 {
-        let path: char[96]
-        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+        let path: u8[96]
+        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
             return -1
         }
 
-        match VFS.resolve(path as char*) {
+        match VFS.resolve(path as u8*) {
             case VFS.Node.NotFound() => {
                 if mode == 0 {
                     return -1
@@ -378,7 +443,7 @@ namespace Syscall {
                 fds[i].used = true
                 fds[i].owner = Task.current_id()
                 fds[i].offset = 0
-                path_copy(fds[i].path as char*, path as char*)
+                path_copy(fds[i].path as u8*, path as u8*)
                 EventLog.add1("syscall", "open fd", i as u64)
                 return i as u64
             }
@@ -413,12 +478,12 @@ namespace Syscall {
     // and 40 - copied out with copy_to_user exactly like sys_read does
     // for its own buffer, rather than needing a new IPC-style shape.
     func sys_readdir(path_addr: u64, index: u64, out_buf: u64) -> u64 {
-        let path: char[96]
-        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+        let path: u8[96]
+        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
             return 0xFFFFFFFFFFFFFFFF
         }
 
-        match VFS.resolve(path as char*) {
+        match VFS.resolve(path as u8*) {
             case VFS.Node.Disk(idx) => {
                 if VFS.inode_kind(idx) != VFS.KIND_DIR {
                     return 0xFFFFFFFFFFFFFFFF
@@ -433,23 +498,183 @@ namespace Syscall {
                     return 0xFFFFFFFFFFFFFFFF
                 }
 
-                let entry: char[48]
+                let entry: u8[48]
                 let zi: i64 = 0
                 while zi < 48 {
                     entry[zi] = 0
                     zi = zi + 1
                 }
-                VFS.inode_name(child, entry as char*)
-                let fields: u64* = ((entry as char*) + 32) as u64*
+                VFS.inode_name(child, entry as u8*)
+                let fields: u64* = ((entry as u8*) + 32) as u64*
                 fields[0] = VFS.inode_kind(child)
                 fields[1] = VFS.inode_size(child)
-                copy_to_user(out_buf, entry as char*, 48)
+                copy_to_user(out_buf, entry as u8*, 48)
                 return 0
             }
             default => {
                 return 0xFFFFFFFFFFFFFFFF
             }
         }
+    }
+
+    func sys_mkdir(path_addr: u64) -> u64 {
+        let path: u8[96]
+        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if VFS.mkdir(path as u8*) {
+            EventLog.add1("vfs", "mkdir", Task.current_id() as u64)
+            return 0
+        }
+        return 0xFFFFFFFFFFFFFFFF
+    }
+
+    func sys_rm(path_addr: u64) -> u64 {
+        let path: u8[96]
+        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if VFS.rm(path as u8*) {
+            EventLog.add1("vfs", "rm", Task.current_id() as u64)
+            return 0
+        }
+        return 0xFFFFFFFFFFFFFFFF
+    }
+
+    // Compact read-only system snapshot for GUI settings/status tools.
+    // out_buf receives ten u64 fields:
+    // fb_w, fb_h, fb_pitch, fb_wc_enabled, schedule_ticks,
+    // context_switches, syscalls, msg_send, msg_recv, msg_reply.
+    func sys_system_info(out_buf: u64) -> u64 {
+        let rec: u64[10]
+        rec[0] = Framebuffer.width as u64
+        rec[1] = Framebuffer.height as u64
+        rec[2] = Framebuffer.pitch as u64
+        rec[3] = 0
+        if Framebuffer.wc_enabled {
+            rec[3] = 1
+        }
+        rec[4] = Task.schedule_ticks
+        rec[5] = Task.context_switches_total
+        rec[6] = dispatch_count
+        rec[7] = msg_send_count
+        rec[8] = msg_recv_count + msg_try_recv_count
+        rec[9] = msg_reply_count
+        copy_to_user(out_buf, rec as u8*, 80)
+        return 0
+    }
+
+    // Read-only task snapshot for user-space tools. out_buf receives a
+    // fixed 96-byte record: name[16], then ten u64 fields at offset 16:
+    // pid, state, mode, switches, syscalls, last_tick, parent_id,
+    // ipc_peer, ipc_len, task_count. The final task_count lets a client
+    // refresh without needing a separate "how many tasks?" syscall.
+    func sys_task_info(index: u64, out_buf: u64) -> u64 {
+        if index >= Task.task_count as u64 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+
+        let rec: u8[96]
+        let i: i64 = 0
+        while i < 96 {
+            rec[i] = 0
+            i = i + 1
+        }
+
+        let name: u8* = Task.name_at(index as i64)
+        i = 0
+        while name[i] != 0 && i < 15 {
+            rec[i] = name[i]
+            i = i + 1
+        }
+
+        let fields: u64* = ((rec as u8*) + 16) as u64*
+        fields[0] = Task.id_at(index as i64) as u64
+        fields[1] = Task.state_at(index as i64) as u64
+        fields[2] = Task.mode_at(index as i64) as u64
+        fields[3] = Task.switches_at(index as i64)
+        fields[4] = Task.syscalls_at(index as i64)
+        fields[5] = Task.last_tick_at(index as i64)
+        fields[6] = Task.parent_id_at(index as i64) as u64
+        fields[7] = Task.ipc_peer_at(index as i64) as u64
+        fields[8] = Task.ipc_len_at(index as i64)
+        fields[9] = Task.task_count as u64
+
+        if copy_to_user(out_buf, rec as u8*, 96) != 96 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return 0
+    }
+
+    func sys_pty_create() -> u64 {
+        let id: i64 = Pty.create(Task.current_id())
+        if id < 0 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return id as u64
+    }
+
+    func sys_pty_spawn_shell(pty_id_u: u64) -> u64 {
+        let pty_id: i64 = pty_id_u as i64
+        if !Pty.owns(pty_id, Task.current_id()) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let pid: i64 = Shell.spawn_pty(pty_id)
+        if pid < 0 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return pid as u64
+    }
+
+    func sys_pty_write(pty_id_u: u64, buf: u64, len: u64) -> u64 {
+        let pty_id: i64 = pty_id_u as i64
+        if !Pty.owns(pty_id, Task.current_id()) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let max: u64 = len
+        if max > IO_MAX {
+            max = IO_MAX
+        }
+        let tmp: u8[4096]
+        let copied: u64 = copy_from_user(buf, tmp as u8*, max)
+        if copied != max {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let i: u64 = 0
+        while i < max {
+            Pty.push_input(pty_id, tmp[i])
+            i = i + 1
+        }
+        return max
+    }
+
+    func sys_pty_read(pty_id_u: u64, out_buf: u64, len: u64) -> u64 {
+        let pty_id: i64 = pty_id_u as i64
+        if !Pty.owns(pty_id, Task.current_id()) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let max: u64 = len
+        if max > IO_MAX {
+            max = IO_MAX
+        }
+        let tmp: u8[4096]
+        let n: u64 = Pty.read_output(pty_id, tmp as u8*, max)
+        if n == 0xFFFFFFFFFFFFFFFF {
+            return n
+        }
+        if copy_to_user(out_buf, tmp as u8*, n) != n {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return n
+    }
+
+    func sys_pty_close(pty_id_u: u64) -> u64 {
+        let pty_id: i64 = pty_id_u as i64
+        if !Pty.owns(pty_id, Task.current_id()) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        Pty.close(pty_id)
+        return 0
     }
 
     func sys_read(fd_u: u64, buf: u64, len: u64) -> u64 {
@@ -461,15 +686,15 @@ namespace Syscall {
         if max > IO_MAX {
             max = IO_MAX
         }
-        let tmp: char[4096]
+        let tmp: u8[4096]
         let n: i64 = -1
-        match VFS.resolve(fds[fd].path as char*) {
+        match VFS.resolve(fds[fd].path as u8*) {
             case VFS.Node.TmpfsFile(idx) => {
-                n = TmpFS.read(idx, tmp as char*, max)
+                n = TmpFS.read(idx, tmp as u8*, max)
             }
             case VFS.Node.Disk(idx) => {
                 if VFS.inode_kind(idx) == VFS.KIND_FILE {
-                    n = VFS.read(fds[fd].path as char*, tmp as char*, max)
+                    n = VFS.read(fds[fd].path as u8*, tmp as u8*, max)
                 }
             }
             default => {
@@ -479,7 +704,7 @@ namespace Syscall {
         if n < 0 {
             return -1
         }
-        return copy_to_user(buf, tmp as char*, n as u64)
+        return copy_to_user(buf, tmp as u8*, n as u64)
     }
 
     func sys_write(fd_u: u64, buf: u64, len: u64) -> u64 {
@@ -491,12 +716,12 @@ namespace Syscall {
         if max > IO_MAX {
             max = IO_MAX
         }
-        let tmp: char[4096]
-        let copied: u64 = copy_from_user(buf, tmp as char*, max)
+        let tmp: u8[4096]
+        let copied: u64 = copy_from_user(buf, tmp as u8*, max)
         if copied != max {
             return copied
         }
-        match VFS.resolve(fds[fd].path as char*) {
+        match VFS.resolve(fds[fd].path as u8*) {
             case VFS.Node.TmpfsFile(idx) => {
                 return -1
             }
@@ -504,7 +729,7 @@ namespace Syscall {
                 return -1
             }
             default => {
-                if VFS.write(fds[fd].path as char*, tmp as char*, copied) {
+                if VFS.write(fds[fd].path as u8*, tmp as u8*, copied) {
                     return copied
                 }
             }
@@ -524,15 +749,15 @@ namespace Syscall {
             return -1
         }
 
-        let tmp: char[128]
-        let copied: u64 = copy_from_user(buf, tmp as char*, len)
+        let tmp: u8[128]
+        let copied: u64 = copy_from_user(buf, tmp as u8*, len)
         if copied != len {
             return -1
         }
 
         if peer.state == Task.STATE_RECV_BLOCKED {
             let deliver: u64 = min_u(len, peer.ipc_recv_len)
-            copy_to_user_pml4(peer.pml4, peer.ipc_recv_buf, tmp as char*, deliver)
+            copy_to_user_pml4(peer.pml4, peer.ipc_recv_buf, tmp as u8*, deliver)
             peer.ipc_len = deliver
             peer.ipc_peer = cur.id
             Task.wake_with_return(peer, cur.id as u64)
@@ -544,7 +769,7 @@ namespace Syscall {
             cur.ipc_reply_len = len
             EventLog.add2("ipc", "send delivered", cur.id as u64, peer.id as u64)
         } else {
-            Task.block_current_send(peer_id, buf, len, tmp as char*, len)
+            Task.block_current_send(peer_id, buf, len, tmp as u8*, len)
             EventLog.add2("ipc", "send blocked", cur.id as u64, peer.id as u64)
         }
         return 0
@@ -565,7 +790,7 @@ namespace Syscall {
         }
 
         let deliver: u64 = min_u(sender.ipc_len, len)
-        copy_to_user(buf, sender.ipc_msg as char*, deliver)
+        copy_to_user(buf, sender.ipc_msg as u8*, deliver)
         sender.state = Task.STATE_REPLY_BLOCKED
         sender.ipc_peer = cur.id
         cur.ipc_peer = sender.id
@@ -594,7 +819,7 @@ namespace Syscall {
         }
 
         let deliver: u64 = min_u(sender.ipc_len, len)
-        copy_to_user(buf, sender.ipc_msg as char*, deliver)
+        copy_to_user(buf, sender.ipc_msg as u8*, deliver)
         sender.state = Task.STATE_REPLY_BLOCKED
         sender.ipc_peer = cur.id
         cur.ipc_peer = sender.id
@@ -614,8 +839,8 @@ namespace Syscall {
             return -1
         }
 
-        let tmp: char[128]
-        let copied: u64 = copy_from_user(buf, tmp as char*, len)
+        let tmp: u8[128]
+        let copied: u64 = copy_from_user(buf, tmp as u8*, len)
         if copied != len {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -625,7 +850,7 @@ namespace Syscall {
         // acting as its own IPC client (see ata.llpl) rather than a ring-3
         // task - resolve it the same way Task's own internals do, or this
         // walks page-table structures starting at physical address 0.
-        let written: u64 = copy_to_user_pml4(Task.pml4_for(sender), sender.ipc_reply_buf, tmp as char*, deliver)
+        let written: u64 = copy_to_user_pml4(Task.pml4_for(sender), sender.ipc_reply_buf, tmp as u8*, deliver)
         sender.ipc_len = written
         sender.ipc_peer = -1
         Task.wake_with_return(sender, written)
@@ -634,17 +859,17 @@ namespace Syscall {
     }
 
     func sys_spawn(path_addr: u64, args_addr: u64) -> u64 {
-        let path: char[96]
-        let args: char[128]
-        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+        let path: u8[96]
+        let args: u8[128]
+        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
             return -1
         }
         if args_addr == 0 {
             args[0] = 0
-        } else if !copy_user_string(args_addr, args as char*, 128) {
+        } else if !copy_user_string(args_addr, args as u8*, 128) {
             return -1
         }
-        if !run_user_executable_with_args_parent(path as char*, args as char*, Task.current_id()) {
+        if !run_user_executable_with_args_parent(path as u8*, args as u8*, Task.current_id()) {
             return -1
         }
 
@@ -660,17 +885,17 @@ namespace Syscall {
     }
 
     func sys_exec(path_addr: u64, args_addr: u64) -> u64 {
-        let path: char[96]
-        let args: char[128]
-        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
+        let path: u8[96]
+        let args: u8[128]
+        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
             return -1
         }
         if args_addr == 0 {
             args[0] = 0
-        } else if !copy_user_string(args_addr, args as char*, 128) {
+        } else if !copy_user_string(args_addr, args as u8*, 128) {
             return -1
         }
-        if !exec_user_executable_with_args(path as char*, args as char*) {
+        if !exec_user_executable_with_args(path as u8*, args as u8*) {
             return -1
         }
         return 0
@@ -714,11 +939,11 @@ namespace Syscall {
     }
 
     func sys_register(name_addr: u64) -> u64 {
-        let name: char[16]
-        if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
+        let name: u8[16]
+        if !copy_user_string(name_addr, name as u8*, Task.SERVICE_NAME_MAX) {
             return -1
         }
-        if Task.register_service(Task.current_id(), name as char*) {
+        if Task.register_service(Task.current_id(), name as u8*) {
             return 0
         }
         return -1
@@ -728,11 +953,11 @@ namespace Syscall {
     // never KILL/WAIT: looking a service up makes the caller its client,
     // not its owner.
     func sys_lookup(name_addr: u64) -> u64 {
-        let name: char[16]
-        if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
+        let name: u8[16]
+        if !copy_user_string(name_addr, name as u8*, Task.SERVICE_NAME_MAX) {
             return -1
         }
-        let pid: i64 = Task.lookup_service(name as char*)
+        let pid: i64 = Task.lookup_service(name as u8*)
         if pid < 0 {
             return -1
         }
@@ -771,7 +996,7 @@ namespace Syscall {
         // compiler placed above it on the stack - including, once pages
         // was raised to (and this array wasn't), this function's own
         // saved return address.
-        let phys: u64[256]
+        let phys: u64[512]
         let i: u64 = 0
         while i < pages {
             phys[i] = VMM.virt_to_phys(aspace.pml4, virt + i * VMM.PAGE_SIZE)
@@ -806,7 +1031,7 @@ namespace Syscall {
         // just above - must match Task.SHM_MAX_PAGES, not the mapped
         // region's own page count, since `pages` here can be anything up
         // to that cap.
-        let phys: u64[256]
+        let phys: u64[512]
         let i: u64 = 0
         while i < pages {
             phys[i] = Task.shm_phys_at(region, i as i64)
@@ -860,7 +1085,7 @@ namespace Syscall {
         if !io_port_permitted(port) {
             return 0xFFFFFFFFFFFFFFFF
         }
-        HAL.outb(port, value as char)
+        HAL.outb(port, value as u8)
         return 0
     }
 
@@ -968,7 +1193,7 @@ namespace Syscall {
         info[0] = Framebuffer.width as u64
         info[1] = Framebuffer.height as u64
         info[2] = Framebuffer.pitch as u64
-        let n: u64 = copy_to_user(out_addr, info as char*, 24)
+        let n: u64 = copy_to_user(out_addr, info as u8*, 24)
         if n != 24 {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -1050,14 +1275,14 @@ namespace Syscall {
         if Keyboard.input_focus != Keyboard.FOCUS_WM || !Keyboard.has_char() {
             return 0
         }
-        // `& 255` undoes char's signedness, exactly like on_scancode's own
+        // `& 255` undoes u8's signedness, exactly like on_scancode's own
         // comment (kbd.llpl) describes for the identical hazard: the
         // KEY_UP/DOWN/LEFT/RIGHT/ESC/F2 sentinels (200-205) don't fit in
-        // a signed 8-bit char, so a bare `as u64` sign-extends them into
+        // a signed 8-bit u8, so a bare `as u64` sign-extends them into
         // huge 64-bit garbage (201 becomes 0xFFFFFFFFFFFFFFC9, not 201) -
         // silently breaking every ring-3 comparison against
         // `KEY_UP as u64` etc., which are plain positive i64 constants
-        // that never pass through a signed char at all.
+        // that never pass through a signed u8 at all.
         return ((Keyboard.pop_char() as i64) & 255) as u64
     }
 

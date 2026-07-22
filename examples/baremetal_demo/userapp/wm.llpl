@@ -75,6 +75,8 @@ struct Window {
 
 const MIN_VIS_W: u64 = 80
 const MIN_VIS_H: u64 = 60
+const DEFAULT_VIS_W: u64 = 320
+const DEFAULT_VIS_H: u64 = 200
 const RESIZE_GRIP: u64 = 10
 const CLOSE_BTN: u64 = 10
 
@@ -233,6 +235,16 @@ func initial_window_y(slot: i64) -> u64 {
     return 40 + (slot as u64) * 30
 }
 
+func max_visible_w_for(slot: i64) -> i64 {
+    let room: i64 = (fb_width as i64) - (windows[slot].win_x as i64)
+    return clampi(room, MIN_VIS_W as i64, Wm.WIN_W)
+}
+
+func max_visible_h_for(slot: i64) -> i64 {
+    let room: i64 = (fb_height as i64) - (windows[slot].win_y as i64) - (TITLEBAR_H as i64) - 32
+    return clampi(room, MIN_VIS_H as i64, Wm.WIN_H)
+}
+
 func clampi(v: i64, lo: i64, hi: i64) -> i64 {
     if v < lo {
         return lo
@@ -327,6 +339,32 @@ func fill_backdrop() {
             col = col + 1
         }
         row = row + 1
+    }
+}
+
+func fill_backdrop_rect(x0: i64, y0: i64, w: i64, h: i64) {
+    let tile_w: u32 = wallpaper_tile.width
+    let tile_h: u32 = wallpaper_tile.height
+    let y: i64 = 0
+    while y < h {
+        let py: i64 = y0 + y
+        let x: i64 = 0
+        while x < w {
+            let px: i64 = x0 + x
+            if px >= 0 && py >= 0 && (px as u64) < fb_width && (py as u64) < fb_height {
+                let color: u32 = BACKDROP_COLOR
+                if tile_w != 0 && tile_h != 0 && fb_width != 0 && fb_height != 0 {
+                    let tile_x: u32 = ((px as u64) * (tile_w as u64) / fb_width) as u32
+                    let tile_y: u32 = ((py as u64) * (tile_h as u64) / fb_height) as u32
+                    color = get_pixel(wallpaper_tile, tile_x, tile_y)
+                }
+                let offset: u64 = (py as u64) * fb_pitch + (px as u64) * 4
+                let p: u32* = (backbuf + offset) as u32*
+                p[0] = color
+            }
+            x = x + 1
+        }
+        y = y + 1
     }
 }
 
@@ -640,6 +678,101 @@ func blit_window(slot: i64) {
     }
 }
 
+func blit_window_rect(slot: i64, sx0: i64, sy0: i64, w: i64, h: i64) {
+    if w <= 0 || h <= 0 {
+        return
+    }
+    let src: u32* = (arena + (slot as u64) * Wm.WIN_BYTES) as u32*
+    let ox: i64 = windows[slot].win_x as i64
+    let oy: i64 = (windows[slot].win_y as i64) + (TITLEBAR_H as i64)
+    let vis_w: i64 = windows[slot].vis_w as i64
+    let vis_h: i64 = windows[slot].vis_h as i64
+
+    let x1: i64 = clampi(sx0, 0, vis_w)
+    let y1: i64 = clampi(sy0, 0, vis_h)
+    let x2: i64 = clampi(sx0 + w, 0, vis_w)
+    let y2: i64 = clampi(sy0 + h, 0, vis_h)
+    let y: i64 = y1
+    while y < y2 {
+        let x: i64 = x1
+        while x < x2 {
+            let screen_x: i64 = ox + x
+            let screen_y: i64 = oy + y
+            if screen_x >= 0 && screen_y >= 0 && (screen_x as u64) < fb_width && (screen_y as u64) < fb_height {
+                let pixel: u32 = src[(y as u64) * (Wm.WIN_W as u64) + (x as u64)]
+                let offset: u64 = (screen_y as u64) * fb_pitch + (screen_x as u64) * 4
+                let p: u32* = (backbuf + offset) as u32*
+                p[0] = blend_alpha(pixel, p[0], WINDOW_ALPHA)
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+}
+
+func copy_rect_to_framebuffer(x0: i64, y0: i64, w: i64, h: i64) {
+    if w <= 0 || h <= 0 {
+        return
+    }
+    let x1: i64 = clampi(x0, 0, fb_width as i64)
+    let y1: i64 = clampi(y0, 0, fb_height as i64)
+    let x2: i64 = clampi(x0 + w, 0, fb_width as i64)
+    let y2: i64 = clampi(y0 + h, 0, fb_height as i64)
+    let y: i64 = y1
+    while y < y2 {
+        let src: u64* = (backbuf + (y as u64) * fb_pitch + (x1 as u64) * 4) as u64*
+        let dst: u64* = (fb + (y as u64) * fb_pitch + (x1 as u64) * 4) as u64*
+        let bytes: u64 = ((x2 - x1) as u64) * 4
+        let words: u64 = bytes / 8
+        let i: u64 = 0
+        while i < words {
+            dst[i] = src[i]
+            i = i + 1
+        }
+        let done: u64 = words * 8
+        let rem: u64 = bytes - done
+        let src_tail: u8* = ((src as u8*) + done) as u8*
+        let dst_tail: u8* = ((dst as u8*) + done) as u8*
+        let j: u64 = 0
+        while j < rem {
+            dst_tail[j] = src_tail[j]
+            j = j + 1
+        }
+        y = y + 1
+    }
+}
+
+func present_window_rect(slot: i64, rx: i64, ry: i64, rw: i64, rh: i64) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS || !windows[slot].used {
+        return
+    }
+    let sx: i64 = (windows[slot].win_x as i64) + rx
+    let sy: i64 = (windows[slot].win_y as i64) + (TITLEBAR_H as i64) + ry
+    let w: i64 = clampi(rw, 0, windows[slot].vis_w as i64)
+    let h: i64 = clampi(rh, 0, windows[slot].vis_h as i64)
+    fill_backdrop_rect(sx, sy, w, h)
+
+    let zi: i64 = 0
+    while zi < z_count {
+        let s: i64 = z_order[zi]
+        if windows[s].used {
+            let wx: i64 = windows[s].win_x as i64
+            let wy: i64 = (windows[s].win_y as i64) + (TITLEBAR_H as i64)
+            let ix1: i64 = clampi(sx, wx, wx + (windows[s].vis_w as i64))
+            let iy1: i64 = clampi(sy, wy, wy + (windows[s].vis_h as i64))
+            let ix2: i64 = clampi(sx + w, wx, wx + (windows[s].vis_w as i64))
+            let iy2: i64 = clampi(sy + h, wy, wy + (windows[s].vis_h as i64))
+            if ix2 > ix1 && iy2 > iy1 {
+                blit_window_rect(s, ix1 - wx, iy1 - wy, ix2 - ix1, iy2 - iy1)
+            }
+        }
+        zi = zi + 1
+    }
+
+    draw_cursor(global_mouse_x, global_mouse_y)
+    copy_rect_to_framebuffer(sx, sy, w, h)
+}
+
 // Topmost-first (reverse slot order, matching redraw_all's draw order
 // below, so a click where two windows' titlebars happen to overlap picks
 // whichever one is actually drawn on top) hit-test against each used
@@ -724,13 +857,14 @@ const RESIZE_CORNER_REACH: i64 = 90
 const RESIZE_GRIP_MARGIN: i64 = 28
 
 func hit_test_resize_grip(mx: i64, my: i64) -> i64 {
-    let i: i64 = Wm.MAX_WINDOWS - 1
-    while i >= 0 {
-        if windows[i].used {
-            let vw: i64 = windows[i].vis_w as i64
-            let vh: i64 = windows[i].vis_h as i64
-            let ox: i64 = windows[i].win_x as i64
-            let oy: i64 = (windows[i].win_y as i64) + (TITLEBAR_H as i64)
+    let zi: i64 = z_count - 1
+    while zi >= 0 {
+        let slot: i64 = z_order[zi]
+        if windows[slot].used {
+            let vw: i64 = windows[slot].vis_w as i64
+            let vh: i64 = windows[slot].vis_h as i64
+            let ox: i64 = windows[slot].win_x as i64
+            let oy: i64 = (windows[slot].win_y as i64) + (TITLEBAR_H as i64)
             let right: i64 = ox + vw
             let bottom: i64 = oy + vh
             let near_right: bool = mx >= right - RESIZE_EDGE_BAND && mx < right + RESIZE_GRIP_MARGIN
@@ -738,10 +872,10 @@ func hit_test_resize_grip(mx: i64, my: i64) -> i64 {
             let reaches_up: bool = my >= bottom - RESIZE_CORNER_REACH && my < bottom + RESIZE_GRIP_MARGIN
             let reaches_left: bool = mx >= right - RESIZE_CORNER_REACH && mx < right + RESIZE_GRIP_MARGIN
             if (near_right && reaches_up) || (near_bottom && reaches_left) {
-                return i
+                return slot
             }
         }
-        i = i - 1
+        zi = zi - 1
     }
     return -1
 }
@@ -813,30 +947,88 @@ const TASKBAR_TEXT: u32 = 0xF0F0F0
 const TASKBAR_BTN_W: u64 = 96
 const START_BTN_W: u64 = 76
 const CLOCK_W: u64 = 64
+const TRAY_W: u64 = 58
+const CPU_GRAPH_W: u64 = 76
+const CPU_GRAPH_H: u64 = 24
+const CPU_GRAPH_SAMPLES: i64 = 48
 const MENU_W: u64 = 184
 const MENU_ITEM_H: u64 = 24
 const MENU_ICON_SIZE: u64 = 16
 const MAX_TASKBAR_ENTRIES = 20
 const TASKBAR_NAME_LEN = 32
+const TASKBAR_LABEL_LEN = 32
 const START_HIT = -2
+const TRAY_HIT = -3
+const DESKTOP_ICON_W: i64 = 72
+const DESKTOP_ICON_H: i64 = 58
+const DESKTOP_ICON_LEFT: i64 = 18
+const DESKTOP_ICON_TOP: i64 = 18
+const DESKTOP_ICON_GAP_Y: i64 = 14
+const DESKTOP_ICON_GAP_X: i64 = 12
+const MAX_DESKTOP_ICONS: i64 = 8
+const ICON_TERMINAL: u8 = 0
+const ICON_FILE: u8 = 1
+const ICON_APP: u8 = 2
 
 let taskbar_names: u8[640] // MAX_TASKBAR_ENTRIES(20) * TASKBAR_NAME_LEN(32)
+let taskbar_labels: u8[640] // MAX_TASKBAR_ENTRIES(20) * TASKBAR_LABEL_LEN(32)
+let taskbar_icons: u8[20]
+let desktop_apps: i64[8]
+let desktop_count: i64 = 0
 let taskbar_count: i64 = 0
 let taskbar_loaded: bool = false
-let taskbar_from_boot: bool = false
 let start_menu_open: bool = false
 let wm_uptime_ms: u64 = 0
+let wm_dirty: bool = true
+let wm_frames_presented: u64 = 0
+let wm_full_redraws: u64 = 0
+let wm_rect_presents: u64 = 0
+let wm_skipped_frames: u64 = 0
+let cpu_history: u8[48]
+let cpu_history_pos: i64 = 0
+let cpu_last_switches: u64 = 0
+let cpu_last_syscalls: u64 = 0
+let cpu_initialized: bool = false
+
+const MAX_NOTIFICATIONS: i64 = 4
+const NOTIFY_TITLE_LEN: i64 = 32
+const NOTIFY_BODY_LEN: i64 = 64
+const NOTIFY_TIMEOUT_MS: u64 = 6000
+const NOTIFY_W: i64 = 286
+const NOTIFY_H: i64 = 58
+const NOTIFY_GAP: i64 = 8
+
+let notify_used: bool[4]
+let notify_created_ms: u64[4]
+let notify_kind: u8[4]
+let notify_titles: u8[128] // MAX_NOTIFICATIONS(4) * NOTIFY_TITLE_LEN(32)
+let notify_bodies: u8[256] // MAX_NOTIFICATIONS(4) * NOTIFY_BODY_LEN(64)
+let notify_unread: i64 = 0
 
 func taskbar_name_at(i: i64) -> u8* {
     return (taskbar_names as u8*) + i * TASKBAR_NAME_LEN
 }
 
+func taskbar_label_at(i: i64) -> u8* {
+    return (taskbar_labels as u8*) + i * TASKBAR_LABEL_LEN
+}
+
+func notify_title_at(i: i64) -> u8* {
+    return (notify_titles as u8*) + i * NOTIFY_TITLE_LEN
+}
+
+func notify_body_at(i: i64) -> u8* {
+    return (notify_bodies as u8*) + i * NOTIFY_BODY_LEN
+}
+
 func load_taskbar() {
     taskbar_count = 0
-    taskbar_from_boot = false
-    load_taskbar_dir("/bin" as u8*, false)
+    desktop_count = 0
+    if !load_app_manifest("/boot/apps.txt" as u8*) {
+        load_taskbar_dir("/bin" as u8*)
+    }
     if taskbar_count == 0 {
-        load_taskbar_dir("/boot" as u8*, true)
+        load_taskbar_dir("/boot" as u8*)
     }
     taskbar_loaded = taskbar_count > 0
 }
@@ -852,8 +1044,192 @@ func has_elf_suffix(name: u8*) -> bool {
     return name[len - 4] == 46 && name[len - 3] == 101 && name[len - 2] == 108 && name[len - 1] == 102
 }
 
-func load_taskbar_dir(path: u8*, from_boot: bool) {
+func copy_fixed(dst: u8*, src: u8*, max_len: i64) {
+    let j: i64 = 0
+    while j < max_len - 1 && src[j] != 0 {
+        dst[j] = src[j]
+        j = j + 1
+    }
+    dst[j] = 0
+    j = j + 1
+    while j < max_len {
+        dst[j] = 0
+        j = j + 1
+    }
+}
+
+func active_notification_count() -> i64 {
+    let count: i64 = 0
+    let i: i64 = 0
+    while i < MAX_NOTIFICATIONS {
+        if notify_used[i] {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+func expire_notifications() {
+    let i: i64 = 0
+    while i < MAX_NOTIFICATIONS {
+        if notify_used[i] && wm_uptime_ms >= notify_created_ms[i] + NOTIFY_TIMEOUT_MS {
+            notify_used[i] = false
+        }
+        i = i + 1
+    }
+}
+
+func oldest_notification_slot() -> i64 {
+    let slot: i64 = -1
+    let oldest: u64 = 0
+    let i: i64 = 0
+    while i < MAX_NOTIFICATIONS {
+        if !notify_used[i] {
+            return i
+        }
+        if slot < 0 || notify_created_ms[i] < oldest {
+            slot = i
+            oldest = notify_created_ms[i]
+        }
+        i = i + 1
+    }
+    return slot
+}
+
+func add_notification(title: u8*, body: u8*, kind: u8) {
+    let slot: i64 = oldest_notification_slot()
+    if slot < 0 {
+        return
+    }
+    notify_used[slot] = true
+    notify_created_ms[slot] = wm_uptime_ms
+    notify_kind[slot] = kind
+    copy_fixed(notify_title_at(slot), title, NOTIFY_TITLE_LEN)
+    copy_fixed(notify_body_at(slot), body, NOTIFY_BODY_LEN)
+    notify_unread = notify_unread + 1
+}
+
+func app_icon_from_name(name: u8*) -> u8 {
+    if name_starts_with(name, "terminal" as u8*) {
+        return ICON_TERMINAL
+    }
+    if name_starts_with(name, "filebrowser" as u8*) || name_starts_with(name, "editor" as u8*) {
+        return ICON_FILE
+    }
+    return ICON_APP
+}
+
+func icon_kind_from_field(field: u8*, fallback_name: u8*) -> u8 {
+    if name_starts_with(field, "terminal" as u8*) {
+        return ICON_TERMINAL
+    }
+    if name_starts_with(field, "file" as u8*) {
+        return ICON_FILE
+    }
+    if name_starts_with(field, "app" as u8*) {
+        return ICON_APP
+    }
+    return app_icon_from_name(fallback_name)
+}
+
+func append_app(exec_name: u8*, label: u8*, icon: u8, desktop: bool) {
+    if taskbar_count >= MAX_TASKBAR_ENTRIES {
+        return
+    }
+    let idx: i64 = taskbar_count
+    copy_fixed(taskbar_name_at(idx), exec_name, TASKBAR_NAME_LEN)
+    if label[0] == 0 {
+        copy_fixed(taskbar_label_at(idx), exec_name, TASKBAR_LABEL_LEN)
+    } else {
+        copy_fixed(taskbar_label_at(idx), label, TASKBAR_LABEL_LEN)
+    }
+    taskbar_icons[idx] = icon
+    if desktop && desktop_count < MAX_DESKTOP_ICONS {
+        desktop_apps[desktop_count] = idx
+        desktop_count = desktop_count + 1
+    }
+    taskbar_count = taskbar_count + 1
+}
+
+func read_manifest_field(buf: u8*, pos_ptr: i64*, out: u8*, max_len: i64) -> u8 {
+    let pos: i64 = pos_ptr[0]
+    let n: i64 = 0
+    while buf[pos] != 0 && buf[pos] != 124 && buf[pos] != 10 && buf[pos] != 13 {
+        if n < max_len - 1 {
+            out[n] = buf[pos]
+            n = n + 1
+        }
+        pos = pos + 1
+    }
+    out[n] = 0
+    let delim: u8 = buf[pos]
+    if delim != 0 {
+        pos = pos + 1
+        if delim == 13 && buf[pos] == 10 {
+            pos = pos + 1
+        }
+    }
+    pos_ptr[0] = pos
+    return delim
+}
+
+func skip_manifest_line(buf: u8*, pos_ptr: i64*) {
+    let pos: i64 = pos_ptr[0]
+    while buf[pos] != 0 && buf[pos] != 10 {
+        pos = pos + 1
+    }
+    if buf[pos] == 10 {
+        pos = pos + 1
+    }
+    pos_ptr[0] = pos
+}
+
+func parse_app_manifest(buf: u8*) -> bool {
+    let pos: i64 = 0
+    while buf[pos] != 0 && taskbar_count < MAX_TASKBAR_ENTRIES {
+        let exec_name: u8[32]
+        let label: u8[32]
+        let icon_field: u8[16]
+        let desktop_field: u8[8]
+
+        let d: u8 = read_manifest_field(buf, &pos, exec_name as u8*, 32)
+        if exec_name[0] == 0 {
+            skip_manifest_line(buf, &pos)
+        } else if d != 124 {
+            skip_manifest_line(buf, &pos)
+        } else {
+            d = read_manifest_field(buf, &pos, label as u8*, 32)
+            if d == 124 {
+                d = read_manifest_field(buf, &pos, icon_field as u8*, 16)
+            }
+            if d == 124 {
+                read_manifest_field(buf, &pos, desktop_field as u8*, 8)
+            } else {
+                desktop_field[0] = 48
+                desktop_field[1] = 0
+            }
+            if has_elf_suffix(exec_name as u8*) {
+                append_app(exec_name as u8*, label as u8*, icon_kind_from_field(icon_field as u8*, exec_name as u8*), desktop_field[0] == 49)
+            }
+        }
+    }
+    return taskbar_count > 0
+}
+
+func load_app_manifest(path: u8*) -> bool {
+    let buf: u8[2048]
+    let n: u64 = sys_read_all(path, buf as u8*, 2047)
+    if n == RT_SYS_ERR || n == 0 {
+        return false
+    }
+    buf[n] = 0
+    return parse_app_manifest(buf as u8*)
+}
+
+func load_taskbar_dir(path: u8*) {
     taskbar_count = 0
+    desktop_count = 0
     let i: u64 = 0
     let done: bool = false
     while (i as i64) < MAX_TASKBAR_ENTRIES && !done {
@@ -865,18 +1241,11 @@ func load_taskbar_dir(path: u8*, from_boot: bool) {
             let fields: u64* = ((buf as u8*) + 32) as u64*
             let kind: u64 = fields[0]
             if kind == 1 && has_elf_suffix(buf as u8*) { // VFS.KIND_FILE
-                let dst: u8* = taskbar_name_at(taskbar_count)
-                let j: i64 = 0
-                while j < TASKBAR_NAME_LEN {
-                    dst[j] = buf[j]
-                    j = j + 1
-                }
-                taskbar_count = taskbar_count + 1
+                append_app(buf as u8*, buf as u8*, app_icon_from_name(buf as u8*), taskbar_count < 6)
             }
             i = i + 1
         }
     }
-    taskbar_from_boot = from_boot
 }
 
 func draw_rect(x: i64, y: i64, w: i64, h: i64, color: u32) {
@@ -936,11 +1305,11 @@ func is_terminal_name(name: u8*) -> bool {
     return name_starts_with(name, "terminal" as u8*)
 }
 
-func icon_for_taskbar_name(name: u8*) -> EmbeddedImage {
-    if is_terminal_name(name) {
+func icon_for_kind(kind: u8) -> EmbeddedImage {
+    if kind == ICON_TERMINAL {
         return start_icon_terminal
     }
-    if name_starts_with(name, "filebrowser" as u8*) || name_starts_with(name, "editor" as u8*) {
+    if kind == ICON_FILE {
         return start_icon_file
     }
     return start_icon_app
@@ -965,6 +1334,100 @@ func draw_embedded_icon(img: EmbeddedImage, x0: i64, y0: i64) {
     }
 }
 
+func draw_embedded_icon_scaled(img: EmbeddedImage, x0: i64, y0: i64, scale: i64) {
+    if scale <= 0 {
+        return
+    }
+    let y: u32 = 0
+    while y < img.height {
+        let x: u32 = 0
+        while x < img.width {
+            let alpha: u32 = get_pixel_alpha(img, x, y)
+            if alpha != 0 {
+                let fg: u32 = get_pixel(img, x, y)
+                let sy: i64 = 0
+                while sy < scale {
+                    let sx: i64 = 0
+                    while sx < scale {
+                        let px: i64 = x0 + (x as i64) * scale + sx
+                        let py: i64 = y0 + (y as i64) * scale + sy
+                        let bg: u32 = fb_get_pixel(px, py)
+                        fb_put_pixel(px, py, blend_alpha(fg, bg, alpha))
+                        sx = sx + 1
+                    }
+                    sy = sy + 1
+                }
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+}
+
+func notification_color(kind: u8) -> u32 {
+    if kind == 1 {
+        return 0x2C4A32
+    }
+    if kind == 2 {
+        return 0x5A3030
+    }
+    if kind == 3 {
+        return 0x4A3E26
+    }
+    return 0x262A34
+}
+
+func draw_notification_icon(x: i64, y: i64, kind: u8, bg: u32) {
+    let color: u32 = 0x9FD7FF
+    let label: u8* = "i" as u8*
+    if kind == 1 {
+        color = 0x8EE090
+        label = "+" as u8*
+    } else if kind == 2 {
+        color = 0xFF9090
+        label = "!" as u8*
+    } else if kind == 3 {
+        color = 0xFFD060
+        label = "*" as u8*
+    }
+    draw_rect(x, y, 18, 18, bg)
+    draw_rect_border(x, y, 18, 18, color)
+    wm_draw_string(x + 6, y + 2, label, color, bg)
+}
+
+func draw_notifications() {
+    expire_notifications()
+    let drawn: i64 = 0
+    let newest: u64 = 0
+    while drawn < MAX_NOTIFICATIONS {
+        let slot: i64 = -1
+        let i: i64 = 0
+        while i < MAX_NOTIFICATIONS {
+            if notify_used[i] && notify_created_ms[i] >= newest {
+                if slot < 0 || notify_created_ms[i] < notify_created_ms[slot] {
+                    slot = i
+                }
+            }
+            i = i + 1
+        }
+        if slot < 0 {
+            return
+        }
+        newest = notify_created_ms[slot] + 1
+        let x: i64 = (fb_width as i64) - NOTIFY_W - 12
+        let y: i64 = (fb_height as i64) - (TASKBAR_H as i64) - ((drawn + 1) * (NOTIFY_H + NOTIFY_GAP))
+        if y >= 0 {
+            let bg: u32 = notification_color(notify_kind[slot])
+            draw_rect(x, y, NOTIFY_W, NOTIFY_H, bg)
+            draw_rect_border(x, y, NOTIFY_W, NOTIFY_H, 0x707888)
+            draw_notification_icon(x + 10, y + 10, notify_kind[slot], bg)
+            wm_draw_string(x + 36, y + 9, notify_title_at(slot), 0xFFFFFF, bg)
+            wm_draw_string(x + 36, y + 31, notify_body_at(slot), 0xD8D8D8, bg)
+        }
+        drawn = drawn + 1
+    }
+}
+
 func write_two_digits(dst: u8*, pos: i64, value: i64) {
     dst[pos] = ((value / 10) + 48) as u8
     dst[pos + 1] = ((value % 10) + 48) as u8
@@ -978,6 +1441,78 @@ func clock_label(dst: u8*) {
     dst[2] = 58 // ':'
     write_two_digits(dst, 3, seconds)
     dst[5] = 0
+}
+
+func tray_label(dst: u8*) {
+    dst[0] = 78 // 'N'
+    dst[1] = 32
+    let count: i64 = notify_unread
+    if count > 9 {
+        count = 9
+    }
+    dst[2] = (48 + count) as u8
+    dst[3] = 0
+}
+
+func update_cpu_graph_sample() {
+    let info: u64[10]
+    if sys_system_info(info as u64*) == RT_SYS_ERR {
+        return
+    }
+    let switches: u64 = info[5]
+    let syscalls: u64 = info[6]
+    if !cpu_initialized {
+        cpu_last_switches = switches
+        cpu_last_syscalls = syscalls
+        cpu_initialized = true
+        return
+    }
+
+    let switch_delta: u64 = switches - cpu_last_switches
+    let syscall_delta: u64 = syscalls - cpu_last_syscalls
+    cpu_last_switches = switches
+    cpu_last_syscalls = syscalls
+
+    // Not calibrated wall-clock CPU utilization yet: this is a compact
+    // scheduler/syscall activity score scaled for the taskbar graph.
+    let sample: u64 = switch_delta + (syscall_delta / 4)
+    if sample > 100 {
+        sample = 100
+    }
+    cpu_history[cpu_history_pos] = sample as u8
+    cpu_history_pos = cpu_history_pos + 1
+    if cpu_history_pos >= CPU_GRAPH_SAMPLES {
+        cpu_history_pos = 0
+    }
+}
+
+func draw_cpu_graph(x: i64, y: i64) {
+    draw_rect(x, y, CPU_GRAPH_W as i64, CPU_GRAPH_H as i64, 0x20242C)
+    draw_rect_border(x, y, CPU_GRAPH_W as i64, CPU_GRAPH_H as i64, 0x505870)
+    wm_draw_string(x + 5, y + 4, "CPU" as u8*, 0xA8D8FF, 0x20242C)
+
+    let base_y: i64 = y + (CPU_GRAPH_H as i64) - 5
+    let i: i64 = 0
+    while i < CPU_GRAPH_SAMPLES {
+        let idx: i64 = (cpu_history_pos + i) % CPU_GRAPH_SAMPLES
+        let value: i64 = cpu_history[idx] as i64
+        let bar_h: i64 = (value * 14) / 100
+        let bx: i64 = x + 26 + i
+        let by: i64 = base_y - bar_h
+        let color: u32 = 0x75D17A
+        if value > 75 {
+            color = 0xF0C65A
+        }
+        if value > 92 {
+            color = 0xF08C5A
+        }
+        let h: i64 = 0
+        while h <= bar_h {
+            fb_put_pixel(bx, by + h, color)
+            h = h + 1
+        }
+        i = i + 1
+    }
 }
 
 func draw_start_menu(y0: i64) {
@@ -998,11 +1533,10 @@ func draw_start_menu(y0: i64) {
         let iy: i64 = y0 - menu_h + 6 + i * (MENU_ITEM_H as i64)
         if iy >= safe_y && iy + (MENU_ITEM_H as i64) <= y0 {
             draw_rect(12, iy, (MENU_W as i64) - 8, (MENU_ITEM_H as i64) - 2, 0x30303A)
-            let name: u8* = taskbar_name_at(i)
-            let icon: EmbeddedImage = icon_for_taskbar_name(name)
+            let icon: EmbeddedImage = icon_for_kind(taskbar_icons[i])
             draw_embedded_icon(icon, 18, iy + 3)
             let label: u8[19]
-            copy_short_label(label as u8*, name, 18)
+            copy_short_label(label as u8*, taskbar_label_at(i), 18)
             wm_draw_string(40, iy + 4, label as u8*, TASKBAR_TEXT, 0x30303A)
         }
         i = i + 1
@@ -1050,6 +1584,22 @@ func draw_taskbar() {
     draw_rect_border(clock_x, y0 + 4, CLOCK_W as i64, (TASKBAR_H as i64) - 8, 0x505050)
     wm_draw_string(clock_x + 12, y0 + 8, clock as u8*, TASKBAR_TEXT, 0x24242A)
 
+    let tray_x: i64 = clock_x - (TRAY_W as i64) - 6
+    let tray_bg: u32 = 0x242832
+    if notify_unread > 0 {
+        tray_bg = 0x30384A
+    }
+    draw_rect(tray_x, y0 + 4, TRAY_W as i64, (TASKBAR_H as i64) - 8, tray_bg)
+    draw_rect_border(tray_x, y0 + 4, TRAY_W as i64, (TASKBAR_H as i64) - 8, 0x505870)
+    draw_rect(tray_x + 8, y0 + 11, 8, 8, 0x8ED0FF)
+    draw_rect_border(tray_x + 8, y0 + 11, 8, 8, 0xD8F0FF)
+    let tray: u8[4]
+    tray_label(tray as u8*)
+    wm_draw_string(tray_x + 22, y0 + 8, tray as u8*, TASKBAR_TEXT, tray_bg)
+
+    let cpu_x: i64 = tray_x - (CPU_GRAPH_W as i64) - 6
+    draw_cpu_graph(cpu_x, y0 + 4)
+
     draw_start_menu(y0)
 }
 
@@ -1063,6 +1613,11 @@ func hit_test_taskbar(mx: i64, my: i64) -> i64 {
     if my >= y0 {
         if mx >= 8 && mx < 8 + (START_BTN_W as i64) {
             return START_HIT
+        }
+        let clock_x: i64 = (fb_width as i64) - (CLOCK_W as i64) - 8
+        let tray_x: i64 = clock_x - (TRAY_W as i64) - 6
+        if mx >= tray_x && mx < tray_x + (TRAY_W as i64) {
+            return TRAY_HIT
         }
         return -1
     }
@@ -1090,45 +1645,152 @@ func hit_test_taskbar(mx: i64, my: i64) -> i64 {
 func launch_fresh_terminal() {
     let handle: u64 = sys_spawn("/boot/terminal.elf" as u8*, "--gui-new" as u8*)
     if handle == RT_SYS_ERR {
-        sys_spawn("/bin/terminal.elf" as u8*, "--gui-new" as u8*)
+        let fallback: u64 = sys_spawn("/bin/terminal.elf" as u8*, "--gui-new" as u8*)
+        if fallback == RT_SYS_ERR {
+            add_notification("Launch failed" as u8*, "Terminal executable was not found" as u8*, 2)
+        } else {
+            add_notification("Terminal launched" as u8*, "Started a fresh shell window" as u8*, 1)
+        }
+    } else {
+        add_notification("Terminal launched" as u8*, "Started a fresh shell window" as u8*, 1)
     }
 }
 
-func taskbar_launch(i: i64) {
-    let path: u8[48]
-    path[0] = 47 // '/'
-    if taskbar_from_boot {
-        path[1] = 98 // 'b'
-        path[2] = 111 // 'o'
-        path[3] = 111 // 'o'
-        path[4] = 116 // 't'
-        path[5] = 47 // '/'
-    } else {
-        path[1] = 98 // 'b'
-        path[2] = 105 // 'i'
-        path[3] = 110 // 'n'
-        path[4] = 47 // '/'
+func build_launch_path(dst: u8*, prefix: u8*, name: u8*) {
+    let i: i64 = 0
+    while prefix[i] != 0 && i < 47 {
+        dst[i] = prefix[i]
+        i = i + 1
     }
-    let name: u8* = taskbar_name_at(i)
+    let j: i64 = 0
+    while name[j] != 0 && i < 47 {
+        dst[i] = name[j]
+        i = i + 1
+        j = j + 1
+    }
+    dst[i] = 0
+}
+
+func launch_app_name(name: u8*) {
     if is_terminal_name(name) {
         launch_fresh_terminal()
         return
     }
-    let j: i64 = 0
-    while name[j] != 0 && j < 42 {
-        let off: i64 = 5
-        if taskbar_from_boot {
-            off = 6
+    let path: u8[48]
+    build_launch_path(path as u8*, "/bin/" as u8*, name)
+    let handle: u64 = sys_spawn(path as u8*, "")
+    if handle == RT_SYS_ERR {
+        build_launch_path(path as u8*, "/boot/" as u8*, name)
+        let boot_handle: u64 = sys_spawn(path as u8*, "")
+        if boot_handle == RT_SYS_ERR {
+            add_notification("Launch failed" as u8*, name, 2)
+        } else {
+            add_notification("App launched" as u8*, name, 1)
         }
-        path[off + j] = name[j]
-        j = j + 1
+    } else {
+        add_notification("App launched" as u8*, name, 1)
     }
-    let end_off: i64 = 5
-    if taskbar_from_boot {
-        end_off = 6
+}
+
+func taskbar_launch(i: i64) {
+    launch_app_name(taskbar_name_at(i))
+}
+
+func desktop_icon_name(i: i64) -> u8* {
+    return taskbar_name_at(desktop_apps[i])
+}
+
+func desktop_icon_label(i: i64) -> u8* {
+    return taskbar_label_at(desktop_apps[i])
+}
+
+func desktop_icon_image(i: i64) -> EmbeddedImage {
+    return icon_for_kind(taskbar_icons[desktop_apps[i]])
+}
+
+func desktop_icons_per_column() -> i64 {
+    let usable_h: i64 = (fb_height as i64) - (TASKBAR_H as i64) - DESKTOP_ICON_TOP
+    let stride: i64 = DESKTOP_ICON_H + DESKTOP_ICON_GAP_Y
+    let n: i64 = usable_h / stride
+    if n < 1 {
+        return 1
     }
-    path[end_off + j] = 0
-    sys_spawn(path as u8*, "")
+    return n
+}
+
+func desktop_icon_x(i: i64) -> i64 {
+    let per_col: i64 = desktop_icons_per_column()
+    let col: i64 = i / per_col
+    return DESKTOP_ICON_LEFT + col * (DESKTOP_ICON_W + DESKTOP_ICON_GAP_X)
+}
+
+func desktop_icon_y(i: i64) -> i64 {
+    let per_col: i64 = desktop_icons_per_column()
+    let row: i64 = i % per_col
+    return DESKTOP_ICON_TOP + row * (DESKTOP_ICON_H + DESKTOP_ICON_GAP_Y)
+}
+
+func point_in_any_window(mx: i64, my: i64) -> bool {
+    let i: i64 = 0
+    while i < Wm.MAX_WINDOWS {
+        if windows[i].used {
+            let ox: i64 = windows[i].win_x as i64
+            let oy: i64 = windows[i].win_y as i64
+            let vw: i64 = windows[i].vis_w as i64
+            let vh: i64 = (windows[i].vis_h as i64) + (TITLEBAR_H as i64)
+            if mx >= ox && mx < ox + vw && my >= oy && my < oy + vh {
+                return true
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+func hit_test_desktop_icon(mx: i64, my: i64) -> i64 {
+    if fb_width == 0 || fb_height <= TASKBAR_H {
+        return -1
+    }
+    if my >= (fb_height as i64) - (TASKBAR_H as i64) {
+        return -1
+    }
+    if point_in_any_window(mx, my) {
+        return -1
+    }
+    let i: i64 = 0
+    while i < desktop_count {
+        let x: i64 = desktop_icon_x(i)
+        let y: i64 = desktop_icon_y(i)
+        if mx >= x && mx < x + DESKTOP_ICON_W && my >= y && my < y + DESKTOP_ICON_H {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+func draw_desktop_icons(mouse_x: i64, mouse_y: i64) {
+    let hover: i64 = hit_test_desktop_icon(mouse_x, mouse_y)
+    let i: i64 = 0
+    while i < desktop_count {
+        let x: i64 = desktop_icon_x(i)
+        let y: i64 = desktop_icon_y(i)
+        let bg: u32 = 0x181820
+        if i == hover {
+            bg = 0x30384A
+            draw_rect(x, y, DESKTOP_ICON_W, DESKTOP_ICON_H, bg)
+            draw_rect_border(x, y, DESKTOP_ICON_W, DESKTOP_ICON_H, 0x6A7898)
+        }
+        let icon: EmbeddedImage = desktop_icon_image(i)
+        draw_embedded_icon_scaled(icon, x + 20, y + 5, 2)
+        draw_rect(x + 2, y + 41, DESKTOP_ICON_W - 4, 12, bg)
+        wm_draw_string(x + 4, y + 43, desktop_icon_label(i), TASKBAR_TEXT, bg)
+        i = i + 1
+    }
+}
+
+func desktop_icon_launch(i: i64) {
+    launch_app_name(desktop_icon_name(i))
 }
 
 // Full repaint of windows + cursor (shadows, decoration, then content,
@@ -1140,6 +1802,8 @@ func taskbar_launch(i: i64) {
 // WINDOW_ALPHA) sees whatever's already been composited behind it -
 // the backdrop, or any window further back in z-order.
 func redraw_windows(mouse_x: i64, mouse_y: i64) {
+    draw_desktop_icons(mouse_x, mouse_y)
+
     // First pass: draw all shadows in z-order
     let i: i64 = 0
     while i < z_count {
@@ -1163,6 +1827,7 @@ func redraw_windows(mouse_x: i64, mouse_y: i64) {
         i = i + 1
     }
     draw_taskbar()
+    draw_notifications()
     draw_cursor(mouse_x, mouse_y)
 }
 
@@ -1175,6 +1840,7 @@ func redraw_windows(mouse_x: i64, mouse_y: i64) {
 // real resolution adds up fast: this alone is an 8x reduction in loop
 // iterations over the naive version.
 func present_frame() {
+    wm_frames_presented = wm_frames_presented + 1
     let total_bytes: u64 = fb_pitch * fb_height
     let total_words: u64 = total_bytes / 8
     let src: u64* = backbuf as u64*
@@ -1219,8 +1885,14 @@ func handle_request(sender: u64, msg: u8*) {
             windows[slot].owner_pid = sender as i64
             windows[slot].win_x = initial_window_x(slot)
             windows[slot].win_y = initial_window_y(slot)
-            windows[slot].vis_w = Wm.WIN_W as u64
-            windows[slot].vis_h = Wm.WIN_H as u64
+            windows[slot].vis_w = DEFAULT_VIS_W
+            windows[slot].vis_h = DEFAULT_VIS_H
+            if windows[slot].vis_w > (max_visible_w_for(slot) as u64) {
+                windows[slot].vis_w = max_visible_w_for(slot) as u64
+            }
+            if windows[slot].vis_h > (max_visible_h_for(slot) as u64) {
+                windows[slot].vis_h = max_visible_h_for(slot) as u64
+            }
             windows[slot].close_requested = false
 
             // Set default window title
@@ -1247,6 +1919,7 @@ func handle_request(sender: u64, msg: u8*) {
             // Add to z-order at the front (newly created windows appear on top)
             z_add(slot)
             active = true
+            wm_dirty = true
             rep[0] = Wm.STATUS_OK as u64
             rep[1] = slot as u64
             rep[2] = (slot as u64) * Wm.WIN_BYTES
@@ -1256,7 +1929,20 @@ func handle_request(sender: u64, msg: u8*) {
         }
     } else if op == (Wm.OP_PRESENT as u64) {
         if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used {
-            blit_window(slot_arg)
+            wm_dirty = true
+            rep[0] = Wm.STATUS_OK as u64
+        } else {
+            rep[0] = Wm.STATUS_FAIL as u64
+        }
+        sys_msg_reply(sender, reply as u8*, 8)
+    } else if op == (Wm.OP_PRESENT_RECT as u64) {
+        if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used {
+            let rx: i64 = req[2] as i64
+            let ry: i64 = req[3] as i64
+            let rw: i64 = req[4] as i64
+            let rh: i64 = req[5] as i64
+            wm_rect_presents = wm_rect_presents + 1
+            present_window_rect(slot_arg, rx, ry, rw, rh)
             rep[0] = Wm.STATUS_OK as u64
         } else {
             rep[0] = Wm.STATUS_FAIL as u64
@@ -1327,8 +2013,8 @@ func handle_request(sender: u64, msg: u8*) {
             // Clamp to window bounds
             if rel_x < 0 { rel_x = -1 }
             if rel_y < 0 { rel_y = -1 }
-            if rel_x >= Wm.WIN_W { rel_x = -1 }
-            if rel_y >= Wm.WIN_H { rel_y = -1 }
+            if rel_x >= (windows[slot_arg].vis_w as i64) { rel_x = -1 }
+            if rel_y >= (windows[slot_arg].vis_h as i64) { rel_y = -1 }
 
             let mouse_flags: u64 = 0
             if global_mouse_left { mouse_flags = mouse_flags | 1 }
@@ -1351,9 +2037,30 @@ func handle_request(sender: u64, msg: u8*) {
             if focused == slot_arg {
                 focused = next_focus_after(slot_arg)
             }
+            wm_dirty = true
         }
         rep[0] = Wm.STATUS_OK as u64
         sys_msg_reply(sender, reply as u8*, 8)
+    } else if op == (Wm.OP_NOTIFY as u64) {
+        let kind: u64 = req[1]
+        if kind > 3 {
+            kind = 0
+        }
+        add_notification((msg as u8*) + 16, (msg as u8*) + 48, kind as u8)
+        wm_dirty = true
+        rep[0] = Wm.STATUS_OK as u64
+        sys_msg_reply(sender, reply as u8*, 8)
+    } else if op == (Wm.OP_STATS as u64) {
+        rep[0] = Wm.STATUS_OK as u64
+        rep[1] = wm_frames_presented
+        rep[2] = wm_full_redraws
+        rep[3] = wm_rect_presents
+        rep[4] = wm_skipped_frames
+        rep[5] = 0
+        if wm_dirty {
+            rep[5] = 1
+        }
+        sys_msg_reply(sender, reply as u8*, 48)
     } else {
         rep[0] = Wm.STATUS_FAIL as u64
         sys_msg_reply(sender, reply as u8*, 8)
@@ -1405,10 +2112,9 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    // 250 pages = 1024000 bytes, exactly Wm.MAX_WINDOWS * Wm.WIN_BYTES
-    // (4 * 256000) - see wm_protocol.llpl's own comment on why both grew
-    // from the original 104x52 demo-sized windows.
-    arena = sys_shm_create(250)
+    let arena_bytes: u64 = (Wm.WIN_BYTES as u64) * (Wm.MAX_WINDOWS as u64)
+    let arena_pages: u64 = (arena_bytes + 4095) / 4096
+    arena = sys_shm_create(arena_pages)
     if arena == null {
         sys_putln("wm: shm_create failed")
         rt_exit(1)
@@ -1431,6 +2137,7 @@ func _start(argc: u64, argv: u64*) {
     start_icon_app = load_embedded_image(app_icon_data)
 
     sys_putln("wm: ready")
+    add_notification("Desktop ready" as u8*, "Start menu, tray, and notifications are online" as u8*, 1)
 
     // Phase 1: reactive, but now watching for *either* of two triggers
     // to start owning the screen - a client creating the first window
@@ -1444,8 +2151,8 @@ func _start(argc: u64, argv: u64*) {
     // instead of blocking in sys_msg_recv, since there are now two
     // separate things to poll instead of one thing to block on.
     while !active {
-        let msg: u8[16]
-        let sender: u64 = sys_msg_try_recv(msg as u8*, 16)
+        let msg: u8[128]
+        let sender: u64 = sys_msg_try_recv(msg as u8*, 128)
         if sender != RT_SYS_ERR {
             handle_request(sender, msg as u8*)
         }
@@ -1475,10 +2182,13 @@ func _start(argc: u64, argv: u64*) {
     let resize_off_x: i64 = 0
     let resize_off_y: i64 = 0
     let prev_left: bool = false
+    let prev_mx: i64 = -1
+    let prev_my: i64 = -1
+    let clock_accum_ms: u64 = 0
 
     while true {
-        let msg: u8[16]
-        let sender: u64 = sys_msg_try_recv(msg as u8*, 16)
+        let msg: u8[128]
+        let sender: u64 = sys_msg_try_recv(msg as u8*, 128)
         if sender != RT_SYS_ERR {
             handle_request(sender, msg as u8*)
         }
@@ -1526,6 +2236,7 @@ func _start(argc: u64, argv: u64*) {
                 // Bring to front even when closing
                 z_bring_to_front(close_hit)
                 focused = close_hit
+                wm_dirty = true
             } else {
                 let resize_hit: i64 = hit_test_resize_grip(mx, my)
                 if resize_hit >= 0 {
@@ -1552,26 +2263,43 @@ func _start(argc: u64, argv: u64*) {
                     resize_off_y = (windows[resize_hit].win_y as i64) + (TITLEBAR_H as i64) + (windows[resize_hit].vis_h as i64) - my
                     // Bring to front when starting resize
                     z_bring_to_front(resize_hit)
+                    wm_dirty = true
                 } else {
                     let taskbar_hit: i64 = hit_test_taskbar(mx, my)
                     if taskbar_hit == START_HIT {
                         start_menu_open = !start_menu_open
+                        wm_dirty = true
+                    } else if taskbar_hit == TRAY_HIT {
+                        notify_unread = 0
+                        add_notification("System status" as u8*, "Window manager and tray are running" as u8*, 0)
+                        start_menu_open = false
+                        wm_dirty = true
                     } else if taskbar_hit >= 0 {
                         taskbar_launch(taskbar_hit)
                         start_menu_open = false
+                        wm_dirty = true
                     } else {
                         if start_menu_open {
                             start_menu_open = false
-                        }
-                        let hit: i64 = hit_test_titlebar(mx, my)
-                        if hit >= 0 {
-                            dragging = true
-                            drag_slot = hit
-                            drag_dx = mx - (windows[hit].win_x as i64)
-                            drag_dy = my - (windows[hit].win_y as i64)
-                            focused = hit
-                            // Bring to front when starting drag
-                            z_bring_to_front(hit)
+                            wm_dirty = true
+                        } else {
+                            let desktop_hit: i64 = hit_test_desktop_icon(mx, my)
+                            if desktop_hit >= 0 {
+                                desktop_icon_launch(desktop_hit)
+                                wm_dirty = true
+                            } else {
+                                let hit: i64 = hit_test_titlebar(mx, my)
+                                if hit >= 0 {
+                                    dragging = true
+                                    drag_slot = hit
+                                    drag_dx = mx - (windows[hit].win_x as i64)
+                                    drag_dy = my - (windows[hit].win_y as i64)
+                                    focused = hit
+                                    // Bring to front when starting drag
+                                    z_bring_to_front(hit)
+                                    wm_dirty = true
+                                }
+                            }
                         }
                     }
                 }
@@ -1585,24 +2313,44 @@ func _start(argc: u64, argv: u64*) {
         prev_left = mleft
 
         if dragging && drag_slot >= 0 {
-            let max_wx: i64 = (fb_width as i64) - Wm.WIN_W
-            let max_wy: i64 = (fb_height as i64) - (Wm.WIN_H as i64) - (TITLEBAR_H as i64)
+            let max_wx: i64 = (fb_width as i64) - (windows[drag_slot].vis_w as i64)
+            let max_wy: i64 = (fb_height as i64) - (windows[drag_slot].vis_h as i64) - (TITLEBAR_H as i64) - 32
             windows[drag_slot].win_x = clampi(mx - drag_dx, 0, max_wx) as u64
             windows[drag_slot].win_y = clampi(my - drag_dy, 0, max_wy) as u64
+            wm_dirty = true
         }
 
         if resizing && resize_slot >= 0 {
             let ox: i64 = windows[resize_slot].win_x as i64
             let oy: i64 = (windows[resize_slot].win_y as i64) + (TITLEBAR_H as i64)
-            let new_w: i64 = clampi(mx + resize_off_x - ox, MIN_VIS_W as i64, Wm.WIN_W)
-            let new_h: i64 = clampi(my + resize_off_y - oy, MIN_VIS_H as i64, Wm.WIN_H)
+            let max_w: i64 = max_visible_w_for(resize_slot)
+            let max_h: i64 = max_visible_h_for(resize_slot)
+            let new_w: i64 = clampi(mx + resize_off_x - ox, MIN_VIS_W as i64, max_w)
+            let new_h: i64 = clampi(my + resize_off_y - oy, MIN_VIS_H as i64, max_h)
             windows[resize_slot].vis_w = new_w as u64
             windows[resize_slot].vis_h = new_h as u64
+            wm_dirty = true
         }
 
-        fill_backdrop()
-        redraw_windows(mx, my)
-        present_frame()
+        let mouse_moved: bool = mx != prev_mx || my != prev_my
+        clock_accum_ms = clock_accum_ms + 15
+        if clock_accum_ms >= 1000 {
+            clock_accum_ms = 0
+            update_cpu_graph_sample()
+            wm_dirty = true
+        }
+
+        if wm_dirty || mouse_moved {
+            fill_backdrop()
+            redraw_windows(mx, my)
+            present_frame()
+            wm_full_redraws = wm_full_redraws + 1
+            wm_dirty = false
+            prev_mx = mx
+            prev_my = my
+        } else {
+            wm_skipped_frames = wm_skipped_frames + 1
+        }
         wm_uptime_ms = wm_uptime_ms + 15
         sys_sleep(15)
     }

@@ -15,12 +15,12 @@ namespace HAL {
     // type), but the x86 variable-port form of in/out only accepts DX. The
     // %w operand modifier tells GCC to print operand 1 as its 16-bit
     // sub-register (dx) regardless of the C-level operand width.
-    func outb(port: u64, value: char) {
+    func outb(port: u64, value: u8) {
         asm("outb %0, %w1" : : "a"(value), "Nd"(port))
     }
 
-    func inb(port: u64) -> char {
-        let result: char = 0
+    func inb(port: u64) -> u8 {
+        let result: u8 = 0
         asm("inb %w1, %0" : "=a"(result) : "Nd"(port))
         return result
     }
@@ -217,18 +217,18 @@ namespace HAL {
             outb(PORT + 4, 11)  // IRQs enabled, RTS/DSR set
         }
 
-        func transmit_ready() -> char {
+        func transmit_ready() -> u8 {
             return inb(PORT + 5) & 32
         }
 
-        func write_char(c: char) {
+        func write_char(c: u8) {
             while transmit_ready() == 0 {
                 // Wait for the transmit buffer to empty
             }
             outb(PORT, c)
         }
 
-        func write(str: char*) {
+        func write(str: u8*) {
             let i: i64 = 0
             while str[i] != 0 {
                 write_char(str[i])
@@ -236,7 +236,7 @@ namespace HAL {
             }
         }
 
-        func write_colored(str: char*, ansi_code: char*) {
+        func write_colored(str: u8*, ansi_code: u8*) {
             write(ansi_code)
             write(str)
             write(Ansi.RESET)
@@ -254,7 +254,7 @@ namespace HAL {
         const COMMAND2 = 0xA0
         const DATA2    = 0xA1
 
-        func remap(offset1: char, offset2: char) {
+        func remap(offset1: u8, offset2: u8) {
             outb(COMMAND1, 0x11) // ICW1: init, expect ICW4
             outb(COMMAND2, 0x11)
             outb(DATA1, offset1) // ICW2: master vector offset
@@ -278,7 +278,7 @@ namespace HAL {
         // always called after unmask_irq0 in this demo, and blindly
         // writing a fixed mask here would re-mask IRQ0).
         func unmask_irq1() {
-            let mask: char = inb(DATA1)
+            let mask: u8 = inb(DATA1)
             outb(DATA1, mask & 0xFD) // clear bit 1 (keyboard)
         }
 
@@ -288,9 +288,9 @@ namespace HAL {
         // on both PICs: the cascade (master bit 2) and IRQ12 itself
         // (slave bit 4, since IRQ8-15 map to slave bits 0-7).
         func unmask_irq12() {
-            let mask1: char = inb(DATA1)
+            let mask1: u8 = inb(DATA1)
             outb(DATA1, mask1 & 0xFB)
-            let mask2: char = inb(DATA2)
+            let mask2: u8 = inb(DATA2)
             outb(DATA2, mask2 & 0xEF)
         }
 
@@ -324,8 +324,8 @@ namespace HAL {
         func set_frequency(hz: u64) {
             let divisor: u64 = BASE_HZ / hz
             outb(COMMAND, 0x36)
-            outb(CHANNEL0, (divisor & 0xFF) as char)
-            outb(CHANNEL0, ((divisor >> 8) & 0xFF) as char)
+            outb(CHANNEL0, (divisor & 0xFF) as u8)
+            outb(CHANNEL0, ((divisor >> 8) & 0xFF) as u8)
         }
     }
 
@@ -339,15 +339,15 @@ namespace HAL {
     // forward through - so callers format into the shared scratch buffer
     // (with however many arguments this call needs) and then flush it:
     //
-    //   HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128, "tick %d\n", n)
+    //   HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128, "tick %d\n", n)
     //   HAL.Log.flush()
     namespace Log {
-        let buffer: char[128]
+        let buffer: u8[128]
 
-        extern func ksnprintf(buf: char*, size: u64, fmt: char*, ...) -> i64
+        extern func ksnprintf(buf: u8*, size: u64, fmt: u8*, ...) -> i64
 
         func flush() {
-            Serial.write(buffer as char*)
+            Serial.write(buffer as u8*)
         }
     }
 }

@@ -4,7 +4,7 @@ namespace HAL {
     }
 
     func inb(port: u64) -> u8 {
-        let value: char = 0
+        let value: u8 = 0
         asm("inb %w1, %0" : "=a"(value) : "Nd"(port))
         value
     }

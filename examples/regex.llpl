@@ -1,13 +1,13 @@
-extern func puts(s: char*) -> i64
-func print_int(label: char*, value: i64) {
-    let buf: char[64]
-    ksnprintf(buf as char*, 64, "%s = %d", label, value)
-    puts(buf as char*)
+extern func puts(s: u8*) -> i64
+func print_int(label: u8*, value: i64) {
+    let buf: u8[64]
+    ksnprintf(buf as u8*, 64, "%s = %d", label, value)
+    puts(buf as u8*)
 }
 
 func demo_find_all() {
     let re = /[0-9]+/
-    let text: char* = "abc 123 def 4567 ghi"
+    let text: u8* = "abc 123 def 4567 ghi"
 
     let count: i64 = 0
     for m in re.find_all(text) {
@@ -21,7 +21,7 @@ func demo_find_all() {
 
 func demo_replace() {
     let digits = /[0-9]+/
-    let text: char* = "abc 123 def 4567 ghi"
+    let text: u8* = "abc 123 def 4567 ghi"
 
     let r1: String = digits.replace(text, "#")
     puts(r1.c_str())

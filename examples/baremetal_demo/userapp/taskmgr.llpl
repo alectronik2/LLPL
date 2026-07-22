@@ -1,0 +1,285 @@
+// Task Manager - a small GUI view over the kernel scheduler's task table.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+import "wm_client"
+import "font"
+
+const BG: u32 = 0x111318
+const PANEL: u32 = 0x1B2028
+const HEADER: u32 = 0x2B3340
+const GRID: u32 = 0x303844
+const TEXT: u32 = 0xD8DEE9
+const MUTED: u32 = 0x89929F
+const ACCENT: u32 = 0x59C2FF
+const ALIVE: u32 = 0x70E080
+const SLEEP: u32 = 0xF0C65A
+const BLOCKED: u32 = 0xF08C5A
+const DEAD: u32 = 0xE05A5A
+
+const TASK_REC_SIZE = 96
+const MAX_ROWS = 8
+
+let selected: i64 = 0
+let task_count_seen: u64 = 0
+let last_refresh: u64 = 0
+
+func fill_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
+    let yy: u64 = 0
+    while yy < h {
+        let xx: u64 = 0
+        while xx < w {
+            wm_put_pixel(x + xx, y + yy, color)
+            xx = xx + 1
+        }
+        yy = yy + 1
+    }
+}
+
+func draw_hline(x: u64, y: u64, w: u64, color: u32) {
+    let i: u64 = 0
+    while i < w {
+        wm_put_pixel(x + i, y, color)
+        i = i + 1
+    }
+}
+
+func uint_to_dec(buf: u8*, n: u64) -> i64 {
+    if n == 0 {
+        buf[0] = 48
+        buf[1] = 0
+        return 1
+    }
+    let tmp: u8[20]
+    let len: i64 = 0
+    let v: u64 = n
+    while v > 0 {
+        tmp[len] = (48 + (v % 10)) as u8
+        len = len + 1
+        v = v / 10
+    }
+    let i: i64 = 0
+    while i < len {
+        buf[i] = tmp[len - 1 - i]
+        i = i + 1
+    }
+    buf[len] = 0
+    return len
+}
+
+func state_name(state: u64) -> u8* {
+    if state == 0 {
+        return "run" as u8*
+    }
+    if state == 2 {
+        return "sleep" as u8*
+    }
+    if state == 3 {
+        return "send" as u8*
+    }
+    if state == 4 {
+        return "recv" as u8*
+    }
+    if state == 5 {
+        return "reply" as u8*
+    }
+    if state == 6 {
+        return "zombie" as u8*
+    }
+    if state == 7 {
+        return "wait" as u8*
+    }
+    return "dead" as u8*
+}
+
+func state_color(state: u64) -> u32 {
+    if state == 0 {
+        return ALIVE
+    }
+    if state == 2 {
+        return SLEEP
+    }
+    if state == 1 || state == 6 {
+        return DEAD
+    }
+    return BLOCKED
+}
+
+func mode_name(mode: u64) -> u8* {
+    if mode == 1 {
+        return "user" as u8*
+    }
+    return "kern" as u8*
+}
+
+func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
+}
+
+func draw_num(x: u64, y: u64, n: u64, fg: u32, bg: u32) {
+    let buf: u8[24]
+    uint_to_dec(buf as u8*, n)
+    draw_text(x, y, buf as u8*, fg, bg)
+}
+
+func draw_num_limited(x: u64, y: u64, n: u64, max_digits: i64, fg: u32, bg: u32) {
+    let buf: u8[24]
+    let len: i64 = uint_to_dec(buf as u8*, n)
+    if len > max_digits {
+        let i: i64 = 0
+        while i < max_digits - 1 {
+            buf[i] = 57 // '9'
+            i = i + 1
+        }
+        buf[max_digits - 1] = 43 // '+'
+        buf[max_digits] = 0
+    }
+    draw_text(x, y, buf as u8*, fg, bg)
+}
+
+func draw_name_limited(x: u64, y: u64, name: u8*, max_chars: i64, fg: u32, bg: u32) {
+    let buf: u8[16]
+    let i: i64 = 0
+    while i < max_chars && i < 15 && name[i] != 0 {
+        buf[i] = name[i]
+        i = i + 1
+    }
+    buf[i] = 0
+    draw_text(x, y, buf as u8*, fg, bg)
+}
+
+func draw_ipc_peer(x: u64, y: u64, peer: u64, fg: u32, bg: u32) {
+    if peer == 0xFFFFFFFFFFFFFFFF {
+        draw_text(x, y, "-" as u8*, fg, bg)
+    } else {
+        draw_num_limited(x, y, peer, 4, fg, bg)
+    }
+}
+
+func task_info(index: u64, rec: u8*) -> bool {
+    return sys_task_info(index, rec) != RT_SYS_ERR
+}
+
+func draw_header() {
+    fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, BG)
+    fill_rect(0, 0, Wm.WIN_W as u64, 26, HEADER)
+    draw_text(8, 5, "TASK MANAGER" as u8*, ACCENT, HEADER)
+    draw_text(216, 5, "tasks" as u8*, MUTED, HEADER)
+    draw_num(264, 5, task_count_seen, TEXT, HEADER)
+
+    fill_rect(6, 32, 308, 18, PANEL)
+    draw_text(10, 34, "PID" as u8*, MUTED, PANEL)
+    draw_text(50, 34, "NAME" as u8*, MUTED, PANEL)
+    draw_text(142, 34, "STATE" as u8*, MUTED, PANEL)
+    draw_text(206, 34, "SW" as u8*, MUTED, PANEL)
+    draw_text(260, 34, "SYS" as u8*, MUTED, PANEL)
+}
+
+func draw_row(row: i64, rec: u8*) {
+    let fields: u64* = (rec + 16) as u64*
+    let pid: u64 = fields[0]
+    let state: u64 = fields[1]
+    let mode: u64 = fields[2]
+    let switches: u64 = fields[3]
+    let syscalls: u64 = fields[4]
+
+    let y: u64 = 52 + (row as u64) * 16
+    let row_bg: u32 = BG
+    if row == selected {
+        row_bg = 0x243040
+    } else if (row % 2) == 1 {
+        row_bg = 0x151922
+    }
+    fill_rect(6, y - 1, 308, 16, row_bg)
+    draw_num_limited(10, y, pid, 4, TEXT, row_bg)
+    draw_name_limited(50, y, rec, 10, TEXT, row_bg)
+    draw_text(142, y, state_name(state), state_color(state), row_bg)
+    draw_text(194, y, mode_name(mode), MUTED, row_bg)
+    draw_num_limited(234, y, switches, 5, TEXT, row_bg)
+    draw_num_limited(282, y, syscalls, 4, TEXT, row_bg)
+    draw_hline(6, y + 15, 308, GRID)
+}
+
+func draw_details() {
+    let rec: u8[96]
+    if !task_info(selected as u64, rec as u8*) {
+        return
+    }
+    let fields: u64* = ((rec as u8*) + 16) as u64*
+    let y: u64 = 182
+    fill_rect(0, 176, Wm.WIN_W as u64, 24, HEADER)
+    draw_text(8, y, "pid" as u8*, MUTED, HEADER)
+    draw_num(32, y, fields[0], TEXT, HEADER)
+    draw_text(72, y, "parent" as u8*, MUTED, HEADER)
+    draw_num(128, y, fields[6], TEXT, HEADER)
+    draw_text(176, y, "ipc" as u8*, MUTED, HEADER)
+    draw_ipc_peer(208, y, fields[7], TEXT, HEADER)
+    draw_text(248, y, "last" as u8*, MUTED, HEADER)
+    draw_num_limited(288, y, fields[5], 4, TEXT, HEADER)
+}
+
+func render() {
+    draw_header()
+
+    let rec: u8[96]
+    let row: i64 = 0
+    while row < MAX_ROWS {
+        if task_info(row as u64, rec as u8*) {
+            let fields: u64* = ((rec as u8*) + 16) as u64*
+            task_count_seen = fields[9]
+            draw_row(row, rec as u8*)
+        }
+        row = row + 1
+    }
+
+    draw_details()
+    wm_present()
+}
+
+func clamp_selection() {
+    if selected < 0 {
+        selected = 0
+    }
+    if task_count_seen > 0 && selected >= task_count_seen as i64 {
+        selected = (task_count_seen as i64) - 1
+    }
+    if selected >= MAX_ROWS {
+        selected = MAX_ROWS - 1
+    }
+}
+
+func _start(argc: u64, argv: u64*) {
+    sys_putln("taskmgr: starting")
+    wm_init()
+    if !wm_create_window() {
+        sys_putln("taskmgr: create_window failed")
+        rt_exit(1)
+    }
+
+    render()
+    while true {
+        let input: WmInput = wm_poll_input()
+        if input.key == KEY_CLOSE_REQ {
+            wm_close()
+            rt_exit(0)
+        }
+        if input.key == KEY_UP {
+            selected = selected - 1
+            clamp_selection()
+            render()
+        } else if input.key == KEY_DOWN {
+            selected = selected + 1
+            clamp_selection()
+            render()
+        }
+
+        last_refresh = last_refresh + 1
+        if last_refresh >= 15 {
+            last_refresh = 0
+            clamp_selection()
+            render()
+        }
+        sys_sleep(16)
+    }
+}

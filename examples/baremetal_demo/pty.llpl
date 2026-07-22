@@ -1,0 +1,148 @@
+// Pseudo-terminal byte queues for GUI-hosted kernel shells.
+
+import task
+
+namespace Pty {
+    const MAX_PTYS = 4
+    const BUF_SIZE = 4096
+
+    packed struct Session {
+        let used: bool
+        let owner_pid: i64
+        let input: u8[4096]
+        let input_head: u64
+        let input_tail: u64
+        let output: u8[4096]
+        let output_head: u64
+        let output_tail: u64
+    }
+
+    let sessions: Session[4]
+
+    func next_pos(pos: u64) -> u64 {
+        return (pos + 1) % BUF_SIZE
+    }
+
+    func valid(id: i64) -> bool {
+        return id >= 0 && id < MAX_PTYS && sessions[id].used
+    }
+
+    func owns(id: i64, pid: i64) -> bool {
+        return valid(id) && sessions[id].owner_pid == pid
+    }
+
+    func owner(id: i64) -> i64 {
+        if !valid(id) {
+            return -1
+        }
+        return sessions[id].owner_pid
+    }
+
+    func create(owner_pid: i64) -> i64 {
+        let i: i64 = 0
+        while i < MAX_PTYS {
+            if !sessions[i].used {
+                sessions[i].used = true
+                sessions[i].owner_pid = owner_pid
+                sessions[i].input_head = 0
+                sessions[i].input_tail = 0
+                sessions[i].output_head = 0
+                sessions[i].output_tail = 0
+                return i
+            }
+            i = i + 1
+        }
+        return -1
+    }
+
+    func close(id: i64) {
+        if valid(id) {
+            push_input(id, 4)
+            sessions[id].owner_pid = -1
+        }
+    }
+
+    func release(id: i64) {
+        if valid(id) {
+            sessions[id].used = false
+        }
+    }
+
+    func push_input(id: i64, c: u8) -> bool {
+        if !valid(id) {
+            return false
+        }
+        let s: Session* = &sessions[id]
+        let next: u64 = next_pos(s.input_head)
+        if next == s.input_tail {
+            s.input_tail = next_pos(s.input_tail)
+        }
+        s.input[s.input_head] = c
+        s.input_head = next
+        return true
+    }
+
+    func pop_input(id: i64, out: u8*) -> bool {
+        if !valid(id) {
+            return false
+        }
+        let s: Session* = &sessions[id]
+        if s.input_tail == s.input_head {
+            return false
+        }
+        out[0] = s.input[s.input_tail]
+        s.input_tail = next_pos(s.input_tail)
+        return true
+    }
+
+    func write_output(id: i64, buf: u8*, len: u64) -> u64 {
+        if !valid(id) {
+            return 0
+        }
+        let s: Session* = &sessions[id]
+        let i: u64 = 0
+        while i < len {
+            let next: u64 = next_pos(s.output_head)
+            if next == s.output_tail {
+                s.output_tail = next_pos(s.output_tail)
+            }
+            s.output[s.output_head] = buf[i]
+            s.output_head = next
+            i = i + 1
+        }
+        return i
+    }
+
+    func write_cstring(id: i64, s: u8*) -> u64 {
+        let n: u64 = 0
+        while s[n] != 0 {
+            n = n + 1
+        }
+        return write_output(id, s, n)
+    }
+
+    func read_output(id: i64, out: u8*, max_len: u64) -> u64 {
+        if !valid(id) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let s: Session* = &sessions[id]
+        let n: u64 = 0
+        while n < max_len && s.output_tail != s.output_head {
+            out[n] = s.output[s.output_tail]
+            s.output_tail = next_pos(s.output_tail)
+            n = n + 1
+        }
+        return n
+    }
+
+    func read_char_blocking(id: i64) -> u8 {
+        let c: u8 = 0
+        while !pop_input(id, &c) {
+            if !valid(id) || sessions[id].owner_pid < 0 {
+                return 4
+            }
+            Task.sleep_current(1)
+        }
+        return c
+    }
+}

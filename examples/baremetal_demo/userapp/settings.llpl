@@ -1,0 +1,167 @@
+// Settings - compact GUI status/control panel for the demo desktop.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+import "wm_client"
+import "font"
+
+const BG: u32 = 0x121417
+const BG_ALT: u32 = 0x181411
+const HEADER: u32 = 0x26313A
+const PANEL: u32 = 0x1A2026
+const ROW: u32 = 0x202832
+const TEXT: u32 = 0xE4E8EE
+const MUTED: u32 = 0x98A2AD
+const ACCENT: u32 = 0x5BC0EB
+const OK: u32 = 0x7BD88F
+const WARN: u32 = 0xF4C95D
+
+let dark_alt: bool = false
+let last_refresh: u64 = 0
+
+func bg_color() -> u32 {
+    if dark_alt {
+        return BG_ALT
+    }
+    return BG
+}
+
+func fill_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
+    let yy: u64 = 0
+    while yy < h {
+        let xx: u64 = 0
+        while xx < w {
+            wm_put_pixel(x + xx, y + yy, color)
+            xx = xx + 1
+        }
+        yy = yy + 1
+    }
+}
+
+func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
+}
+
+func uint_to_dec(buf: u8*, n: u64) {
+    if n == 0 {
+        buf[0] = 48
+        buf[1] = 0
+        return
+    }
+    let tmp: u8[20]
+    let len: i64 = 0
+    let v: u64 = n
+    while v > 0 {
+        tmp[len] = (48 + (v % 10)) as u8
+        len = len + 1
+        v = v / 10
+    }
+    let i: i64 = 0
+    while i < len {
+        buf[i] = tmp[len - 1 - i]
+        i = i + 1
+    }
+    buf[len] = 0
+}
+
+func draw_num(x: u64, y: u64, n: u64, fg: u32, bg: u32) {
+    let buf: u8[24]
+    uint_to_dec(buf as u8*, n)
+    draw_text(x, y, buf as u8*, fg, bg)
+}
+
+func draw_bool(x: u64, y: u64, yes: bool, bg: u32) {
+    if yes {
+        draw_text(x, y, "on" as u8*, OK, bg)
+    } else {
+        draw_text(x, y, "off" as u8*, WARN, bg)
+    }
+}
+
+func draw_section(x: u64, y: u64, w: u64, title: u8*) {
+    fill_rect(x, y, w, 18, HEADER)
+    draw_text(x + 6, y + 2, title, ACCENT, HEADER)
+}
+
+func draw_row(x: u64, y: u64, w: u64, label: u8*, value: u8*) {
+    fill_rect(x, y, w, 16, ROW)
+    draw_text(x + 6, y + 1, label, MUTED, ROW)
+    draw_text(x + 86, y + 1, value, TEXT, ROW)
+}
+
+func draw_row_num(x: u64, y: u64, w: u64, label: u8*, value: u64) {
+    fill_rect(x, y, w, 16, ROW)
+    draw_text(x + 6, y + 1, label, MUTED, ROW)
+    draw_num(x + 86, y + 1, value, TEXT, ROW)
+}
+
+func render() {
+    let sys: u64[10]
+    let wm: u64[5]
+    sys_system_info(sys as u64*)
+    wm_stats(wm as u64*)
+
+    let bg: u32 = bg_color()
+    fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, bg)
+    fill_rect(0, 0, Wm.WIN_W as u64, 24, HEADER)
+    draw_text(8, 4, "SETTINGS" as u8*, ACCENT, HEADER)
+    draw_text(224, 4, "desktop" as u8*, MUTED, HEADER)
+
+    draw_section(8, 32, 148, "Display" as u8*)
+    draw_row_num(8, 54, 148, "width" as u8*, sys[0])
+    draw_row_num(8, 72, 148, "height" as u8*, sys[1])
+    draw_row_num(8, 90, 148, "pitch" as u8*, sys[2])
+    fill_rect(8, 108, 148, 16, ROW)
+    draw_text(14, 109, "WC" as u8*, MUTED, ROW)
+    draw_bool(94, 109, sys[3] == 1, ROW)
+
+    draw_section(164, 32, 148, "Kernel" as u8*)
+    draw_row_num(164, 54, 148, "sched" as u8*, sys[4])
+    draw_row_num(164, 72, 148, "switch" as u8*, sys[5])
+    draw_row_num(164, 90, 148, "syscall" as u8*, sys[6])
+    draw_row_num(164, 108, 148, "ipc" as u8*, sys[7] + sys[8] + sys[9])
+
+    draw_section(8, 134, 148, "Compositor" as u8*)
+    draw_row_num(8, 156, 148, "frames" as u8*, wm[0])
+    draw_row_num(8, 174, 148, "full" as u8*, wm[1])
+
+    draw_section(164, 134, 148, "Options" as u8*)
+    draw_row(164, 156, 148, "boot" as u8*, "gui" as u8*)
+    fill_rect(164, 174, 148, 16, ROW)
+    draw_text(170, 175, "color" as u8*, MUTED, ROW)
+    draw_bool(250, 175, dark_alt, ROW)
+
+    wm_present()
+}
+
+func _start(argc: u64, argv: u64*) {
+    sys_putln("settings: starting")
+    if !wm_connect() {
+        sys_putln("settings: wm_connect failed")
+        rt_exit(1)
+    }
+    if !wm_create_window() {
+        sys_putln("settings: create_window failed")
+        rt_exit(1)
+    }
+
+    render()
+    while true {
+        let input: WmInput = wm_poll_input()
+        if input.key == KEY_CLOSE_REQ {
+            wm_close()
+            rt_exit(0)
+        }
+        if input.key == 32 || input.key == 10 {
+            dark_alt = !dark_alt
+            render()
+        }
+        last_refresh = last_refresh + 1
+        if last_refresh >= 30 {
+            last_refresh = 0
+            render()
+        }
+        sys_sleep(16)
+    }
+}

@@ -11,10 +11,10 @@ namespace GDT {
     packed struct Entry {
         let limit_low: uint16
         let base_low: uint16
-        let base_mid: char
-        let access: char
-        let granularity: char
-        let base_high: char
+        let base_mid: u8
+        let access: u8
+        let granularity: u8
+        let base_high: u8
     }
 
     // The 10-byte operand `lgdt`/`sgdt` read/write directly. `packed` is
@@ -53,8 +53,8 @@ namespace GDT {
     let entries: Entry[7]
     let pointer: Pointer
 
-    func set_entry(index: i64, limit_low: uint16, base_low: uint16, base_mid: char,
-                    access: char, granularity: char, base_high: char) {
+    func set_entry(index: i64, limit_low: uint16, base_low: uint16, base_mid: u8,
+                    access: u8, granularity: u8, base_high: u8) {
         entries[index].limit_low = limit_low
         entries[index].base_low = base_low
         entries[index].base_mid = base_mid
@@ -69,10 +69,10 @@ namespace GDT {
     func set_tss_descriptor(index: i64, base: u64, limit: u64) {
         entries[index].limit_low = (limit & 0xFFFF) as uint16
         entries[index].base_low = (base & 0xFFFF) as uint16
-        entries[index].base_mid = ((base >> 16) & 0xFF) as char
-        entries[index].access = 0x89 as char
-        entries[index].granularity = 0 as char
-        entries[index].base_high = ((base >> 24) & 0xFF) as char
+        entries[index].base_mid = ((base >> 16) & 0xFF) as u8
+        entries[index].access = 0x89 as u8
+        entries[index].granularity = 0 as u8
+        entries[index].base_high = ((base >> 24) & 0xFF) as u8
 
         let upper: u64 = base >> 32
         entries[index + 1].limit_low = (upper & 0xFFFF) as uint16

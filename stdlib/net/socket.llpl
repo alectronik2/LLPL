@@ -47,7 +47,7 @@ struct SockAddrIn {
     let sin_family: uint16
     let sin_port: uint16
     let sin_addr: uint32
-    let sin_zero: char[8]
+    let sin_zero: u8[8]
 
     constructor() {
         self.sin_family = AF_INET as uint16
@@ -126,8 +126,8 @@ class Socket {
         return self.is_open
     }
 
-    func bind_addr(addr: SockAddrIn) -> Result<bool, char*> {
-        let result: Result<bool, char*> = new Result<bool, char*>()
+    func bind_addr(addr: SockAddrIn) -> Result<bool, u8*> {
+        let result: Result<bool, u8*> = new Result<bool, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -144,8 +144,8 @@ class Socket {
         return result
     }
 
-    func listen_backlog(backlog: i64) -> Result<bool, char*> {
-        let result: Result<bool, char*> = new Result<bool, char*>()
+    func listen_backlog(backlog: i64) -> Result<bool, u8*> {
+        let result: Result<bool, u8*> = new Result<bool, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -162,8 +162,8 @@ class Socket {
         return result
     }
 
-    func accept_connection() -> Result<Socket, char*> {
-        let result: Result<Socket, char*> = new Result<Socket, char*>()
+    func accept_connection() -> Result<Socket, u8*> {
+        let result: Result<Socket, u8*> = new Result<Socket, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -187,8 +187,8 @@ class Socket {
         return result
     }
 
-    func connect_to(addr: SockAddrIn) -> Result<bool, char*> {
-        let result: Result<bool, char*> = new Result<bool, char*>()
+    func connect_to(addr: SockAddrIn) -> Result<bool, u8*> {
+        let result: Result<bool, u8*> = new Result<bool, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -205,8 +205,8 @@ class Socket {
         return result
     }
 
-    func send_data(buffer: char*, size: u64) -> Result<i64, char*> {
-        let result: Result<i64, char*> = new Result<i64, char*>()
+    func send_data(buffer: u8*, size: u64) -> Result<i64, u8*> {
+        let result: Result<i64, u8*> = new Result<i64, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -223,8 +223,8 @@ class Socket {
         return result
     }
 
-    func recv_data(buffer: char*, size: u64) -> Result<i64, char*> {
-        let result: Result<i64, char*> = new Result<i64, char*>()
+    func recv_data(buffer: u8*, size: u64) -> Result<i64, u8*> {
+        let result: Result<i64, u8*> = new Result<i64, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -241,15 +241,15 @@ class Socket {
         return result
     }
 
-    func send_string(s: String) -> Result<i64, char*> {
+    func send_string(s: String) -> Result<i64, u8*> {
         return self.send_data(s.c_str(), s.len() as u64)
     }
 
-    func recv_string(max_size: u64) -> Result<String, char*> {
-        let result: Result<String, char*> = new Result<String, char*>()
+    func recv_string(max_size: u64) -> Result<String, u8*> {
+        let result: Result<String, u8*> = new Result<String, u8*>()
 
-        let buffer: char* = llpl_alloc(max_size + 1)
-        let recv_result: Result<i64, char*> = self.recv_data(buffer, max_size)
+        let buffer: u8* = llpl_alloc(max_size + 1)
+        let recv_result: Result<i64, u8*> = self.recv_data(buffer, max_size)
 
         if !recv_result.is_ok() {
             llpl_free(buffer)
@@ -266,8 +266,8 @@ class Socket {
         return result
     }
 
-    func set_reuse_addr(enable: bool) -> Result<bool, char*> {
-        let result: Result<bool, char*> = new Result<bool, char*>()
+    func set_reuse_addr(enable: bool) -> Result<bool, u8*> {
+        let result: Result<bool, u8*> = new Result<bool, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -286,8 +286,8 @@ class Socket {
         return result
     }
 
-    func shutdown_socket(how: i64) -> Result<bool, char*> {
-        let result: Result<bool, char*> = new Result<bool, char*>()
+    func shutdown_socket(how: i64) -> Result<bool, u8*> {
+        let result: Result<bool, u8*> = new Result<bool, u8*>()
 
         if !self.is_open {
             result.set_err("Socket not open")
@@ -317,10 +317,10 @@ class TcpServer {
         sockaddr_in_set_addr_any(&self.addr)
     }
 
-    func start_server(backlog: i64) -> Result<bool, char*> {
+    func start_server(backlog: i64) -> Result<bool, u8*> {
         self.sock.set_reuse_addr(true)
 
-        let bind_result: Result<bool, char*> = self.sock.bind_addr(self.addr)
+        let bind_result: Result<bool, u8*> = self.sock.bind_addr(self.addr)
         if !bind_result.is_ok() {
             return bind_result
         }
@@ -328,7 +328,7 @@ class TcpServer {
         return self.sock.listen_backlog(backlog)
     }
 
-    func accept_client() -> Result<Socket, char*> {
+    func accept_client() -> Result<Socket, u8*> {
         return self.sock.accept_connection()
     }
 
@@ -345,18 +345,18 @@ class TcpClient {
         self.sock = new Socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
     }
 
-    func connect_to_host(host_a: uint8, host_b: uint8, host_c: uint8, host_d: uint8, port: uint16) -> Result<bool, char*> {
+    func connect_to_host(host_a: uint8, host_b: uint8, host_c: uint8, host_d: uint8, port: uint16) -> Result<bool, u8*> {
         let addr: SockAddrIn = new SockAddrIn()
         sockaddr_in_set_port(&addr, port)
         sockaddr_in_set_addr(&addr, host_a, host_b, host_c, host_d)
         return self.sock.connect_to(addr)
     }
 
-    func send_message(data: String) -> Result<i64, char*> {
+    func send_message(data: String) -> Result<i64, u8*> {
         return self.sock.send_string(data)
     }
 
-    func recv_message(max_size: u64) -> Result<String, char*> {
+    func recv_message(max_size: u64) -> Result<String, u8*> {
         return self.sock.recv_string(max_size)
     }
 
@@ -381,12 +381,12 @@ class UdpSocket {
         sockaddr_in_set_addr_any(&self.addr)
     }
 
-    func bind_socket() -> Result<bool, char*> {
+    func bind_socket() -> Result<bool, u8*> {
         return self.sock.bind_addr(self.addr)
     }
 
-    func send_to(data: char*, size: u64, dest_addr: SockAddrIn) -> Result<i64, char*> {
-        let result: Result<i64, char*> = new Result<i64, char*>()
+    func send_to(data: u8*, size: u64, dest_addr: SockAddrIn) -> Result<i64, u8*> {
+        let result: Result<i64, u8*> = new Result<i64, u8*>()
 
         if !self.sock.is_valid() {
             result.set_err("Socket not open")
@@ -403,8 +403,8 @@ class UdpSocket {
         return result
     }
 
-    func recv_from(buffer: char*, size: u64) -> Result<i64, char*> {
-        let result: Result<i64, char*> = new Result<i64, char*>()
+    func recv_from(buffer: u8*, size: u64) -> Result<i64, u8*> {
+        let result: Result<i64, u8*> = new Result<i64, u8*>()
 
         if !self.sock.is_valid() {
             result.set_err("Socket not open")

@@ -10,6 +10,7 @@ LIBSYS_1.0 {
     llpl_memcpy;
     llpl_alloc;
     llpl_free;
+    llpl_panic;
     rc_alloc;
     rc_free;
     rc_init;

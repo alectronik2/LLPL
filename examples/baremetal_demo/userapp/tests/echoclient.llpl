@@ -34,13 +34,13 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("missing-lookup=ALLOWED (bug!)")
     }
 
-    let msg: char[64]
-    sys_strcpy(msg as char*, "hello from client")
-    let n: u64 = sys_msg_send(handle, msg as char*, 18)
+    let msg: u8[64]
+    sys_strcpy(msg as u8*, "hello from client")
+    let n: u64 = sys_msg_send(handle, msg as u8*, 18)
     if n == RT_SYS_ERR {
         sys_putln("echoclient send=fail")
         rt_exit(1)
     }
-    sys_putln(msg as char*)
+    sys_putln(msg as u8*)
     rt_exit(0)
 }

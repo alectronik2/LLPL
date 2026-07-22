@@ -163,8 +163,8 @@ class Renderer {
     }
 
     // Load texture from file
-    func load_texture(filepath: char*) -> Result<Texture, char*> {
-        let result: Result<Texture, char*> = new Result<Texture, char*>()
+    func load_texture(filepath: u8*) -> Result<Texture, u8*> {
+        let result: Result<Texture, u8*> = new Result<Texture, u8*>()
 
         let surface: SDL_Surface* = SDL_LoadBMP(filepath)
         if surface == null {

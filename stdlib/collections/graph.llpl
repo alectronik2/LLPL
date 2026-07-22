@@ -60,11 +60,11 @@ class Graph {
                 let current: AdjListNode* = self.adjacency_list[i]
                 while current != null {
                     let next: AdjListNode* = (*current).next
-                    llpl_free(current as char*)
+                    llpl_free(current as u8*)
                     current = next
                 }
             }
-            llpl_free(self.adjacency_list as char*)
+            llpl_free(self.adjacency_list as u8*)
         }
     }
 
@@ -185,7 +185,7 @@ class Graph {
         visited[start] = true
 
         while !queue.is_empty() {
-            let v_result: Result<i64, char*> = queue.dequeue()
+            let v_result: Result<i64, u8*> = queue.dequeue()
             if !v_result.is_ok() {
                 break
             }
@@ -204,7 +204,7 @@ class Graph {
             }
         }
 
-        llpl_free(visited as char*)
+        llpl_free(visited as u8*)
         return result
     }
 
@@ -223,7 +223,7 @@ class Graph {
 
         self.dfs_helper(start, visited, result)
 
-        llpl_free(visited as char*)
+        llpl_free(visited as u8*)
         return result
     }
 
@@ -252,8 +252,8 @@ class Graph {
     }
 
     // Topological sort (for directed acyclic graphs)
-    func topological_sort() -> Result<Vector<i64>, char*> {
-        let result_container: Result<Vector<i64>, char*> = new Result<Vector<i64>, char*>()
+    func topological_sort() -> Result<Vector<i64>, u8*> {
+        let result_container: Result<Vector<i64>, u8*> = new Result<Vector<i64>, u8*>()
 
         if !self.is_directed {
             result_container.set_err("Graph must be directed")
@@ -284,7 +284,7 @@ class Graph {
         let result: Vector<i64> = new Vector<i64>()
 
         while !queue.is_empty() {
-            let v_result: Result<i64, char*> = queue.dequeue()
+            let v_result: Result<i64, u8*> = queue.dequeue()
             if !v_result.is_ok() {
                 break
             }
@@ -303,7 +303,7 @@ class Graph {
             }
         }
 
-        llpl_free(in_degree as char*)
+        llpl_free(in_degree as u8*)
 
         if result.len() != self.vertex_count {
             result_container.set_err("Graph has a cycle")
@@ -327,15 +327,15 @@ class Graph {
         for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
             if !visited[i] {
                 if self.has_cycle_directed_helper(i, visited, rec_stack) {
-                    llpl_free(visited as char*)
-                    llpl_free(rec_stack as char*)
+                    llpl_free(visited as u8*)
+                    llpl_free(rec_stack as u8*)
                     return true
                 }
             }
         }
 
-        llpl_free(visited as char*)
-        llpl_free(rec_stack as char*)
+        llpl_free(visited as u8*)
+        llpl_free(rec_stack as u8*)
         return false
     }
 
@@ -398,10 +398,10 @@ class GraphMatrix {
         if self.matrix != null {
             for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
                 if self.matrix[i] != null {
-                    llpl_free(self.matrix[i] as char*)
+                    llpl_free(self.matrix[i] as u8*)
                 }
             }
-            llpl_free(self.matrix as char*)
+            llpl_free(self.matrix as u8*)
         }
     }
 

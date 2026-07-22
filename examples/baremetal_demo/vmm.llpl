@@ -383,7 +383,7 @@ namespace VMM {
             if phys == 0 {
                 return 0
             }
-            let p: char* = phys as char*
+            let p: u8* = phys as u8*
             let j: i64 = 0
             while j < PAGE_SIZE as i64 {
                 p[j] = 0
@@ -424,7 +424,7 @@ namespace VMM {
                 if phys == 0 {
                     return 0
                 }
-                let p: char* = phys as char*
+                let p: u8* = phys as u8*
                 let j: i64 = 0
                 while j < PAGE_SIZE as i64 {
                     p[j] = 0

@@ -36,27 +36,33 @@ struct StepCounter {
     void step(string message) {
         current++;
         writefln("%s %s", paint(format("[%d/%d]", current, total), Color.bold), message);
+        stdout.flush();
     }
 
     void skipped(string message) {
         current++;
         writefln("%s %s %s", paint(format("[%d/%d]", current, total), Color.bold),
             message, paint("(up to date)", Color.gray));
+        stdout.flush();
     }
 }
 
 void logOk(string message) {
     writefln("%s %s", paint("✓", Color.green), message);
+    stdout.flush();
 }
 
 void logFail(string message) {
     stderr.writefln("%s %s", paint("✗", Color.red), message);
+    stderr.flush();
 }
 
 void logInfo(string message) {
     writeln(paint(message, Color.gray));
+    stdout.flush();
 }
 
 void logWarn(string message) {
     stderr.writefln("%s %s", paint("warning:", Color.yellow), message);
+    stderr.flush();
 }

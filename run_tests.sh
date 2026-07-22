@@ -48,7 +48,7 @@ for src in test/*.llpl; do
         continue
     fi
 
-    if ! gcc "$TMP_C" "$RUNTIME_DIR"/runtime.c -I "$RUNTIME_DIR" -o "$TMP_BIN" >/dev/null 2>&1; then
+    if ! gcc -funsigned-char "$TMP_C" "$RUNTIME_DIR"/runtime.c -I "$RUNTIME_DIR" -o "$TMP_BIN" >/dev/null 2>&1; then
         echo "[FAIL] $src  (C backend error)"
         FAILED=$((FAILED + 1))
         continue

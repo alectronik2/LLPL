@@ -10,6 +10,9 @@ import std.path;
 import std.process;
 import std.stdio;
 import std.string;
+import core.thread;
+import core.sync.condition;
+import core.sync.mutex;
 import buildconfig;
 import terminal;
 
@@ -91,10 +94,11 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
     if (config !is null) cflags ~= config.cflags;
 
     string generatedC = stripExtension(cfg.entry) ~ ".c";
+    string[] llplDeps = allLlplSources(".", cfg.llplCompiler);
 
     plan ~= PlanStep(StepKind.compileLlpl,
         format("Compiling %s", cfg.entry),
-        allLlplSources(".", cfg.llplCompiler),
+        llplDeps,
         [generatedC],
         [cfg.llplCompiler, cfg.entry, "-o", generatedC],
         PackageAction.init, "", "", false, 0);
@@ -113,14 +117,15 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         string[] cmd = [cfg.cc] ~ cflags ~ src.cflags;
         foreach (dir; src.includeDirs) cmd ~= ["-I", dir];
         cmd ~= ["-c", src.path, "-o", obj];
-        // A c_source whose path is the LLPL-generated file also depends
-        // on that generation step's own inputs (transitively) - already
-        // covered since compileLlpl must finish (group 0) before this
-        // group-1 batch starts, and this step's own input list below
-        // includes the generated .c file's current mtime either way.
+        string[] inputs = [src.path, configStampPath];
+        // Generated C may keep a stale/unchanged mtime when the LLPL
+        // compiler rewrites it quickly. Make the object depend directly
+        // on the LLPL source set too, so imported modules always
+        // invalidate the C compilation stage.
+        if (src.path == generatedC) inputs ~= llplDeps;
         plan ~= PlanStep(StepKind.compileC,
             format("Compiling %s", src.path),
-            [src.path, configStampPath],
+            inputs,
             [obj],
             cmd,
             PackageAction.init, "", "", false, 1);
@@ -146,7 +151,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         foreach (src; el.llplSources) {
             plan ~= PlanStep(StepKind.compileLlpl,
                 format("Compiling %s (%s)", src.src, el.name),
-                allLlplSources(".", cfg.llplCompiler),
+                llplDeps,
                 [src.cOutput],
                 [cfg.llplCompiler, src.src, "-o", src.cOutput],
                 PackageAction.init, "", "", false, 0);
@@ -156,7 +161,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
             cmd ~= ["-c", src.cOutput, "-o", src.objOutput];
             plan ~= PlanStep(StepKind.compileC,
                 format("Compiling %s (%s)", src.cOutput, el.name),
-                [src.cOutput, configStampPath],
+                [src.cOutput, configStampPath] ~ llplDeps,
                 [src.objOutput],
                 cmd,
                 PackageAction.init, "", "", false, group);
@@ -321,8 +326,162 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
     StepCounter counter;
     counter.total = cast(int)plan.length;
 
+    void runBuildChunk(size_t start, size_t end) {
+        if (start >= end) return;
+
+        PlanStep[] steps = plan[start .. end];
+        size_t n = steps.length;
+        bool[] done = new bool[](n);
+        bool[] running = new bool[](n);
+        bool[] willRun = new bool[](n);
+        int[] remainingDeps = new int[](n);
+        size_t[][string] consumersByOutput;
+        size_t[string] producerByOutput;
+        size_t doneCount = 0;
+        size_t runningCount = 0;
+
+        foreach (idx, s; steps) {
+            foreach (o; s.outputs) {
+                if (o.length > 0) producerByOutput[o] = idx;
+            }
+            willRun[idx] = !isUpToDate(s.outputs, s.inputs, configPath);
+        }
+
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            foreach (idx, s; steps) {
+                if (willRun[idx]) continue;
+                foreach (input; s.inputs) {
+                    if (auto producer = input in producerByOutput) {
+                        if (willRun[*producer]) {
+                            willRun[idx] = true;
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        foreach (idx, s; steps) {
+            if (!willRun[idx]) {
+                counter.skipped(s.description);
+                done[idx] = true;
+                doneCount++;
+            } else {
+                counter.step(s.description);
+            }
+        }
+
+        foreach (idx, s; steps) {
+            if (done[idx]) continue;
+            foreach (input; s.inputs) {
+                if (auto producer = input in producerByOutput) {
+                    if (!done[*producer]) {
+                        remainingDeps[idx]++;
+                        consumersByOutput[input] ~= idx;
+                    }
+                }
+            }
+        }
+
+        Thread[] threads = new Thread[](n);
+        string[] errors = new string[](n);
+        size_t[] completed;
+        auto completeMutex = new Mutex();
+        auto completeCond = new Condition(completeMutex);
+        int maxJobs = opts.jobs > 0 ? opts.jobs : 1;
+
+        void launch(size_t idx) {
+            running[idx] = true;
+            runningCount++;
+            auto worker = new Thread({
+                string error;
+                try {
+                    executeStep(steps[idx]);
+                } catch (BuildError e) {
+                    error = e.msg;
+                } catch (Exception e) {
+                    error = format("%s: %s", steps[idx].description, e.msg);
+                }
+                synchronized (completeMutex) {
+                    errors[idx] = error;
+                    completed ~= idx;
+                    completeCond.notify();
+                }
+            });
+            worker.start();
+            threads[idx] = worker;
+        }
+
+        size_t waitForFinishedWorker() {
+            synchronized (completeMutex) {
+                while (completed.length == 0) {
+                    completeCond.wait();
+                }
+                size_t idx = completed[$ - 1];
+                completed.length = completed.length - 1;
+                return idx;
+            }
+        }
+
+        void finishWorker(size_t finishedIdx) {
+            threads[finishedIdx].join();
+            if (errors[finishedIdx].length > 0) {
+                throw new BuildError(errors[finishedIdx]);
+            }
+
+            running[finishedIdx] = false;
+            done[finishedIdx] = true;
+            doneCount++;
+            runningCount--;
+
+            foreach (output; steps[finishedIdx].outputs) {
+                if (auto consumers = output in consumersByOutput) {
+                    foreach (consumer; *consumers) {
+                        if (remainingDeps[consumer] > 0) remainingDeps[consumer]--;
+                    }
+                }
+            }
+        }
+
+        while (doneCount < n) {
+            bool launchedAny = false;
+            while (runningCount < cast(size_t)maxJobs) {
+                size_t readyIdx = n;
+                foreach (idx; 0 .. n) {
+                    if (!done[idx] && !running[idx] && remainingDeps[idx] == 0) {
+                        readyIdx = idx;
+                        break;
+                    }
+                }
+                if (readyIdx == n) break;
+                launch(readyIdx);
+                launchedAny = true;
+            }
+
+            if (runningCount == 0) {
+                throw new BuildError("internal build scheduler error: no runnable steps; check for circular or missing dependencies");
+            }
+
+            if (!launchedAny && runningCount >= cast(size_t)maxJobs) {
+                // Fall through and wait for a worker below.
+            }
+
+            finishWorker(waitForFinishedWorker());
+        }
+    }
+
     size_t i = 0;
     while (i < plan.length) {
+        size_t chunkStart = i;
+        while (i < plan.length && plan[i].kind != StepKind.packageGate && plan[i].kind != StepKind.action) {
+            i++;
+        }
+        runBuildChunk(chunkStart, i);
+        if (i >= plan.length) break;
+
         // The whole package (ISO/etc.) is judged up to date or stale here,
         // live - every step ahead of it in the plan has already executed
         // (or been skipped) by this point, so its inputs' mtimes now
@@ -345,54 +504,12 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
             continue;
         }
 
-        if (plan[i].parallelGroup == 0) {
-            if (isUpToDate(plan[i].outputs, plan[i].inputs, configPath)) {
-                counter.skipped(plan[i].description);
-            } else {
-                counter.step(plan[i].description);
-                executeStep(plan[i]);
-            }
+        if (plan[i].kind == StepKind.action) {
+            counter.step(plan[i].description);
+            executeStep(plan[i]);
             i++;
             continue;
         }
-
-        // Batch every consecutive step sharing this group id, run the
-        // ones that aren't already up to date together (capped at
-        // opts.jobs concurrent children), and wait for the whole batch
-        // before moving on to whatever comes after it in the plan.
-        int group = plan[i].parallelGroup;
-        size_t j = i;
-        while (j < plan.length && plan[j].parallelGroup == group) j++;
-        PlanStep[] batch = plan[i .. j];
-
-        PlanStep[] toRun;
-        foreach (s; batch) {
-            if (isUpToDate(s.outputs, s.inputs, configPath)) {
-                counter.skipped(s.description);
-            } else {
-                counter.step(s.description);
-                toRun ~= s;
-            }
-        }
-
-        size_t k = 0;
-        while (k < toRun.length) {
-            size_t batchEnd = min(k + opts.jobs, toRun.length);
-            Pid[] pids;
-            foreach (s; toRun[k .. batchEnd]) {
-                pids ~= spawnProcess(s.cmd);
-            }
-            foreach (idx, pid; pids) {
-                int code = wait(pid);
-                if (code != 0) {
-                    throw new BuildError(format("%s failed (exit %d): %s",
-                        toRun[k + idx].description, code, toRun[k + idx].cmd.join(" ")));
-                }
-            }
-            k = batchEnd;
-        }
-
-        i = j;
     }
 }
 

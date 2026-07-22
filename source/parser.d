@@ -1415,11 +1415,11 @@ class Parser {
     // Short Rust-style spellings for the fixed-width integer types, resolved
     // to their canonical internal names right here so every other type-name
     // check in the parser and code generator only ever has to know about one
-    // spelling per width. i64/u64 are canonical now; legacy int/uint are no
-    // longer accepted as LLPL type names.
+    // spelling per width. i64/u64/u8 are canonical now; legacy int/uint/char
+    // are no longer accepted as LLPL type names.
     private static string canonicalIntTypeName(string name) {
         switch (name) {
-            case "u8": return "uint8";
+            case "u8": return "u8";
             case "u16": return "uint16";
             case "u32": return "uint32";
             case "u64": return "u64";
@@ -1436,10 +1436,11 @@ class Parser {
             return parseParenType();
         }
         auto nameTok = expect(TokenType.Identifier);
-        if (nameTok.value == "int" || nameTok.value == "uint") {
+        if (nameTok.value == "int" || nameTok.value == "uint" || nameTok.value == "char") {
             errorAt(nameTok.line, nameTok.column,
                 format("'%s' is no longer a type; use '%s' instead",
-                    nameTok.value, nameTok.value == "int" ? "i64" : "u64"));
+                    nameTok.value,
+                    nameTok.value == "int" ? "i64" : (nameTok.value == "uint" ? "u64" : "u8")));
         }
         string name = canonicalIntTypeName(nameTok.value);
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
@@ -1883,12 +1884,14 @@ class Parser {
     }
 
     private ReturnStmt returnStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
         expect(TokenType.Return);
         ASTNode value = null;
         if (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
             value = expression();
         }
-        return new ReturnStmt(value);
+        return new ReturnStmt(value, startLine, startColumn);
     }
 
     private ContinueStmt continueStmt() {

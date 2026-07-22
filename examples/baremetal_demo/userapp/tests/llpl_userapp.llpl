@@ -14,23 +14,23 @@ const SYS_CLOSE = 9
 
 func syscall1(number: u64, a: u64) -> u64 {
     let ret: u64 = 0
-    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a) : "memory")
     return ret
 }
 
 func syscall2(number: u64, a: u64, b: u64) -> u64 {
     let ret: u64 = 0
-    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b) : "memory")
     return ret
 }
 
 func syscall3(number: u64, a: u64, b: u64, c: u64) -> u64 {
     let ret: u64 = 0
-    asm("i64 $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
+    asm("int $0x80" : "=a"(ret) : "a"(number), "D"(a), "S"(b), "d"(c) : "memory")
     return ret
 }
 
-func user_strlen(s: char*) -> u64 {
+func user_strlen(s: u8*) -> u64 {
     let n: u64 = 0
     while s[n] != 0 {
         n = n + 1
@@ -38,11 +38,11 @@ func user_strlen(s: char*) -> u64 {
     return n
 }
 
-func print(s: char*) {
+func print(s: u8*) {
     syscall2(SYS_PRINT, s as u64, user_strlen(s))
 }
 
-func print_bytes(s: char*, len: u64) {
+func print_bytes(s: u8*, len: u64) {
     syscall2(SYS_PRINT, s as u64, len)
 }
 
@@ -53,7 +53,7 @@ func main(argc: u64, argv: u64*) {
     let i: u64 = 0
     while i < argc {
         print(" ")
-        print(argv[i] as char*)
+        print(argv[i] as u8*)
         i = i + 1
     }
     print("\n")
@@ -62,11 +62,11 @@ func main(argc: u64, argv: u64*) {
 
     let fd: u64 = syscall2(SYS_OPEN, "/boot/readme.txt" as u64, 0)
     if fd != 0xFFFFFFFFFFFFFFFF {
-        let buf: char[160]
+        let buf: u8[160]
         let n: u64 = syscall3(SYS_READ, fd, buf as u64, 159)
         if n != 0xFFFFFFFFFFFFFFFF {
             print("readme: ")
-            print_bytes(buf as char*, n)
+            print_bytes(buf as u8*, n)
             print("\n")
         }
         syscall1(SYS_CLOSE, fd)

@@ -9,9 +9,9 @@ let VGA_HEIGHT: i64 = 25
 class Screen {
     let row: i64
     let col: i64
-    let color: char
+    let color: u8
 
-    constructor(color: char) {
+    constructor(color: u8) {
         self.row = 0
         self.col = 0
         self.color = color
@@ -22,7 +22,7 @@ class Screen {
     }
 
     func clear() {
-        let buffer: char* = VGA_BUFFER as char*
+        let buffer: u8* = VGA_BUFFER as u8*
         let total: i64 = VGA_WIDTH * VGA_HEIGHT * 2
         for let i: i64 = 0, i < total, i = i + 2 {
             buffer[i] = 0
@@ -32,7 +32,7 @@ class Screen {
         self.col = 0
     }
 
-    func putchar(c: char) {
+    func putchar(c: u8) {
         if c == 10 {
             self.newline()
             return
@@ -42,7 +42,7 @@ class Screen {
             self.newline()
         }
 
-        let buffer: char* = VGA_BUFFER as char*
+        let buffer: u8* = VGA_BUFFER as u8*
         let index: i64 = (self.row * VGA_WIDTH + self.col) * 2
 
         buffer[index] = c
@@ -51,7 +51,7 @@ class Screen {
         self.col = self.col + 1
     }
 
-    func write(str: char*) {
+    func write(str: u8*) {
         let i: i64 = 0
         while str[i] != 0 {
             self.putchar(str[i])

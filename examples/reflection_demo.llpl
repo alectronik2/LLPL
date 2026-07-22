@@ -1,13 +1,13 @@
 extern func puts(s: string) -> i64
 
 func print_int(label: string, value: i64) {
-    let buf: char[96]
+    let buf: u8[96]
     ksnprintf(buf as string, 96, "%s = %d", label, value)
     puts(buf as string)
 }
 
 func print_str(label: string, value: string) {
-    let buf: char[128]
+    let buf: u8[128]
     ksnprintf(buf as string, 128, "%s = %s", label, value)
     puts(buf as string)
 }

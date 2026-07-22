@@ -28,8 +28,8 @@ grammar Calc {
     NUMBER : [0-9]+ ;
 }
 
-extern func puts(s: char*) -> i64
-extern func atoi(s: char*) -> i64
+extern func puts(s: u8*) -> i64
+extern func atoi(s: u8*) -> i64
 
 // Every rule match becomes one ParseNode (see prelude.llpl): `.name()` is
 // the rule (or terminal) name, `.text()` the exact substring it matched,
@@ -53,7 +53,7 @@ func eval(node: ParseNode) -> i64 {
         // the left operand, the operator terminal, the right operand.
         let left: i64 = eval(node.child(0))
         let right: i64 = eval(node.child(2))
-        let op: char = node.child(1).text().byte_at(0)
+        let op: u8 = node.child(1).text().byte_at(0)
         if op == '+' { return left + right }
         if op == '-' { return left - right }
         if op == '*' { return left * right }
@@ -62,10 +62,10 @@ func eval(node: ParseNode) -> i64 {
     return 0
 }
 
-func print_result(expression: char*, result: i64) {
-    let buf: char[64]
-    ksnprintf(buf as char*, 64, "%s = %d", expression, result)
-    puts(buf as char*)
+func print_result(expression: u8*, result: i64) {
+    let buf: u8[64]
+    ksnprintf(buf as u8*, 64, "%s = %d", expression, result)
+    puts(buf as u8*)
 }
 
 func demo_arithmetic() {

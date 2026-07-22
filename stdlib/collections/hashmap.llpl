@@ -53,7 +53,7 @@ class EnhancedHashMap<K: Hashable, V> {
     destructor() {
         self.clear()
         if self.buckets != null {
-            llpl_free(self.buckets as char*)
+            llpl_free(self.buckets as u8*)
         }
     }
 
@@ -101,12 +101,12 @@ class EnhancedHashMap<K: Hashable, V> {
             while entry != null {
                 let next: HashMapEntry<K, V>* = (*entry).next
                 self.insert((*entry).key, (*entry).value)
-                llpl_free(entry as char*)
+                llpl_free(entry as u8*)
                 entry = next
             }
         }
 
-        llpl_free(old_buckets as char*)
+        llpl_free(old_buckets as u8*)
     }
 
     func insert(key: K, value: V) {
@@ -147,8 +147,8 @@ class EnhancedHashMap<K: Hashable, V> {
         }
     }
 
-    func get(key: K) -> Result<V, char*> {
-        let result: Result<V, char*> = new Result<V, char*>()
+    func get(key: K) -> Result<V, u8*> {
+        let result: Result<V, u8*> = new Result<V, u8*>()
         let hash: u64 = key.hash()
         let bucket_idx: i64 = self.get_bucket_index(hash)
 
@@ -182,8 +182,8 @@ class EnhancedHashMap<K: Hashable, V> {
         return false
     }
 
-    func remove(key: K) -> Result<V, char*> {
-        let result: Result<V, char*> = new Result<V, char*>()
+    func remove(key: K) -> Result<V, u8*> {
+        let result: Result<V, u8*> = new Result<V, u8*>()
         let hash: u64 = key.hash()
         let bucket_idx: i64 = self.get_bucket_index(hash)
 
@@ -200,7 +200,7 @@ class EnhancedHashMap<K: Hashable, V> {
                     (*prev).next = (*entry).next
                 }
 
-                llpl_free(entry as char*)
+                llpl_free(entry as u8*)
                 self.count = self.count - 1
 
                 result.set_ok(value)
@@ -251,7 +251,7 @@ class EnhancedHashMap<K: Hashable, V> {
 
             while entry != null {
                 let next: HashMapEntry<K, V>* = (*entry).next
-                llpl_free(entry as char*)
+                llpl_free(entry as u8*)
                 entry = next
             }
 
@@ -308,7 +308,7 @@ class HashSet<T: Hashable> {
     }
 
     func remove(value: T) -> bool {
-        let result: Result<bool, char*> = self.map.remove(value)
+        let result: Result<bool, u8*> = self.map.remove(value)
         return result.is_ok()
     }
 

@@ -10,10 +10,10 @@ import "../user_runtime"
 
 const BULK_LEN = 600
 
-func fill_bulk(buf: char*) {
+func fill_bulk(buf: u8*) {
     let i: u64 = 0
     while i < BULK_LEN {
-        buf[i] = (65 + (i % 26)) as char // 'A'..'Z' repeating
+        buf[i] = (65 + (i % 26)) as u8 // 'A'..'Z' repeating
         i = i + 1
     }
     buf[BULK_LEN] = 0
@@ -24,14 +24,14 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    let shm: char* = sys_shm_create(1)
+    let shm: u8* = sys_shm_create(1)
     if shm == null {
         rt_exit(1)
     }
 
     while true {
-        let msg: char[16]
-        let sender: u64 = sys_msg_recv(msg as char*, 16)
+        let msg: u8[16]
+        let sender: u64 = sys_msg_recv(msg as u8*, 16)
         if sender == RT_SYS_ERR {
             continue
         }

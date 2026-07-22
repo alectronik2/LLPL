@@ -2,8 +2,8 @@
 
 import graphics  // Circular import back to graphics
 
-extern func inb(port: u64) -> char
-extern func outb(port: u64, value: char)
+extern func inb(port: u64) -> u8
+extern func outb(port: u64, value: u8)
 
 let KEYBOARD_DATA: u64 = 96
 let KEYBOARD_STATUS: u64 = 100
@@ -19,18 +19,18 @@ class Keyboard {
         // Nothing
     }
 
-    func read_key() -> char {
+    func read_key() -> u8 {
         // Wait for key
         while (inb(KEYBOARD_STATUS) & 1) == 0 {
             // Wait
         }
 
-        let scancode: char = inb(KEYBOARD_DATA)
+        let scancode: u8 = inb(KEYBOARD_DATA)
         return scancode
     }
 
     func has_key() -> i64 {
-        let status: char = inb(KEYBOARD_STATUS)
+        let status: u8 = inb(KEYBOARD_STATUS)
         return (status & 1) as i64
     }
 }
