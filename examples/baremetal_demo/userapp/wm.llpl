@@ -60,6 +60,12 @@ struct Window {
     // reveal up to the original WIN_W x WIN_H, never more.
     let vis_w: u64
     let vis_h: u64
+    let restore_x: u64
+    let restore_y: u64
+    let restore_w: u64
+    let restore_h: u64
+    let minimized: bool
+    let maximized: bool
     // Set by the close button (see hit_test_close_button in the main
     // loop), cleared the moment OP_POLL_INPUT next delivers KEY_CLOSE_REQ
     // for this slot - a *request*, not an immediate close: the window
@@ -206,6 +212,99 @@ func z_bring_to_front(slot: i64) {
     z_add(slot)
 }
 
+func restore_window(slot: i64) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS || !windows[slot].used {
+        return
+    }
+    windows[slot].minimized = false
+    if windows[slot].maximized {
+        return
+    }
+    if windows[slot].restore_w >= MIN_VIS_W && windows[slot].restore_h >= MIN_VIS_H {
+        windows[slot].win_x = windows[slot].restore_x
+        windows[slot].win_y = windows[slot].restore_y
+        windows[slot].vis_w = windows[slot].restore_w
+        windows[slot].vis_h = windows[slot].restore_h
+    }
+}
+
+func minimize_window(slot: i64) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS || !windows[slot].used {
+        return
+    }
+    windows[slot].minimized = true
+    if focused == slot {
+        focused = -1
+        let zi: i64 = z_count - 1
+        while zi >= 0 && focused < 0 {
+            let s: i64 = z_order[zi]
+            if windows[s].used && !windows[s].minimized {
+                focused = s
+            }
+            zi = zi - 1
+        }
+    }
+}
+
+func toggle_maximize_window(slot: i64) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS || !windows[slot].used {
+        return
+    }
+    windows[slot].minimized = false
+    if windows[slot].maximized {
+        windows[slot].maximized = false
+        restore_window(slot)
+        return
+    }
+    windows[slot].restore_x = windows[slot].win_x
+    windows[slot].restore_y = windows[slot].win_y
+    windows[slot].restore_w = windows[slot].vis_w
+    windows[slot].restore_h = windows[slot].vis_h
+    windows[slot].win_x = 0
+    windows[slot].win_y = 0
+    windows[slot].vis_w = max_visible_w_for(slot) as u64
+    windows[slot].vis_h = max_visible_h_for(slot) as u64
+    windows[slot].maximized = true
+}
+
+func snap_window_rect(slot: i64, x: i64, y: i64, w: i64, h: i64) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS || !windows[slot].used {
+        return
+    }
+    windows[slot].restore_x = windows[slot].win_x
+    windows[slot].restore_y = windows[slot].win_y
+    windows[slot].restore_w = windows[slot].vis_w
+    windows[slot].restore_h = windows[slot].vis_h
+    windows[slot].win_x = x as u64
+    windows[slot].win_y = y as u64
+    windows[slot].vis_w = w as u64
+    windows[slot].vis_h = h as u64
+    windows[slot].minimized = false
+    windows[slot].maximized = false
+}
+
+func apply_drag_snap(slot: i64, mx: i64, my: i64) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS || !windows[slot].used {
+        return
+    }
+    let max_x: i64 = (fb_width as i64)
+    let max_y: i64 = (fb_height as i64)
+    if my <= SNAP_EDGE_PX {
+        toggle_maximize_window(slot)
+        return
+    }
+    if mx <= SNAP_EDGE_PX {
+        let half_w: i64 = max_x / 2
+        snap_window_rect(slot, 0, 0, half_w, max_y - (TASKBAR_H as i64))
+        return
+    }
+    if mx >= max_x - SNAP_EDGE_PX {
+        let half_w: i64 = max_x / 2
+        snap_window_rect(slot, half_w, 0, half_w, max_y - (TASKBAR_H as i64))
+        return
+    }
+}
+
 // Next used slot strictly after `cur`, wrapping around - -1 if none are
 // used at all (can't happen mid-dispatch of a request from an existing
 // window, but a defensive return value costs nothing).
@@ -213,7 +312,7 @@ func next_focus_after(cur: i64) -> i64 {
     let i: i64 = 0
     while i < Wm.MAX_WINDOWS {
         let idx: i64 = (cur + 1 + i) % Wm.MAX_WINDOWS
-        if windows[idx].used {
+        if windows[idx].used && !windows[idx].minimized {
             return idx
         }
         i = i + 1
@@ -755,7 +854,7 @@ func present_window_rect(slot: i64, rx: i64, ry: i64, rw: i64, rh: i64) {
     let zi: i64 = 0
     while zi < z_count {
         let s: i64 = z_order[zi]
-        if windows[s].used {
+        if windows[s].used && !windows[s].minimized {
             let wx: i64 = windows[s].win_x as i64
             let wy: i64 = (windows[s].win_y as i64) + (TITLEBAR_H as i64)
             let ix1: i64 = clampi(sx, wx, wx + (windows[s].vis_w as i64))
@@ -778,17 +877,18 @@ func present_window_rect(slot: i64, rx: i64, ry: i64, rw: i64, rh: i64) {
 // whichever one is actually drawn on top) hit-test against each used
 // window's titlebar strip - -1 if the point isn't over any of them.
 func hit_test_titlebar(mx: i64, my: i64) -> i64 {
-    let i: i64 = Wm.MAX_WINDOWS - 1
-    while i >= 0 {
-        if windows[i].used {
-            let ox: i64 = windows[i].win_x as i64
-            let oy: i64 = windows[i].win_y as i64
-            let vw: i64 = windows[i].vis_w as i64
+    let zi: i64 = z_count - 1
+    while zi >= 0 {
+        let slot: i64 = z_order[zi]
+        if windows[slot].used && !windows[slot].minimized {
+            let ox: i64 = windows[slot].win_x as i64
+            let oy: i64 = windows[slot].win_y as i64
+            let vw: i64 = windows[slot].vis_w as i64
             if mx >= ox && mx < ox + vw && my >= oy && my < oy + (TITLEBAR_H as i64) {
-                return i
+                return slot
             }
         }
-        i = i - 1
+        zi = zi - 1
     }
     return -1
 }
@@ -797,26 +897,30 @@ func hit_test_titlebar(mx: i64, my: i64) -> i64 {
 // traffic light, leftmost of the three) in each used window's titlebar -
 // checked before hit_test_titlebar in the main loop so a click there
 // closes the window instead of starting a drag.
-func hit_test_close_button(mx: i64, my: i64) -> i64 {
-    let i: i64 = Wm.MAX_WINDOWS - 1
-    while i >= 0 {
-        if windows[i].used {
-            let ox: i64 = windows[i].win_x as i64
-            let oy: i64 = windows[i].win_y as i64
+func hit_test_title_button(mx: i64, my: i64, btn_idx: i64) -> i64 {
+    let zi: i64 = z_count - 1
+    while zi >= 0 {
+        let slot: i64 = z_order[zi]
+        if windows[slot].used && !windows[slot].minimized {
+            let ox: i64 = windows[slot].win_x as i64
+            let oy: i64 = windows[slot].win_y as i64
             let btn_y_center: i64 = oy + ((TITLEBAR_H as i64) / 2)
-            let btn_x_center: i64 = ox + 10
+            let btn_x_center: i64 = ox + 10 + btn_idx * ((BTN_SIZE as i64) + (BTN_SPACING as i64))
             let radius: i64 = (BTN_SIZE as i64) / 2
 
-            // Check if click is within circular close button
             let dx: i64 = mx - btn_x_center
             let dy: i64 = my - btn_y_center
             if dx * dx + dy * dy <= radius * radius {
-                return i
+                return slot
             }
         }
-        i = i - 1
+        zi = zi - 1
     }
     return -1
+}
+
+func hit_test_close_button(mx: i64, my: i64) -> i64 {
+    return hit_test_title_button(mx, my, 0)
 }
 
 // Same again, against the resize grip in each used window's bottom-right
@@ -860,7 +964,7 @@ func hit_test_resize_grip(mx: i64, my: i64) -> i64 {
     let zi: i64 = z_count - 1
     while zi >= 0 {
         let slot: i64 = z_order[zi]
-        if windows[slot].used {
+        if windows[slot].used && !windows[slot].minimized {
             let vw: i64 = windows[slot].vis_w as i64
             let vh: i64 = windows[slot].vis_h as i64
             let ox: i64 = windows[slot].win_x as i64
@@ -959,6 +1063,7 @@ const TASKBAR_NAME_LEN = 32
 const TASKBAR_LABEL_LEN = 32
 const START_HIT = -2
 const TRAY_HIT = -3
+const WINDOW_BUTTON_HIT_BASE = -100
 const DESKTOP_ICON_W: i64 = 72
 const DESKTOP_ICON_H: i64 = 58
 const DESKTOP_ICON_LEFT: i64 = 18
@@ -973,11 +1078,14 @@ const ICON_APP: u8 = 2
 let taskbar_names: u8[640] // MAX_TASKBAR_ENTRIES(20) * TASKBAR_NAME_LEN(32)
 let taskbar_labels: u8[640] // MAX_TASKBAR_ENTRIES(20) * TASKBAR_LABEL_LEN(32)
 let taskbar_icons: u8[20]
+let taskbar_desktop: bool[20]
 let desktop_apps: i64[8]
 let desktop_count: i64 = 0
 let taskbar_count: i64 = 0
 let taskbar_loaded: bool = false
 let start_menu_open: bool = false
+let launcher_query: u8[24]
+let launcher_query_len: i64 = 0
 let wm_uptime_ms: u64 = 0
 let wm_dirty: bool = true
 let wm_frames_presented: u64 = 0
@@ -986,8 +1094,8 @@ let wm_rect_presents: u64 = 0
 let wm_skipped_frames: u64 = 0
 let cpu_history: u8[48]
 let cpu_history_pos: i64 = 0
-let cpu_last_switches: u64 = 0
-let cpu_last_syscalls: u64 = 0
+let cpu_last_total_ticks: u64 = 0
+let cpu_last_idle_ticks: u64 = 0
 let cpu_initialized: bool = false
 
 const MAX_NOTIFICATIONS: i64 = 4
@@ -1004,6 +1112,27 @@ let notify_kind: u8[4]
 let notify_titles: u8[128] // MAX_NOTIFICATIONS(4) * NOTIFY_TITLE_LEN(32)
 let notify_bodies: u8[256] // MAX_NOTIFICATIONS(4) * NOTIFY_BODY_LEN(64)
 let notify_unread: i64 = 0
+let file_dialog_active: bool = false
+let file_dialog_sender: u64 = 0
+let file_dialog_owner_slot: i64 = -1
+let file_dialog_selected: i64 = 0
+const FILE_DIALOG_MAX_ROWS: i64 = 8
+const APP_MANIFEST_PATH: u8* = "/etc/apps.txt" as u8*
+const TASKBAR_PIN_LIMIT = 6
+const SNAP_EDGE_PX: i64 = 24
+const SNAP_HALF_PX: i64 = 36
+const TASKBAR_DRAG_THRESHOLD: i64 = 10
+let drag_file_active: bool = false
+let drag_file_source: i64 = -1
+let drag_file_path: u8[128]
+let taskbar_drag_active: bool = false
+let taskbar_drag_slot: i64 = -1
+let taskbar_drag_start_x: i64 = 0
+let taskbar_drag_start_y: i64 = 0
+let taskbar_drag_target: i64 = -1
+let pending_drop_valid: bool = false
+let pending_drop_slot: i64 = -1
+let pending_drop_path: u8[128]
 
 func taskbar_name_at(i: i64) -> u8* {
     return (taskbar_names as u8*) + i * TASKBAR_NAME_LEN
@@ -1024,12 +1153,20 @@ func notify_body_at(i: i64) -> u8* {
 func load_taskbar() {
     taskbar_count = 0
     desktop_count = 0
-    if !load_app_manifest("/boot/apps.txt" as u8*) {
-        load_taskbar_dir("/bin" as u8*)
+    let i: i64 = 0
+    while i < MAX_TASKBAR_ENTRIES {
+        taskbar_desktop[i] = false
+        i = i + 1
+    }
+    if !load_app_manifest(APP_MANIFEST_PATH) {
+        if !load_app_manifest("/boot/apps.txt" as u8*) {
+            load_taskbar_dir("/bin" as u8*)
+        }
     }
     if taskbar_count == 0 {
         load_taskbar_dir("/boot" as u8*)
     }
+    rebuild_desktop_apps()
     taskbar_loaded = taskbar_count > 0
 }
 
@@ -1145,11 +1282,83 @@ func append_app(exec_name: u8*, label: u8*, icon: u8, desktop: bool) {
         copy_fixed(taskbar_label_at(idx), label, TASKBAR_LABEL_LEN)
     }
     taskbar_icons[idx] = icon
+    taskbar_desktop[idx] = desktop
     if desktop && desktop_count < MAX_DESKTOP_ICONS {
         desktop_apps[desktop_count] = idx
         desktop_count = desktop_count + 1
     }
     taskbar_count = taskbar_count + 1
+}
+
+func rebuild_desktop_apps() {
+    desktop_count = 0
+    let i: i64 = 0
+    while i < taskbar_count {
+        if taskbar_desktop[i] && desktop_count < MAX_DESKTOP_ICONS {
+            desktop_apps[desktop_count] = i
+            desktop_count = desktop_count + 1
+        }
+        i = i + 1
+    }
+}
+
+func manifest_icon_text(kind: u8) -> u8* {
+    if kind == ICON_TERMINAL {
+        return "terminal" as u8*
+    }
+    if kind == ICON_FILE {
+        return "file" as u8*
+    }
+    return "app" as u8*
+}
+
+func save_taskbar_manifest() {
+    let out: u8[2048]
+    let pos: u64 = 0
+    let i: i64 = 0
+    while i < taskbar_count && pos + 64 < 2047 {
+        let name: u8* = taskbar_name_at(i)
+        let label: u8* = taskbar_label_at(i)
+        let j: u64 = 0
+        while name[j] != 0 && pos < 2047 {
+            out[pos] = name[j]
+            pos = pos + 1
+            j = j + 1
+        }
+        if pos + 3 >= 2047 { break }
+        out[pos] = 124
+        pos = pos + 1
+        j = 0
+        while label[j] != 0 && pos < 2047 {
+            out[pos] = label[j]
+            pos = pos + 1
+            j = j + 1
+        }
+        if pos + 3 >= 2047 { break }
+        out[pos] = 124
+        pos = pos + 1
+        let icon_text: u8* = manifest_icon_text(taskbar_icons[i])
+        j = 0
+        while icon_text[j] != 0 && pos < 2047 {
+            out[pos] = icon_text[j]
+            pos = pos + 1
+            j = j + 1
+        }
+        if pos + 2 >= 2047 { break }
+        out[pos] = 124
+        pos = pos + 1
+        if taskbar_desktop[i] {
+            out[pos] = 49
+        } else {
+            out[pos] = 48
+        }
+        pos = pos + 1
+        out[pos] = 10
+        pos = pos + 1
+        i = i + 1
+    }
+    out[pos] = 0
+    sys_write_all(APP_MANIFEST_PATH, out as u8*, pos)
 }
 
 func read_manifest_field(buf: u8*, pos_ptr: i64*, out: u8*, max_len: i64) -> u8 {
@@ -1288,6 +1497,136 @@ func copy_short_label(dst: u8*, src: u8*, max_len: i64) {
         k = k + 1
     }
     dst[k] = 0
+}
+
+func launcher_clear_query() {
+    let i: i64 = 0
+    while i < 23 {
+        launcher_query[i] = 0
+        i = i + 1
+    }
+    launcher_query_len = 0
+}
+
+func launcher_lower(c: u8) -> u8 {
+    if c >= 65 && c <= 90 {
+        return c + 32
+    }
+    return c
+}
+
+func launcher_contains(text: u8*, needle: u8*) -> bool {
+    if needle[0] == 0 {
+        return true
+    }
+    let i: i64 = 0
+    while text[i] != 0 {
+        let j: i64 = 0
+        while needle[j] != 0 && text[i + j] != 0 && launcher_lower(text[i + j]) == launcher_lower(needle[j]) {
+            j = j + 1
+        }
+        if needle[j] == 0 {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+func launcher_matches(i: i64) -> bool {
+    if launcher_query_len == 0 {
+        return true
+    }
+    if launcher_contains(taskbar_label_at(i), launcher_query as u8*) {
+        return true
+    }
+    return launcher_contains(taskbar_name_at(i), launcher_query as u8*)
+}
+
+func launcher_visible_count() -> i64 {
+    let count: i64 = 0
+    let i: i64 = 0
+    while i < taskbar_count {
+        if launcher_matches(i) {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+func launcher_taskbar_index_at(visible_index: i64) -> i64 {
+    let seen: i64 = 0
+    let i: i64 = 0
+    while i < taskbar_count {
+        if launcher_matches(i) {
+            if seen == visible_index {
+                return i
+            }
+            seen = seen + 1
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+func launcher_launch_first() {
+    let idx: i64 = launcher_taskbar_index_at(0)
+    if idx >= 0 {
+        taskbar_launch(idx)
+    }
+    start_menu_open = false
+    launcher_clear_query()
+}
+
+func launcher_backspace() {
+    if launcher_query_len <= 0 {
+        return
+    }
+    launcher_query_len = launcher_query_len - 1
+    launcher_query[launcher_query_len] = 0
+}
+
+func launcher_append(key: u64) {
+    if key < 32 || key > 126 {
+        return
+    }
+    if launcher_query_len >= 23 {
+        return
+    }
+    launcher_query[launcher_query_len] = key as u8
+    launcher_query_len = launcher_query_len + 1
+    launcher_query[launcher_query_len] = 0
+}
+
+func launcher_key(key: u64) {
+    if key == 8 {
+        launcher_backspace()
+        return
+    }
+    if key == 10 || key == 13 {
+        launcher_launch_first()
+        return
+    }
+    if key == KEY_ESC as u64 {
+        if launcher_query_len > 0 {
+            launcher_clear_query()
+        } else {
+            close_start_menu()
+        }
+        return
+    }
+    launcher_append(key)
+}
+
+func open_start_menu() {
+    start_menu_open = true
+    launcher_clear_query()
+}
+
+func close_start_menu() {
+    start_menu_open = false
+    launcher_clear_query()
 }
 
 func name_starts_with(name: u8*, prefix: u8*) -> bool {
@@ -1455,29 +1794,33 @@ func tray_label(dst: u8*) {
 }
 
 func update_cpu_graph_sample() {
-    let info: u64[10]
-    if sys_system_info(info as u64*) == RT_SYS_ERR {
+    let info: u64[4]
+    if sys_cpu_info(info as u64*) == RT_SYS_ERR {
         return
     }
-    let switches: u64 = info[5]
-    let syscalls: u64 = info[6]
+    let total_ticks: u64 = info[0]
+    let idle_ticks: u64 = info[1]
     if !cpu_initialized {
-        cpu_last_switches = switches
-        cpu_last_syscalls = syscalls
+        cpu_last_total_ticks = total_ticks
+        cpu_last_idle_ticks = idle_ticks
         cpu_initialized = true
         return
     }
 
-    let switch_delta: u64 = switches - cpu_last_switches
-    let syscall_delta: u64 = syscalls - cpu_last_syscalls
-    cpu_last_switches = switches
-    cpu_last_syscalls = syscalls
+    let total_delta: u64 = total_ticks - cpu_last_total_ticks
+    let idle_delta: u64 = idle_ticks - cpu_last_idle_ticks
+    cpu_last_total_ticks = total_ticks
+    cpu_last_idle_ticks = idle_ticks
 
-    // Not calibrated wall-clock CPU utilization yet: this is a compact
-    // scheduler/syscall activity score scaled for the taskbar graph.
-    let sample: u64 = switch_delta + (syscall_delta / 4)
-    if sample > 100 {
-        sample = 100
+    let sample: u64 = 0
+    if total_delta > 0 {
+        let busy_delta: u64 = total_delta
+        if idle_delta < total_delta {
+            busy_delta = total_delta - idle_delta
+        } else {
+            busy_delta = 0
+        }
+        sample = (busy_delta * 100) / total_delta
     }
     cpu_history[cpu_history_pos] = sample as u8
     cpu_history_pos = cpu_history_pos + 1
@@ -1515,11 +1858,190 @@ func draw_cpu_graph(x: i64, y: i64) {
     }
 }
 
+func window_taskbar_x(n: i64) -> i64 {
+    return 92 + n * 78
+}
+
+func draw_window_taskbar_buttons(y0: i64, right_limit: i64) {
+    let drawn: i64 = 0
+    let slot: i64 = 0
+    while slot < Wm.MAX_WINDOWS {
+        if windows[slot].used {
+            let x: i64 = window_taskbar_x(drawn)
+            if x + 72 < right_limit {
+                let bg: u32 = 0x303038
+                if slot == focused && !windows[slot].minimized {
+                    bg = 0x445070
+                } else if windows[slot].minimized {
+                    bg = 0x24242A
+                }
+                draw_rect(x, y0 + 5, 72, (TASKBAR_H as i64) - 10, bg)
+                draw_rect_border(x, y0 + 5, 72, (TASKBAR_H as i64) - 10, 0x606070)
+                wm_draw_string(x + 8, y0 + 9, windows[slot].title as u8*, TASKBAR_TEXT, bg)
+            }
+            drawn = drawn + 1
+        }
+        slot = slot + 1
+    }
+}
+
+func hit_test_window_taskbar(mx: i64, my: i64, right_limit: i64) -> i64 {
+    if fb_height <= TASKBAR_H {
+        return -1
+    }
+    let y0: i64 = (fb_height as i64) - (TASKBAR_H as i64)
+    if my < y0 + 5 || my >= y0 + (TASKBAR_H as i64) - 5 {
+        return -1
+    }
+    let drawn: i64 = 0
+    let slot: i64 = 0
+    while slot < Wm.MAX_WINDOWS {
+        if windows[slot].used {
+            let x: i64 = window_taskbar_x(drawn)
+            if x + 72 < right_limit && mx >= x && mx < x + 72 {
+                return slot
+            }
+            drawn = drawn + 1
+        }
+        slot = slot + 1
+    }
+    return -1
+}
+
+func file_dialog_entry_count() -> i64 {
+    let count: i64 = 0
+    let entry: u8[48]
+    while count < 48 && sys_readdir("/" as u8*, count as u64, entry as u8*) != RT_SYS_ERR {
+        count = count + 1
+    }
+    return count
+}
+
+func file_dialog_entry_at(index: i64, out: u8*) -> bool {
+    let entry: u8[48]
+    if sys_readdir("/" as u8*, index as u64, entry as u8*) == RT_SYS_ERR {
+        return false
+    }
+    let i: i64 = 0
+    while i < 31 && entry[i] != 0 {
+        out[i] = entry[i]
+        i = i + 1
+    }
+    out[i] = 0
+    return true
+}
+
+func file_dialog_reply(ok: bool) {
+    let reply: u8[128]
+    let r: u64* = (reply as u8*) as u64*
+    if ok {
+        r[0] = Wm.STATUS_OK as u64
+    } else {
+        r[0] = Wm.STATUS_FAIL as u64
+    }
+    sys_msg_reply(file_dialog_sender, reply as u8*, 128)
+    file_dialog_active = false
+    file_dialog_sender = 0
+    file_dialog_owner_slot = -1
+    file_dialog_selected = 0
+    wm_dirty = true
+}
+
+func file_dialog_accept() {
+    let name: u8[32]
+    if !file_dialog_entry_at(file_dialog_selected, name as u8*) {
+        file_dialog_reply(false)
+        return
+    }
+    let reply: u8[128]
+    let r: u64* = (reply as u8*) as u64*
+    r[0] = Wm.STATUS_OK as u64
+    let out: u8* = (reply as u8*) + 8
+    out[0] = 47
+    let i: i64 = 0
+    while i < 94 && name[i] != 0 {
+        out[i + 1] = name[i]
+        i = i + 1
+    }
+    out[i + 1] = 0
+    sys_msg_reply(file_dialog_sender, reply as u8*, 128)
+    file_dialog_active = false
+    file_dialog_sender = 0
+    file_dialog_owner_slot = -1
+    file_dialog_selected = 0
+    wm_dirty = true
+}
+
+func file_dialog_key(key: u64) {
+    let count: i64 = file_dialog_entry_count()
+    if key == (KEY_ESC as u64) || key == (KEY_CLOSE_REQ as u64) {
+        file_dialog_reply(false)
+    } else if key == (KEY_UP as u64) {
+        if file_dialog_selected > 0 {
+            file_dialog_selected = file_dialog_selected - 1
+            wm_dirty = true
+        }
+    } else if key == (KEY_DOWN as u64) {
+        if file_dialog_selected < count - 1 {
+            file_dialog_selected = file_dialog_selected + 1
+            wm_dirty = true
+        }
+    } else if key == 10 {
+        if count > 0 {
+            file_dialog_accept()
+        } else {
+            file_dialog_reply(false)
+        }
+    }
+}
+
+func draw_file_dialog() {
+    if !file_dialog_active {
+        return
+    }
+    let box_w: i64 = 300
+    let box_h: i64 = 166
+    let x: i64 = ((fb_width as i64) - box_w) / 2
+    let y: i64 = ((fb_height as i64) - (TASKBAR_H as i64) - box_h) / 2
+    draw_rect(x, y, box_w, box_h, 0x20202A)
+    draw_rect_border(x, y, box_w, box_h, 0x707080)
+    wm_draw_string(x + 12, y + 10, "Open file" as u8*, TASKBAR_TEXT, 0x20202A)
+    wm_draw_string(x + 190, y + 10, "Enter / Esc" as u8*, 0xB8B8C8, 0x20202A)
+
+    let count: i64 = file_dialog_entry_count()
+    let top: i64 = 0
+    if file_dialog_selected >= FILE_DIALOG_MAX_ROWS {
+        top = file_dialog_selected - FILE_DIALOG_MAX_ROWS + 1
+    }
+    let row: i64 = 0
+    while row < FILE_DIALOG_MAX_ROWS {
+        let idx: i64 = top + row
+        let ry: i64 = y + 34 + row * 16
+        let bg: u32 = 0x262630
+        if idx == file_dialog_selected {
+            bg = 0x3A5378
+        }
+        draw_rect(x + 10, ry, box_w - 20, 14, bg)
+        if idx < count {
+            let name: u8[32]
+            if file_dialog_entry_at(idx, name as u8*) {
+                wm_draw_string(x + 18, ry + 2, name as u8*, TASKBAR_TEXT, bg)
+            }
+        }
+        row = row + 1
+    }
+}
+
 func draw_start_menu(y0: i64) {
     if !start_menu_open {
         return
     }
-    let menu_h: i64 = 12 + taskbar_count * (MENU_ITEM_H as i64)
+    let visible_count: i64 = launcher_visible_count()
+    let menu_items_h: i64 = MENU_ITEM_H as i64
+    if visible_count > 0 {
+        menu_items_h = visible_count * (MENU_ITEM_H as i64)
+    }
+    let menu_h: i64 = 36 + menu_items_h
     let menu_y: i64 = y0 - menu_h
     let safe_y: i64 = menu_y
     if safe_y < 0 {
@@ -1528,18 +2050,34 @@ func draw_start_menu(y0: i64) {
     draw_rect(8, safe_y, MENU_W as i64, y0 - safe_y, 0x202028)
     draw_rect_border(8, safe_y, MENU_W as i64, y0 - safe_y, 0x686878)
 
+    draw_rect(12, safe_y + 8, (MENU_W as i64) - 16, 18, 0x2A2A34)
+    draw_rect_border(12, safe_y + 8, (MENU_W as i64) - 16, 18, 0x707080)
+    if launcher_query_len == 0 {
+        wm_draw_string(18, safe_y + 12, "Search apps" as u8*, 0x808894, 0x2A2A34)
+    } else {
+        wm_draw_string(18, safe_y + 12, launcher_query as u8*, TASKBAR_TEXT, 0x2A2A34)
+    }
+
+    let item_top: i64 = safe_y + 32
     let i: i64 = 0
+    let shown: i64 = 0
     while i < taskbar_count {
-        let iy: i64 = y0 - menu_h + 6 + i * (MENU_ITEM_H as i64)
-        if iy >= safe_y && iy + (MENU_ITEM_H as i64) <= y0 {
-            draw_rect(12, iy, (MENU_W as i64) - 8, (MENU_ITEM_H as i64) - 2, 0x30303A)
-            let icon: EmbeddedImage = icon_for_kind(taskbar_icons[i])
-            draw_embedded_icon(icon, 18, iy + 3)
-            let label: u8[19]
-            copy_short_label(label as u8*, taskbar_label_at(i), 18)
-            wm_draw_string(40, iy + 4, label as u8*, TASKBAR_TEXT, 0x30303A)
+        if launcher_matches(i) {
+            let iy: i64 = item_top + shown * (MENU_ITEM_H as i64)
+            if iy >= safe_y && iy + (MENU_ITEM_H as i64) <= y0 {
+                draw_rect(12, iy, (MENU_W as i64) - 8, (MENU_ITEM_H as i64) - 2, 0x30303A)
+                let icon: EmbeddedImage = icon_for_kind(taskbar_icons[i])
+                draw_embedded_icon(icon, 18, iy + 3)
+                let label: u8[19]
+                copy_short_label(label as u8*, taskbar_label_at(i), 18)
+                wm_draw_string(40, iy + 4, label as u8*, TASKBAR_TEXT, 0x30303A)
+            }
+            shown = shown + 1
         }
         i = i + 1
+    }
+    if shown == 0 {
+        wm_draw_string(18, item_top + 2, "No results" as u8*, 0x808894, 0x202028)
     }
 }
 
@@ -1577,14 +2115,17 @@ func draw_taskbar() {
     draw_rect_border(8, y0 + 4, START_BTN_W as i64, (TASKBAR_H as i64) - 8, 0x707070)
     wm_draw_string(18, y0 + 8, "Start" as u8*, TASKBAR_TEXT, TASKBAR_BTN)
 
+    let clock_x: i64 = (fb_width as i64) - (CLOCK_W as i64) - 8
+    let tray_x: i64 = clock_x - (TRAY_W as i64) - 6
+    let cpu_x: i64 = tray_x - (CPU_GRAPH_W as i64) - 6
+    draw_window_taskbar_buttons(y0, cpu_x - 6)
+
     let clock: u8[6]
     clock_label(clock as u8*)
-    let clock_x: i64 = (fb_width as i64) - (CLOCK_W as i64) - 8
     draw_rect(clock_x, y0 + 4, CLOCK_W as i64, (TASKBAR_H as i64) - 8, 0x24242A)
     draw_rect_border(clock_x, y0 + 4, CLOCK_W as i64, (TASKBAR_H as i64) - 8, 0x505050)
     wm_draw_string(clock_x + 12, y0 + 8, clock as u8*, TASKBAR_TEXT, 0x24242A)
 
-    let tray_x: i64 = clock_x - (TRAY_W as i64) - 6
     let tray_bg: u32 = 0x242832
     if notify_unread > 0 {
         tray_bg = 0x30384A
@@ -1597,7 +2138,6 @@ func draw_taskbar() {
     tray_label(tray as u8*)
     wm_draw_string(tray_x + 22, y0 + 8, tray as u8*, TASKBAR_TEXT, tray_bg)
 
-    let cpu_x: i64 = tray_x - (CPU_GRAPH_W as i64) - 6
     draw_cpu_graph(cpu_x, y0 + 4)
 
     draw_start_menu(y0)
@@ -1616,6 +2156,11 @@ func hit_test_taskbar(mx: i64, my: i64) -> i64 {
         }
         let clock_x: i64 = (fb_width as i64) - (CLOCK_W as i64) - 8
         let tray_x: i64 = clock_x - (TRAY_W as i64) - 6
+        let cpu_x: i64 = tray_x - (CPU_GRAPH_W as i64) - 6
+        let win_hit: i64 = hit_test_window_taskbar(mx, my, cpu_x - 6)
+        if win_hit >= 0 {
+            return WINDOW_BUTTON_HIT_BASE - win_hit
+        }
         if mx >= tray_x && mx < tray_x + (TRAY_W as i64) {
             return TRAY_HIT
         }
@@ -1623,18 +2168,23 @@ func hit_test_taskbar(mx: i64, my: i64) -> i64 {
     }
 
     if start_menu_open {
-        let menu_h: i64 = 12 + taskbar_count * (MENU_ITEM_H as i64)
+        let visible_count: i64 = launcher_visible_count()
+        let menu_items_h: i64 = MENU_ITEM_H as i64
+        if visible_count > 0 {
+            menu_items_h = visible_count * (MENU_ITEM_H as i64)
+        }
+        let menu_h: i64 = 36 + menu_items_h
         let menu_y: i64 = y0 - menu_h
         let safe_y: i64 = menu_y
         if safe_y < 0 {
             safe_y = 0
         }
         if mx >= 8 && mx < 8 + (MENU_W as i64) && my >= safe_y && my < y0 {
-            let rel: i64 = my - (y0 - menu_h) - 6
-            if rel >= 0 {
-                let idx: i64 = rel / (MENU_ITEM_H as i64)
-                if idx >= 0 && idx < taskbar_count {
-                    return idx
+            let item_top: i64 = safe_y + 32
+            if my >= item_top {
+                let idx: i64 = (my - item_top) / (MENU_ITEM_H as i64)
+                if idx >= 0 && idx < visible_count {
+                    return launcher_taskbar_index_at(idx)
                 }
             }
         }
@@ -1696,6 +2246,76 @@ func taskbar_launch(i: i64) {
     launch_app_name(taskbar_name_at(i))
 }
 
+func swap_taskbar_entries(a: i64, b: i64) {
+    if a == b || a < 0 || b < 0 || a >= taskbar_count || b >= taskbar_count {
+        return
+    }
+    let name_a: u8[32]
+    let name_b: u8[32]
+    let label_a: u8[32]
+    let label_b: u8[32]
+    let i: i64 = 0
+    while i < 32 {
+        name_a[i] = taskbar_name_at(a)[i]
+        name_b[i] = taskbar_name_at(b)[i]
+        label_a[i] = taskbar_label_at(a)[i]
+        label_b[i] = taskbar_label_at(b)[i]
+        i = i + 1
+    }
+    let icon_a: u8 = taskbar_icons[a]
+    let icon_b: u8 = taskbar_icons[b]
+    let desk_a: bool = taskbar_desktop[a]
+    let desk_b: bool = taskbar_desktop[b]
+    i = 0
+    while i < 32 {
+        taskbar_name_at(a)[i] = name_b[i]
+        taskbar_name_at(b)[i] = name_a[i]
+        taskbar_label_at(a)[i] = label_b[i]
+        taskbar_label_at(b)[i] = label_a[i]
+        i = i + 1
+    }
+    taskbar_icons[a] = icon_b
+    taskbar_icons[b] = icon_a
+    taskbar_desktop[a] = desk_b
+    taskbar_desktop[b] = desk_a
+}
+
+func toggle_taskbar_pin(slot: i64) {
+    if slot < 0 || slot >= taskbar_count {
+        return
+    }
+    taskbar_desktop[slot] = !taskbar_desktop[slot]
+    rebuild_desktop_apps()
+    save_taskbar_manifest()
+    wm_dirty = true
+}
+
+func reorder_taskbar_button(slot: i64, target: i64) {
+    if slot < 0 || target < 0 || slot >= taskbar_count || target >= taskbar_count {
+        return
+    }
+    if slot == target {
+        return
+    }
+    let cur: i64 = slot
+    let step: i64 = 1
+    if target < slot {
+        let t: i64 = target
+        while cur > t {
+            swap_taskbar_entries(cur, cur - 1)
+            cur = cur - 1
+        }
+    } else {
+        while cur < target {
+            swap_taskbar_entries(cur, cur + 1)
+            cur = cur + 1
+        }
+    }
+    rebuild_desktop_apps()
+    save_taskbar_manifest()
+    wm_dirty = true
+}
+
 func desktop_icon_name(i: i64) -> u8* {
     return taskbar_name_at(desktop_apps[i])
 }
@@ -1733,7 +2353,7 @@ func desktop_icon_y(i: i64) -> i64 {
 func point_in_any_window(mx: i64, my: i64) -> bool {
     let i: i64 = 0
     while i < Wm.MAX_WINDOWS {
-        if windows[i].used {
+        if windows[i].used && !windows[i].minimized {
             let ox: i64 = windows[i].win_x as i64
             let oy: i64 = windows[i].win_y as i64
             let vw: i64 = windows[i].vis_w as i64
@@ -1793,6 +2413,61 @@ func desktop_icon_launch(i: i64) {
     launch_app_name(desktop_icon_name(i))
 }
 
+func hit_test_window_under_point(mx: i64, my: i64) -> i64 {
+    let zi: i64 = z_count - 1
+    while zi >= 0 {
+        let slot: i64 = z_order[zi]
+        if windows[slot].used && !windows[slot].minimized {
+            let ox: i64 = windows[slot].win_x as i64
+            let oy: i64 = windows[slot].win_y as i64
+            let vw: i64 = windows[slot].vis_w as i64
+            let vh: i64 = (windows[slot].vis_h as i64) + (TITLEBAR_H as i64)
+            if mx >= ox && mx < ox + vw && my >= oy && my < oy + vh {
+                return slot
+            }
+        }
+        zi = zi - 1
+    }
+    return -1
+}
+
+func begin_file_drag(slot: i64, path: u8*) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS {
+        return
+    }
+    let i: i64 = 0
+    while i < 127 && path[i] != 0 {
+        drag_file_path[i] = path[i]
+        i = i + 1
+    }
+    drag_file_path[i] = 0
+    drag_file_source = slot
+    drag_file_active = true
+}
+
+func queue_file_drop(target_slot: i64) {
+    if !drag_file_active || target_slot < 0 || target_slot >= Wm.MAX_WINDOWS || !windows[target_slot].used {
+        drag_file_active = false
+        drag_file_source = -1
+        return
+    }
+    if target_slot == drag_file_source {
+        drag_file_active = false
+        drag_file_source = -1
+        return
+    }
+    pending_drop_valid = true
+    pending_drop_slot = target_slot
+    let i: i64 = 0
+    while i < 127 && drag_file_path[i] != 0 {
+        pending_drop_path[i] = drag_file_path[i]
+        i = i + 1
+    }
+    pending_drop_path[i] = 0
+    drag_file_active = false
+    drag_file_source = -1
+}
+
 // Full repaint of windows + cursor (shadows, decoration, then content,
 // then the cursor on top of everything) rather than any kind of dirty-rect
 // tracking - cheap enough (a handful of 320x200-ish window blits) to just
@@ -1808,7 +2483,7 @@ func redraw_windows(mouse_x: i64, mouse_y: i64) {
     let i: i64 = 0
     while i < z_count {
         let slot: i64 = z_order[i]
-        if windows[slot].used {
+        if windows[slot].used && !windows[slot].minimized {
             draw_shadow(slot)
         }
         i = i + 1
@@ -1818,7 +2493,7 @@ func redraw_windows(mouse_x: i64, mouse_y: i64) {
     i = 0
     while i < z_count {
         let slot: i64 = z_order[i]
-        if windows[slot].used {
+        if windows[slot].used && !windows[slot].minimized {
             draw_titlebar(slot)
             blit_window(slot)
             draw_window_border(slot)
@@ -1826,6 +2501,7 @@ func redraw_windows(mouse_x: i64, mouse_y: i64) {
         }
         i = i + 1
     }
+    draw_file_dialog()
     draw_taskbar()
     draw_notifications()
     draw_cursor(mouse_x, mouse_y)
@@ -1872,7 +2548,7 @@ func handle_request(sender: u64, msg: u8*) {
     let op: u64 = req[0]
     let slot_arg: i64 = req[1] as i64
 
-    let reply: u8[48]
+    let reply: u8[128]
     let rep: u64* = (reply as u8*) as u64*
 
     if op == (Wm.OP_CREATE as u64) {
@@ -1893,6 +2569,12 @@ func handle_request(sender: u64, msg: u8*) {
             if windows[slot].vis_h > (max_visible_h_for(slot) as u64) {
                 windows[slot].vis_h = max_visible_h_for(slot) as u64
             }
+            windows[slot].restore_x = windows[slot].win_x
+            windows[slot].restore_y = windows[slot].win_y
+            windows[slot].restore_w = windows[slot].vis_w
+            windows[slot].restore_h = windows[slot].vis_h
+            windows[slot].minimized = false
+            windows[slot].maximized = false
             windows[slot].close_requested = false
 
             // Set default window title
@@ -1966,7 +2648,9 @@ func handle_request(sender: u64, msg: u8*) {
             rep[3] = 0
             rep[4] = 0
             rep[5] = 0
-            sys_msg_reply(sender, reply as u8*, 48)
+            rep[6] = 0
+            rep[7] = 0
+            sys_msg_reply(sender, reply as u8*, 64)
         } else if windows[slot_arg].close_requested {
             // Checked before the focus-gated keyboard poll below, and
             // regardless of focus - the close button applies to a
@@ -1980,17 +2664,23 @@ func handle_request(sender: u64, msg: u8*) {
             rep[3] = 0
             rep[4] = 0
             rep[5] = 0
-            sys_msg_reply(sender, reply as u8*, 48)
+            rep[6] = windows[slot_arg].vis_w
+            rep[7] = windows[slot_arg].vis_h
+            sys_msg_reply(sender, reply as u8*, 64)
         } else {
             let key: u64 = 0
             let wheel: i64 = 0
             if slot_arg == focused {
-                key = sys_kbd_poll()
-                if key == 9 {
-                    let nxt: i64 = next_focus_after(focused)
-                    if nxt >= 0 {
-                        focused = nxt
+                if !start_menu_open {
+                    key = sys_kbd_poll()
+                    if key == 9 {
+                        let nxt: i64 = next_focus_after(focused)
+                        if nxt >= 0 {
+                            focused = nxt
+                        }
+                        key = 0
                     }
+                } else {
                     key = 0
                 }
                 // Only the focused window ever receives wheel motion too
@@ -2026,11 +2716,27 @@ func handle_request(sender: u64, msg: u8*) {
             rep[3] = rel_x as u64
             rep[4] = rel_y as u64
             rep[5] = mouse_flags
-            sys_msg_reply(sender, reply as u8*, 48)
+            rep[6] = windows[slot_arg].vis_w
+            rep[7] = windows[slot_arg].vis_h
+            rep[8] = 0
+            if pending_drop_valid && pending_drop_slot == slot_arg {
+                rep[8] = 1
+                let di: i64 = 0
+                while di < 127 && pending_drop_path[di] != 0 {
+                    reply[72 + di] = pending_drop_path[di]
+                    di = di + 1
+                }
+                reply[72 + di] = 0
+                pending_drop_valid = false
+                pending_drop_slot = -1
+            }
+            sys_msg_reply(sender, reply as u8*, 80)
         }
     } else if op == (Wm.OP_CLOSE as u64) {
         if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS {
             windows[slot_arg].used = false
+            windows[slot_arg].minimized = false
+            windows[slot_arg].maximized = false
             windows[slot_arg].owner_pid = -1
             // Remove from z-order
             z_remove(slot_arg)
@@ -2050,6 +2756,29 @@ func handle_request(sender: u64, msg: u8*) {
         wm_dirty = true
         rep[0] = Wm.STATUS_OK as u64
         sys_msg_reply(sender, reply as u8*, 8)
+    } else if op == (Wm.OP_FILE_DIALOG as u64) {
+        if !file_dialog_active && slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used {
+            file_dialog_active = true
+            file_dialog_sender = sender
+            file_dialog_owner_slot = slot_arg
+            file_dialog_selected = 0
+            focused = slot_arg
+            z_bring_to_front(slot_arg)
+            wm_dirty = true
+        } else {
+            rep[0] = Wm.STATUS_FAIL as u64
+            sys_msg_reply(sender, reply as u8*, 8)
+        }
+    } else if op == (Wm.OP_BEGIN_FILE_DRAG as u64) {
+        if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used {
+            let drag_path: u8* = (msg as u8*) + 16
+            begin_file_drag(slot_arg, drag_path)
+            rep[0] = Wm.STATUS_OK as u64
+            sys_msg_reply(sender, reply as u8*, 8)
+        } else {
+            rep[0] = Wm.STATUS_FAIL as u64
+            sys_msg_reply(sender, reply as u8*, 8)
+        }
     } else if op == (Wm.OP_STATS as u64) {
         rep[0] = Wm.STATUS_OK as u64
         rep[1] = wm_frames_presented
@@ -2073,12 +2802,21 @@ func _start(argc: u64, argv: u64*) {
     let i: i64 = 0
     while i < Wm.MAX_WINDOWS {
         windows[i].used = false
+        windows[i].minimized = false
+        windows[i].maximized = false
         windows[i].owner_pid = -1
         windows[i].close_requested = false
         z_order[i] = 0
         i = i + 1
     }
     z_count = 0
+    drag_file_active = false
+    drag_file_source = -1
+    pending_drop_valid = false
+    pending_drop_slot = -1
+    taskbar_drag_active = false
+    taskbar_drag_slot = -1
+    taskbar_drag_target = -1
 
     if sys_register("wm") == RT_SYS_ERR {
         sys_putln("wm: register failed")
@@ -2135,6 +2873,7 @@ func _start(argc: u64, argv: u64*) {
     start_icon_file = load_embedded_image(file_icon_data)
     let app_icon_data: u8* = load_start_icon_app()
     start_icon_app = load_embedded_image(app_icon_data)
+    launcher_clear_query()
 
     sys_putln("wm: ready")
     add_notification("Desktop ready" as u8*, "Start menu, tray, and notifications are online" as u8*, 1)
@@ -2182,6 +2921,7 @@ func _start(argc: u64, argv: u64*) {
     let resize_off_x: i64 = 0
     let resize_off_y: i64 = 0
     let prev_left: bool = false
+    let prev_right: bool = false
     let prev_mx: i64 = -1
     let prev_my: i64 = -1
     let clock_accum_ms: u64 = 0
@@ -2191,6 +2931,14 @@ func _start(argc: u64, argv: u64*) {
         let sender: u64 = sys_msg_try_recv(msg as u8*, 128)
         if sender != RT_SYS_ERR {
             handle_request(sender, msg as u8*)
+        }
+
+        if start_menu_open {
+            let menu_key: u64 = sys_kbd_poll()
+            if menu_key != 0 {
+                launcher_key(menu_key)
+                wm_dirty = true
+            }
         }
 
         let mstate: u64 = sys_mouse_poll()
@@ -2218,99 +2966,141 @@ func _start(argc: u64, argv: u64*) {
         }
         wheel_accum = wheel_accum + wheel_raw
 
+        if file_dialog_active {
+            let dialog_key: u64 = sys_kbd_poll()
+            if dialog_key != 0 {
+                file_dialog_key(dialog_key)
+            }
+        }
+
+        if taskbar_drag_active && mleft {
+            let clock_x: i64 = (fb_width as i64) - (CLOCK_W as i64) - 8
+            let tray_x: i64 = clock_x - (TRAY_W as i64) - 6
+            let cpu_x: i64 = tray_x - (CPU_GRAPH_W as i64) - 6
+            taskbar_drag_target = hit_test_window_taskbar(mx, my, cpu_x - 6)
+        }
+
         // Priority order on a fresh press: close button, then resize
         // grip, then the taskbar, then an ordinary titlebar drag - close/
         // resize/taskbar are all small, specific targets that would
         // otherwise be swallowed by a broader titlebar-drag hit test if
         // they overlapped it.
-        if mleft && !prev_left {
+        if !file_dialog_active && mleft && !prev_left {
             let close_hit: i64 = hit_test_close_button(mx, my)
+            let minimize_hit: i64 = hit_test_title_button(mx, my, 1)
+            let maximize_hit: i64 = hit_test_title_button(mx, my, 2)
+            let resize_hit: i64 = hit_test_resize_grip(mx, my)
+            let taskbar_hit: i64 = hit_test_taskbar(mx, my)
+
             if close_hit >= 0 {
-                // Just a request now, not an immediate close - the
-                // window stays exactly as it is until its own client
-                // acts on KEY_CLOSE_REQ (OP_POLL_INPUT, delivered on
-                // this window's very next poll regardless of focus) by
-                // calling OP_CLOSE itself. See close_requested's own
-                // doc comment (Window struct) for why.
                 windows[close_hit].close_requested = true
-                // Bring to front even when closing
                 z_bring_to_front(close_hit)
                 focused = close_hit
                 wm_dirty = true
+            } else if minimize_hit >= 0 {
+                minimize_window(minimize_hit)
+                close_start_menu()
+                wm_dirty = true
+            } else if maximize_hit >= 0 {
+                toggle_maximize_window(maximize_hit)
+                focused = maximize_hit
+                z_bring_to_front(maximize_hit)
+                close_start_menu()
+                wm_dirty = true
+            } else if resize_hit >= 0 && !windows[resize_hit].maximized {
+                resizing = true
+                resize_slot = resize_hit
+                focused = resize_hit
+                resize_off_x = (windows[resize_hit].win_x as i64) + (windows[resize_hit].vis_w as i64) - mx
+                resize_off_y = (windows[resize_hit].win_y as i64) + (TITLEBAR_H as i64) + (windows[resize_hit].vis_h as i64) - my
+                z_bring_to_front(resize_hit)
+                wm_dirty = true
+            } else if taskbar_hit == START_HIT {
+                if start_menu_open {
+                    close_start_menu()
+                } else {
+                    open_start_menu()
+                }
+                wm_dirty = true
+            } else if taskbar_hit == TRAY_HIT {
+                notify_unread = 0
+                add_notification("System status" as u8*, "Window manager and tray are running" as u8*, 0)
+                close_start_menu()
+                wm_dirty = true
+            } else if taskbar_hit <= WINDOW_BUTTON_HIT_BASE && taskbar_hit > WINDOW_BUTTON_HIT_BASE - Wm.MAX_WINDOWS {
+                let win_slot: i64 = WINDOW_BUTTON_HIT_BASE - taskbar_hit
+                restore_window(win_slot)
+                focused = win_slot
+                z_bring_to_front(win_slot)
+                close_start_menu()
+                wm_dirty = true
+            } else if taskbar_hit >= 0 {
+                taskbar_drag_active = true
+                taskbar_drag_slot = taskbar_hit
+                taskbar_drag_start_x = mx
+                taskbar_drag_start_y = my
+                taskbar_drag_target = taskbar_hit
+            } else if start_menu_open {
+                close_start_menu()
+                wm_dirty = true
             } else {
-                let resize_hit: i64 = hit_test_resize_grip(mx, my)
-                if resize_hit >= 0 {
-                    resizing = true
-                    resize_slot = resize_hit
-                    focused = resize_hit
-                    // The widened hit-zone (see hit_test_resize_grip) means
-                    // the click can land well away from the actual corner -
-                    // without this offset, the very first resize tick would
-                    // jump vis_w/vis_h straight to (click - origin), snapping
-                    // the window to whatever size the click position implied
-                    // instead of smoothly continuing from its current size.
-                    // Recording how far the click was from the true corner
-                    // here, then adding it back on every tick below (the
-                    // same "preserve the grab point" trick drag_dx/drag_dy
-                    // already use for moving a window), keeps the corner
-                    // glued to the cursor throughout the drag no matter
-                    // where in the zone the grip was actually grabbed - this
-                    // was the real cause of "shrinking works, growing snaps
-                    // back down instead": every regrab attempt landed
-                    // somewhere inside the (inward-reaching) zone, and each
-                    // one snapped the window smaller before it could grow.
-                    resize_off_x = (windows[resize_hit].win_x as i64) + (windows[resize_hit].vis_w as i64) - mx
-                    resize_off_y = (windows[resize_hit].win_y as i64) + (TITLEBAR_H as i64) + (windows[resize_hit].vis_h as i64) - my
-                    // Bring to front when starting resize
-                    z_bring_to_front(resize_hit)
+                let desktop_hit: i64 = hit_test_desktop_icon(mx, my)
+                if desktop_hit >= 0 {
+                    desktop_icon_launch(desktop_hit)
                     wm_dirty = true
                 } else {
-                    let taskbar_hit: i64 = hit_test_taskbar(mx, my)
-                    if taskbar_hit == START_HIT {
-                        start_menu_open = !start_menu_open
+                    let hit: i64 = hit_test_titlebar(mx, my)
+                    if hit >= 0 {
+                        dragging = true
+                        drag_slot = hit
+                        drag_dx = mx - (windows[hit].win_x as i64)
+                        drag_dy = my - (windows[hit].win_y as i64)
+                        focused = hit
+                        z_bring_to_front(hit)
                         wm_dirty = true
-                    } else if taskbar_hit == TRAY_HIT {
-                        notify_unread = 0
-                        add_notification("System status" as u8*, "Window manager and tray are running" as u8*, 0)
-                        start_menu_open = false
-                        wm_dirty = true
-                    } else if taskbar_hit >= 0 {
-                        taskbar_launch(taskbar_hit)
-                        start_menu_open = false
-                        wm_dirty = true
-                    } else {
-                        if start_menu_open {
-                            start_menu_open = false
-                            wm_dirty = true
-                        } else {
-                            let desktop_hit: i64 = hit_test_desktop_icon(mx, my)
-                            if desktop_hit >= 0 {
-                                desktop_icon_launch(desktop_hit)
-                                wm_dirty = true
-                            } else {
-                                let hit: i64 = hit_test_titlebar(mx, my)
-                                if hit >= 0 {
-                                    dragging = true
-                                    drag_slot = hit
-                                    drag_dx = mx - (windows[hit].win_x as i64)
-                                    drag_dy = my - (windows[hit].win_y as i64)
-                                    focused = hit
-                                    // Bring to front when starting drag
-                                    z_bring_to_front(hit)
-                                    wm_dirty = true
-                                }
-                            }
-                        }
                     }
                 }
             }
         } else if !mleft && prev_left {
+            if taskbar_drag_active {
+                let dx: i64 = mx - taskbar_drag_start_x
+                let dy: i64 = my - taskbar_drag_start_y
+                if dx * dx + dy * dy < TASKBAR_DRAG_THRESHOLD * TASKBAR_DRAG_THRESHOLD {
+                    taskbar_launch(taskbar_drag_slot)
+                    close_start_menu()
+                    wm_dirty = true
+                } else if taskbar_drag_target >= 0 && taskbar_drag_target != taskbar_drag_slot {
+                    reorder_taskbar_button(taskbar_drag_slot, taskbar_drag_target)
+                    focused = taskbar_drag_slot
+                    z_bring_to_front(taskbar_drag_slot)
+                    close_start_menu()
+                    wm_dirty = true
+                }
+                taskbar_drag_active = false
+                taskbar_drag_slot = -1
+                taskbar_drag_target = -1
+            }
+            if drag_file_active {
+                let drop_slot: i64 = hit_test_window_under_point(mx, my)
+                queue_file_drop(drop_slot)
+            }
+            if dragging && drag_slot >= 0 {
+                apply_drag_snap(drag_slot, mx, my)
+                wm_dirty = true
+            }
             dragging = false
             drag_slot = -1
             resizing = false
             resize_slot = -1
         }
+        if !file_dialog_active && mright && !prev_right {
+            let taskbar_hit: i64 = hit_test_taskbar(mx, my)
+            if taskbar_hit >= 0 && taskbar_hit < taskbar_count {
+                toggle_taskbar_pin(taskbar_hit)
+            }
+        }
         prev_left = mleft
+        prev_right = mright
 
         if dragging && drag_slot >= 0 {
             let max_wx: i64 = (fb_width as i64) - (windows[drag_slot].vis_w as i64)

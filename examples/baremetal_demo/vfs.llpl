@@ -272,6 +272,7 @@ namespace VFS {
 
     func flush_inode_table() {
         ATA.write_sectors(superblock().inode_table_block, inode_table_blocks, inode_table)
+        ATA.flush_cache()
     }
 
     func alloc_inode() -> i64 {
@@ -607,6 +608,7 @@ namespace VFS {
         ATA.write_sector(0, sb_buf as u8*)
         ATA.write_sectors(1, bitmap_blocks, bitmap)
         flush_inode_table()
+        ATA.flush_cache()
     }
 
     func init() -> bool {

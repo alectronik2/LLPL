@@ -133,25 +133,25 @@ namespace VMM {
         if (pml4e[0] & PTE_PRESENT) == 0 {
             return 0
         }
-        let pdpt: u64 = (pml4e[0] >> 12) << 12
+        let pdpt: u64 = pml4e[0] & ~12
 
         let pdpte: u64* = get_pte(pdpt, pdpti)
         if (pdpte[0] & PTE_PRESENT) == 0 {
             return 0
         }
-        let pd: u64 = (pdpte[0] >> 12) << 12
+        let pd: u64 = pdpte[0] & ~12
 
         let pde: u64* = get_pte(pd, pdi)
         if (pde[0] & PTE_PRESENT) == 0 {
             return 0
         }
-        let pt: u64 = (pde[0] >> 12) << 12
+        let pt: u64 = pde[0] & ~12
 
         let pte: u64* = get_pte(pt, pti)
         if (pte[0] & PTE_PRESENT) == 0 {
             return 0
         }
-        return (pte[0] >> 12) << 12
+        return pte[0] & ~12
     }
 
     func pte_for(pml4: u64, virt: u64) -> u64* {
@@ -164,13 +164,13 @@ namespace VMM {
         if (pml4e[0] & PTE_PRESENT) == 0 {
             return null
         }
-        let pdpt: u64 = (pml4e[0] >> 12) << 12
+        let pdpt: u64 = pml4e[0] & ~12
 
         let pdpte: u64* = get_pte(pdpt, pdpti)
         if (pdpte[0] & PTE_PRESENT) == 0 {
             return null
         }
-        let pd: u64 = (pdpte[0] >> 12) << 12
+        let pd: u64 = pdpte[0] & ~12
 
         let pde: u64* = get_pte(pd, pdi)
         if (pde[0] & PTE_PRESENT) == 0 {
@@ -200,7 +200,7 @@ namespace VMM {
             }
             pml4e[0] = pdpt | PTE_PRESENT | PTE_WRITABLE | PTE_USER
         } else {
-            pdpt = (pml4e[0] >> 12) << 12
+            pdpt = pml4e[0] & ~12
         }
 
         let pdpte: u64* = get_pte(pdpt, pdpti)
@@ -212,7 +212,7 @@ namespace VMM {
             }
             pdpte[0] = pd | PTE_PRESENT | PTE_WRITABLE | PTE_USER
         } else {
-            pd = (pdpte[0] >> 12) << 12
+            pd = pdpte[0] & ~12
         }
 
         let pde: u64* = get_pte(pd, pdi)
@@ -224,11 +224,11 @@ namespace VMM {
             }
             pde[0] = pt | PTE_PRESENT | PTE_WRITABLE | PTE_USER
         } else {
-            pt = (pde[0] >> 12) << 12
+            pt = pde[0] & ~12
         }
 
         let pte: u64* = get_pte(pt, pti)
-        pte[0] = ((phys >> 12) << 12) | (flags & 0xFFF) | PTE_PRESENT
+        pte[0] = (phys & ~12) | (flags & 0xFFF) | PTE_PRESENT
         invlpg(virt)
         return true
     }
@@ -331,7 +331,7 @@ namespace VMM {
         // its own PDPT for the low canonical region so user mappings above 4GB
         // don't leak into the shared kernel PDPT.
         let kp: u64* = kernel_pml4 as u64*
-        let kernel_pdpt: u64 = (kp[0] >> 12) << 12
+        let kernel_pdpt: u64 = kp[0] & ~12
         let user_pdpt: u64 = alloc_zero_page()
         if user_pdpt == 0 {
             return null
@@ -503,7 +503,7 @@ namespace VMM {
             if pte == null {
                 return false
             }
-            let phys: u64 = (pte[0] >> 12) << 12
+            let phys: u64 = pte[0] & ~12
             pte[0] = 0
             invlpg(virt)
             forget_mapping(aspace, virt)

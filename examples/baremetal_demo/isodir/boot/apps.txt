@@ -4,5 +4,6 @@ editor.elf|Editor|file|1
 tetris.elf|Tetris|app|1
 pingview.elf|Ping|app|1
 taskmgr.elf|Tasks|app|1
+pngviewer.elf|Images|app|1
 settings.elf|Settings|app|1
 ui_demo.elf|Widgets|app|0

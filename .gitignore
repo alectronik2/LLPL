@@ -38,3 +38,11 @@ editors/vscode-llpl/**/.llpl-lsp-*.llpl
 # OS files
 .DS_Store
 Thumbs.db
+
+.agents/
+.claude/
+.juggler/
+.codex/
+
+testy.c
+testy

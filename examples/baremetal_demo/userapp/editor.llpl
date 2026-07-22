@@ -32,6 +32,7 @@ const HEADER_COLOR: u32 = 0x60A0FF
 const TEXT_COLOR: u32 = 0xD8D8D8
 const CARET_COLOR: u32 = 0xFFD000
 const CONFIRM_COLOR: u32 = 0xFF6060
+const SELECTION_BG: u32 = 0x304C78
 
 let path: u8[96]
 let text: u8[8192] // TEXT_CAP
@@ -39,6 +40,10 @@ let text_len: u64 = 0
 let cursor: u64 = 0
 let top_line: u64 = 0
 let modified: bool = false
+let selecting: bool = false
+let prev_mouse_left: bool = false
+let sel_start: u64 = 0
+let sel_end: u64 = 0
 // True while showing the "unsaved changes" prompt (see render/_start
 // below) - entered instead of closing immediately whenever the close
 // button or ESC is used with unsaved changes pending, so a slip of the
@@ -46,6 +51,36 @@ let modified: bool = false
 // editing keys are ignored while this is up; only ENTER (discard and
 // close) and ESC (cancel, back to editing) do anything.
 let confirm_quit: bool = false
+
+func visible_cols() -> u64 {
+    let w: u64 = wm_visible_width()
+    if w < 32 {
+        return 1
+    }
+    let cols: u64 = (w - 16) / 8
+    if cols > 61 {
+        return 61
+    }
+    if cols < 1 {
+        return 1
+    }
+    return cols
+}
+
+func visible_rows() -> u64 {
+    let h: u64 = wm_visible_height()
+    if h <= (TEXT_TOP as u64) + ROW_H as u64 {
+        return 1
+    }
+    let rows: u64 = (h - (TEXT_TOP as u64)) / ROW_H
+    if rows > 14 {
+        return 14
+    }
+    if rows < 1 {
+        return 1
+    }
+    return rows
+}
 
 func line_start_at_or_before(pos: u64) -> u64 {
     let i: u64 = pos
@@ -85,6 +120,158 @@ func offset_of_line(line: u64) -> u64 {
         i = i + 1
     }
     return i
+}
+
+func min_u64(a: u64, b: u64) -> u64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+func max_u64(a: u64, b: u64) -> u64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+func has_selection() -> bool {
+    return sel_start != sel_end
+}
+
+func clear_selection() {
+    sel_start = cursor
+    sel_end = cursor
+}
+
+func selection_start() -> u64 {
+    return min_u64(sel_start, sel_end)
+}
+
+func selection_end() -> u64 {
+    return max_u64(sel_start, sel_end)
+}
+
+func position_from_mouse(mx: i64, my: i64) -> u64 {
+    if my < TEXT_TOP {
+        return offset_of_line(top_line)
+    }
+    let rows_visible: u64 = visible_rows()
+    let row: u64 = ((my - TEXT_TOP) / ROW_H) as u64
+    if row >= rows_visible {
+        row = rows_visible - 1
+    }
+    let line: u64 = top_line + row
+    let start: u64 = offset_of_line(line)
+    let end: u64 = line_end_at_or_after(start)
+    let col: u64 = 0
+    if mx > 4 {
+        col = ((mx - 4) / 8) as u64
+    }
+    let pos: u64 = start + col
+    if pos > end {
+        return end
+    }
+    return pos
+}
+
+func draw_selection_for_line(bufp: u32*, row_y: u64, line_start: u64, line_end: u64) {
+    if !has_selection() {
+        return
+    }
+    let a: u64 = min_u64(sel_start, sel_end)
+    let b: u64 = max_u64(sel_start, sel_end)
+    if b <= line_start || a > line_end {
+        return
+    }
+    let sx: u64 = 0
+    if a > line_start {
+        sx = a - line_start
+    }
+    let ex: u64 = line_end - line_start
+    if b < line_end {
+        ex = b - line_start
+    }
+    if ex <= sx {
+        return
+    }
+    fill_rect(bufp, 4 + sx * 8, row_y, (ex - sx) * 8, ROW_H as u64, SELECTION_BG)
+}
+
+func draw_text_line(bufp: u32*, win_w: u64, win_h: u64, x: u64, y: u64, linebuf: u8*, line_start: u64) {
+    if !has_selection() {
+        Font.draw_string(bufp, win_w, win_h, x, y, linebuf, TEXT_COLOR, BG_COLOR)
+        return
+    }
+    let a: u64 = min_u64(sel_start, sel_end)
+    let b: u64 = max_u64(sel_start, sel_end)
+    let i: u64 = 0
+    while linebuf[i] != 0 {
+        let bg: u32 = BG_COLOR
+        let pos: u64 = line_start + i
+        if pos >= a && pos < b {
+            bg = SELECTION_BG
+        }
+        Font.draw_char(bufp, win_w, win_h, x + i * 8, y, linebuf[i], TEXT_COLOR, bg)
+        i = i + 1
+    }
+}
+
+func delete_selection() {
+    if !has_selection() {
+        return
+    }
+    let a: u64 = selection_start()
+    let b: u64 = selection_end()
+    let len: u64 = b - a
+    let i: u64 = a
+    while i + len < text_len {
+        text[i] = text[i + len]
+        i = i + 1
+    }
+    text_len = text_len - len
+    cursor = a
+    clear_selection()
+    modified = true
+}
+
+func copy_selection_to_clipboard() {
+    if !has_selection() {
+        return
+    }
+    let a: u64 = selection_start()
+    let b: u64 = selection_end()
+    let len: u64 = b - a
+    let n: u64 = len
+    if n > 4096 {
+        n = 4096
+    }
+    let clip: u8[4096]
+    let i: u64 = 0
+    while i < n {
+        clip[i] = text[a + i]
+        i = i + 1
+    }
+    sys_clipboard_set(clip as u8*, n)
+}
+
+func paste_clipboard() {
+    let clip: u8[4096]
+    let n: u64 = sys_clipboard_get(clip as u8*, 4096)
+    if n == 0 || n == RT_SYS_ERR {
+        return
+    }
+    if has_selection() {
+        delete_selection()
+    }
+    let i: u64 = 0
+    while i < n {
+        insert_u8(clip[i])
+        i = i + 1
+    }
+    clear_selection()
+    modified = true
 }
 
 func move_up() {
@@ -159,6 +346,26 @@ func save_file() {
     }
 }
 
+func load_file_from_path(new_path: u8*) {
+    let i: u64 = 0
+    while new_path[i] != 0 && i < 95 {
+        path[i] = new_path[i]
+        i = i + 1
+    }
+    path[i] = 0
+    let n: u64 = sys_read_all(path as string, text as string, (TEXT_CAP as u64) - 1)
+    if n == RT_SYS_ERR {
+        wm_notify("Editor" as u8*, "Open failed" as u8*, 2)
+        return
+    }
+    text_len = n
+    cursor = 0
+    top_line = 0
+    modified = false
+    clear_selection()
+    wm_notify("Editor" as u8*, "Opened file" as u8*, 1)
+}
+
 func draw_caret(buf: u32*, win_w: u64, x: u64, y: u64) {
     if x + 1 >= win_w {
         return
@@ -177,11 +384,12 @@ func draw_caret(buf: u32*, win_w: u64, x: u64, y: u64) {
 // the mouse wheel (see the main loop) is what actually moves top_line.
 func draw_scrollbar(buf: u32*, win_w: u64) {
     let total: u64 = line_number_of(text_len) + 1
-    if total <= (VISIBLE_ROWS as u64) {
+    let rows_visible: u64 = visible_rows()
+    if total <= rows_visible {
         return
     }
     let track_top: i64 = TEXT_TOP
-    let track_h: i64 = VISIBLE_ROWS * ROW_H
+    let track_h: i64 = (rows_visible as i64) * ROW_H
     let sb_x: i64 = (win_w as i64) - SCROLLBAR_W - 2
 
     let ty: i64 = 0
@@ -194,14 +402,14 @@ func draw_scrollbar(buf: u32*, win_w: u64) {
         ty = ty + 1
     }
 
-    let thumb_h: i64 = (track_h * (VISIBLE_ROWS as i64)) / (total as i64)
+    let thumb_h: i64 = (track_h * (rows_visible as i64)) / (total as i64)
     if thumb_h < 8 {
         thumb_h = 8
     }
     if thumb_h > track_h {
         thumb_h = track_h
     }
-    let max_scroll: i64 = (total as i64) - (VISIBLE_ROWS as i64)
+    let max_scroll: i64 = (total as i64) - (rows_visible as i64)
     let thumb_y: i64 = track_top
     if max_scroll > 0 {
         thumb_y = track_top + ((track_h - thumb_h) * (top_line as i64)) / max_scroll
@@ -233,13 +441,18 @@ func fill_rect(bufp: u32*, x: u64, y: u64, w: u64, h: u64, color: u32) {
 }
 
 func render_cursor_line_fast() -> bool {
+    if has_selection() {
+        return false
+    }
     let cursor_line: u64 = line_number_of(cursor)
+    let rows_visible: u64 = visible_rows()
+    let cols_visible: u64 = visible_cols()
     let old_top: u64 = top_line
     if cursor_line < top_line {
         top_line = cursor_line
     }
-    if cursor_line >= top_line + (VISIBLE_ROWS as u64) {
-        top_line = cursor_line - (VISIBLE_ROWS as u64) + 1
+    if cursor_line >= top_line + rows_visible {
+        top_line = cursor_line - rows_visible + 1
     }
     if top_line != old_top {
         return false
@@ -248,7 +461,7 @@ func render_cursor_line_fast() -> bool {
         return false
     }
     let cur_row: u64 = cursor_line - top_line
-    if cur_row >= (VISIBLE_ROWS as u64) {
+    if cur_row >= rows_visible {
         return false
     }
 
@@ -260,10 +473,10 @@ func render_cursor_line_fast() -> bool {
 
     let line_start: u64 = line_start_at_or_before(cursor)
     let line_end: u64 = line_end_at_or_after(cursor)
-    let linebuf: u8[40]
+    let linebuf: u8[64]
     let col: u64 = 0
     let p: u64 = line_start
-    while p < line_end && col < (MAX_COLS as u64) {
+    while p < line_end && col < cols_visible {
         linebuf[col] = text[p]
         col = col + 1
         p = p + 1
@@ -272,8 +485,8 @@ func render_cursor_line_fast() -> bool {
     Font.draw_string(buf, win_w, win_h, 4, y, linebuf as string, TEXT_COLOR, BG_COLOR)
 
     let cur_col: u64 = cursor - line_start
-    if cur_col > (MAX_COLS as u64) {
-        cur_col = MAX_COLS as u64
+    if cur_col > cols_visible {
+        cur_col = cols_visible
     }
     let cx: u64 = 4 + cur_col * 8
     draw_caret(buf, win_w, cx, y)
@@ -309,29 +522,31 @@ func render() {
     Font.draw_string(buf, win_w, win_h, 4, 2, header as string, HEADER_COLOR, BG_COLOR)
 
     let cursor_line: u64 = line_number_of(cursor)
+    let rows_visible: u64 = visible_rows()
+    let cols_visible: u64 = visible_cols()
     if cursor_line < top_line {
         top_line = cursor_line
     }
-    if cursor_line >= top_line + (VISIBLE_ROWS as u64) {
-        top_line = cursor_line - (VISIBLE_ROWS as u64) + 1
+    if cursor_line >= top_line + rows_visible {
+        top_line = cursor_line - rows_visible + 1
     }
 
     let offset: u64 = offset_of_line(top_line)
     let row: u64 = 0
-    while row < (VISIBLE_ROWS as u64) {
+    while row < rows_visible {
         if offset <= text_len {
             let line_end: u64 = line_end_at_or_after(offset)
             let y: u64 = (TEXT_TOP as u64) + row * ROW_H
-            let linebuf: u8[40]
+            let linebuf: u8[64]
             let col: u64 = 0
             let p: u64 = offset
-            while p < line_end && col < (MAX_COLS as u64) {
+            while p < line_end && col < cols_visible {
                 linebuf[col] = text[p]
                 col = col + 1
                 p = p + 1
             }
             linebuf[col] = 0
-            Font.draw_string(buf, win_w, win_h, 4, y, linebuf as string, TEXT_COLOR, BG_COLOR)
+            draw_text_line(buf, win_w, win_h, 4, y, linebuf as u8*, offset)
             if line_end < text_len {
                 offset = line_end + 1
             } else {
@@ -343,12 +558,12 @@ func render() {
 
     let cur_line_start: u64 = line_start_at_or_before(cursor)
     let cur_col: u64 = cursor - cur_line_start
-    if cur_col > (MAX_COLS as u64) {
-        cur_col = MAX_COLS as u64
+    if cur_col > cols_visible {
+        cur_col = cols_visible
     }
     if cursor_line >= top_line {
         let cur_row: u64 = cursor_line - top_line
-        if cur_row < (VISIBLE_ROWS as u64) {
+        if cur_row < rows_visible {
             let cx: u64 = 4 + cur_col * 8
             let cy: u64 = (TEXT_TOP as u64) + cur_row * ROW_H
             draw_caret(buf, win_w, cx, cy)
@@ -389,12 +604,40 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
     render()
+    let last_win_w: u64 = Wm.WIN_W as u64
+    let last_win_h: u64 = Wm.WIN_H as u64
 
     while true {
         let input: WmInput = wm_poll_input()
         let key: u64 = input.key
         let dirty_full: bool = false
         let dirty_line: bool = false
+        if input.win_w != last_win_w || input.win_h != last_win_h {
+            last_win_w = input.win_w
+            last_win_h = input.win_h
+            dirty_full = true
+        }
+        if !confirm_quit {
+        if input.mouse_left && !prev_mouse_left {
+            selecting = true
+            cursor = position_from_mouse(input.mouse_x, input.mouse_y)
+            sel_start = cursor
+            sel_end = cursor
+            dirty_full = true
+            } else if input.mouse_left && selecting {
+                cursor = position_from_mouse(input.mouse_x, input.mouse_y)
+                sel_end = cursor
+                dirty_full = true
+            } else if !input.mouse_left && prev_mouse_left {
+                selecting = false
+                dirty_full = true
+            }
+        }
+        prev_mouse_left = input.mouse_left
+        if input.drop_valid {
+            load_file_from_path(input.drop_path as u8*)
+            dirty_full = true
+        }
         if confirm_quit {
             // Only these two keys mean anything while the prompt is up -
             // everything else (including ordinary typing) is ignored so
@@ -407,18 +650,22 @@ func _start(argc: u64, argv: u64*) {
                 dirty_full = true
             }
         } else if key == (KEY_UP as u64) {
+            clear_selection()
             move_up()
             dirty_full = true
         } else if key == (KEY_DOWN as u64) {
+            clear_selection()
             move_down()
             dirty_full = true
         } else if key == (KEY_LEFT as u64) {
             if cursor > 0 {
+                clear_selection()
                 cursor = cursor - 1
                 dirty_full = true
             }
         } else if key == (KEY_RIGHT as u64) {
             if cursor < text_len {
+                clear_selection()
                 cursor = cursor + 1
                 dirty_full = true
             }
@@ -433,7 +680,20 @@ func _start(argc: u64, argv: u64*) {
         } else if key == (KEY_F2 as u64) {
             save_file()
             dirty_full = true
+        } else if key == 15 {
+            let chosen: u8[96]
+            if wm_open_file_dialog(chosen as u8*) {
+                load_file_from_path(chosen as u8*)
+            }
+            dirty_full = true
+        } else if key == 3 {
+            copy_selection_to_clipboard()
+            dirty_full = true
+        } else if key == 22 {
+            paste_clipboard()
+            dirty_full = true
         } else if key == 8 {
+            clear_selection()
             let old_line: u64 = line_number_of(cursor)
             let was_modified: bool = modified
             delete_before_cursor()
@@ -443,6 +703,7 @@ func _start(argc: u64, argv: u64*) {
                 dirty_full = true
             }
         } else if key != 0 && key < 128 {
+            clear_selection()
             let old_line: u64 = line_number_of(cursor)
             let was_modified: bool = modified
             insert_u8(key as u8)

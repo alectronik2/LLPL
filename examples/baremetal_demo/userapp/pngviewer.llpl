@@ -1,0 +1,240 @@
+// Image viewer for the embedded PNG-derived assets shipped with the demo.
+// The target does not yet have a runtime PNG decoder, so this viewer
+// browses the already-converted embedded RGBA assets instead.
+
+import "../libsys/imports"
+import "user_runtime"
+import "wm_protocol"
+import "wm_client"
+import "font"
+import "png_decoder"
+import "embedded_images"
+
+const BG: u32 = 0x10131A
+const PANEL: u32 = 0x1B2030
+const BORDER: u32 = 0x4C6078
+const TEXT: u32 = 0xD8DEE9
+const MUTED: u32 = 0x8790A0
+const ACCENT: u32 = 0x59C2FF
+const VIEW_X: i64 = 18
+const VIEW_Y: i64 = 40
+const VIEW_W: i64 = 364
+const VIEW_H: i64 = 186
+const IMAGE_COUNT = 5
+
+let images: EmbeddedImage[5]
+let selected: i64 = 0
+let zoom: i64 = 1
+
+func fill_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
+    let yy: u64 = 0
+    while yy < h {
+        let xx: u64 = 0
+        while xx < w {
+            wm_put_pixel(x + xx, y + yy, color)
+            xx = xx + 1
+        }
+        yy = yy + 1
+    }
+}
+
+func draw_border(x: u64, y: u64, w: u64, h: u64, color: u32) {
+    if w == 0 || h == 0 {
+        return
+    }
+    let i: u64 = 0
+    while i < w {
+        wm_put_pixel(x + i, y, color)
+        wm_put_pixel(x + i, y + h - 1, color)
+        i = i + 1
+    }
+    i = 0
+    while i < h {
+        wm_put_pixel(x, y + i, color)
+        wm_put_pixel(x + w - 1, y + i, color)
+        i = i + 1
+    }
+}
+
+func uint_to_dec(buf: u8*, n: u64) -> i64 {
+    if n == 0 {
+        buf[0] = 48
+        buf[1] = 0
+        return 1
+    }
+    let tmp: u8[20]
+    let len: i64 = 0
+    let v: u64 = n
+    while v > 0 {
+        tmp[len] = (48 + (v % 10)) as u8
+        len = len + 1
+        v = v / 10
+    }
+    let i: i64 = 0
+    while i < len {
+        buf[i] = tmp[len - 1 - i]
+        i = i + 1
+    }
+    buf[len] = 0
+    return len
+}
+
+func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
+}
+
+func image_name_at(index: i64) -> u8* {
+    if index == 0 { return "wallpaper" as u8* }
+    if index == 1 { return "cursor" as u8* }
+    if index == 2 { return "terminal icon" as u8* }
+    if index == 3 { return "file icon" as u8* }
+    return "app icon" as u8*
+}
+
+func image_at(index: i64) -> EmbeddedImage {
+    return images[index]
+}
+
+func clamp_selection() {
+    if selected < 0 {
+        selected = IMAGE_COUNT - 1
+    }
+    if selected >= IMAGE_COUNT {
+        selected = 0
+    }
+    if zoom < 1 {
+        zoom = 1
+    }
+    if zoom > 8 {
+        zoom = 8
+    }
+}
+
+func fit_scale(img: EmbeddedImage) -> i64 {
+    let scale: i64 = zoom
+    let max_w: i64 = VIEW_W - 16
+    let max_h: i64 = VIEW_H - 16
+    let fit_w: i64 = max_w / (img.width as i64)
+    let fit_h: i64 = max_h / (img.height as i64)
+    let fit: i64 = fit_w
+    if fit_h < fit {
+        fit = fit_h
+    }
+    if fit < 1 {
+        fit = 1
+    }
+    if fit < scale {
+        return fit
+    }
+    return scale
+}
+
+func draw_image_scaled(img: EmbeddedImage, x0: i64, y0: i64, scale: i64) {
+    let y: u32 = 0
+    while y < img.height {
+        let x: u32 = 0
+        while x < img.width {
+            let alpha: u32 = get_pixel_alpha(img, x, y)
+            if alpha != 0 {
+                let fg: u32 = get_pixel(img, x, y)
+                let color: u32 = fg
+                if alpha < 255 {
+                    color = blend_alpha(fg, PANEL, alpha)
+                }
+                let sy: i64 = 0
+                while sy < scale {
+                    let sx: i64 = 0
+                    while sx < scale {
+                        wm_put_pixel((x0 + ((x as i64) * scale) + sx) as u64, (y0 + ((y as i64) * scale) + sy) as u64, color)
+                        sx = sx + 1
+                    }
+                    sy = sy + 1
+                }
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+}
+
+func draw_frame() {
+    fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, BG)
+    fill_rect(0, 0, Wm.WIN_W as u64, 28, PANEL)
+    draw_text(8, 6, "PNG VIEWER" as u8*, ACCENT, PANEL)
+    draw_text(120, 6, image_name_at(selected), TEXT, PANEL)
+
+    fill_rect(VIEW_X as u64, VIEW_Y as u64, VIEW_W as u64, VIEW_H as u64, 0x161B24)
+    draw_border(VIEW_X as u64, VIEW_Y as u64, VIEW_W as u64, VIEW_H as u64, BORDER)
+
+    let img: EmbeddedImage = image_at(selected)
+    let scale: i64 = fit_scale(img)
+    let draw_w: i64 = (img.width as i64) * scale
+    let draw_h: i64 = (img.height as i64) * scale
+    let draw_x: i64 = VIEW_X + ((VIEW_W - draw_w) / 2)
+    let draw_y: i64 = VIEW_Y + ((VIEW_H - draw_h) / 2)
+    draw_image_scaled(img, draw_x, draw_y, scale)
+
+    fill_rect(0, 232, Wm.WIN_W as u64, 24, PANEL)
+    let info: u8[32]
+    let wbuf: u8[12]
+    let hbuf: u8[12]
+    uint_to_dec(wbuf as u8*, img.width as u64)
+    uint_to_dec(hbuf as u8*, img.height as u64)
+    draw_text(8, 236, "left/right image  up/down zoom  esc close" as u8*, MUTED, PANEL)
+    draw_text(8, 248, "size " as u8*, MUTED, PANEL)
+    draw_text(48, 248, wbuf as u8*, TEXT, PANEL)
+    draw_text(72, 248, "x" as u8*, MUTED, PANEL)
+    draw_text(80, 248, hbuf as u8*, TEXT, PANEL)
+    draw_text(132, 248, "zoom" as u8*, MUTED, PANEL)
+    uint_to_dec(info as u8*, zoom as u64)
+    draw_text(168, 248, info as u8*, TEXT, PANEL)
+}
+
+func _start(argc: u64, argv: u64*) {
+    sys_putln("pngviewer: starting")
+    wm_init()
+    if !wm_create_window() {
+        sys_putln("pngviewer: create_window failed")
+        rt_exit(1)
+    }
+
+    images[0] = load_embedded_image(load_wallpaper_photo())
+    images[1] = load_embedded_image(load_cursor_photo())
+    images[2] = load_embedded_image(load_start_icon_terminal())
+    images[3] = load_embedded_image(load_start_icon_file())
+    images[4] = load_embedded_image(load_start_icon_app())
+
+    draw_frame()
+    while true {
+        let input: WmInput = wm_poll_input()
+        if input.key == KEY_CLOSE_REQ || input.key == KEY_ESC {
+            wm_close()
+            rt_exit(0)
+        } else if input.key == KEY_LEFT {
+            selected = selected - 1
+            clamp_selection()
+            draw_frame()
+        } else if input.key == KEY_RIGHT {
+            selected = selected + 1
+            clamp_selection()
+            draw_frame()
+        } else if input.key == KEY_UP || input.key == 43 {
+            zoom = zoom + 1
+            clamp_selection()
+            draw_frame()
+        } else if input.key == KEY_DOWN || input.key == 45 {
+            zoom = zoom - 1
+            clamp_selection()
+            draw_frame()
+        } else if input.wheel != 0 {
+            zoom = zoom + input.wheel
+            clamp_selection()
+            draw_frame()
+        }
+
+        if input.win_w != Wm.WIN_W as u64 || input.win_h != Wm.WIN_H as u64 {
+            draw_frame()
+        }
+        sys_sleep(16)
+    }
+}

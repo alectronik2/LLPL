@@ -21,7 +21,7 @@ namespace GDT {
     // required here too: a bare uint16 followed by a u64 would otherwise be
     // padded to put the u64 on an 8-byte boundary, breaking the layout.
     packed struct Pointer {
-        let limit: uint16
+        let limit: u16
         let base: u64
     }
 
@@ -29,7 +29,7 @@ namespace GDT {
     // interrupts without an IST) and IST1 (the stack the timer and syscall
     // gates use).
     packed struct TSS {
-        let reserved0: uint32
+        let reserved0: u32
         let rsp0: u64
         let rsp1: u64
         let rsp2: u64
@@ -42,18 +42,18 @@ namespace GDT {
         let ist6: u64
         let ist7: u64
         let reserved2: u64
-        let reserved3: uint16
-        let iomap_base: uint16
+        let reserved3: u16
+        let iomap_base: u16
     }
 
     extern func get_tss() -> u64
     extern func get_kernel_stack_top() -> u64
-    extern func load_tss(selector: uint16)
+    extern func load_tss(selector: u16)
 
     let entries: Entry[7]
     let pointer: Pointer
 
-    func set_entry(index: i64, limit_low: uint16, base_low: uint16, base_mid: u8,
+    func set_entry(index: i64, limit_low: u16, base_low: u16, base_mid: u8,
                     access: u8, granularity: u8, base_high: u8) {
         entries[index].limit_low = limit_low
         entries[index].base_low = base_low

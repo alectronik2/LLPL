@@ -147,11 +147,18 @@ func _start(argc: u64, argv: u64*) {
     }
 
     render()
+    let last_win_w: u64 = Wm.WIN_W as u64
+    let last_win_h: u64 = Wm.WIN_H as u64
     while true {
         let input: WmInput = wm_poll_input()
         if input.key == KEY_CLOSE_REQ {
             wm_close()
             rt_exit(0)
+        }
+        if input.win_w != last_win_w || input.win_h != last_win_h {
+            last_win_w = input.win_w
+            last_win_h = input.win_h
+            render()
         }
         if input.key == 32 || input.key == 10 {
             dark_alt = !dark_alt

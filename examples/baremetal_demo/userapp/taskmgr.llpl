@@ -1,4 +1,4 @@
-// Task Manager - a small GUI view over the kernel scheduler's task table.
+// Task Manager - tree view over the kernel scheduler's task table.
 
 import "../libsys/imports"
 import "user_runtime"
@@ -18,12 +18,28 @@ const SLEEP: u32 = 0xF0C65A
 const BLOCKED: u32 = 0xF08C5A
 const DEAD: u32 = 0xE05A5A
 
-const TASK_REC_SIZE = 96
+const TASK_REC_SIZE = 120
+const SNAP_MAX = 32
 const MAX_ROWS = 8
+const ROW_H = 16
+const LIST_TOP = 52
+const DETAILS_Y = 182
+const ACTION_Y = 214
+const ACTION_W = 78
+const ACTION_H = 18
+const ACTION_GAP = 8
 
 let selected: i64 = 0
-let task_count_seen: u64 = 0
+let top_row: i64 = 0
+let snapshot_count: i64 = 0
+let display_count: i64 = 0
+let task_total_seen: u64 = 0
 let last_refresh: u64 = 0
+
+let snapshot: u8[3840] // SNAP_MAX(32) * TASK_REC_SIZE(120)
+let display_rows: i64[32]
+let display_depths: i64[32]
+let display_used: bool[32]
 
 func fill_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
     let yy: u64 = 0
@@ -34,6 +50,28 @@ func fill_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
             xx = xx + 1
         }
         yy = yy + 1
+    }
+}
+
+func draw_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
+    fill_rect(x, y, w, h, color)
+}
+
+func draw_border(x: u64, y: u64, w: u64, h: u64, color: u32) {
+    if w == 0 || h == 0 {
+        return
+    }
+    let i: u64 = 0
+    while i < w {
+        wm_put_pixel(x + i, y, color)
+        wm_put_pixel(x + i, y + h - 1, color)
+        i = i + 1
+    }
+    i = 0
+    while i < h {
+        wm_put_pixel(x, y + i, color)
+        wm_put_pixel(x + w - 1, y + i, color)
+        i = i + 1
     }
 }
 
@@ -68,51 +106,6 @@ func uint_to_dec(buf: u8*, n: u64) -> i64 {
     return len
 }
 
-func state_name(state: u64) -> u8* {
-    if state == 0 {
-        return "run" as u8*
-    }
-    if state == 2 {
-        return "sleep" as u8*
-    }
-    if state == 3 {
-        return "send" as u8*
-    }
-    if state == 4 {
-        return "recv" as u8*
-    }
-    if state == 5 {
-        return "reply" as u8*
-    }
-    if state == 6 {
-        return "zombie" as u8*
-    }
-    if state == 7 {
-        return "wait" as u8*
-    }
-    return "dead" as u8*
-}
-
-func state_color(state: u64) -> u32 {
-    if state == 0 {
-        return ALIVE
-    }
-    if state == 2 {
-        return SLEEP
-    }
-    if state == 1 || state == 6 {
-        return DEAD
-    }
-    return BLOCKED
-}
-
-func mode_name(mode: u64) -> u8* {
-    if mode == 1 {
-        return "user" as u8*
-    }
-    return "kern" as u8*
-}
-
 func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
     Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
 }
@@ -129,10 +122,10 @@ func draw_num_limited(x: u64, y: u64, n: u64, max_digits: i64, fg: u32, bg: u32)
     if len > max_digits {
         let i: i64 = 0
         while i < max_digits - 1 {
-            buf[i] = 57 // '9'
+            buf[i] = 57
             i = i + 1
         }
-        buf[max_digits - 1] = 43 // '+'
+        buf[max_digits - 1] = 43
         buf[max_digits] = 0
     }
     draw_text(x, y, buf as u8*, fg, bg)
@@ -149,104 +142,413 @@ func draw_name_limited(x: u64, y: u64, name: u8*, max_chars: i64, fg: u32, bg: u
     draw_text(x, y, buf as u8*, fg, bg)
 }
 
-func draw_ipc_peer(x: u64, y: u64, peer: u64, fg: u32, bg: u32) {
-    if peer == 0xFFFFFFFFFFFFFFFF {
-        draw_text(x, y, "-" as u8*, fg, bg)
-    } else {
-        draw_num_limited(x, y, peer, 4, fg, bg)
-    }
+func state_name(state: u64) -> u8* {
+    if state == 0 { return "run" as u8* }
+    if state == 2 { return "sleep" as u8* }
+    if state == 3 { return "send" as u8* }
+    if state == 4 { return "recv" as u8* }
+    if state == 5 { return "reply" as u8* }
+    if state == 6 { return "zombie" as u8* }
+    if state == 7 { return "wait" as u8* }
+    return "dead" as u8*
+}
+
+func state_color(state: u64) -> u32 {
+    if state == 0 { return ALIVE }
+    if state == 2 { return SLEEP }
+    if state == 1 || state == 6 { return DEAD }
+    return BLOCKED
+}
+
+func mode_name(mode: u64) -> u8* {
+    if mode == 1 { return "user" as u8* }
+    return "kern" as u8*
+}
+
+func rec_at(index: i64) -> u8* {
+    return (snapshot as u8*) + index * TASK_REC_SIZE
+}
+
+func fields_at(index: i64) -> u64* {
+    return (rec_at(index) + 16) as u64*
+}
+
+func task_name_at(index: i64) -> u8* {
+    return rec_at(index)
+}
+
+func task_pid_at(index: i64) -> i64 {
+    let f: u64* = fields_at(index)
+    return f[0] as i64
+}
+
+func task_state_at(index: i64) -> u64 {
+    return fields_at(index)[1]
+}
+
+func task_mode_at(index: i64) -> u64 {
+    return fields_at(index)[2]
+}
+
+func task_switches_at(index: i64) -> u64 {
+    return fields_at(index)[3]
+}
+
+func task_syscalls_at(index: i64) -> u64 {
+    return fields_at(index)[4]
+}
+
+func task_last_tick_at(index: i64) -> u64 {
+    return fields_at(index)[5]
+}
+
+func task_parent_at(index: i64) -> i64 {
+    return fields_at(index)[6] as i64
+}
+
+func task_ipc_peer_at(index: i64) -> i64 {
+    return fields_at(index)[7] as i64
+}
+
+func task_ipc_len_at(index: i64) -> u64 {
+    return fields_at(index)[8]
+}
+
+func task_map_count_at(index: i64) -> u64 {
+    return fields_at(index)[11]
+}
+
+func task_total_at(index: i64) -> u64 {
+    return fields_at(index)[9]
+}
+
+func task_cpu_ticks_at(index: i64) -> u64 {
+    return fields_at(index)[10]
 }
 
 func task_info(index: u64, rec: u8*) -> bool {
     return sys_task_info(index, rec) != RT_SYS_ERR
 }
 
+func find_snapshot_by_pid(pid: i64) -> i64 {
+    let row: i64 = 0
+    while row < snapshot_count {
+        if task_pid_at(row) == pid {
+            return row
+        }
+        row = row + 1
+    }
+    return -1
+}
+
+func reset_display() {
+    let i: i64 = 0
+    while i < SNAP_MAX {
+        display_used[i] = false
+        i = i + 1
+    }
+    display_count = 0
+}
+
+func append_display_row(index: i64, depth: i64) {
+    if index < 0 || index >= snapshot_count || display_count >= SNAP_MAX {
+        return
+    }
+    if display_used[index] {
+        return
+    }
+    display_used[index] = true
+    display_rows[display_count] = index
+    display_depths[display_count] = depth
+    display_count = display_count + 1
+
+    let pid: i64 = task_pid_at(index)
+    let row: i64 = 0
+    while row < snapshot_count {
+        if row != index && task_parent_at(row) == pid {
+            append_display_row(row, depth + 1)
+        }
+        row = row + 1
+    }
+}
+
+func build_display_order() {
+    reset_display()
+
+    let row: i64 = 0
+    while row < snapshot_count {
+        let parent: i64 = task_parent_at(row)
+        let pid: i64 = task_pid_at(row)
+        if parent < 0 || parent == pid || find_snapshot_by_pid(parent) < 0 {
+            append_display_row(row, 0)
+        }
+        row = row + 1
+    }
+
+    row = 0
+    while row < snapshot_count {
+        if !display_used[row] {
+            append_display_row(row, 0)
+        }
+        row = row + 1
+    }
+}
+
+func refresh_snapshot() {
+    snapshot_count = 0
+    task_total_seen = 0
+
+    let row: i64 = 0
+    while row < SNAP_MAX {
+        let rec: u8* = rec_at(row)
+        if !task_info(row as u64, rec) {
+            break
+        }
+        task_total_seen = task_total_at(row)
+        snapshot_count = row + 1
+        row = row + 1
+    }
+
+    build_display_order()
+}
+
+func clamp_selection() {
+    if display_count <= 0 {
+        selected = 0
+        top_row = 0
+        return
+    }
+    if selected < 0 {
+        selected = 0
+    }
+    if selected >= display_count {
+        selected = display_count - 1
+    }
+    if top_row < 0 {
+        top_row = 0
+    }
+    if top_row > selected {
+        top_row = selected
+    }
+    if selected >= top_row + MAX_ROWS {
+        top_row = selected - MAX_ROWS + 1
+    }
+    if top_row > display_count - MAX_ROWS {
+        top_row = display_count - MAX_ROWS
+    }
+    if top_row < 0 {
+        top_row = 0
+    }
+}
+
+func scroll_selection(delta: i64) {
+    if display_count <= 0 {
+        return
+    }
+    selected = selected + delta
+    clamp_selection()
+}
+
+func selected_display_row() -> i64 {
+    if display_count <= 0 {
+        return -1
+    }
+    if selected < 0 || selected >= display_count {
+        return -1
+    }
+    return display_rows[selected]
+}
+
+func ensure_name_rooted(name: u8*, dst: u8*) {
+    if name[0] == 47 {
+        let i: i64 = 0
+        while name[i] != 0 && i < 63 {
+            dst[i] = name[i]
+            i = i + 1
+        }
+        dst[i] = 0
+        return
+    }
+    let i: i64 = 0
+    while name[i] != 0 && i < 63 {
+        dst[i] = name[i]
+        i = i + 1
+    }
+    dst[i] = 0
+}
+
+func build_launch_path(dst: u8*, prefix: u8*, name: u8*) {
+    let i: i64 = 0
+    while prefix[i] != 0 && i < 63 {
+        dst[i] = prefix[i]
+        i = i + 1
+    }
+    let j: i64 = 0
+    while name[j] != 0 && i < 63 {
+        dst[i] = name[j]
+        i = i + 1
+        j = j + 1
+    }
+    dst[i] = 0
+}
+
+func spawn_from_task_name(name: u8*) -> bool {
+    let path: u8[64]
+    if name[0] == 47 {
+        ensure_name_rooted(name, path as u8*)
+        return sys_spawn(path as u8*, "" as u8*) != RT_SYS_ERR
+    }
+    build_launch_path(path as u8*, "/bin/" as u8*, name)
+    if sys_spawn(path as u8*, "" as u8*) != RT_SYS_ERR {
+        return true
+    }
+    build_launch_path(path as u8*, "/boot/" as u8*, name)
+    return sys_spawn(path as u8*, "" as u8*) != RT_SYS_ERR
+}
+
+func kill_selected_task() {
+    let row: i64 = selected_display_row()
+    if row < 0 {
+        return
+    }
+    let pid: i64 = task_pid_at(row)
+    sys_task_kill(pid as u64)
+}
+
+func restart_selected_task() {
+    let row: i64 = selected_display_row()
+    if row < 0 {
+        return
+    }
+    let pid: i64 = task_pid_at(row)
+    let name: u8[16]
+    let i: i64 = 0
+    while i < 15 && task_name_at(row)[i] != 0 {
+        name[i] = task_name_at(row)[i]
+        i = i + 1
+    }
+    name[i] = 0
+    if sys_task_kill(pid as u64) != RT_SYS_ERR {
+        spawn_from_task_name(name as u8*)
+    }
+}
+
 func draw_header() {
     fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, BG)
     fill_rect(0, 0, Wm.WIN_W as u64, 26, HEADER)
     draw_text(8, 5, "TASK MANAGER" as u8*, ACCENT, HEADER)
-    draw_text(216, 5, "tasks" as u8*, MUTED, HEADER)
-    draw_num(264, 5, task_count_seen, TEXT, HEADER)
+    draw_text(214, 5, "tasks" as u8*, MUTED, HEADER)
+    draw_num(262, 5, task_total_seen, TEXT, HEADER)
 
-    fill_rect(6, 32, 308, 18, PANEL)
+    fill_rect(6, 32, 388, 18, PANEL)
     draw_text(10, 34, "PID" as u8*, MUTED, PANEL)
     draw_text(50, 34, "NAME" as u8*, MUTED, PANEL)
-    draw_text(142, 34, "STATE" as u8*, MUTED, PANEL)
-    draw_text(206, 34, "SW" as u8*, MUTED, PANEL)
-    draw_text(260, 34, "SYS" as u8*, MUTED, PANEL)
+    draw_text(190, 34, "STATE" as u8*, MUTED, PANEL)
+    draw_text(258, 34, "CPU" as u8*, MUTED, PANEL)
+    draw_text(318, 34, "MAPS" as u8*, MUTED, PANEL)
 }
 
-func draw_row(row: i64, rec: u8*) {
-    let fields: u64* = (rec + 16) as u64*
-    let pid: u64 = fields[0]
-    let state: u64 = fields[1]
-    let mode: u64 = fields[2]
-    let switches: u64 = fields[3]
-    let syscalls: u64 = fields[4]
-
-    let y: u64 = 52 + (row as u64) * 16
+func draw_row(view_row: i64, model_row: i64, depth: i64) {
+    let y: u64 = LIST_TOP + (view_row as u64) * (ROW_H as u64)
     let row_bg: u32 = BG
-    if row == selected {
+    if selected >= 0 && selected < display_count && display_rows[selected] == model_row {
         row_bg = 0x243040
-    } else if (row % 2) == 1 {
+    } else if (view_row % 2) == 1 {
         row_bg = 0x151922
     }
-    fill_rect(6, y - 1, 308, 16, row_bg)
-    draw_num_limited(10, y, pid, 4, TEXT, row_bg)
-    draw_name_limited(50, y, rec, 10, TEXT, row_bg)
-    draw_text(142, y, state_name(state), state_color(state), row_bg)
-    draw_text(194, y, mode_name(mode), MUTED, row_bg)
-    draw_num_limited(234, y, switches, 5, TEXT, row_bg)
-    draw_num_limited(282, y, syscalls, 4, TEXT, row_bg)
-    draw_hline(6, y + 15, 308, GRID)
+    fill_rect(6, y - 1, 388, 16, row_bg)
+    draw_num_limited(10, y, task_pid_at(model_row) as u64, 4, TEXT, row_bg)
+    draw_text(50 + (depth as u64) * 10, y, task_name_at(model_row), TEXT, row_bg)
+    draw_text(190, y, state_name(task_state_at(model_row)), state_color(task_state_at(model_row)), row_bg)
+    draw_num_limited(258, y, task_cpu_ticks_at(model_row), 5, TEXT, row_bg)
+    draw_num_limited(318, y, task_map_count_at(model_row), 4, TEXT, row_bg)
+    draw_hline(6, y + 15, 388, GRID)
 }
 
 func draw_details() {
-    let rec: u8[96]
-    if !task_info(selected as u64, rec as u8*) {
+    fill_rect(0, DETAILS_Y - 4, Wm.WIN_W as u64, 72, HEADER)
+    if display_count <= 0 {
+        draw_text(8, DETAILS_Y, "no tasks" as u8*, MUTED, HEADER)
         return
     }
-    let fields: u64* = ((rec as u8*) + 16) as u64*
-    let y: u64 = 182
-    fill_rect(0, 176, Wm.WIN_W as u64, 24, HEADER)
-    draw_text(8, y, "pid" as u8*, MUTED, HEADER)
-    draw_num(32, y, fields[0], TEXT, HEADER)
-    draw_text(72, y, "parent" as u8*, MUTED, HEADER)
-    draw_num(128, y, fields[6], TEXT, HEADER)
-    draw_text(176, y, "ipc" as u8*, MUTED, HEADER)
-    draw_ipc_peer(208, y, fields[7], TEXT, HEADER)
-    draw_text(248, y, "last" as u8*, MUTED, HEADER)
-    draw_num_limited(288, y, fields[5], 4, TEXT, HEADER)
+    let row: i64 = selected_display_row()
+    if row < 0 {
+        return
+    }
+    let f: u64* = fields_at(row)
+    draw_text(8, DETAILS_Y, "pid" as u8*, MUTED, HEADER)
+    draw_num(32, DETAILS_Y, f[0], TEXT, HEADER)
+    draw_text(74, DETAILS_Y, "parent" as u8*, MUTED, HEADER)
+    draw_num(124, DETAILS_Y, f[6], TEXT, HEADER)
+    draw_text(174, DETAILS_Y, "ipc" as u8*, MUTED, HEADER)
+    if f[7] == 0xFFFFFFFFFFFFFFFF {
+        draw_text(204, DETAILS_Y, "-" as u8*, TEXT, HEADER)
+    } else {
+        draw_num_limited(204, DETAILS_Y, f[7], 4, TEXT, HEADER)
+    }
+    draw_text(248, DETAILS_Y, "len" as u8*, MUTED, HEADER)
+    draw_num_limited(278, DETAILS_Y, f[8], 5, TEXT, HEADER)
+    draw_text(318, DETAILS_Y, "maps" as u8*, MUTED, HEADER)
+    draw_num_limited(352, DETAILS_Y, f[11], 4, TEXT, HEADER)
+
+    draw_rect_buttons()
+}
+
+func draw_rect_buttons() {
+    let kill_x: i64 = 8
+    let restart_x: i64 = kill_x + ACTION_W + ACTION_GAP
+    draw_rect(kill_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x403038)
+    draw_border(kill_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x905060)
+    draw_text((kill_x + 20) as u64, (ACTION_Y + 5) as u64, "KILL" as u8*, TEXT, 0x403038)
+    draw_rect(restart_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x304050)
+    draw_border(restart_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x6080A0)
+    draw_text((restart_x + 10) as u64, (ACTION_Y + 5) as u64, "RESTART" as u8*, TEXT, 0x304050)
+    draw_text(204, (ACTION_Y + 5) as u64, "K kill, R restart" as u8*, MUTED, HEADER)
+}
+
+func hit_test_action(mx: i64, my: i64) -> i64 {
+    if my < ACTION_Y || my >= ACTION_Y + ACTION_H {
+        return 0
+    }
+    if mx >= 8 && mx < 8 + ACTION_W {
+        return 1
+    }
+    if mx >= 8 + ACTION_W + ACTION_GAP && mx < 8 + ACTION_W + ACTION_GAP + ACTION_W {
+        return 2
+    }
+    return 0
+}
+
+func row_from_point(mx: i64, my: i64) -> i64 {
+    if my < LIST_TOP || my >= LIST_TOP + MAX_ROWS * ROW_H {
+        return -1
+    }
+    if mx < 6 || mx >= 394 {
+        return -1
+    }
+    let row: i64 = (my - LIST_TOP) / ROW_H
+    let idx: i64 = top_row + row
+    if idx < 0 || idx >= display_count {
+        return -1
+    }
+    return idx
 }
 
 func render() {
+    clamp_selection()
     draw_header()
 
-    let rec: u8[96]
     let row: i64 = 0
     while row < MAX_ROWS {
-        if task_info(row as u64, rec as u8*) {
-            let fields: u64* = ((rec as u8*) + 16) as u64*
-            task_count_seen = fields[9]
-            draw_row(row, rec as u8*)
+        let idx: i64 = top_row + row
+        if idx < display_count {
+            draw_row(row, display_rows[idx], display_depths[idx])
         }
         row = row + 1
     }
 
     draw_details()
     wm_present()
-}
-
-func clamp_selection() {
-    if selected < 0 {
-        selected = 0
-    }
-    if task_count_seen > 0 && selected >= task_count_seen as i64 {
-        selected = (task_count_seen as i64) - 1
-    }
-    if selected >= MAX_ROWS {
-        selected = MAX_ROWS - 1
-    }
 }
 
 func _start(argc: u64, argv: u64*) {
@@ -257,27 +559,82 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
+    refresh_snapshot()
     render()
+
+    let last_win_w: u64 = Wm.WIN_W as u64
+    let last_win_h: u64 = Wm.WIN_H as u64
+    let prev_mouse_left: bool = false
+
     while true {
         let input: WmInput = wm_poll_input()
-        if input.key == KEY_CLOSE_REQ {
+        if input.key == KEY_CLOSE_REQ || input.key == KEY_ESC {
             wm_close()
             rt_exit(0)
         }
-        if input.key == KEY_UP {
-            selected = selected - 1
-            clamp_selection()
-            render()
-        } else if input.key == KEY_DOWN {
-            selected = selected + 1
-            clamp_selection()
+
+        if input.win_w != last_win_w || input.win_h != last_win_h {
+            last_win_w = input.win_w
+            last_win_h = input.win_h
             render()
         }
+
+        if input.wheel != 0 {
+            scroll_selection(-(input.wheel as i64))
+            render()
+        }
+
+        if input.key == KEY_UP {
+            scroll_selection(-1)
+            render()
+        } else if input.key == KEY_DOWN {
+            scroll_selection(1)
+            render()
+        } else if input.key == KEY_LEFT {
+            top_row = 0
+            render()
+        } else if input.key == KEY_RIGHT {
+            if display_count > MAX_ROWS {
+                top_row = display_count - MAX_ROWS
+            } else {
+                top_row = 0
+            }
+            render()
+        } else if input.key == 107 || input.key == 75 {
+            kill_selected_task()
+            refresh_snapshot()
+            render()
+        } else if input.key == 114 || input.key == 82 {
+            restart_selected_task()
+            refresh_snapshot()
+            render()
+        }
+
+        if input.mouse_left && !prev_mouse_left {
+            let action: i64 = hit_test_action(input.mouse_x, input.mouse_y)
+            if action == 1 {
+                kill_selected_task()
+                refresh_snapshot()
+                render()
+            } else if action == 2 {
+                restart_selected_task()
+                refresh_snapshot()
+                render()
+            } else {
+                let row_idx: i64 = row_from_point(input.mouse_x, input.mouse_y)
+                if row_idx >= 0 {
+                    selected = row_idx
+                    clamp_selection()
+                    render()
+                }
+            }
+        }
+        prev_mouse_left = input.mouse_left
 
         last_refresh = last_refresh + 1
         if last_refresh >= 15 {
             last_refresh = 0
-            clamp_selection()
+            refresh_snapshot()
             render()
         }
         sys_sleep(16)

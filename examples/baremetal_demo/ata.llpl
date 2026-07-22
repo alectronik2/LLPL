@@ -49,10 +49,11 @@ namespace ATA {
     let cache_hits: u64 = 0
     let cache_misses: u64 = 0
 
-    const CACHE_SLOTS = 16
-    let cache_valid: bool[16]
-    let cache_lba: u64[16]
-    let cache_data: u8[8192] // CACHE_SLOTS * SECTOR_SIZE
+    const CACHE_SLOTS = 128
+    let cache_valid: bool[128]
+    let cache_dirty: bool[128]
+    let cache_lba: u64[128]
+    let cache_data: u8[65536] // CACHE_SLOTS * SECTOR_SIZE
 
     // Guards atad's one shared sector buffer across a whole request+copy
     // cycle - not just the request itself. atad's own loop never waits for
@@ -140,11 +141,45 @@ namespace ATA {
         return false
     }
 
-    func cache_store(lba: u64, src: u8*) {
+    func cache_flush_slot(idx: i64) -> bool {
+        if !cache_valid[idx] || !cache_dirty[idx] {
+            return true
+        }
+        let dst: u8* = shm_ptr()
+        llpl_memcpy(dst, cache_slot_ptr(idx), SECTOR_SIZE as u64)
+        if call(OP_WRITE, cache_lba[idx], 1) != 0 {
+            return false
+        }
+        cache_dirty[idx] = false
+        return true
+    }
+
+    func cache_store(lba: u64, src: u8*, dirty: bool) -> bool {
         let idx: i64 = cache_index(lba)
+        if cache_valid[idx] && cache_lba[idx] != lba {
+            if !cache_flush_slot(idx) {
+                return false
+            }
+        }
         cache_valid[idx] = true
+        cache_dirty[idx] = dirty
         cache_lba[idx] = lba
         llpl_memcpy(cache_slot_ptr(idx), src, SECTOR_SIZE as u64)
+        return true
+    }
+
+    func flush_cache() -> bool {
+        acquire_ata()
+        let ok: bool = true
+        let i: i64 = 0
+        while i < CACHE_SLOTS {
+            if !cache_flush_slot(i) {
+                ok = false
+            }
+            i = i + 1
+        }
+        release_ata()
+        return ok
     }
 
     // Sends {op, lba} to atad and blocks until it replies with a status
@@ -340,7 +375,10 @@ namespace ATA {
                 let c: u64 = 0
                 while c < chunk {
                     let off: i64 = (c * (SECTOR_SIZE as u64)) as i64
-                    cache_store(lba + done + c, src + off)
+                    if !cache_store(lba + done + c, src + off, false) {
+                        release_ata()
+                        return false
+                    }
                     c = c + 1
                 }
             }
@@ -375,7 +413,10 @@ namespace ATA {
             let c: u64 = 0
             while c < chunk {
                 let off: i64 = ((done + c) * (SECTOR_SIZE as u64)) as i64
-                cache_store(lba + done + c, buf + off)
+                if !cache_store(lba + done + c, buf + off, false) {
+                    release_ata()
+                    return false
+                }
                 c = c + 1
             }
             release_ata()

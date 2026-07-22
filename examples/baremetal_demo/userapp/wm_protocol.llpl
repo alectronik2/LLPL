@@ -18,6 +18,8 @@ namespace Wm {
     const OP_PRESENT_RECT = 5
     const OP_NOTIFY = 6
     const OP_STATS = 7
+    const OP_FILE_DIALOG = 8
+    const OP_BEGIN_FILE_DRAG = 9
 
     const STATUS_OK = 0
     const STATUS_FAIL = 1
@@ -33,4 +35,6 @@ namespace Wm {
     const WIN_W = 400
     const WIN_H = 256
     const WIN_BYTES = 409600 // WIN_W(400) * WIN_H(256) * 4
+
+    const DRAG_PATH_LEN = 112
 }

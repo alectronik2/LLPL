@@ -96,6 +96,8 @@ namespace Task {
         let mode: i64
         let switches: u64
         let syscalls: u64
+        let cpu_ticks: u64
+        let cpu_last_sample: u64
         let last_tick: u64
         let canary_addr: u64
         let canary_failed: bool
@@ -348,6 +350,8 @@ namespace Task {
     let scheduling_enabled: bool = false
     let schedule_ticks: u64 = 0
     let context_switches_total: u64 = 0
+    let total_cpu_ticks: u64 = 0
+    let idle_cpu_ticks: u64 = 0
 
     // A kernel-mode task's own `pml4` field is 0 ("use the kernel's boot
     // page table" - see spawn_named), never a real address - anything that
@@ -517,6 +521,28 @@ namespace Task {
             i = i + 1
         }
         tcb.name[i] = 0
+    }
+
+    func task_name_starts_with(tcb: TCB*, prefix: u8*) -> bool {
+        let i: i64 = 0
+        while prefix[i] != 0 {
+            if tcb.name[i] != prefix[i] {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    func charge_current_tick(tcb: TCB*) {
+        if tcb == null {
+            return
+        }
+        tcb.cpu_ticks = tcb.cpu_ticks + 1
+        total_cpu_ticks = total_cpu_ticks + 1
+        if task_name_starts_with(tcb, "idle" as u8*) {
+            idle_cpu_ticks = idle_cpu_ticks + 1
+        }
     }
 
     func init_handles(tcb: TCB*) {
@@ -718,6 +744,8 @@ namespace Task {
         tcb.mode = MODE_KERNEL
         tcb.switches = 0
         tcb.syscalls = 0
+        tcb.cpu_ticks = 0
+        tcb.cpu_last_sample = 0
         tcb.last_tick = 0
         tcb.user_stack_base = 0
         tcb.user_guard_base = 0
@@ -806,6 +834,8 @@ namespace Task {
         tcb.mode = MODE_USER
         tcb.switches = 0
         tcb.syscalls = 0
+        tcb.cpu_ticks = 0
+        tcb.cpu_last_sample = 0
         tcb.last_tick = 0
         tcb.user_stack_base = stack_top - VMM.PAGE_SIZE
         tcb.user_guard_base = tcb.user_stack_base - VMM.PAGE_SIZE
@@ -931,6 +961,7 @@ namespace Task {
 
         let cur: TCB* = current_task as TCB*
         cur.saved_rsp = rsp
+        charge_current_tick(cur)
         note_canary_if_bad(cur)
 
         refresh_sleep(cur)
@@ -1396,6 +1427,14 @@ namespace Task {
         return t.syscalls
     }
 
+    func cpu_ticks_at(index: i64) -> u64 {
+        let t: TCB* = nth(index)
+        if t == null {
+            return 0
+        }
+        return t.cpu_ticks
+    }
+
     func last_tick_at(index: i64) -> u64 {
         let t: TCB* = nth(index)
         if t == null {
@@ -1426,6 +1465,14 @@ namespace Task {
             return 0
         }
         return t.ipc_len
+    }
+
+    func map_count_at(index: i64) -> u64 {
+        let t: TCB* = nth(index)
+        if t == null || t.aspace == null {
+            return 0
+        }
+        return t.aspace.map_count as u64
     }
 
     func parent_id_at(index: i64) -> i64 {

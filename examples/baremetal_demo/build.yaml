@@ -417,6 +417,18 @@ extra_links:
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
       objects: [build/taskmgr.o, build/libsys.so]
+  - name: pngviewer
+    llpl_sources:
+      - src: userapp/pngviewer.llpl
+        c_output: build/pngviewer.c
+        output: build/pngviewer.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: build/pngviewer.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [build/pngviewer.o, build/libsys.so]
   - name: settings
     llpl_sources:
       - src: userapp/settings.llpl
@@ -466,6 +478,7 @@ package:
     - copy: {from: build/terminal.elf, to: isodir/boot/terminal.elf}
     - copy: {from: build/ui_demo.elf, to: isodir/boot/ui_demo.elf}
     - copy: {from: build/taskmgr.elf, to: isodir/boot/taskmgr.elf}
+    - copy: {from: build/pngviewer.elf, to: isodir/boot/pngviewer.elf}
     - copy: {from: build/settings.elf, to: isodir/boot/settings.elf}
     - write:
         to: isodir/boot/hello.txt
@@ -482,6 +495,7 @@ package:
           tetris.elf|Tetris|app|1
           pingview.elf|Ping|app|1
           taskmgr.elf|Tasks|app|1
+          pngviewer.elf|Images|app|1
           settings.elf|Settings|app|1
           ui_demo.elf|Widgets|app|0
     - write:
@@ -522,6 +536,7 @@ package:
               module2 /boot/terminal.elf terminal.elf
               module2 /boot/ui_demo.elf ui_demo.elf
               module2 /boot/taskmgr.elf taskmgr.elf
+              module2 /boot/pngviewer.elf pngviewer.elf
               module2 /boot/settings.elf settings.elf
           }
     - run: "grub-mkrescue -o kernel.iso isodir"

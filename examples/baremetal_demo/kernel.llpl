@@ -935,6 +935,7 @@ func install_userland_to_vfs() {
     install_boot_module_to_vfs("terminal.elf", "/bin/terminal.elf")
     install_boot_module_to_vfs("ui_demo.elf", "/bin/ui_demo.elf")
     install_boot_module_to_vfs("taskmgr.elf", "/bin/taskmgr.elf")
+    install_boot_module_to_vfs("pngviewer.elf", "/bin/pngviewer.elf")
 }
 
 // Runs as its own scheduled kernel task (spawned from kernel_main, after
@@ -1097,9 +1098,9 @@ func kernel_main(multiboot_ptr: u64) {
     log("<GREEN>Interrupts enabled.\n</>")
 
     print("\n")
-    log("<WHITE>Spawning tasks (shell + a background counter) and starting the scheduler...\n</>")
+    log("<WHITE>Spawning tasks (shell + idle task) and starting the scheduler...\n</>")
     Task.spawn_named(shell_task_entry as u64, "shell")
-    Task.spawn_named(bg_task_entry as u64, "bg-counter")
+    Task.spawn_named(idle_task_entry as u64, "idle")
     // atad must be running before vfs_boot_task_entry's VFS.init() can
     // complete (see ata.llpl) - loaded straight from its tmpfs boot
     // module, same as userapp.elf/llpl_userapp.elf below, since the VFS

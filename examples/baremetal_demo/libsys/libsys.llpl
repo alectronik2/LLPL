@@ -53,6 +53,10 @@ const SYS_CRASH_REPORT = 44
 const SYS_MKDIR = 45
 const SYS_RM = 46
 const SYS_SYSTEM_INFO = 47
+const SYS_CPU_INFO = 48
+const SYS_CLIPBOARD_SET = 49
+const SYS_CLIPBOARD_GET = 50
+const SYS_TASK_KILL = 51
 
 const SYS_ERR = 0xFFFFFFFFFFFFFFFF
 const O_RDONLY = 0
@@ -308,6 +312,22 @@ func sys_rm(path: u8*) -> u64 {
 
 func sys_system_info(out_buf: u64*) -> u64 {
     return syscall1(SYS_SYSTEM_INFO, out_buf as u64)
+}
+
+func sys_cpu_info(out_buf: u64*) -> u64 {
+    return syscall1(SYS_CPU_INFO, out_buf as u64)
+}
+
+func sys_clipboard_set(buf: u8*, len: u64) -> u64 {
+    return syscall2(SYS_CLIPBOARD_SET, buf as u64, len)
+}
+
+func sys_clipboard_get(out_buf: u8*, max_len: u64) -> u64 {
+    return syscall2(SYS_CLIPBOARD_GET, out_buf as u64, max_len)
+}
+
+func sys_task_kill(pid: u64) -> u64 {
+    return syscall1(SYS_TASK_KILL, pid)
 }
 
 // Fills `out[0..2]` with {width, height, pitch} (pixels/bytes, 32bpp

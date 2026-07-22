@@ -20,7 +20,7 @@ import "embedded_images"
 
 const MAX_ENTRIES = 48
 const ENTRY_SIZE = 48
-const ROWS_VISIBLE = 10
+const ROWS_VISIBLE = 14
 const ROW_H = 16
 const LIST_TOP = 24
 
@@ -30,6 +30,7 @@ const DIR_COLOR: uint32 = 0x70D0FF
 const FILE_COLOR: uint32 = 0xD0D0D0
 const SEL_BG: uint32 = 0x30609F
 const SEL_FG: uint32 = 0xFFFFFF
+const CONFIRM_COLOR: uint32 = 0xFF9090
 const VFS_KIND_DIR = 2
 const SCROLLBAR_W = 4
 const SCROLLBAR_TRACK: uint32 = 0x202020
@@ -52,6 +53,33 @@ let clipboard_path: u8[160]
 let clipboard_name: u8[32]
 let clipboard_valid: bool = false
 let copy_buf: u8[4096]
+let prev_mouse_left: bool = false
+let dialog_mode: i64 = 0
+let dialog_text: u8[32]
+let dialog_len: i64 = 0
+let dialog_old_path: u8[160]
+let dialog_old_name: u8[32]
+
+const DIALOG_NONE = 0
+const DIALOG_NEW_FILE = 1
+const DIALOG_NEW_FOLDER = 2
+const DIALOG_RENAME = 3
+const DIALOG_DELETE = 4
+
+func rows_visible() -> i64 {
+    let h: u64 = wm_visible_height()
+    if h <= (LIST_TOP as u64) + 32 {
+        return 1
+    }
+    let rows: i64 = ((h - (LIST_TOP as u64) - 16) / ROW_H) as i64
+    if rows > ROWS_VISIBLE {
+        return ROWS_VISIBLE
+    }
+    if rows < 1 {
+        return 1
+    }
+    return rows
+}
 
 func path_len(p: u8*) -> u64 {
     let i: u64 = 0
@@ -147,6 +175,15 @@ func selected_path(dst: u8*) {
         return
     }
     join_path(dst, cur_path as u8*, entry_at(selected))
+}
+
+func copy_name32(dst: u8*, src: u8*) {
+    let i: i64 = 0
+    while i < 31 && src[i] != 0 {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
 }
 
 func icon_for_entry(name: u8*, kind: u64) -> EmbeddedImage {
@@ -270,11 +307,12 @@ func draw_icon(buf: uint32*, img: EmbeddedImage, x0: i64, y0: i64) {
 // draggable itself); the mouse wheel is what actually moves it - see
 // this file's main loop.
 func draw_scrollbar() {
-    if entry_count <= ROWS_VISIBLE {
+    let visible: i64 = rows_visible()
+    if entry_count <= visible {
         return
     }
     let track_top: i64 = LIST_TOP
-    let track_h: i64 = ROWS_VISIBLE * ROW_H
+    let track_h: i64 = visible * ROW_H
     let sb_x: i64 = (Wm.WIN_W as i64) - SCROLLBAR_W - 2
 
     let ty: i64 = 0
@@ -287,14 +325,14 @@ func draw_scrollbar() {
         ty = ty + 1
     }
 
-    let thumb_h: i64 = (track_h * ROWS_VISIBLE) / entry_count
+    let thumb_h: i64 = (track_h * visible) / entry_count
     if thumb_h < 8 {
         thumb_h = 8
     }
     if thumb_h > track_h {
         thumb_h = track_h
     }
-    let max_scroll: i64 = entry_count - ROWS_VISIBLE
+    let max_scroll: i64 = entry_count - visible
     let thumb_y: i64 = track_top
     if max_scroll > 0 {
         thumb_y = track_top + ((track_h - thumb_h) * scroll) / max_scroll
@@ -319,8 +357,9 @@ func render() {
     draw_icon(buf, icon_file, ICON_X, 4)
     Font.draw_string(buf, win_w, win_h, ICON_TEXT_X, 4, cur_path as u8*, HEADER_COLOR, BG_COLOR)
 
+    let visible: i64 = rows_visible()
     let row: i64 = 0
-    while row < ROWS_VISIBLE {
+    while row < visible {
         let idx: i64 = scroll + row
         let y: u64 = (LIST_TOP as u64) + (row as u64) * ROW_H
         if idx < entry_count {
@@ -342,8 +381,28 @@ func render() {
         row = row + 1
     }
     draw_scrollbar()
-    fill_row(buf, 184, 0x151922)
-    Font.draw_string(buf, win_w, win_h, 8, 184, status as u8*, FILE_COLOR, 0x151922)
+    let status_y: u64 = (wm_visible_height() - 16)
+    fill_row(buf, status_y, 0x151922)
+    Font.draw_string(buf, win_w, win_h, 8, status_y, status as u8*, FILE_COLOR, 0x151922)
+
+    if dialog_mode != DIALOG_NONE {
+        let box_y: u64 = 72
+        fill_row(buf, box_y, 0x202030)
+        fill_row(buf, box_y + 16, 0x202030)
+        fill_row(buf, box_y + 32, 0x202030)
+        if dialog_mode == DIALOG_NEW_FILE {
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "New file name:" as u8*, HEADER_COLOR, 0x202030)
+        } else if dialog_mode == DIALOG_NEW_FOLDER {
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "New folder name:" as u8*, HEADER_COLOR, 0x202030)
+        } else if dialog_mode == DIALOG_RENAME {
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Rename to:" as u8*, HEADER_COLOR, 0x202030)
+        } else if dialog_mode == DIALOG_DELETE {
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Delete selected? Enter=yes Esc=no" as u8*, CONFIRM_COLOR, 0x202030)
+        }
+        if dialog_mode != DIALOG_DELETE {
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 22, dialog_text as u8*, FILE_COLOR, 0x202030)
+        }
+    }
     wm_present()
 }
 
@@ -357,12 +416,110 @@ func move_selection_up() {
 }
 
 func move_selection_down() {
+    let visible: i64 = rows_visible()
     if selected < entry_count - 1 {
         selected = selected + 1
-        if selected >= scroll + ROWS_VISIBLE {
-            scroll = selected - ROWS_VISIBLE + 1
+        if selected >= scroll + visible {
+            scroll = selected - visible + 1
         }
     }
+}
+
+func start_text_dialog(mode: i64, initial: u8*) {
+    dialog_mode = mode
+    dialog_len = 0
+    let i: i64 = 0
+    while i < 31 && initial[i] != 0 {
+        dialog_text[i] = initial[i]
+        i = i + 1
+    }
+    dialog_len = i
+    dialog_text[i] = 0
+}
+
+func close_dialog() {
+    dialog_mode = DIALOG_NONE
+    dialog_len = 0
+    dialog_text[0] = 0
+}
+
+func dialog_backspace() {
+    if dialog_len > 0 {
+        dialog_len = dialog_len - 1
+        dialog_text[dialog_len] = 0
+    }
+}
+
+func dialog_insert(c: u8) {
+    if dialog_len < 31 && c != 47 {
+        dialog_text[dialog_len] = c
+        dialog_len = dialog_len + 1
+        dialog_text[dialog_len] = 0
+    }
+}
+
+func create_named_file(name: u8*) {
+    let full: u8[160]
+    join_path(full as u8*, cur_path as u8*, name)
+    let text: u8* = "" as u8*
+    if sys_write_all(full as u8*, text, 0) == RT_SYS_ERR {
+        set_status("create file failed" as u8*)
+    } else {
+        set_status("file created" as u8*)
+    }
+    refresh_listing()
+}
+
+func create_named_folder(name: u8*) {
+    let full: u8[160]
+    join_path(full as u8*, cur_path as u8*, name)
+    if sys_mkdir(full as u8*) == RT_SYS_ERR {
+        set_status("create folder failed" as u8*)
+    } else {
+        set_status("folder created" as u8*)
+    }
+    refresh_listing()
+}
+
+func rename_selected_to(new_name: u8*) {
+    if dialog_old_path[0] == 0 || new_name[0] == 0 {
+        set_status("rename failed" as u8*)
+        return
+    }
+    let n: u64 = sys_read_all(dialog_old_path as u8*, copy_buf as u8*, 4096)
+    if n == RT_SYS_ERR {
+        set_status("read failed" as u8*)
+        return
+    }
+    let full: u8[160]
+    join_path(full as u8*, cur_path as u8*, new_name)
+    if sys_write_all(full as u8*, copy_buf as u8*, n) == RT_SYS_ERR {
+        set_status("write failed" as u8*)
+        return
+    }
+    sys_rm(dialog_old_path as u8*)
+    set_status("renamed" as u8*)
+    refresh_listing()
+}
+
+func accept_dialog() {
+    if dialog_mode == DIALOG_DELETE {
+        delete_selected()
+        close_dialog()
+        return
+    }
+    if dialog_text[0] == 0 {
+        set_status("name required" as u8*)
+        return
+    }
+    if dialog_mode == DIALOG_NEW_FILE {
+        create_named_file(dialog_text as u8*)
+    } else if dialog_mode == DIALOG_NEW_FOLDER {
+        create_named_folder(dialog_text as u8*)
+    } else if dialog_mode == DIALOG_RENAME {
+        rename_selected_to(dialog_text as u8*)
+    }
+    close_dialog()
 }
 
 func create_generated_file() {
@@ -420,13 +577,29 @@ func copy_selected() {
     }
     clipboard_name[i] = 0
     clipboard_valid = true
+    sys_clipboard_set(clipboard_path as u8*, path_len(clipboard_path as u8*))
     set_status("copied" as u8*)
+}
+
+func system_clipboard_path() -> bool {
+    let n: u64 = sys_clipboard_get(clipboard_path as u8*, 159)
+    if n == RT_SYS_ERR || n == 0 {
+        return false
+    }
+    clipboard_path[n] = 0
+    if clipboard_path[0] != 47 {
+        return false
+    }
+    clipboard_valid = true
+    return true
 }
 
 func paste_file(prefix: u8*) -> bool {
     if !clipboard_valid {
-        set_status("paste failed" as u8*)
-        return false
+        if !system_clipboard_path() {
+            set_status("paste failed" as u8*)
+            return false
+        }
     }
     let n: u64 = sys_read_all(clipboard_path as u8*, copy_buf as u8*, 4096)
     if n == RT_SYS_ERR {
@@ -470,6 +643,25 @@ func open_selected_with_terminal() {
     sys_spawn("/bin/terminal.elf" as u8*, full as u8*)
 }
 
+func entry_index_from_mouse(mx: i64, my: i64) -> i64 {
+    if my < LIST_TOP {
+        return -1
+    }
+    let visible: i64 = rows_visible()
+    let row: i64 = (my - LIST_TOP) / ROW_H
+    if row < 0 || row >= visible {
+        return -1
+    }
+    let idx: i64 = scroll + row
+    if idx < 0 || idx >= entry_count {
+        return -1
+    }
+    if mx < 0 || mx >= (Wm.WIN_W as i64) - SCROLLBAR_W - 4 {
+        return -1
+    }
+    return idx
+}
+
 func _start(argc: u64, argv: u64*) {
     sys_putln("filebrowser: starting")
     if !wm_connect() {
@@ -489,11 +681,48 @@ func _start(argc: u64, argv: u64*) {
     cur_path[1] = 0
     set_status("ready" as u8*)
     refresh_listing()
+    let press_row: i64 = -1
 
     while true {
         let input: WmInput = wm_poll_input()
         let key: u64 = input.key as u64
-        if key == (KEY_CLOSE_REQ as u64) {
+        if input.mouse_left && !prev_mouse_left {
+            press_row = entry_index_from_mouse(input.mouse_x, input.mouse_y)
+        if press_row >= 0 {
+            selected = press_row
+            let full: u8[160]
+            selected_path(full as u8*)
+            wm_begin_file_drag(full as u8*)
+        }
+        } else if !input.mouse_left && prev_mouse_left {
+            let release_row: i64 = entry_index_from_mouse(input.mouse_x, input.mouse_y)
+            if press_row >= 0 && release_row == press_row {
+                if entry_count > 0 {
+                    let name: u8* = entry_at(selected)
+                    let kind: u64 = entry_kind(selected)
+                    if kind == VFS_KIND_DIR {
+                        join_path(cur_path as u8*, cur_path as u8*, name)
+                        refresh_listing()
+                    } else {
+                        let full: u8[160]
+                        join_path(full as u8*, cur_path as u8*, name)
+                        open_file(full as u8*, name)
+                    }
+                }
+            }
+            press_row = -1
+        }
+        if dialog_mode != DIALOG_NONE {
+            if key == (KEY_ESC as u64) || key == (KEY_CLOSE_REQ as u64) {
+                close_dialog()
+            } else if key == 10 {
+                accept_dialog()
+            } else if key == 8 {
+                dialog_backspace()
+            } else if key >= 32 && key < 127 {
+                dialog_insert(key as u8)
+            }
+        } else if key == (KEY_CLOSE_REQ as u64) {
             // Nothing here worth keeping around to ask about (unlike
             // editor.llpl) - close immediately. Deliberately a separate
             // branch from KEY_ESC below, which already means "go up a
@@ -521,17 +750,25 @@ func _start(argc: u64, argv: u64*) {
             go_up()
             refresh_listing()
         } else if key == 102 || key == 70 {
-            create_generated_file()
+            start_text_dialog(DIALOG_NEW_FILE, "new.txt" as u8*)
         } else if key == 110 || key == 78 {
-            create_generated_folder()
+            start_text_dialog(DIALOG_NEW_FOLDER, "folder" as u8*)
         } else if key == 100 || key == 68 {
-            delete_selected()
+            if entry_count > 0 {
+                start_text_dialog(DIALOG_DELETE, "" as u8*)
+            }
         } else if key == 99 || key == 67 {
             copy_selected()
         } else if key == 118 || key == 86 {
             paste_file("copy" as u8*)
         } else if key == 114 || key == 82 {
-            rename_selected()
+            if entry_count > 0 && entry_kind(selected) != VFS_KIND_DIR {
+                selected_path(dialog_old_path as u8*)
+                copy_name32(dialog_old_name as u8*, entry_at(selected))
+                start_text_dialog(DIALOG_RENAME, dialog_old_name as u8*)
+            } else {
+                set_status("rename failed" as u8*)
+            }
         } else if key == 101 || key == 69 {
             if entry_count > 0 {
                 let full: u8[160]
@@ -540,28 +777,30 @@ func _start(argc: u64, argv: u64*) {
             }
         } else if key == 120 || key == 88 {
             open_selected_with_terminal()
+        } else if input.drop_valid {
+            if input.drop_path[0] != 0 {
+                sys_spawn("/bin/editor.elf" as u8*, input.drop_path as u8*)
+                set_status("dropped" as u8*)
+            }
         }
 
-        // Mouse wheel: one notch moves the selection exactly like a
-        // single arrow-key press would, capped at 3 steps per poll so a
-        // stray huge value (there shouldn't be one, but this is the
-        // boundary of what a client trusts from outside itself) can't
-        // send `selected` flying. Positive = wheel scrolled up/away, per
-        // the raw PS/2 convention (see mouse.llpl) - that's "up" on
-        // screen too, matching KEY_UP above.
-        let wheel: i64 = wm_wheel_delta()
-        if wheel > 3 {
-            wheel = 3
-        } else if wheel < -3 {
-            wheel = -3
-        }
-        while wheel > 0 {
-            move_selection_up()
-            wheel = wheel - 1
-        }
-        while wheel < 0 {
-            move_selection_down()
-            wheel = wheel + 1
+        if dialog_mode == DIALOG_NONE {
+            // Mouse wheel: one notch moves the selection exactly like a
+            // single arrow-key press would, capped at 3 steps per poll.
+            let wheel: i64 = wm_wheel_delta()
+            if wheel > 3 {
+                wheel = 3
+            } else if wheel < -3 {
+                wheel = -3
+            }
+            while wheel > 0 {
+                move_selection_up()
+                wheel = wheel - 1
+            }
+            while wheel < 0 {
+                move_selection_down()
+                wheel = wheel + 1
+            }
         }
 
         render()

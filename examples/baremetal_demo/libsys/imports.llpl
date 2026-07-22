@@ -44,6 +44,7 @@ extern func sys_bmide_base() -> u64
 extern func sys_virt_to_phys(virt: u64) -> u64
 extern func sys_nic_mmap() -> u8*
 extern func sys_task_info(index: u64, out_buf: u8*) -> u64
+extern func sys_task_kill(pid: u64) -> u64
 extern func sys_pty_create() -> u64
 extern func sys_pty_spawn_shell(pty_id: u64) -> u64
 extern func sys_pty_write(pty_id: u64, buf: u8*, len: u64) -> u64
@@ -52,6 +53,9 @@ extern func sys_pty_close(pty_id: u64) -> u64
 extern func sys_mkdir(path: u8*) -> u64
 extern func sys_rm(path: u8*) -> u64
 extern func sys_system_info(out_buf: u64*) -> u64
+extern func sys_cpu_info(out_buf: u64*) -> u64
+extern func sys_clipboard_set(buf: u8*, len: u64) -> u64
+extern func sys_clipboard_get(out_buf: u8*, max_len: u64) -> u64
 
 const KEY_UP = 200
 const KEY_DOWN = 201

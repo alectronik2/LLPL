@@ -9,9 +9,8 @@
 // arrives (see shmclient.llpl's own doc comment on this), and
 // sys_msg_reply only ever delivers min(reply_len, the caller's own
 // buffer length) bytes (see Syscall.sys_msg_reply) - so every buffer
-// below is sized for the *largest* reply its op can produce (40 bytes
-// for OP_CREATE's {status, slot, offset, x, y}, not the 16-byte request
-// those same bytes started as), not just the request being sent.
+// below is sized for the *largest* reply its op can produce, not just the
+// request being sent.
 
 import "../libsys/imports"
 import "user_runtime"
@@ -57,6 +56,8 @@ func wm_create_window() -> bool {
     wm_slot = r[1] as i64
     wm_win_x = r[3]
     wm_win_y = r[4]
+    wm_last_input.win_w = 320
+    wm_last_input.win_h = 200
     return true
 }
 
@@ -140,6 +141,10 @@ struct WmInput {
     let mouse_y: i64
     let mouse_left: bool
     let mouse_right: bool
+    let win_w: u64
+    let win_h: u64
+    let drop_valid: bool
+    let drop_path: u8[112]
 }
 
 // Set as a side effect of every wm_poll_input() call below - read it
@@ -148,11 +153,11 @@ let wm_last_wheel: i64 = 0
 let wm_last_input: WmInput
 
 func wm_poll_input() -> WmInput {
-    let req: u8[48]
+    let req: u8[128]
     let r: u64* = (req as u8*) as u64*
     r[0] = Wm.OP_POLL_INPUT as u64
     r[1] = wm_slot as u64
-    let n: u64 = sys_msg_send(wm_handle, req as u8*, 48)
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 128)
 
     // Initialize with defaults
     wm_last_input.key = 0
@@ -161,6 +166,10 @@ func wm_poll_input() -> WmInput {
     wm_last_input.mouse_y = 0
     wm_last_input.mouse_left = false
     wm_last_input.mouse_right = false
+    wm_last_input.win_w = Wm.WIN_W as u64
+    wm_last_input.win_h = Wm.WIN_H as u64
+    wm_last_input.drop_valid = false
+    wm_last_input.drop_path[0] = 0
 
     if n == RT_SYS_ERR {
         return wm_last_input
@@ -179,6 +188,19 @@ func wm_poll_input() -> WmInput {
     let mouse_flags: u64 = r[5]
     wm_last_input.mouse_left = (mouse_flags & 1) != 0
     wm_last_input.mouse_right = (mouse_flags & 2) != 0
+    wm_last_input.win_w = r[6]
+    wm_last_input.win_h = r[7]
+    wm_last_input.drop_valid = r[8] != 0
+    wm_last_input.drop_path[0] = 0
+    if wm_last_input.drop_valid {
+        let src: u8* = (req as u8*) + 72
+        let i: i64 = 0
+        while i < 111 && src[i] != 0 {
+            wm_last_input.drop_path[i] = src[i]
+            i = i + 1
+        }
+        wm_last_input.drop_path[i] = 0
+    }
 
     wm_last_wheel = wm_last_input.wheel
     return wm_last_input
@@ -192,12 +214,45 @@ func wm_wheel_delta() -> i64 {
     return wm_last_wheel
 }
 
+func wm_visible_width() -> u64 {
+    if wm_last_input.win_w == 0 {
+        return 320
+    }
+    return wm_last_input.win_w
+}
+
+func wm_visible_height() -> u64 {
+    if wm_last_input.win_h == 0 {
+        return 200
+    }
+    return wm_last_input.win_h
+}
+
 func wm_close() {
     let req: u8[16]
     let r: u64* = (req as u8*) as u64*
     r[0] = Wm.OP_CLOSE as u64
     r[1] = wm_slot as u64
     sys_msg_send(wm_handle, req as u8*, 16)
+}
+
+func wm_open_file_dialog(out_path: u8*) -> bool {
+    let req: u8[128]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_FILE_DIALOG as u64
+    r[1] = wm_slot as u64
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 128)
+    if n == RT_SYS_ERR || r[0] != (Wm.STATUS_OK as u64) {
+        return false
+    }
+    let src: u8* = (req as u8*) + 8
+    let i: i64 = 0
+    while i < 95 && src[i] != 0 {
+        out_path[i] = src[i]
+        i = i + 1
+    }
+    out_path[i] = 0
+    return true
 }
 
 func wm_copy_field(dst: u8*, src: u8*, max_len: u64) {
@@ -249,6 +304,22 @@ func wm_stats(out_buf: u64*) -> bool {
         i = i + 1
     }
     return true
+}
+
+func wm_begin_file_drag(path: u8*) -> bool {
+    if wm_handle == RT_SYS_ERR {
+        return false
+    }
+    let req: u8[128]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_BEGIN_FILE_DRAG as u64
+    r[1] = wm_slot as u64
+    wm_copy_field((req as u8*) + 16, path, Wm.DRAG_PATH_LEN as u64)
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 128)
+    if n == RT_SYS_ERR {
+        return false
+    }
+    return r[0] == (Wm.STATUS_OK as u64)
 }
 
 // Convenience functions

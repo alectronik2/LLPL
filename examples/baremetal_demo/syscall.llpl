@@ -70,6 +70,10 @@ namespace Syscall {
     const SYS_MKDIR = 45
     const SYS_RM = 46
     const SYS_SYSTEM_INFO = 47
+    const SYS_CPU_INFO = 48
+    const SYS_CLIPBOARD_SET = 49
+    const SYS_CLIPBOARD_GET = 50
+    const SYS_TASK_KILL = 51
 
     const MAX_FDS = 16
     const FD_PATH_MAX = 96
@@ -88,6 +92,8 @@ namespace Syscall {
     let msg_recv_count: u64 = 0
     let msg_try_recv_count: u64 = 0
     let msg_reply_count: u64 = 0
+    let clipboard_len: u64 = 0
+    let clipboard_data: u8[4096]
 
     func dispatch(number: u64, a: u64, b: u64, c: u64) -> u64 {
         dispatch_count = dispatch_count + 1
@@ -243,6 +249,18 @@ namespace Syscall {
         }
         if number == SYS_SYSTEM_INFO {
             return sys_system_info(a)
+        }
+        if number == SYS_CPU_INFO {
+            return sys_cpu_info(a)
+        }
+        if number == SYS_CLIPBOARD_SET {
+            return sys_clipboard_set(a, b)
+        }
+        if number == SYS_CLIPBOARD_GET {
+            return sys_clipboard_get(a, b)
+        }
+        if number == SYS_TASK_KILL {
+            return sys_task_kill(a)
         }
         EventLog.add1("syscall", "unknown", number)
         return 0
@@ -564,19 +582,61 @@ namespace Syscall {
         return 0
     }
 
+    // out_buf receives four u64 fields:
+    // total_cpu_ticks, idle_cpu_ticks, schedule_ticks, context_switches.
+    func sys_cpu_info(out_buf: u64) -> u64 {
+        let rec: u64[4]
+        rec[0] = Task.total_cpu_ticks
+        rec[1] = Task.idle_cpu_ticks
+        rec[2] = Task.schedule_ticks
+        rec[3] = Task.context_switches_total
+        copy_to_user(out_buf, rec as u8*, 32)
+        return 0
+    }
+
+    func sys_clipboard_set(buf: u64, len: u64) -> u64 {
+        let n: u64 = len
+        if n > 4096 {
+            n = 4096
+        }
+        if n == 0 {
+            clipboard_len = 0
+            return 0
+        }
+        if copy_from_user(buf, clipboard_data as u8*, n) != n {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        clipboard_len = n
+        return n
+    }
+
+    func sys_clipboard_get(out_buf: u64, max_len: u64) -> u64 {
+        let n: u64 = clipboard_len
+        if n > max_len {
+            n = max_len
+        }
+        if n == 0 {
+            return 0
+        }
+        if copy_to_user(out_buf, clipboard_data as u8*, n) != n {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return n
+    }
+
     // Read-only task snapshot for user-space tools. out_buf receives a
-    // fixed 96-byte record: name[16], then ten u64 fields at offset 16:
+    // fixed 112-byte record: name[16], then u64 fields at offset 16:
     // pid, state, mode, switches, syscalls, last_tick, parent_id,
-    // ipc_peer, ipc_len, task_count. The final task_count lets a client
-    // refresh without needing a separate "how many tasks?" syscall.
+    // ipc_peer, ipc_len, task_count, cpu_ticks. task_count lets a client
+    // refresh without needing a separate count syscall.
     func sys_task_info(index: u64, out_buf: u64) -> u64 {
         if index >= Task.task_count as u64 {
             return 0xFFFFFFFFFFFFFFFF
         }
 
-        let rec: u8[96]
+        let rec: u8[112]
         let i: i64 = 0
-        while i < 96 {
+        while i < 112 {
             rec[i] = 0
             i = i + 1
         }
@@ -599,11 +659,33 @@ namespace Syscall {
         fields[7] = Task.ipc_peer_at(index as i64) as u64
         fields[8] = Task.ipc_len_at(index as i64)
         fields[9] = Task.task_count as u64
+        fields[10] = Task.cpu_ticks_at(index as i64)
+        fields[11] = Task.map_count_at(index as i64)
 
-        if copy_to_user(out_buf, rec as u8*, 96) != 96 {
+        if copy_to_user(out_buf, rec as u8*, 120) != 120 {
             return 0xFFFFFFFFFFFFFFFF
         }
         return 0
+    }
+
+    func sys_task_kill(pid_u: u64) -> u64 {
+        if !Task.is_boot_spawned(Task.current_id()) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let pid: i64 = pid_u as i64
+        if pid < 0 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let t: Task.TCB* = Task.find_by_id(pid)
+        if t != null {
+            LdSo.cleanup_aspace(t.aspace)
+            close_owner(t.id)
+            Task.shm_release(t.id)
+        }
+        if Task.kill(pid) {
+            return 0
+        }
+        return 0xFFFFFFFFFFFFFFFF
     }
 
     func sys_pty_create() -> u64 {

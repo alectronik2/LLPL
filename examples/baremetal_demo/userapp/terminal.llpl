@@ -33,6 +33,7 @@ const TEXT_COLOR: uint32 = 0xD8D8D8
 const PROMPT_COLOR: uint32 = 0x70D0FF
 const ERROR_COLOR: uint32 = 0xFF6060
 const CARET_COLOR: uint32 = 0xFFD000
+const SELECTION_BG: uint32 = 0x304C78
 
 const VFS_KIND_DIR = 2
 const MAX_LS_ENTRIES = 48
@@ -52,6 +53,40 @@ let term_path: u8[128]
 let exec_probe: u8[1]
 let pty_id: u64 = RT_SYS_ERR
 let pty_drain_full: bool = false
+let selecting: bool = false
+let prev_mouse_left: bool = false
+let sel_start: u64 = 0
+let sel_end: u64 = 0
+
+func visible_cols() -> u64 {
+    let w: u64 = wm_visible_width()
+    if w < 32 {
+        return 1
+    }
+    let cols: u64 = (w - 16) / 8
+    if cols > 61 {
+        return 61
+    }
+    if cols < 1 {
+        return 1
+    }
+    return cols
+}
+
+func visible_rows() -> u64 {
+    let h: u64 = wm_visible_height()
+    if h <= (TOP as u64) + ROW_H as u64 {
+        return 1
+    }
+    let rows: u64 = (h - (TOP as u64)) / ROW_H
+    if rows > 15 {
+        return 15
+    }
+    if rows < 1 {
+        return 1
+    }
+    return rows
+}
 
 func path_len(p: u8*) -> u64 {
     let i: u64 = 0
@@ -550,13 +585,146 @@ func offset_of_line(line: u64) -> u64 {
     return i
 }
 
+func min_u64(a: u64, b: u64) -> u64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+func max_u64(a: u64, b: u64) -> u64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+func has_selection() -> bool {
+    return sel_start != sel_end
+}
+
+func clear_selection() {
+    sel_start = buf_len
+    sel_end = buf_len
+}
+
+func selection_start() -> u64 {
+    return min_u64(sel_start, sel_end)
+}
+
+func selection_end() -> u64 {
+    return max_u64(sel_start, sel_end)
+}
+
+func position_from_mouse(mx: i64, my: i64) -> u64 {
+    if my < TOP {
+        return offset_of_line(top_line)
+    }
+    let rows_visible: u64 = visible_rows()
+    let row: u64 = ((my - TOP) / ROW_H) as u64
+    if row >= rows_visible {
+        row = rows_visible - 1
+    }
+    let line: u64 = top_line + row
+    let start: u64 = offset_of_line(line)
+    let end: u64 = start
+    while end < buf_len && buf[end] != 10 {
+        end = end + 1
+    }
+    let col: u64 = 0
+    if mx > 4 {
+        col = ((mx - 4) / 8) as u64
+    }
+    let pos: u64 = start + col
+    if pos > end {
+        return end
+    }
+    return pos
+}
+
+func draw_selection_for_line(bufp: uint32*, row_y: u64, line_start: u64, line_end: u64) {
+    if !has_selection() {
+        return
+    }
+    let a: u64 = min_u64(sel_start, sel_end)
+    let b: u64 = max_u64(sel_start, sel_end)
+    if b <= line_start || a > line_end {
+        return
+    }
+    let sx: u64 = 0
+    if a > line_start {
+        sx = a - line_start
+    }
+    let ex: u64 = line_end - line_start
+    if b < line_end {
+        ex = b - line_start
+    }
+    if ex <= sx {
+        return
+    }
+    fill_rect(bufp, 4 + sx * 8, row_y, (ex - sx) * 8, ROW_H as u64, SELECTION_BG)
+}
+
+func draw_text_line(bufp: uint32*, win_w: u64, win_h: u64, x: u64, y: u64, linebuf: u8*, line_start: u64, fg: uint32) {
+    if !has_selection() {
+        Font.draw_string(bufp, win_w, win_h, x, y, linebuf, fg, BG_COLOR)
+        return
+    }
+    let a: u64 = min_u64(sel_start, sel_end)
+    let b: u64 = max_u64(sel_start, sel_end)
+    let i: u64 = 0
+    while linebuf[i] != 0 {
+        let bg: uint32 = BG_COLOR
+        let pos: u64 = line_start + i
+        if pos >= a && pos < b {
+            bg = SELECTION_BG
+        }
+        Font.draw_char(bufp, win_w, win_h, x + i * 8, y, linebuf[i], fg, bg)
+        i = i + 1
+    }
+}
+
+func copy_selection_to_clipboard() {
+    if !has_selection() {
+        return
+    }
+    let a: u64 = selection_start()
+    let b: u64 = selection_end()
+    let len: u64 = b - a
+    let n: u64 = len
+    if n > 4096 {
+        n = 4096
+    }
+    let clip: u8[4096]
+    let i: u64 = 0
+    while i < n {
+        clip[i] = buf[a + i]
+        i = i + 1
+    }
+    sys_clipboard_set(clip as u8*, n)
+}
+
+func paste_clipboard_to_pty() {
+    let clip: u8[4096]
+    let n: u64 = sys_clipboard_get(clip as u8*, 4096)
+    if n == 0 || n == RT_SYS_ERR {
+        return
+    }
+    let i: u64 = 0
+    while i < n {
+        pty_send_char(clip[i])
+        i = i + 1
+    }
+}
+
 func draw_scrollbar(fb: uint32*, win_w: u64) {
     let total: u64 = line_number_of(buf_len) + 1
-    if total <= (VISIBLE_ROWS as u64) {
+    let rows_visible: u64 = visible_rows()
+    if total <= rows_visible {
         return
     }
     let track_top: i64 = TOP
-    let track_h: i64 = VISIBLE_ROWS * ROW_H
+    let track_h: i64 = (rows_visible as i64) * ROW_H
     let sb_x: i64 = (win_w as i64) - SCROLLBAR_W - 2
 
     let ty: i64 = 0
@@ -569,14 +737,14 @@ func draw_scrollbar(fb: uint32*, win_w: u64) {
         ty = ty + 1
     }
 
-    let thumb_h: i64 = (track_h * (VISIBLE_ROWS as i64)) / (total as i64)
+    let thumb_h: i64 = (track_h * (rows_visible as i64)) / (total as i64)
     if thumb_h < 8 {
         thumb_h = 8
     }
     if thumb_h > track_h {
         thumb_h = track_h
     }
-    let max_scroll: i64 = (total as i64) - (VISIBLE_ROWS as i64)
+    let max_scroll: i64 = (total as i64) - (rows_visible as i64)
     let thumb_y: i64 = track_top
     if max_scroll > 0 {
         thumb_y = track_top + ((track_h - thumb_h) * (top_line as i64)) / max_scroll
@@ -621,13 +789,18 @@ func fill_rect(bufp: uint32*, x: u64, y: u64, w: u64, h: u64, color: uint32) {
 }
 
 func render_input_line_fast() -> bool {
+    if has_selection() {
+        return false
+    }
     let cur_line: u64 = line_number_of(buf_len)
+    let rows_visible: u64 = visible_rows()
+    let cols_visible: u64 = visible_cols()
     let old_top: u64 = top_line
     if cur_line < top_line {
         top_line = cur_line
     }
-    if cur_line >= top_line + (VISIBLE_ROWS as u64) {
-        top_line = cur_line - (VISIBLE_ROWS as u64) + 1
+    if cur_line >= top_line + rows_visible {
+        top_line = cur_line - rows_visible + 1
     }
     if top_line != old_top {
         return false
@@ -636,7 +809,7 @@ func render_input_line_fast() -> bool {
         return false
     }
     let row_of_end: u64 = cur_line - top_line
-    if row_of_end >= (VISIBLE_ROWS as u64) {
+    if row_of_end >= rows_visible {
         return false
     }
 
@@ -647,10 +820,10 @@ func render_input_line_fast() -> bool {
     fill_rect(win_buf, 0, y, Wm.WIN_W as u64, ROW_H as u64, BG_COLOR)
 
     let line_start: u64 = line_start_at_or_before(buf_len)
-    let linebuf: u8[40]
+    let linebuf: u8[64]
     let col: u64 = 0
     let p: u64 = line_start
-    while p < buf_len && buf[p] != 10 && col < (MAX_COLS as u64) {
+    while p < buf_len && buf[p] != 10 && col < cols_visible {
         linebuf[col] = buf[p]
         col = col + 1
         p = p + 1
@@ -659,8 +832,8 @@ func render_input_line_fast() -> bool {
     Font.draw_string(win_buf, win_w, win_h, 4, y, linebuf as u8*, PROMPT_COLOR, BG_COLOR)
 
     let caret_col: u64 = buf_len - line_start
-    if caret_col > (MAX_COLS as u64) {
-        caret_col = MAX_COLS as u64
+    if caret_col > cols_visible {
+        caret_col = cols_visible
     }
     let cx: u64 = 4 + caret_col * 8
     if cx + 1 < win_w {
@@ -685,26 +858,28 @@ func render() {
     // screen, the same rule editor.llpl's own render() applies to its
     // cursor line.
     let cur_line: u64 = line_number_of(buf_len)
+    let rows_visible: u64 = visible_rows()
+    let cols_visible: u64 = visible_cols()
     if cur_line < top_line {
         top_line = cur_line
     }
-    if cur_line >= top_line + (VISIBLE_ROWS as u64) {
-        top_line = cur_line - (VISIBLE_ROWS as u64) + 1
+    if cur_line >= top_line + rows_visible {
+        top_line = cur_line - rows_visible + 1
     }
 
     let offset: u64 = offset_of_line(top_line)
     let row: u64 = 0
-    while row < (VISIBLE_ROWS as u64) {
+    while row < rows_visible {
         if offset <= buf_len {
             let line_end: u64 = offset
             while line_end < buf_len && buf[line_end] != 10 {
                 line_end = line_end + 1
             }
             let y: u64 = (TOP as u64) + row * ROW_H
-            let linebuf: u8[40]
+            let linebuf: u8[64]
             let col: u64 = 0
             let p: u64 = offset
-            while p < line_end && col < (MAX_COLS as u64) {
+            while p < line_end && col < cols_visible {
                 linebuf[col] = buf[p]
                 col = col + 1
                 p = p + 1
@@ -715,7 +890,7 @@ func render() {
             if is_prompt_line {
                 fg = PROMPT_COLOR
             }
-            Font.draw_string(win_buf, win_w, win_h, 4, y, linebuf as u8*, fg, BG_COLOR)
+            draw_text_line(win_buf, win_w, win_h, 4, y, linebuf as u8*, offset, fg)
             if line_end < buf_len {
                 offset = line_end + 1
             } else {
@@ -729,11 +904,11 @@ func render() {
     // this file's own header comment on why there's no other cursor).
     if cur_line >= top_line {
         let row_of_end: u64 = cur_line - top_line
-        if row_of_end < (VISIBLE_ROWS as u64) {
+        if row_of_end < rows_visible {
             let line_start: u64 = line_start_at_or_before(buf_len)
             let col: u64 = buf_len - line_start
-            if col > (MAX_COLS as u64) {
-                col = MAX_COLS as u64
+            if col > cols_visible {
+                col = cols_visible
             }
             let cx: u64 = 4 + col * 8
             let cy: u64 = (TOP as u64) + row_of_end * ROW_H
@@ -786,34 +961,79 @@ func _start(argc: u64, argv: u64*) {
     }
     drain_pty_output()
     render()
+    let last_win_w: u64 = Wm.WIN_W as u64
+    let last_win_h: u64 = Wm.WIN_H as u64
 
     while true {
         let input: WmInput = wm_poll_input()
         let key: u64 = input.key as u64
         let dirty_full: bool = false
+        if input.win_w != last_win_w || input.win_h != last_win_h {
+            last_win_w = input.win_w
+            last_win_h = input.win_h
+            dirty_full = true
+        }
+        if input.mouse_left && !prev_mouse_left {
+            selecting = true
+            sel_start = position_from_mouse(input.mouse_x, input.mouse_y)
+            sel_end = sel_start
+            dirty_full = true
+        } else if input.mouse_left && selecting {
+            sel_end = position_from_mouse(input.mouse_x, input.mouse_y)
+            dirty_full = true
+        } else if !input.mouse_left && prev_mouse_left {
+            selecting = false
+            dirty_full = true
+        }
+        prev_mouse_left = input.mouse_left
+        if input.drop_valid {
+            clear_selection()
+            pty_send_str(input.drop_path as u8*)
+            dirty_full = true
+        }
         if key == (KEY_CLOSE_REQ as u64) {
             if pty_id != RT_SYS_ERR {
                 sys_pty_close(pty_id)
             }
             wm_close()
             rt_exit(0)
+        } else if key == 3 {
+            if has_selection() {
+                copy_selection_to_clipboard()
+                clear_selection()
+                dirty_full = true
+            } else {
+                pty_send_char(3 as u8)
+            }
+        } else if key == 22 {
+            clear_selection()
+            paste_clipboard_to_pty()
         } else if key == 10 {
+            clear_selection()
             pty_send_char(10 as u8)
         } else if key == 8 {
+            clear_selection()
             pty_send_char(8 as u8)
         } else if key == (KEY_UP as u64) {
+            clear_selection()
             pty_send_char(KEY_UP as u8)
         } else if key == (KEY_DOWN as u64) {
+            clear_selection()
             pty_send_char(KEY_DOWN as u8)
         } else if key == (KEY_LEFT as u64) {
+            clear_selection()
             pty_send_char(KEY_LEFT as u8)
         } else if key == (KEY_RIGHT as u64) {
+            clear_selection()
             pty_send_char(KEY_RIGHT as u8)
         } else if key == (KEY_ESC as u64) {
+            clear_selection()
             pty_send_char(27 as u8)
         } else if key > 0 && key < 32 {
+            clear_selection()
             pty_send_char(key as u8)
         } else if key != 0 && key >= 32 && key < 127 {
+            clear_selection()
             pty_send_char(key as u8)
         }
 

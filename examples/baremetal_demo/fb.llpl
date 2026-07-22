@@ -460,7 +460,7 @@ namespace Framebuffer {
     const GLYPH_WIDTH = 8
     const GLYPH_HEIGHT = 16
 
-    // Draws one u8acter at pixel position (x, y). Anything outside the
+    // Draws one character at pixel position (x, y). Anything outside the
     // printable ASCII range (32-126) draws as a blank cell rather than
     // garbage - there's no glyph data for it.
     func draw_u8(x: u32, y: u32, c: u8, fg: u32, bg: u32) {
