@@ -19,7 +19,7 @@ sudo apt-get install ldc dub
 ### Build the Compiler
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/alectronik2/LLPL.git
 cd LLPL
 dub build
 ```
@@ -31,17 +31,17 @@ This creates the `llpl` executable in the current directory.
 Create a file `hello.llpl`:
 
 ```swift
-extern func putchar(c: int) -> int
+extern func putchar(c: i64) -> i64
 
-func print(msg: char*) {
-    let i: int = 0
+func print(msg: u8*) {
+    let i: i64 = 0
     while msg[i] != 0 {
-        putchar(msg[i] as int)
+        putchar(msg[i] as i64)
         i = i + 1
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     print("Hello, LLPL!\n")
     return 0
 }
@@ -72,21 +72,22 @@ Add `--safe` to enable runtime bounds checks on fixed-size array indexing
 ```
 
 This only targets ordinary hosted programs; a freestanding/kernel target
-like `examples/baremetal_demo` still needs its own Makefile (custom linker
-script, boot assembly, `-ffreestanding` flags) rather than `-b`.
+like `examples/baremetal_demo` still needs its own `tools/llplbuild` build
+(custom linker script, boot assembly, `-ffreestanding` flags) rather than
+`-b` - see [Building a Kernel](#building-a-kernel) below.
 
 ## Language Syntax Cheat Sheet
 
 ### Variables
 ```swift
-let x: int = 42              // Mutable variable
-const MAX: int = 100         // Constant
-let name: char* = "Bob"      // String literals are already char*, no cast needed
+let x: i64 = 42              // Mutable variable
+const MAX: i64 = 100         // Constant
+let name: u8* = "Bob"        // String literals are already u8*, no cast needed
 ```
 
 ### Functions
 ```swift
-func add(a: int, b: int) -> int {
+func add(a: i64, b: i64) -> i64 {
     return a + b
 }
 
@@ -98,10 +99,10 @@ func greet() {
 ### Classes
 ```swift
 class Point {
-    let x: int
-    let y: int
+    let x: i64
+    let y: i64
 
-    constructor(x: int, y: int) {
+    constructor(x: i64, y: i64) {
         self.x = x
         self.y = y
     }
@@ -110,14 +111,14 @@ class Point {
         // Cleanup
     }
 
-    func distance() -> int {
+    func distance() -> i64 {
         return self.x * self.x + self.y * self.y
     }
 }
 
 // Create instance
 let p: Point = new Point(10, 20)
-let d: int = p.distance()
+let d: i64 = p.distance()
 ```
 
 ### Control Flow
@@ -136,7 +137,12 @@ while count < 10 {
 }
 
 // For loop: init, condition, update
-for let i: int = 0, i < 10, i = i + 1 {
+for let i: i64 = 0, i < 10, i = i + 1 {
+    // loop body
+}
+
+// for x in y: iterates a fixed array or anything implementing Iterator<T>
+for item in my_vector {
     // loop body
 }
 ```
@@ -155,7 +161,7 @@ func process_file() {
 ### C FFI
 ```swift
 // Declare C functions
-extern func malloc(size: uint) -> void*
+extern func malloc(size: u64) -> void*
 extern func free(ptr: void*)
 
 // Use them
@@ -165,8 +171,8 @@ defer free(ptr)
 
 ### Inline Assembly
 ```swift
-func read_cr0() -> uint {
-    let value: uint = 0
+func read_cr0() -> u64 {
+    let value: u64 = 0
     asm("mov %%cr0, %0" : "=r"(value))
     return value
 }
@@ -174,18 +180,18 @@ func read_cr0() -> uint {
 
 ### Tuples and Destructuring
 ```swift
-func pair() -> (int, int) {
+func pair() -> (i64, i64) {
     return (1, 2)
 }
 
-func main() -> int {
-    let t: (int, int) = (10, 20)
-    let a: int = t._0
-    let b: int = t._1
+func main() -> i64 {
+    let t: (i64, i64) = (10, 20)
+    let a: i64 = t._0
+    let b: i64 = t._1
 
     let (x, y) = pair()          // tuple destructuring
 
-    struct Point { let x: int; let y: int }
+    struct Point { let x: i64; let y: i64 }
     let p = Point { x: 3, y: 4 }
     let Point { px, py } = p     // struct destructuring
 
@@ -200,16 +206,16 @@ func main() -> int {
 ### Traits and Bounded Generics
 ```swift
 trait Hashable {
-    func hash() -> uint
+    func hash() -> u64
     func equals(other: Self) -> bool
 }
 
-impl Hashable for int {
-    func hash() -> uint { return self as uint }
-    func equals(other: int) -> bool { return self == other }
+impl Hashable for i64 {
+    func hash() -> u64 { return self as u64 }
+    func equals(other: i64) -> bool { return self == other }
 }
 
-func hash_of<T: Hashable>(v: T) -> uint {
+func hash_of<T: Hashable>(v: T) -> u64 {
     return v.hash()
 }
 ```
@@ -224,37 +230,64 @@ sudo apt-get install nasm gcc qemu-system-x86 grub-pc-bin xorriso
 
 ### Build and Run
 
+`examples/baremetal_demo` (GRUB/Multiboot2) and `examples/limine_baremetal_demo`
+(Limine) are built and run with `tools/llplbuild` - a YAML-configured build
+tool (see `tools/llplbuild/README.md`), not a plain Makefile:
+
 ```bash
-cd examples
-make run
+cd examples/baremetal_demo
+../../tools/llplbuild/llplbuild run       # build, then launch QEMU
 ```
 
 This will:
-1. Compile the LLPL kernel to C
-2. Compile C to object files
-3. Link with bootloader
-4. Run in QEMU
+1. Compile `kernel.llpl` to C
+2. Compile the C code with the runtime
+3. Assemble the bootloader
+4. Link everything into a kernel binary and package a bootable ISO
+5. Launch QEMU
 
 ### Kernel Output
 
-You should see:
+You should see output like:
 ```
-LLPL Kernel v0.1
-================
+LLPL Bare-Metal Demo
+=====================
+colors: red green yellow cyan - a single log() call, tags inline
+Loading a fresh GDT from LLPL...
+GDT reloaded: base=0x0000000000163a00 limit=0x37
+Installing IDT and remapping the PIC...
+IDT installed (timer on IRQ0, keyboard on IRQ1).
+Triggering a breakpoint exception (int3)...
+Breakpoint (int3) handled, resuming...
+...resumed after the fault handler returned via iretq.
+Enabling interrupts...
+Interrupts enabled.
+Spawning tasks (shell + a background counter) and starting the scheduler...
+spawned user task 2 from atad.elf (entry=0x1000004d0)
+spawned user task 3 from wm.elf (entry=0x100003370)
+spawned user task 4 from netd.elf (entry=0x100002070)
+Starting the shell. Type 'help' for a list of commands.
+llpl $ atad: Bus Master DMA enabled
+netd: e1000 up, mac=52:54:00:12:34:56
+wm: loading wallpaper...
+wm: ready
+ATA: primary master detected (via atad); VFS mounted (self-formats on first boot)
+netd: DHCP ok, ip=10.0.2.15 gw=10.0.2.2
+SELFTEST: PASS
+```
 
-Initializing serial port...
-Testing control flow:
-...
-Kernel initialization complete!
-System halted.
-```
+By this point you have a preemptive multitasking kernel with a real
+network stack (DHCP-configured, ARP/ICMP), a persistent VFS on a virtual
+disk, and a windowing compositor with a mouse-driven desktop - see the
+README's [Bare-Metal Demo Highlights](README.md#bare-metal-demo-highlights)
+for what's actually running underneath that boot log.
 
 ## Common Patterns
 
 ### Error Handling (Return Codes)
 
 ```swift
-func open_file(path: char*) -> int {
+func open_file(path: u8*) -> i64 {
     if path == null {
         return -1  // Error
     }
@@ -273,12 +306,12 @@ func caller() {
 
 ```swift
 class Buffer {
-    let data: char*
-    let size: int
+    let data: u8*
+    let size: i64
 
-    constructor(size: int) {
+    constructor(size: i64) {
         self.size = size
-        self.data = malloc(size) as char*
+        self.data = malloc(size) as u8*
     }
 
     destructor() {
@@ -299,8 +332,8 @@ func use_buffer() {
 
 ### Error Handling with Result<T, E>
 ```swift
-func safe_div(a: int, b: int) -> Result<int, char*> {
-    let r: Result<int, char*> = new Result<int, char*>()
+func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
+    let r: Result<i64, u8*> = new Result<i64, u8*>()
     if b == 0 {
         r.set_err("division by zero")
         return r
@@ -309,10 +342,10 @@ func safe_div(a: int, b: int) -> Result<int, char*> {
     return r
 }
 
-func sum(a: int, b: int, c: int, d: int) -> Result<int, char*> {
-    let x: int = safe_div(a, b)?
-    let y: int = safe_div(c, d)?
-    let r: Result<int, char*> = new Result<int, char*>()
+func sum(a: i64, b: i64, c: i64, d: i64) -> Result<i64, u8*> {
+    let x: i64 = safe_div(a, b)?
+    let y: i64 = safe_div(c, d)?
+    let r: Result<i64, u8*> = new Result<i64, u8*>()
     r.set_ok(x + y)
     return r
 }
@@ -320,9 +353,9 @@ func sum(a: int, b: int, c: int, d: int) -> Result<int, char*> {
 
 ### Panics
 ```swift
-extern func llpl_panic(msg: char*)
+extern func llpl_panic(msg: u8*)
 
-func must_be_positive(n: int) {
+func must_be_positive(n: i64) {
     if n <= 0 {
         llpl_panic("expected positive value")
     }
@@ -331,7 +364,7 @@ func must_be_positive(n: int) {
 
 ### Assert
 ```swift
-func must_be_positive(n: int) {
+func must_be_positive(n: i64) {
     assert(n > 0, "expected positive value")
 }
 ```
@@ -339,7 +372,7 @@ func must_be_positive(n: int) {
 ### Bitwise Operations
 
 ```swift
-let flags: uint = 0
+let flags: u64 = 0
 flags = flags | 1    // Set bit 0
 flags = flags | 4    // Set bit 2
 flags = flags & ~2   // Clear bit 1
@@ -352,13 +385,13 @@ if (flags & 1) != 0 {
 ### Hardware I/O (Kernel)
 
 ```swift
-extern func outb(port: uint, value: char)
-extern func inb(port: uint) -> char
+extern func outb(port: u64, value: u8)
+extern func inb(port: u64) -> u8
 
 class SerialPort {
-    let port: uint
+    let port: u64
 
-    constructor(port: uint) {
+    constructor(port: u64) {
         self.port = port
         self.init_port()
     }
@@ -370,7 +403,7 @@ class SerialPort {
         // More initialization...
     }
 
-    func write(c: char) {
+    func write(c: u8) {
         while (inb(self.port + 5) & 32) == 0 {
             // Wait for ready
         }
@@ -414,17 +447,19 @@ gdb kernel.bin
 
 ## Type Reference
 
+> **Breaking change:** the bare, unsized `int`, `uint`, and `char` spellings
+> have been removed entirely - using any of them is now a hard compile
+> error (`'int' is no longer a type; use 'i64' instead`, and similarly for
+> `uint`/`u64` and `char`/`u8`). Always write the explicitly-sized name.
+
 | LLPL Type | C Type | Size | Description |
 |-----------|--------|------|-------------|
-| `int` | `int64_t` | 8 bytes | Signed integer |
-| `uint` | `uint64_t` | 8 bytes | Unsigned integer |
-| `int32` | `int32_t` | 4 bytes | Signed 32-bit integer |
-| `uint32` | `uint32_t` | 4 bytes | Unsigned 32-bit integer |
-| `int16` | `int16_t` | 2 bytes | Signed 16-bit integer |
-| `uint16` | `uint16_t` | 2 bytes | Unsigned 16-bit integer |
-| `char` | `char` | 1 byte | Character |
-| `bool` | `int` | 4 bytes | Boolean |
+| `i8`/`i16`/`i32`/`i64` | `int8_t`...`int64_t` | 1-8 bytes | Signed integers |
+| `u8`/`u16`/`u32`/`u64` | `uint8_t`...`uint64_t` | 1-8 bytes | Unsigned integers |
+| `bool` | real C99 `bool` | 1 byte | Boolean (`<stdbool.h>`) |
 | `void` | `void` | - | No value |
+| `float`/`double` | `float`/`double` | 4/8 bytes | Floating point |
+| `string` | `u8*` | 8 bytes | Alias (`prelude.llpl`: `alias string = u8*`) |
 | `TypeName*` | `TypeName*` | 8 bytes | Pointer |
 | `TypeName[N]` | `TypeName[N]` | N×size | Fixed array |
 
@@ -486,7 +521,8 @@ bit size.
 ## Next Steps
 
 - Read the full [README.md](README.md) for detailed documentation
-- Explore [examples/kernel.llpl](examples/kernel.llpl) for a complete kernel
+- Browse the [full documentation site](https://alectronik2.github.io/LLPL/llpl-docs.html) - compiler CLI, standard library API, and a guided tour of every example
+- Explore [examples/baremetal_demo](examples/baremetal_demo) for a complete kernel with networking and a windowing compositor
 - Check out [OSDev Wiki](https://wiki.osdev.org) for OS development guides
 
 ## Getting Help
