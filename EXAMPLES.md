@@ -17,7 +17,7 @@ need exact ELF placement or retention:
 @section(".limine_requests")
 @used
 @align(16)
-let request: uint[4] = [1, 2, 3, 4]
+let request: u64[4] = [1, 2, 3, 4]
 ```
 
 `@section("NAME")` emits a C section attribute, `@used` prevents dead
@@ -35,15 +35,15 @@ nm, a DWARF parser) is needed to make a bare-metal backtrace readable;
 chain and resolves each return address through it:
 
 ```swift
-extern func puts(s: char*) -> int
+extern func puts(s: u8*) -> i64
 
-func helper(n: int) -> int {
+func helper(n: i64) -> i64 {
     return n * 2
 }
 
-func main() -> int {
-    let addr: uint = helper as uint
-    let sym: char* = llpl_resolve_symbol(addr)
+func main() -> i64 {
+    let addr: u64 = helper as u64
+    let sym: u8* = llpl_resolve_symbol(addr)
     if sym != null {
         puts(llpl_symbol_name(sym))  // "helper"
         puts(llpl_symbol_file(sym))  // "example.llpl"
@@ -62,8 +62,8 @@ line info, so two different calls into the same function report the same
 line. See `test/symbol_table_demo.llpl` for the full runnable version
 this is taken from.
 
-A bare instance method reference (`f.method as uint`, no call parens)
-works the same way a plain function name does - `f.bar as uint` decays to
+A bare instance method reference (`f.method as u64`, no call parens)
+works the same way a plain function name does - `f.bar as u64` decays to
 `Foo_bar`'s address (whether `bar` was written directly in `Foo`'s body
 or via an `impl Trait for Foo { ... }` block). An overloaded method can't
 be referenced this way without a call's arguments to disambiguate which
@@ -74,9 +74,9 @@ one is meant - a clear compile error, not a wrong pick.
 ### Hello World (with C FFI)
 
 ```swift
-extern func puts(s: char*) -> int
+extern func puts(s: u8*) -> i64
 
-func main() -> int {
+func main() -> i64 {
     puts("Hello from LLPL!")
     return 0
 }
@@ -85,15 +85,15 @@ func main() -> int {
 ### Fibonacci
 
 ```swift
-func fibonacci(n: int) -> int {
+func fibonacci(n: i64) -> i64 {
     if n <= 1 {
         return n
     }
     return fibonacci(n - 1) + fibonacci(n - 2)
 }
 
-func main() -> int {
-    let result: int = fibonacci(10)
+func main() -> i64 {
+    let result: i64 = fibonacci(10)
     return result
 }
 ```
@@ -101,43 +101,43 @@ func main() -> int {
 ### Array Operations
 
 ```swift
-func sum_array(arr: int*, len: int) -> int {
-    let sum: int = 0
-    for let i: int = 0, i < len, i = i + 1 {
+func sum_array(arr: i64*, len: i64) -> i64 {
+    let sum: i64 = 0
+    for let i: i64 = 0, i < len, i = i + 1 {
         sum = sum + arr[i]
     }
     return sum
 }
 
-func main() -> int {
-    let numbers: int[5]
+func main() -> i64 {
+    let numbers: i64[5]
     numbers[0] = 10
     numbers[1] = 20
     numbers[2] = 30
     numbers[3] = 40
     numbers[4] = 50
 
-    let total: int = sum_array(numbers as int*, 5)
+    let total: i64 = sum_array(numbers as i64*, 5)
     return 0
 }
 ```
 
 ### Pointer-to-Pointer
 
-Any level of indirection is allowed - `int*`, `int**`, `int***`, ... -
-`&` adds one level (`&ptr` where `ptr: int*` gives `int**`, not `int*`
+Any level of indirection is allowed - `i64*`, `i64**`, `i64***`, ... -
+`&` adds one level (`&ptr` where `ptr: i64*` gives `i64**`, not `i64*`
 again), `*` removes one. See `test/pointer_to_pointer_demo.llpl` for the
 full runnable version this is taken from:
 
 ```swift
-func set_via_pp(pp: int**, v: int) {
+func set_via_pp(pp: i64**, v: i64) {
     **pp = v
 }
 
-func main() -> int {
-    let x: int = 5
-    let p: int* = &x
-    let pp: int** = &p
+func main() -> i64 {
+    let x: i64 = 5
+    let p: i64* = &x
+    let pp: i64** = &p
 
     set_via_pp(pp, 42)
     return x  // 42
@@ -165,12 +165,12 @@ constructors, generic functions, and closures. See
 from:
 
 ```swift
-func greet(name: char*, greeting: char* = "Hello") {
+func greet(name: u8*, greeting: u8* = "Hello") {
     puts(greeting)
     puts(name)
 }
 
-func main() -> int {
+func main() -> i64 {
     greet("Alice", "Hi")                  // all-positional
     greet("Bob")                          // trailing default omitted
     greet(name: "Cara", greeting: "Yo")    // named, in order
@@ -198,10 +198,10 @@ simpler `string[]`/field-list shape with no notion of a default.
 
 ```swift
 class Rectangle {
-    let width: int
-    let height: int
+    let width: i64
+    let height: i64
 
-    constructor(w: int, h: int) {
+    constructor(w: i64, h: i64) {
         self.width = w
         self.height = h
     }
@@ -210,34 +210,34 @@ class Rectangle {
         // Cleanup if needed
     }
 
-    func area() -> int {
+    func area() -> i64 {
         return self.width * self.height
     }
 
-    func perimeter() -> int {
+    func perimeter() -> i64 {
         return 2 * (self.width + self.height)
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     let rect: Rectangle = new Rectangle(10, 20)
-    let area: int = rect.area()
-    let perim: int = rect.perimeter()
+    let area: i64 = rect.area()
+    let perim: i64 = rect.perimeter()
     return 0
 }
 ```
 
-A field can also be declared without `let` - `width: int` means exactly
-what `let width: int` does (still mutable, just terser). `const` and
+A field can also be declared without `let` - `width: i64` means exactly
+what `let width: i64` does (still mutable, just terser). `const` and
 `volatile` fields still need their keyword written out, since dropping it
 would leave no way to tell them apart from a plain mutable field:
 
 ```swift
 class Rectangle2 {
-    width: int
-    height: int
+    width: i64
+    height: i64
 
-    constructor(w: int, h: int) {
+    constructor(w: i64, h: i64) {
         self.width = w
         self.height = h
     }
@@ -258,17 +258,17 @@ this is taken from:
 
 ```swift
 class Counter {
-    private let count: int
+    private let count: i64
 
     constructor() { self.count = 0 }
     destructor() {}
 
-    private func bump() -> int {
+    private func bump() -> i64 {
         self.count = self.count + 1
         return self.count
     }
 
-    func increment() -> int {
+    func increment() -> i64 {
         return self.bump()
     }
 
@@ -279,7 +279,7 @@ class Counter {
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     let c: Counter = new Counter()
     c.increment()
     // c.count       // compile error: private, only accessible from within 'Counter'
@@ -292,10 +292,10 @@ func main() -> int {
 
 ```swift
 class ListNode {
-    let value: int
+    let value: i64
     let next: ListNode
 
-    constructor(val: int) {
+    constructor(val: i64) {
         self.value = val
         self.next = null
     }
@@ -304,7 +304,7 @@ class ListNode {
         // Automatic cleanup of 'next' via reference counting
     }
 
-    func append(val: int) {
+    func append(val: i64) {
         let current: ListNode = self
         while current.next != null {
             current = current.next
@@ -312,8 +312,8 @@ class ListNode {
         current.next = new ListNode(val)
     }
 
-    func length() -> int {
-        let count: int = 1
+    func length() -> i64 {
+        let count: i64 = 1
         let current: ListNode = self.next
         while current != null {
             count = count + 1
@@ -323,13 +323,13 @@ class ListNode {
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     let list: ListNode = new ListNode(1)
     list.append(2)
     list.append(3)
     list.append(4)
 
-    let len: int = list.length()
+    let len: i64 = list.length()
     return 0
 }
 ```
@@ -349,8 +349,8 @@ runnable version this is taken from:
 
 ```swift
 class Foo {
-    let n: int
-    constructor(n: int) {
+    let n: i64
+    constructor(n: i64) {
         self.n = n
         puts("Foo constructed")
     }
@@ -359,7 +359,7 @@ class Foo {
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     let f: Foo = new Foo(5)
     delete f  // prints "Foo destructed" right here
     return 0
@@ -380,9 +380,9 @@ runnable version this is taken from:
 
 ```swift
 class Child {
-    let name: char*
+    let name: u8*
     let parent: Weak<Parent>
-    constructor(name: char*) {
+    constructor(name: u8*) {
         self.name = name
     }
     destructor() { puts("Child destroyed") }
@@ -394,14 +394,14 @@ class Child {
 
 class Parent {
     let child: Child
-    constructor(name: char*) {
+    constructor(name: u8*) {
         self.child = new Child(name)
         self.child.link_parent(self)
     }
     destructor() { puts("Parent destroyed") }
 }
 
-func main() -> int {
+func main() -> i64 {
     let p: Parent = new Parent("kid")
 
     // .upgrade() returns a real, retained reference if the target is
@@ -432,27 +432,27 @@ actually-overloaded name needs disambiguating. See
 from:
 
 ```swift
-func describe(n: int) -> char* {
-    return "an int"
+func describe(n: i64) -> u8* {
+    return "an i64"
 }
-func describe(s: char*) -> char* {
+func describe(s: u8*) -> u8* {
     return "a string"
 }
 
 class Box {
-    let n: int
+    let n: i64
 
     constructor() { self.n = 0 }
-    constructor(n: int) { self.n = n }
+    constructor(n: i64) { self.n = n }
 
     destructor() {}
 
-    func combine(x: int) -> int { return self.n + x }
-    func combine(x: int, y: int) -> int { return self.n + x + y }
+    func combine(x: i64) -> i64 { return self.n + x }
+    func combine(x: i64, y: i64) -> i64 { return self.n + x + y }
 }
 
-func main() -> int {
-    puts(describe(5))     // "an int"
+func main() -> i64 {
+    puts(describe(5))     // "an i64"
     puts(describe("hi"))  // "a string"
 
     let b: Box = new Box(10)
@@ -473,7 +473,7 @@ signatures for the same operator, and `extern func` re-declarations
 
 ### Implicit conversion: `as_string`/`as_int`/`as_float`/`as_bool`
 
-A class opts into converting like a string/int/float/bool by defining a
+A class opts into converting like a string/i64/float/bool by defining a
 no-argument method named `as_string()`/`as_int()`/`as_float()`/
 `as_bool()` - purely by naming convention, the same unintrusive way
 operator overloading works (`func operator+`), rather than a real
@@ -483,7 +483,7 @@ three places:
 - **`let x: T = value` / plain assignment** (`x = value`) - `value`'s
   `as_<kind>()` is called if `T` is `string`/an integer type/`float`/
   `bool` and `value`'s type defines a matching one.
-- **Casting** - `value as string`/`as int`/`as float`/`as bool` resolves
+- **Casting** - `value as string`/`as i64`/`as float`/`as bool` resolves
   the same way, instead of reinterpreting the value as a raw
   pointer/integer.
 - **`.as_string` property** (no call parens - `x.as_string()` already
@@ -498,7 +498,7 @@ three places:
   method is a real type mismatch, same as before this existed.
 
 If `as_string()` returns this codebase's own `String` class rather than a
-bare `char*`/`string` directly, it's bridged through `String`'s own
+bare `u8*`/`string` directly, it's bridged through `String`'s own
 `c_str()` automatically - a class can return either.
 
 See `test/as_string_demo.llpl` for the full runnable version this is
@@ -506,11 +506,11 @@ taken from:
 
 ```swift
 class Point3D {
-    let x: int
-    let y: int
-    let z: int
+    let x: i64
+    let y: i64
+    let z: i64
 
-    constructor(x: int, y: int, z: int) {
+    constructor(x: i64, y: i64, z: i64) {
         self.x = x
         self.y = y
         self.z = z
@@ -527,12 +527,12 @@ class Point3D {
 }
 
 class Plain {
-    let n: int
-    constructor(n: int) { self.n = n }
+    let n: i64
+    constructor(n: i64) { self.n = n }
     destructor() {}
 }
 
-func main() -> int {
+func main() -> i64 {
     let p: Point3D = new Point3D(1, 2, 3)
     puts(p.as_string)   // "Point3D(non-origin)" - custom method
     puts(p as string)    // same, via a cast
@@ -541,8 +541,8 @@ func main() -> int {
     let q: Plain = new Plain(5)
     puts(q.as_string)   // "Plain" - no as_string() defined, falls back to the type name
 
-    let n: int = 42
-    puts(n.as_string)   // "int" - primitives fall back too
+    let n: i64 = 42
+    puts(n.as_string)   // "i64" - primitives fall back too
 
     puts("interpolated: \(p)")  // implicit as_string inside "\(...)"
     return 0
@@ -558,17 +558,17 @@ version this is taken from:
 
 ```swift
 struct Pair {
-    let x: int
-    let y: int
+    let x: i64
+    let y: i64
 }
 
-func main() -> int {
-    let n: int = 5
+func main() -> i64 {
+    let n: i64 = 5
     let p: Pair = Pair { x: 1, y: 2 }
 
-    let a: uint = n.sizeof        // 8 - same as sizeof(int)
-    let b: uint = p.sizeof        // 16 - same as sizeof(Pair)
-    let c: uint = sizeof(int)     // the type-only spelling still works
+    let a: u64 = n.sizeof        // 8 - same as sizeof(i64)
+    let b: u64 = p.sizeof        // 16 - same as sizeof(Pair)
+    let c: u64 = sizeof(i64)     // the type-only spelling still works
     return 0
 }
 ```
@@ -582,10 +582,10 @@ pointer, so that's what the value itself actually is at runtime.
 ### Nested Loops
 
 ```swift
-func print_multiplication_table(size: int) {
-    for let i: int = 1, i <= size, i = i + 1 {
-        for let j: int = 1, j <= size, j = j + 1 {
-            let product: int = i * j
+func print_multiplication_table(size: i64) {
+    for let i: i64 = 1, i <= size, i = i + 1 {
+        for let j: i64 = 1, j <= size, j = j + 1 {
+            let product: i64 = i * j
             // Print product
         }
     }
@@ -602,8 +602,8 @@ plain if/else-if chain, not a C `switch`. See `test/break_demo.llpl` for
 the full runnable version this is taken from:
 
 ```swift
-func main() -> int {
-    for let i: int = 0, i < 10, i++ {
+func main() -> i64 {
+    for let i: i64 = 0, i < 10, i++ {
         if i == 2 {
             continue
         }
@@ -626,7 +626,7 @@ not just literals, and nests like any other loop. See
 from:
 
 ```swift
-func main() -> int {
+func main() -> i64 {
     for i in 0..5 {
         print_int("i", i)  // 0, 1, 2, 3, 4
     }
@@ -657,22 +657,22 @@ taken from:
 
 ```swift
 class Countdown {
-    let n: int
-    constructor(n: int) { self.n = n }
+    let n: i64
+    constructor(n: i64) { self.n = n }
     destructor() {}
 }
 
-impl Iterator<int> for Countdown {
+impl Iterator<i64> for Countdown {
     func iter_has_next() -> bool {
         return self.n > 0
     }
-    func iter_next() -> int {
+    func iter_next() -> i64 {
         self.n = self.n - 1
         return self.n + 1
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     let c: Countdown = new Countdown(3)
     for x in c {
         print_int("x", x)  // 3, 2, 1
@@ -681,7 +681,7 @@ func main() -> int {
 }
 ```
 
-The trait's own `<T>` and an impl's `<int>` type argument are a
+The trait's own `<T>` and an impl's `<i64>` type argument are a
 signature-writing convenience, not type-checked against the impl's
 concrete methods - a trait's return/param types are never resolved or
 generate code (traits are signature-only everywhere in this language);
@@ -690,7 +690,7 @@ only the method names and arities are verified to match.
 ### Conditional Logic
 
 ```swift
-func max(a: int, b: int) -> int {
+func max(a: i64, b: i64) -> i64 {
     if a > b {
         return a
     } else {
@@ -698,7 +698,7 @@ func max(a: int, b: int) -> int {
     }
 }
 
-func clamp(value: int, min: int, max: int) -> int {
+func clamp(value: i64, min: i64, max: i64) -> i64 {
     if value < min {
         return min
     } else if value > max {
@@ -720,7 +720,7 @@ value. See `test/if_expr_demo.llpl` for the full runnable version this is
 taken from:
 
 ```swift
-func classify(n: int) -> char* {
+func classify(n: i64) -> u8* {
     return if n < 0 {
         "negative"
     } else if n == 0 {
@@ -730,17 +730,17 @@ func classify(n: int) -> char* {
     }
 }
 
-func main() -> int {
-    let x: int = if true { 128 } else { 256 }
+func main() -> i64 {
+    let x: i64 = if true { 128 } else { 256 }
 
     // type inferred from the branches, no explicit annotation needed
     let y = if false { 1 } else { 2 }
 
     // earlier statements run for their side effects; only the trailing
     // expression supplies the branch's value
-    let z: int = if true {
-        let a: int = 10
-        let b: int = 20
+    let z: i64 = if true {
+        let a: i64 = 10
+        let b: i64 = 20
         a + b
     } else {
         0
@@ -760,27 +760,27 @@ if-expression as a branch's trailing value.
 ### Implicit Returns
 
 A function/method/lambda body's trailing bare expression is its return
-value, unless the return type is `void` - `func square(n: int) -> int { n
-* n }` behaves exactly like `func square(n: int) -> int { return n * n }`.
+value, unless the return type is `void` - `func square(n: i64) -> i64 { n
+* n }` behaves exactly like `func square(n: i64) -> i64 { return n * n }`.
 Only the true *last* statement counts; an expression anywhere else in the
 body is still just evaluated for its side effects and discarded, same as
 today. See `test/implicit_return_demo.llpl` for the full runnable version
 this is taken from:
 
 ```swift
-func square(n: int) -> int {
+func square(n: i64) -> i64 {
     n * n
 }
 
 // earlier statements still run for their side effects/bindings
-func sum_of_squares(a: int, b: int) -> int {
-    let sa: int = square(a)
-    let sb: int = square(b)
+func sum_of_squares(a: i64, b: i64) -> i64 {
+    let sa: i64 = square(a)
+    let sb: i64 = square(b)
     sa + sb
 }
 
 // explicit `return` still works, including mixed with an implicit one
-func abs_value(n: int) -> int {
+func abs_value(n: i64) -> i64 {
     if n < 0 {
         return -n
     }
@@ -795,7 +795,7 @@ parenthesized `if` there is parsed as a statement, not this function's
 implicit return value):
 
 ```swift
-func abs_value2(n: int) -> int {
+func abs_value2(n: i64) -> i64 {
     (if n < 0 { -n } else { n })
 }
 ```
@@ -804,7 +804,7 @@ func abs_value2(n: int) -> int {
 
 ### Plain Enums
 
-A bare `enum` is sugar for a namespace of auto-incrementing int constants -
+A bare `enum` is sugar for a namespace of auto-incrementing i64 constants -
 `EnumName.MEMBER` resolves just like any other namespaced value:
 
 ```swift
@@ -815,8 +815,8 @@ enum Color {
     YELLOW // continues from 11
 }
 
-func main() -> int {
-    let c: int = Color.BLUE
+func main() -> i64 {
+    let c: i64 = Color.BLUE
     return c
 }
 ```
@@ -830,9 +830,9 @@ or `Shape.Triangle()` for a zero-field variant - never as a bare value.
 
 ```swift
 enum Shape {
-    Circle(radius: int),
-    Rectangle(width: int, height: int),
-    Triangle(base: int, height: int)
+    Circle(radius: i64),
+    Rectangle(width: i64, height: i64),
+    Triangle(base: i64, height: i64)
 }
 ```
 
@@ -842,7 +842,7 @@ enum Shape {
 from:
 
 ```swift
-func area(s: Shape) -> int {
+func area(s: Shape) -> i64 {
     match s {
         case Shape.Circle(radius) => {
             return 3 * radius * radius
@@ -863,11 +863,11 @@ type where the error case carries its own message:
 
 ```swift
 enum Result {
-    Ok(value: int),
-    Err(message: char*)
+    Ok(value: i64),
+    Err(message: u8*)
 }
 
-func safe_divide(a: int, b: int) -> Result {
+func safe_divide(a: i64, b: i64) -> Result {
     if b == 0 {
         return Result.Err("division by zero")
     }
@@ -875,7 +875,7 @@ func safe_divide(a: int, b: int) -> Result {
 }
 ```
 
-A destructuring `case` and an ordinary equality `case` (string/int
+A destructuring `case` and an ordinary equality `case` (string/i64
 literals, as elsewhere in this doc) can appear in the same `match`, and
 `default` still works as the catch-all for either.
 
@@ -886,11 +886,11 @@ wildcard:
 
 ```swift
 struct Point {
-    let x: int
-    let y: int
+    let x: i64
+    let y: i64
 }
 
-func describe(t: (int, int)) -> char* {
+func describe(t: (i64, i64)) -> u8* {
     match t {
         case (x, y) => {
             if x == 0 && y == 0 { return "origin" }
@@ -902,7 +902,7 @@ func describe(t: (int, int)) -> char* {
     return ""
 }
 
-func classify(p: Point) -> char* {
+func classify(p: Point) -> u8* {
     match p {
         case Point { x, y } => {
             if x == 0 && y == 0 { return "origin" }
@@ -927,15 +927,15 @@ the lambda expression runs - changing the original variable afterwards
 never affects an already-created closure:
 
 ```swift
-func make_adder(n: int) -> (int) -> int {
-    return func[n](x: int) -> int {
+func make_adder(n: i64) -> (i64) -> i64 {
+    return func[n](x: i64) -> i64 {
         return x + n
     }
 }
 
-func main() -> int {
-    let add5: (int) -> int = make_adder(5)
-    let result: int = add5(10) // 15
+func main() -> i64 {
+    let add5: (i64) -> i64 = make_adder(5)
+    let result: i64 = add5(10) // 15
     return 0
 }
 ```
@@ -954,15 +954,15 @@ argument, or stored in and called through a class field - see
 `test/closures_demo.llpl` for the full runnable version this is taken from:
 
 ```swift
-func apply_twice(f: (int) -> int, x: int) -> int {
+func apply_twice(f: (i64) -> i64, x: i64) -> i64 {
     return f(f(x))
 }
 
 class Counter {
-    let count: int
-    let step: (int) -> int
+    let count: i64
+    let step: (i64) -> i64
 
-    constructor(start: int, step_fn: (int) -> int) {
+    constructor(start: i64, step_fn: (i64) -> i64) {
         self.count = start
         self.step = step_fn
     }
@@ -978,7 +978,7 @@ class Counter {
 A lambda with no captures at all just omits the `[...]`:
 
 ```swift
-let doubler: (int) -> int = func(x: int) -> int {
+let doubler: (i64) -> i64 = func(x: i64) -> i64 {
     return x * 2
 }
 ```
@@ -1006,7 +1006,7 @@ namespace Graphics.Utils {
     }
 }
 
-func main() -> int {
+func main() -> i64 {
     Graphics.Utils.describe()
     Graphics.Utils.Deep.hello()
     puts("\(Graphics.Utils.VERSION)")
@@ -1026,10 +1026,10 @@ taken from:
 namespace HAL {
     namespace Foo {
         class Bar {
-            let n: int
-            constructor(n: int) { self.n = n }
+            let n: i64
+            constructor(n: i64) { self.n = n }
             destructor() {}
-            func value() -> int { return self.n }
+            func value() -> i64 { return self.n }
         }
 
         func greet() {
@@ -1040,7 +1040,7 @@ namespace HAL {
 
 alias hf = HAL.Foo
 
-func main() -> int {
+func main() -> i64 {
     hf.greet()
     let b: hf.Bar = new hf.Bar(7)
     return 0
@@ -1076,7 +1076,7 @@ An alias lets you qualify names through a shorter prefix:
 ```swift
 import graphics as G
 
-func main() -> int {
+func main() -> i64 {
     G.clear_screen()
     return 0
 }
@@ -1088,7 +1088,7 @@ which is useful for keeping large imports tidy or resolving name clashes:
 ```swift
 import { Point, draw as render } from graphics
 
-func main() -> int {
+func main() -> i64 {
     let p: Point = Point { x: 1, y: 2 }
     render(p)
     return 0
@@ -1137,7 +1137,7 @@ let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
 
 A bare `alias NAME = value` (no brackets right after `=`) is unaffected -
 that's still the existing symbol/type alias grammar (`alias string =
-char*`).
+u8*`).
 
 ## Generics
 
@@ -1160,10 +1160,10 @@ struct Pair<A, B> {
     let second: B
 }
 
-func main() -> int {
-    let m: int = max_of(3, 7)      // T inferred as int - always from
-    let n: int = max_of(100, 42)   // arguments, never written explicitly
-    let p: Pair<int, int>
+func main() -> i64 {
+    let m: i64 = max_of(3, 7)      // T inferred as i64 - always from
+    let n: i64 = max_of(100, 42)   // arguments, never written explicitly
+    let p: Pair<i64, i64>
     p.first = 1
     p.second = 2
     return 0
@@ -1171,10 +1171,10 @@ func main() -> int {
 ```
 
 A generic function's type parameters are always inferred from its
-arguments - there's no `identity<int>(5)` call syntax - so every type
+arguments - there's no `identity<i64>(5)` call syntax - so every type
 parameter must appear in at least one parameter's type; a generic
 class/struct, on the other hand, is always instantiated explicitly
-(`Pair<int, int>`, `new Vector<int>(...)`), since there's often nothing to
+(`Pair<i64, i64>`, `new Vector<i64>(...)`), since there's often nothing to
 infer it from at the point it's constructed.
 
 `sizeof(Type)` is available too (mainly for writing generic containers
@@ -1188,23 +1188,23 @@ available in every program without an import. See `test/generics_demo.llpl`
 for the full runnable version this is taken from:
 
 ```swift
-func main() -> int {
-    let numbers: Vector<int> = new Vector<int>()
+func main() -> i64 {
+    let numbers: Vector<i64> = new Vector<i64>()
     numbers.push(10)
     numbers.push(20)
 
-    let maybe: Optional<int> = new Optional<int>()
+    let maybe: Optional<i64> = new Optional<i64>()
     maybe.set(99)
     if maybe.is_some() {
-        let value: int = maybe.get()
+        let value: i64 = maybe.get()
     }
 
-    let list: LinkedList<int> = new LinkedList<int>()
+    let list: LinkedList<i64> = new LinkedList<i64>()
     list.push_front(1)
 
-    let ages: HashMap<int, int> = new HashMap<int, int>()
+    let ages: HashMap<i64, i64> = new HashMap<i64, i64>()
     ages.insert(1, 30)
-    let found: Optional<int> = ages.get(1) // HashMap.get() returns Optional<V>
+    let found: Optional<i64> = ages.get(1) // HashMap.get() returns Optional<V>
 
     return 0
 }
@@ -1212,10 +1212,10 @@ func main() -> int {
 
 `HashMap<K: Hashable, V>` hashes/compares keys via `key.hash()`/
 `key.equals(other)` (see [Traits/Interfaces](#traitsinterfaces) below) -
-`prelude.llpl` provides `Hashable` impls for `int`/`uint`/`char`/`char*`,
-the `char*` one hashing/comparing by actual string content, not pointer
+`prelude.llpl` provides `Hashable` impls for `i64`/`u64`/`u8`/`u8*`,
+the `u8*` one hashing/comparing by actual string content, not pointer
 identity. `Vector<T>` can't hold an explicitly-pointer element type
-(`Vector<char*>`) either, since that would need a real pointer-to-pointer C
+(`Vector<u8*>`) either, since that would need a real pointer-to-pointer C
 type this language's type system can't express - use a one-field wrapper
 struct around the pointer instead if you need that.
 
@@ -1232,11 +1232,11 @@ pointer type.
 
 ```swift
 trait Comparable {
-    func compare(other: Self) -> int
+    func compare(other: Self) -> i64
 }
 
-impl Comparable for int {
-    func compare(other: int) -> int {
+impl Comparable for i64 {
+    func compare(other: i64) -> i64 {
         if self < other { return -1 }
         if self > other { return 1 }
         return 0
@@ -1261,13 +1261,13 @@ one its trait declares; deeper signature mismatches are left for the C
 backend to catch, same as everywhere else in this compiler. A trait can
 have at most one bound per type parameter in v1 (no `T: A + B`), no default
 method bodies, and an `impl` target must be concrete - `impl X for
-Vector<int>` (a generic type) is rejected.
+Vector<i64>` (a generic type) is rejected.
 
-`prelude.llpl` ships `Hashable` (`hash() -> uint`, `equals(other: Self) ->
-bool`, with impls for `int`/`uint`/`char`/`char*` and `String` - the `char*`
+`prelude.llpl` ships `Hashable` (`hash() -> u64`, `equals(other: Self) ->
+bool`, with impls for `i64`/`u64`/`u8`/`u8*` and `String` - the `u8*`
 and `String` impls hash/compare by actual string content, not pointer
-identity), `Comparable` (`compare(other: Self) -> int`, with impls for
-`int`/`uint`/`char`), and the operator-overloading traits below. See
+identity), `Comparable` (`compare(other: Self) -> i64`, with impls for
+`i64`/`u64`/`u8`), and the operator-overloading traits below. See
 `test/traits_demo.llpl` and `test/test_hashmap_string.llpl` for full runnable
 versions.
 
@@ -1284,8 +1284,8 @@ either way once a matching method exists:
 
 ```swift
 struct Vec2 {
-    let x: int
-    let y: int
+    let x: i64
+    let y: i64
 }
 
 trait Add {
@@ -1306,7 +1306,7 @@ func sum_pair<T: Add>(a: T, b: T) -> T {
     return a + b
 }
 
-func main() -> int {
+func main() -> i64 {
     let a: Vec2
     a.x = 1
     a.y = 2
@@ -1321,15 +1321,15 @@ func main() -> int {
 
 `prelude.llpl` ships `Add`, `Sub`, `Neg` (unary `-`), and `Mul` as traits,
 deliberately *without* impls for the primitive types - plain `+`/`-`/`*`
-already works unconditionally on `int`/`uint`/`char` with no bound needed,
-and `impl Add for int` would recurse (its own `self + other` body would
+already works unconditionally on `i64`/`u64`/`u8` with no bound needed,
+and `impl Add for i64` would recurse (its own `self + other` body would
 dispatch straight back into that same impl, since there's no way to spell
 "the native operator, not this overload" once one exists for a type). These
 traits exist for user-defined arithmetic types like `Vec2` that have no
 native operator to begin with. Validation is nominal/name-only (see above),
 so an impl's parameter doesn't have to be `Self` either - `impl Mul for
-Vec2 { func operator*(scalar: int) -> Vec2 { ... } }` (scaling by a plain
-`int`) is perfectly valid.
+Vec2 { func operator*(scalar: i64) -> Vec2 { ... } }` (scaling by a plain
+`i64`) is perfectly valid.
 
 ## Pipe Operator
 
@@ -1341,17 +1341,17 @@ right-hand side is always a callable reference (a bare name, or already
 applied to its own trailing args) rather than a general expression:
 
 ```swift
-func double_it(x: int) -> int {
+func double_it(x: i64) -> i64 {
     return x * 2
 }
 
-func add(a: int, b: int) -> int {
+func add(a: i64, b: i64) -> i64 {
     return a + b
 }
 
-func main() -> int {
-    let a: int = 5 |> double_it              // double_it(5) = 10
-    let b: int = 5 |> double_it |> add(1)     // add(double_it(5), 1) = 11
+func main() -> i64 {
+    let a: i64 = 5 |> double_it              // double_it(5) = 10
+    let b: i64 = 5 |> double_it |> add(1)     // add(double_it(5), 1) = 11
     return 0
 }
 ```
@@ -1366,14 +1366,14 @@ for `null` or a bare `let x: T?` with no initializer at all - see
 from:
 
 ```swift
-func main() -> int {
-    let maybe: int? = 42     // sugar for a real Optional<int>, set to 42
+func main() -> i64 {
+    let maybe: i64? = 42     // sugar for a real Optional<i64>, set to 42
     if maybe.is_some() {
-        let value: int = maybe.get()
+        let value: i64 = maybe.get()
     }
 
-    let nothing: int? = null // an empty Optional<int>
-    let default_empty: int?  // also starts out empty, no initializer needed
+    let nothing: i64? = null // an empty Optional<i64>
+    let default_empty: i64?  // also starts out empty, no initializer needed
 
     return 0
 }
@@ -1383,7 +1383,7 @@ Pipe and nullable types compose naturally - a function returning `T?` can
 sit at the end of a pipeline:
 
 ```swift
-func parse_positive(s: char*) -> int? {
+func parse_positive(s: u8*) -> i64? {
     if s[0] == 0 {
         return null
     }
@@ -1391,10 +1391,10 @@ func parse_positive(s: char*) -> int? {
     return 123 // placeholder
 }
 
-func main() -> int {
-    let parsed: int? = "123" |> parse_positive
+func main() -> i64 {
+    let parsed: i64? = "123" |> parse_positive
     if parsed.is_some() {
-        let n: int = parsed.get()
+        let n: i64 = parsed.get()
     }
     return 0
 }
@@ -1412,11 +1412,11 @@ order. Structs only, never a class (use `new` for those):
 
 ```swift
 struct Point {
-    let x: int
-    let y: int
+    let x: i64
+    let y: i64
 }
 
-func main() -> int {
+func main() -> i64 {
     let p: Point = Point { x: 1, y: 2 }
     let p2: Point = Point { y: 4, x: 3 } // order doesn't matter
     return 0
@@ -1433,8 +1433,8 @@ struct Pair<A, B> {
     let second: B
 }
 
-func main() -> int {
-    let coords: Pair<int, int> = Pair { first: 10, second: 20 }
+func main() -> i64 {
+    let coords: Pair<i64, i64> = Pair { first: 10, second: 20 }
     return 0
 }
 ```
@@ -1453,19 +1453,19 @@ prelude, with positional fields `_0`, `_1`, etc.).
 
 ```swift
 struct Point {
-    let x: int
-    let y: int
+    let x: i64
+    let y: i64
 }
 
-func split() -> (int, int) {
+func split() -> (i64, i64) {
     return (10, 20)
 }
 
-func main() -> int {
+func main() -> i64 {
     // Explicit tuple type and positional access
-    let t: (int, int) = (1, 2)
-    let a: int = t._0
-    let b: int = t._1
+    let t: (i64, i64) = (1, 2)
+    let a: i64 = t._0
+    let b: i64 = t._1
 
     // Type inference works too
     let inferred = (3, 4)
@@ -1505,8 +1505,8 @@ must itself return a compatible Optional/Result. See
 is taken from:
 
 ```swift
-func safe_div(a: int, b: int) -> Result<int, char*> {
-    let r: Result<int, char*> = new Result<int, char*>()
+func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
+    let r: Result<i64, u8*> = new Result<i64, u8*>()
     if b == 0 {
         r.set_err("division by zero")
         return r
@@ -1517,10 +1517,10 @@ func safe_div(a: int, b: int) -> Result<int, char*> {
 
 // If either division fails, this returns early with that same failure,
 // never reaching the addition.
-func sum_of_divisions(a: int, b: int, c: int, d: int) -> Result<int, char*> {
-    let first: int = safe_div(a, b)?
-    let second: int = safe_div(c, d)?
-    let result: Result<int, char*> = new Result<int, char*>()
+func sum_of_divisions(a: i64, b: i64, c: i64, d: i64) -> Result<i64, u8*> {
+    let first: i64 = safe_div(a, b)?
+    let second: i64 = safe_div(c, d)?
+    let result: Result<i64, u8*> = new Result<i64, u8*>()
     result.set_ok(first + second)
     return result
 }
@@ -1531,10 +1531,10 @@ Each `?` propagation step records the call-site `file:line` in the returned
 trace is chained (`a.llpl:5 -> b.llpl:12`). Use `get_trace()` to read it:
 
 ```swift
-func main() -> int {
-    let r: Result<int, char*> = sum_of_divisions(10, 0, 20, 4)
+func main() -> i64 {
+    let r: Result<i64, u8*> = sum_of_divisions(10, 0, 20, 4)
     if r.is_err() {
-        let trace: char* = r.get_trace()
+        let trace: u8* = r.get_trace()
         if trace != null {
             // trace might be "examples.llpl:14 -> examples.llpl:21"
         }
@@ -1551,27 +1551,27 @@ explicit handler stack and an x86_64 register save/restore jump buffer, so
 `throw` can cross LLPL function boundaries on hosted and bare-metal targets
 without libc or platform unwind tables.
 
-Cross-function throws need an explicit catch type, such as `catch (e: int)`.
+Cross-function throws need an explicit catch type, such as `catch (e: i64)`.
 Local `throw`/`?` paths can still infer the type when no annotation is
 present. See `test/throw_try_demo.llpl` and `test/try_catch_demo.llpl` for
 runnable examples:
 
 ```swift
-func safe_div(a: int, b: int) -> Result<int, int> {
+func safe_div(a: i64, b: i64) -> Result<i64, i64> {
     if b == 0 {
         throw -1
     }
-    let r: Result<int, int> = new Result<int, int>()
+    let r: Result<i64, i64> = new Result<i64, i64>()
     r.set_ok(a / b)
     return r
 }
 
-func main() -> int {
+func main() -> i64 {
     try {
-        let x: int = safe_div(10, 2)?
+        let x: i64 = safe_div(10, 2)?
         print_int("x", x)      // prints 5
         throw 7
-    } catch (e: int) {
+    } catch (e: i64) {
         print_int("caught", e) // prints 7
     } finally {
         puts("finally always runs")
@@ -1583,7 +1583,7 @@ func main() -> int {
 `catch` and `finally` are each independently optional, but at least one of
 them must be present - a bare `try { }` with neither is a parse error.
 The parens around the caught variable are optional too - `catch e`,
-`catch e: int`, `catch (e)`, and `catch (e: int)` all parse the same way.
+`catch e: i64`, `catch (e)`, and `catch (e: i64)` all parse the same way.
 `catch (e: T)` catches thrown values whose static type string matches `T`.
 If the type annotation is omitted, the compiler infers the type from local
 `throw` or failed `Result<T, E>?` paths in the try body. A `finally` block
@@ -1611,14 +1611,14 @@ prints to stderr and calls `abort()`. A custom handler can be installed for
 logging or last-ditch cleanup:
 
 ```swift
-extern func llpl_panic(msg: char*)
-extern func llpl_set_panic_handler(handler: (char*) -> void)
+extern func llpl_panic(msg: u8*)
+extern func llpl_set_panic_handler(handler: (u8*) -> void)
 
-func log_panic(msg: char*) {
+func log_panic(msg: u8*) {
     // write msg to a serial log, free global resources, etc.
 }
 
-func main() -> int {
+func main() -> i64 {
     llpl_set_panic_handler(log_panic)
     llpl_panic("unrecoverable error")
     return 0
@@ -1630,15 +1630,15 @@ func main() -> int {
 GCC-style extended inline assembly is available through `asm(...)`:
 
 ```swift
-func read_cr0() -> uint {
-    let value: uint = 0
+func read_cr0() -> u64 {
+    let value: u64 = 0
     asm("mov %%cr0, %0" : "=r"(value))
     return value
 }
 
-func atomic_inc(p: int*) -> int {
-    let one: int = 1
-    let old: int = 0
+func atomic_inc(p: i64*) -> i64 {
+    let one: i64 = 1
+    let old: i64 = 0
     asm("lock; xaddq %0, %1"
         : "=r"(old), "+m"(*p)
         : "0"(one)
@@ -1669,8 +1669,8 @@ macro twice(value) {
     quote(unquote(value) + unquote(value))
 }
 
-func main() -> int {
-    let x: int = 0
+func main() -> i64 {
+    let x: i64 = 0
     assignTwice!(x, 20)
     return twice!(x)
 }
@@ -1685,24 +1685,24 @@ macro argument should be spliced into the generated syntax.
 ### Flag Management
 
 ```swift
-let FLAG_READ: uint = 1
-let FLAG_WRITE: uint = 2
-let FLAG_EXECUTE: uint = 4
+let FLAG_READ: u64 = 1
+let FLAG_WRITE: u64 = 2
+let FLAG_EXECUTE: u64 = 4
 
-func has_flag(flags: uint, flag: uint) -> bool {
+func has_flag(flags: u64, flag: u64) -> bool {
     return (flags & flag) != 0 as bool
 }
 
-func set_flag(flags: uint, flag: uint) -> uint {
+func set_flag(flags: u64, flag: u64) -> u64 {
     return flags | flag
 }
 
-func clear_flag(flags: uint, flag: uint) -> uint {
+func clear_flag(flags: u64, flag: u64) -> u64 {
     return flags & ~flag
 }
 
-func main() -> int {
-    let permissions: uint = 0
+func main() -> i64 {
+    let permissions: u64 = 0
 
     // Set read and write
     permissions = set_flag(permissions, FLAG_READ)
@@ -1720,12 +1720,12 @@ func main() -> int {
 ### Bit Manipulation
 
 ```swift
-func is_power_of_two(n: uint) -> bool {
+func is_power_of_two(n: u64) -> bool {
     return n != 0 && (n & (n - 1)) == 0 as bool
 }
 
-func count_bits(n: uint) -> int {
-    let count: int = 0
+func count_bits(n: u64) -> i64 {
+    let count: i64 = 0
     while n != 0 {
         count = count + 1
         n = n & (n - 1)
@@ -1733,9 +1733,9 @@ func count_bits(n: uint) -> int {
     return count
 }
 
-func reverse_bits(n: uint) -> uint {
-    let result: uint = 0
-    for let i: int = 0, i < 64, i = i + 1 {
+func reverse_bits(n: u64) -> u64 {
+    let result: u64 = 0
+    for let i: i64 = 0, i < 64, i = i + 1 {
         result = result << 1
         result = result | (n & 1)
         n = n >> 1
@@ -1749,12 +1749,12 @@ func reverse_bits(n: uint) -> uint {
 ### Resource Management
 
 ```swift
-extern func open_file(path: char*) -> int
-extern func close_file(fd: int)
-extern func read_file(fd: int, buf: char*, size: int) -> int
+extern func open_file(path: u8*) -> i64
+extern func close_file(fd: i64)
+extern func read_file(fd: i64, buf: u8*, size: i64) -> i64
 
-func process_file(path: char*) -> int {
-    let fd: int = open_file(path)
+func process_file(path: u8*) -> i64 {
+    let fd: i64 = open_file(path)
 
     if fd < 0 {
         return -1
@@ -1762,8 +1762,8 @@ func process_file(path: char*) -> int {
 
     defer close_file(fd)
 
-    let buffer: char[1024]
-    let bytes: int = read_file(fd, buffer as char*, 1024)
+    let buffer: u8[1024]
+    let bytes: i64 = read_file(fd, buffer as u8*, 1024)
 
     // File automatically closed when function returns
     return bytes
@@ -1793,10 +1793,10 @@ func complex_operation() {
 ### Port I/O
 
 ```swift
-extern func outb(port: uint, value: char)
-extern func inb(port: uint) -> char
+extern func outb(port: u64, value: u8)
+extern func inb(port: u64) -> u8
 
-let COM1: uint = 1016
+let COM1: u64 = 1016
 
 func serial_init() {
     outb(COM1 + 1, 0)
@@ -1808,7 +1808,7 @@ func serial_init() {
     outb(COM1 + 4, 11)
 }
 
-func serial_write(c: char) {
+func serial_write(c: u8) {
     while (inb(COM1 + 5) & 32) == 0 {
         // Wait for ready
     }
@@ -1819,18 +1819,18 @@ func serial_write(c: char) {
 ### Memory-Mapped I/O
 
 ```swift
-let VGA_BUFFER: uint = 753664  // 0xB8000
+let VGA_BUFFER: u64 = 753664  // 0xB8000
 
-func vga_put_char(x: int, y: int, c: char, color: char) {
-    let buffer: char* = VGA_BUFFER as char*
-    let index: int = ((y * 80) + x) * 2
+func vga_put_char(x: i64, y: i64, c: u8, color: u8) {
+    let buffer: u8* = VGA_BUFFER as u8*
+    let index: i64 = ((y * 80) + x) * 2
     buffer[index] = c
     buffer[index + 1] = color
 }
 
 func vga_clear_screen() {
-    let buffer: char* = VGA_BUFFER as char*
-    for let i: int = 0, i < 80 * 25 * 2, i = i + 2 {
+    let buffer: u8* = VGA_BUFFER as u8*
+    for let i: i64 = 0, i < 80 * 25 * 2, i = i + 2 {
         buffer[i] = 0
         buffer[i + 1] = 15
     }
@@ -1840,15 +1840,15 @@ func vga_clear_screen() {
 ### PIC (Programmable Interrupt Controller)
 
 ```swift
-let PIC1_COMMAND: uint = 32
-let PIC1_DATA: uint = 33
-let PIC2_COMMAND: uint = 160
-let PIC2_DATA: uint = 161
+let PIC1_COMMAND: u64 = 32
+let PIC1_DATA: u64 = 33
+let PIC2_COMMAND: u64 = 160
+let PIC2_DATA: u64 = 161
 
-func pic_remap(offset1: char, offset2: char) {
+func pic_remap(offset1: u8, offset2: u8) {
     // Save masks
-    let mask1: char = inb(PIC1_DATA)
-    let mask2: char = inb(PIC2_DATA)
+    let mask1: u8 = inb(PIC1_DATA)
+    let mask2: u8 = inb(PIC2_DATA)
 
     // Start initialization
     outb(PIC1_COMMAND, 17)
@@ -1951,7 +1951,7 @@ The demo kernel now has a real per-process virtual-memory manager:
   Each user task gets its own `AddressSpace` (a fresh PML4) that keeps
   the kernel's low identity mapping while isolating user mappings above
   4GB.
-- `syscall.llpl` (`namespace Syscall`) implements an `int 0x80` ABI:
+- `syscall.llpl` (`namespace Syscall`) implements an `i64 0x80` ABI:
   `RAX` = syscall number, `RDI`/`RSI`/`RDX` = arguments, return in `RAX`.
   Supported syscalls: `SYS_EXIT` (0), `SYS_PRINT` (1), `SYS_MMAP` (2).
 - `task.llpl` gained `Task.spawn_user()` and per-task page-table switching
@@ -1970,7 +1970,7 @@ _start:
     xor rdi, rdi        ; hint = 0
     mov rsi, 1          ; pages = 1
     xor rdx, rdx        ; flags = 0
-    int 0x80
+    i64 0x80
 
     mov r8, rax         ; save buffer
     mov rdi, rax
@@ -1981,10 +1981,10 @@ _start:
     mov rax, 1          ; SYS_PRINT
     mov rdi, r8
     mov rsi, msg_len
-    int 0x80
+    i64 0x80
 
     mov rax, 0          ; SYS_EXIT
-    int 0x80
+    i64 0x80
 
 section .data
 msg: db "Hello from user-space mmap!", 10
@@ -2010,9 +2010,9 @@ end - with one value `slice_get`/`slice_set` actually validate before
 touching memory:
 
 ```swift
-func sum(s: Slice<int>) -> int {
-    let total: int = 0
-    let i: uint = 0
+func sum(s: Slice<i64>) -> i64 {
+    let total: i64 = 0
+    let i: u64 = 0
     while i < s.len {
         total = total + slice_get(s, i)
         i = i + 1
@@ -2020,11 +2020,11 @@ func sum(s: Slice<int>) -> int {
     return total
 }
 
-func main() -> int {
-    let arr: int[5]
+func main() -> i64 {
+    let arr: i64[5]
     arr[0] = 10
     arr[1] = 20
-    let view: Slice<int> = Slice { ptr: arr as int*, len: 2 }
+    let view: Slice<i64> = Slice { ptr: arr as i64*, len: 2 }
     return sum(view) // 30
 }
 ```
@@ -2066,9 +2066,9 @@ re-searching a suffix of it. See `test/regex_replace_demo.llpl` for the
 full runnable version this is taken from:
 
 ```swift
-func main() -> int {
+func main() -> i64 {
     let digits = /[0-9]+/
-    let text: char* = "abc 123 def 4567 ghi"
+    let text: u8* = "abc 123 def 4567 ghi"
 
     foreach let m in digits.find_all(text) {
         puts(m.group(0).c_str())  // "123", then "4567"
@@ -2085,9 +2085,9 @@ every non-overlapping one. Both return a `String`, and both accept
 match; `$$` is a literal `$`):
 
 ```swift
-func main() -> int {
+func main() -> i64 {
     let digits = /[0-9]+/
-    let text: char* = "abc 123 def 4567 ghi"
+    let text: u8* = "abc 123 def 4567 ghi"
     digits.replace(text, "#")      // "abc # def 4567 ghi"
     digits.replace_all(text, "#")  // "abc # def # ghi"
 
@@ -2101,42 +2101,42 @@ func main() -> int {
 
 ### Stack
 
-A real, complete `Stack` - unlike a raw `int*`, `self.data`'s bounds are
+A real, complete `Stack` - unlike a raw `i64*`, `self.data`'s bounds are
 checked on every push/pop:
 
 ```swift
 class Stack {
-    let data: Slice<int>
-    let backing: int*
-    let capacity: int
-    let top: int
+    let data: Slice<i64>
+    let backing: i64*
+    let capacity: i64
+    let top: i64
 
-    constructor(cap: int) {
+    constructor(cap: i64) {
         self.capacity = cap
         self.top = 0
-        self.backing = llpl_alloc((cap as uint) * sizeof(int)) as int*
-        self.data = Slice { ptr: self.backing, len: cap as uint }
+        self.backing = llpl_alloc((cap as u64) * sizeof(i64)) as i64*
+        self.data = Slice { ptr: self.backing, len: cap as u64 }
     }
 
     destructor() {
-        llpl_free(self.backing as char*)
+        llpl_free(self.backing as u8*)
     }
 
-    func push(value: int) -> bool {
+    func push(value: i64) -> bool {
         if self.top >= self.capacity {
             return false
         }
-        slice_set(self.data, self.top as uint, value)
+        slice_set(self.data, self.top as u64, value)
         self.top = self.top + 1
         return true
     }
 
-    func pop() -> int {
+    func pop() -> i64 {
         if self.top == 0 {
             return -1
         }
         self.top = self.top - 1
-        return slice_get(self.data, self.top as uint)
+        return slice_get(self.data, self.top as u64)
     }
 
     func is_empty() -> bool {
@@ -2149,47 +2149,47 @@ class Stack {
 
 ```swift
 class RingBuffer {
-    let data: Slice<char>
-    let backing: char*
-    let size: int
-    let read_pos: int
-    let write_pos: int
+    let data: Slice<u8>
+    let backing: u8*
+    let size: i64
+    let read_pos: i64
+    let write_pos: i64
 
-    constructor(size: int) {
+    constructor(size: i64) {
         self.size = size
         self.read_pos = 0
         self.write_pos = 0
-        self.backing = llpl_alloc(size as uint) as char*
-        self.data = Slice { ptr: self.backing, len: size as uint }
+        self.backing = llpl_alloc(size as u64) as u8*
+        self.data = Slice { ptr: self.backing, len: size as u64 }
     }
 
     destructor() {
-        llpl_free(self.backing as char*)
+        llpl_free(self.backing as u8*)
     }
 
-    func write(value: char) -> bool {
-        let next: int = (self.write_pos + 1) % self.size
+    func write(value: u8) -> bool {
+        let next: i64 = (self.write_pos + 1) % self.size
 
         if next == self.read_pos {
             return false // Buffer full
         }
 
-        slice_set(self.data, self.write_pos as uint, value)
+        slice_set(self.data, self.write_pos as u64, value)
         self.write_pos = next
         return true
     }
 
-    func read() -> int {
+    func read() -> i64 {
         if self.read_pos == self.write_pos {
             return -1 // Buffer empty
         }
 
-        let value: char = slice_get(self.data, self.read_pos as uint)
+        let value: u8 = slice_get(self.data, self.read_pos as u64)
         self.read_pos = (self.read_pos + 1) % self.size
-        return value as int
+        return value as i64
     }
 
-    func available() -> int {
+    func available() -> i64 {
         if self.write_pos >= self.read_pos {
             return self.write_pos - self.read_pos
         } else {
@@ -2205,38 +2205,38 @@ class RingBuffer {
 
 ```swift
 // Cast integer to pointer
-let addr: uint = 4096
-let ptr: char* = addr as char*
+let addr: u64 = 4096
+let ptr: u8* = addr as u8*
 
 // Cast pointer to integer
-let ptr_val: uint = ptr as uint
+let ptr_val: u64 = ptr as u64
 
 // Cast between pointer types
 let void_ptr: void* = ptr as void*
-let int_ptr: int* = void_ptr as int*
+let i64_ptr: i64* = void_ptr as i64*
 ```
 
 ### Hex and Binary Masks
 
 ```swift
 // Hexadecimal
-let hex_value: uint = 0xDEADBEEF
-let port_addr: uint = 0x3F8
+let hex_value: u64 = 0xDEADBEEF
+let port_addr: u64 = 0x3F8
 
 // Bit masks
-let mask: uint = 0xFF
-let masked: uint = hex_value & mask
+let mask: u64 = 0xFF
+let masked: u64 = hex_value & mask
 
 // Bit shifts for multiplication/division
-let doubled: uint = hex_value << 1
-let halved: uint = hex_value >> 1
+let doubled: u64 = hex_value << 1
+let halved: u64 = hex_value >> 1
 ```
 
 ### Conditional Assignments
 
 ```swift
-func get_min(a: int, b: int) -> int {
-    let result: int = a
+func get_min(a: i64, b: i64) -> i64 {
+    let result: i64 = a
     if b < a {
         result = b
     }
@@ -2247,6 +2247,8 @@ func get_min(a: int, b: int) -> int {
 ---
 
 For more examples, see:
-- `examples/kernel.llpl` - Full bare metal kernel
-- `test/simple.llpl` - Simple test program
+- `examples/baremetal_demo/kernel.llpl` - Full bare metal kernel (GRUB/Multiboot2)
+- `examples/limine_baremetal_demo/kernel.llpl` - Same idea, booted via Limine
+- `test/` - One runnable demo + `.expected` output per language feature
 - README.md - Full language documentation
+- [Full documentation site](https://alectronik2.github.io/LLPL/llpl-docs.html) - compiler CLI, standard library API, and a guided tour of every example
