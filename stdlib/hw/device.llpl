@@ -1,0 +1,51 @@
+namespace hw {
+    struct DeviceRegister {
+        let base: u64
+        let offset: u64
+        let width_bits: u64
+
+        constructor(base: u64, offset: u64, width_bits: u64) {
+            self.base = base
+            self.offset = offset
+            self.width_bits = width_bits
+        }
+    }
+
+    struct DeviceDmaResource {
+        let entries: u64
+        let bytes: u64
+        let alignment: u64
+
+        constructor(entries: u64, bytes: u64, alignment: u64) {
+            self.entries = entries
+            self.bytes = bytes
+            self.alignment = alignment
+        }
+    }
+
+    struct DeviceResourceMap {
+        let base: u64
+        let irq: u64
+
+        constructor(base: u64, irq: u64) {
+            self.base = base
+            self.irq = irq
+        }
+    }
+
+    func device_map(base: u64, irq: u64) -> DeviceResourceMap {
+        return new DeviceResourceMap(base, irq)
+    }
+
+    func device_register(base: u64, offset: u64, width_bits: u64) -> DeviceRegister {
+        return new DeviceRegister(base, offset, width_bits)
+    }
+
+    func device_dma(entries: u64, bytes: u64, alignment: u64) -> DeviceDmaResource {
+        return new DeviceDmaResource(entries, bytes, alignment)
+    }
+
+    func register_addr(reg: DeviceRegister) -> u64 {
+        return reg.base + reg.offset
+    }
+}

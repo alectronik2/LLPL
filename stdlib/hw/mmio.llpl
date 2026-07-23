@@ -1,0 +1,110 @@
+import "cache.llpl"
+
+namespace hw {
+    struct MmioU8 {
+        let addr: u64
+        constructor(addr: u64) {
+            self.addr = addr
+        }
+    }
+
+    struct MmioU16 {
+        let addr: u64
+        constructor(addr: u64) {
+            self.addr = addr
+        }
+    }
+
+    struct MmioU32 {
+        let addr: u64
+        constructor(addr: u64) {
+            self.addr = addr
+        }
+    }
+
+    struct MmioU64 {
+        let addr: u64
+        constructor(addr: u64) {
+            self.addr = addr
+        }
+    }
+
+    func mmio_u8(addr: u64) -> MmioU8 {
+        return new MmioU8(addr)
+    }
+
+    func mmio_u16(addr: u64) -> MmioU16 {
+        return new MmioU16(addr)
+    }
+
+    func mmio_u32(addr: u64) -> MmioU32 {
+        return new MmioU32(addr)
+    }
+
+    func mmio_u64(addr: u64) -> MmioU64 {
+        return new MmioU64(addr)
+    }
+
+    func mmio_read_u8(reg: MmioU8) -> u8 {
+        Barrier.read()
+        let value: u8 = 0
+        asm("movb %1, %b0" : "=q"(value) : "m"(*(reg.addr as u8*)) : "memory")
+        Barrier.read()
+        return value
+    }
+
+    func mmio_write_u8(reg: MmioU8, value: u8) {
+        Barrier.write()
+        asm("movb %b0, %1" : : "q"(value), "m"(*(reg.addr as u8*)) : "memory")
+        Barrier.write()
+    }
+
+    func mmio_read_u16(reg: MmioU16) -> u16 {
+        Barrier.read()
+        let value: u16 = 0
+        asm("movw %1, %w0" : "=r"(value) : "m"(*(reg.addr as u16*)) : "memory")
+        Barrier.read()
+        return value
+    }
+
+    func mmio_write_u16(reg: MmioU16, value: u16) {
+        Barrier.write()
+        asm("movw %w0, %1" : : "r"(value), "m"(*(reg.addr as u16*)) : "memory")
+        Barrier.write()
+    }
+
+    func mmio_read_u32(reg: MmioU32) -> u32 {
+        Barrier.read()
+        let value: u32 = 0
+        asm("movl %1, %k0" : "=r"(value) : "m"(*(reg.addr as u32*)) : "memory")
+        Barrier.read()
+        return value
+    }
+
+    func mmio_write_u32(reg: MmioU32, value: u32) {
+        Barrier.write()
+        asm("movl %k0, %1" : : "r"(value), "m"(*(reg.addr as u32*)) : "memory")
+        Barrier.write()
+    }
+
+    func mmio_update_u32(reg: MmioU32, clear_mask: u32, set_mask: u32) -> u32 {
+        let old: u32 = mmio_read_u32(reg)
+        let next: u32 = (old & ~clear_mask) | set_mask
+        mmio_write_u32(reg, next)
+        return next
+    }
+
+    func mmio_read_u64(reg: MmioU64) -> u64 {
+        Barrier.read()
+        let value: u64 = 0
+        asm("movq %1, %0" : "=r"(value) : "m"(*(reg.addr as u64*)) : "memory")
+        Barrier.read()
+        return value
+    }
+
+    func mmio_write_u64(reg: MmioU64, value: u64) {
+        Barrier.write()
+        asm("movq %0, %1" : : "r"(value), "m"(*(reg.addr as u64*)) : "memory")
+        Barrier.write()
+    }
+}

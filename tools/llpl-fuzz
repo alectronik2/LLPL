@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+count="${1:-25}"
+outdir="${2:-/tmp/llpl-fuzz}"
+compiler="${LLPL:-./llpl}"
+mkdir -p "$outdir"
+
+for i in $(seq 1 "$count"); do
+  a=$(( (i * 17 + 3) % 97 ))
+  b=$(( (i * 31 + 11) % 89 + 1 ))
+  op=$(( i % 4 ))
+  src="$outdir/fuzz_$i.llpl"
+  c="$outdir/fuzz_$i.c"
+  bin="$outdir/fuzz_$i"
+
+  case "$op" in
+    0) expr="$a + $b" ;;
+    1) expr="$a * $b" ;;
+    2) expr="($a + $b) / 2" ;;
+    *) expr="if $a < $b { $b - $a } else { $a - $b }" ;;
+  esac
+
+  {
+    printf 'func calc() -> int {\n'
+    printf '    let x: int = %s\n' "$expr"
+    printf '    return x\n'
+    printf '}\n\n'
+    printf 'func main() -> int {\n'
+    printf '    let y: int = calc()\n'
+    printf '    assert(y >= 0, "fuzz invariant failed")\n'
+    printf '    return 0\n'
+    printf '}\n'
+  } > "$src"
+
+  "$compiler" "$src" -o "$c" >/dev/null
+  cc "$c" runtime/runtime.c -I runtime -funsigned-char -o "$bin"
+  "$bin" >/dev/null
+done
+
+printf 'fuzz ok: %s cases in %s\n' "$count" "$outdir"

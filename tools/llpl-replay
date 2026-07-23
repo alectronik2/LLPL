@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'usage:\n' >&2
+  printf '  tools/llpl-replay record <input.llpl> <outdir> [program args...]\n' >&2
+  printf '  tools/llpl-replay replay <outdir>\n' >&2
+  exit 2
+}
+
+mode="${1:-}"
+[ -n "$mode" ] || usage
+shift
+
+compiler="${LLPL:-./llpl}"
+
+if [ "$mode" = "record" ]; then
+  [ "$#" -ge 2 ] || usage
+  src="$1"
+  outdir="$2"
+  shift 2
+  mkdir -p "$outdir"
+  cp "$src" "$outdir/input.llpl"
+  "$compiler" -b "$outdir/input.llpl" -o "$outdir/program" --debug-bundle "$outdir/build" >/dev/null
+  set +e
+  "$outdir/program" "$@" >"$outdir/stdout.txt" 2>"$outdir/stderr.txt"
+  status="$?"
+  set -e
+  {
+    printf 'status=%s\n' "$status"
+    printf 'argc=%s\n' "$#"
+    n=0
+    for arg in "$@"; do
+      printf 'arg_%s=%q\n' "$n" "$arg"
+      n=$((n + 1))
+    done
+  } > "$outdir/replay.env"
+  printf 'recorded: %s\n' "$outdir"
+elif [ "$mode" = "replay" ]; then
+  [ "$#" -eq 1 ] || usage
+  outdir="$1"
+  [ -f "$outdir/replay.env" ] || { printf 'missing %s/replay.env\n' "$outdir" >&2; exit 1; }
+  # shellcheck disable=SC1090
+  . "$outdir/replay.env"
+  "$compiler" -b "$outdir/input.llpl" -o "$outdir/program.replay" --debug-bundle "$outdir/build.replay" >/dev/null
+  args=()
+  n=0
+  while [ "$n" -lt "${argc:-0}" ]; do
+    var="arg_$n"
+    args+=("${!var}")
+    n=$((n + 1))
+  done
+  set +e
+  "$outdir/program.replay" "${args[@]}" >"$outdir/stdout.replay.txt" 2>"$outdir/stderr.replay.txt"
+  replay_status="$?"
+  set -e
+  cmp "$outdir/stdout.txt" "$outdir/stdout.replay.txt"
+  cmp "$outdir/stderr.txt" "$outdir/stderr.replay.txt"
+  [ "$replay_status" = "$status" ]
+  printf 'replay ok: %s\n' "$outdir"
+else
+  usage
+fi

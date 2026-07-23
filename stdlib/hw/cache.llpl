@@ -1,0 +1,46 @@
+namespace hw {
+    namespace CachePolicy {
+        const UNCACHED: u64 = 0
+        const WRITE_BACK: u64 = 1
+        const WRITE_THROUGH: u64 = 2
+        const WRITE_COMBINING: u64 = 3
+    }
+
+    namespace Barrier {
+        func compiler() {
+            asm("" : : : "memory")
+        }
+
+        func read() {
+            asm("lfence" : : : "memory")
+        }
+
+        func write() {
+            asm("sfence" : : : "memory")
+        }
+
+        func full() {
+            asm("mfence" : : : "memory")
+        }
+
+        func pause() {
+            asm("pause" : : : "memory")
+        }
+
+        func flush_all_caches() {
+            asm("wbinvd" : : : "memory")
+        }
+
+        func invalidate_page(addr: u64) {
+            asm("invlpg (%0)" : : "r"(addr) : "memory")
+        }
+
+        func prefetch_read(addr: u64) {
+            asm("prefetcht0 (%0)" : : "r"(addr))
+        }
+
+        func prefetch_write(addr: u64) {
+            asm("prefetchw (%0)" : : "r"(addr))
+        }
+    }
+}

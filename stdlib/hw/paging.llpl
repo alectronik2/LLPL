@@ -1,0 +1,73 @@
+namespace hw {
+    namespace Page {
+        const SIZE: u64 = 4096
+    }
+
+    namespace PagePerm {
+        const PRESENT: u64 = 1
+        const WRITE: u64 = 2
+        const USER: u64 = 4
+        const WRITE_THROUGH: u64 = 8
+        const CACHE_DISABLE: u64 = 16
+        const ACCESSED: u64 = 32
+        const DIRTY: u64 = 64
+        const HUGE: u64 = 128
+        const GLOBAL: u64 = 256
+    }
+
+    struct PageRegion {
+        let virt: u64
+        let phys: u64
+        let bytes: u64
+        let flags: u64
+
+        constructor(virt: u64, phys: u64, bytes: u64, flags: u64) {
+            self.virt = virt
+            self.phys = phys
+            self.bytes = bytes
+            self.flags = flags
+        }
+    }
+
+    func page_align_down(addr: u64) -> u64 {
+        return addr & ~(Page.SIZE - 1)
+    }
+
+    func page_align_up(addr: u64) -> u64 {
+        return (addr + Page.SIZE - 1) & ~(Page.SIZE - 1)
+    }
+
+    func page_is_aligned(addr: u64) -> bool {
+        return (addr & (Page.SIZE - 1)) == 0
+    }
+
+    func page_count_for_bytes(bytes: u64) -> u64 {
+        return page_align_up(bytes) / Page.SIZE
+    }
+
+    func page_region(virt: u64, phys: u64, bytes: u64, flags: u64) -> PageRegion {
+        return new PageRegion(virt, phys, bytes, flags)
+    }
+
+    func page_region_is_valid(region: PageRegion) -> bool {
+        if !page_is_aligned(region.virt) || !page_is_aligned(region.phys) {
+            return false
+        }
+        if region.bytes == 0 || !page_is_aligned(region.bytes) {
+            return false
+        }
+        return (region.flags & PagePerm.PRESENT) != 0
+    }
+
+    func page_flags_kernel_rw() -> u64 {
+        return PagePerm.PRESENT | PagePerm.WRITE
+    }
+
+    func page_flags_user_rw() -> u64 {
+        return PagePerm.PRESENT | PagePerm.WRITE | PagePerm.USER
+    }
+
+    func page_flags_mmio() -> u64 {
+        return PagePerm.PRESENT | PagePerm.WRITE | PagePerm.CACHE_DISABLE
+    }
+}

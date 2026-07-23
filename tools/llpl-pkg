@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+manifest="${LLPL_PKG_MANIFEST:-llpl.pkg}"
+
+case "${1:-}" in
+  init)
+    if [ -f "$manifest" ]; then
+      printf '%s already exists\n' "$manifest" >&2
+      exit 1
+    fi
+    {
+      printf '# name git_url commit import_path\n'
+      printf '# collections https://example.invalid/llpl/collections.git 0123456789abcdef std/collections\n'
+    } > "$manifest"
+    printf 'created %s\n' "$manifest"
+    ;;
+  list)
+    [ -f "$manifest" ] || { printf 'missing %s\n' "$manifest" >&2; exit 1; }
+    awk 'NF && $1 !~ /^#/ { print $1, $2, $3, $4 }' "$manifest"
+    ;;
+  vendor)
+    [ -f "$manifest" ] || { printf 'missing %s\n' "$manifest" >&2; exit 1; }
+    mkdir -p vendor
+    awk 'NF && $1 !~ /^#/ { print $1 "\t" $2 "\t" $3 }' "$manifest" |
+    while IFS="$(printf '\t')" read -r name url commit; do
+      dest="vendor/$name"
+      if [ ! -d "$dest/.git" ]; then
+        git clone "$url" "$dest"
+      fi
+      git -C "$dest" fetch --all --tags
+      git -C "$dest" checkout --detach "$commit"
+      printf 'vendored %s at %s\n' "$name" "$commit"
+    done
+    ;;
+  *)
+    printf 'usage: tools/llpl-pkg init|list|vendor\n' >&2
+    exit 2
+    ;;
+esac

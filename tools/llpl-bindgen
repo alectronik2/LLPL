@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -lt 1 ]; then
+  printf 'usage: tools/llpl-bindgen <header.h>\n' >&2
+  exit 2
+fi
+
+dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+root="$(CDPATH= cd -- "$dir/.." && pwd)"
+compiler="${LLPL:-$root/llpl}"
+src="$dir/llpl-bindgen.llpl"
+bin="${LLPL_BINDGEN_BIN:-$(mktemp -u "${TMPDIR:-/tmp}/llpl-bindgen.XXXXXX")}"
+
+if [ ! -x "$compiler" ]; then
+  printf 'llpl-bindgen: compiler not found: %s\n' "$compiler" >&2
+  exit 1
+fi
+
+"$compiler" -b "$src" -o "$bin" >/dev/null
+exec "$bin" "$@"

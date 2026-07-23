@@ -1,0 +1,66 @@
+import "cache.llpl"
+
+namespace hw {
+    namespace DmaOwner {
+        const CPU: u64 = 0
+        const DEVICE: u64 = 1
+    }
+
+    struct DmaBuffer {
+        let phys: u64
+        let virt: u64
+        let bytes: u64
+        let alignment: u64
+        let cache_policy: u64
+        let owner: u64
+
+        constructor(phys: u64, virt: u64, bytes: u64, alignment: u64, cache_policy: u64, owner: u64) {
+            self.phys = phys
+            self.virt = virt
+            self.bytes = bytes
+            self.alignment = alignment
+            self.cache_policy = cache_policy
+            self.owner = owner
+        }
+    }
+
+    func dma_buffer(phys: u64, virt: u64, bytes: u64, alignment: u64, cache_policy: u64) -> DmaBuffer {
+        return new DmaBuffer(phys, virt, bytes, alignment, cache_policy, DmaOwner.CPU)
+    }
+
+    func is_aligned(addr: u64, alignment: u64) -> bool {
+        if alignment == 0 {
+            return false
+        }
+        return (addr % alignment) == 0
+    }
+
+    func dma_is_valid(buf: DmaBuffer) -> bool {
+        if buf.phys == 0 || buf.virt == 0 || buf.bytes == 0 {
+            return false
+        }
+        return is_aligned(buf.phys, buf.alignment) && is_aligned(buf.virt, buf.alignment)
+    }
+
+    func dma_sync_for_device(buf: DmaBuffer*) -> bool {
+        if !dma_is_valid(*buf) {
+            return false
+        }
+        if buf.cache_policy == CachePolicy.WRITE_BACK || buf.cache_policy == CachePolicy.WRITE_THROUGH {
+            Barrier.full()
+        }
+        buf.owner = DmaOwner.DEVICE
+        return true
+    }
+
+    func dma_sync_for_cpu(buf: DmaBuffer*) -> bool {
+        if !dma_is_valid(*buf) {
+            return false
+        }
+        if buf.cache_policy == CachePolicy.WRITE_BACK || buf.cache_policy == CachePolicy.WRITE_THROUGH {
+            Barrier.full()
+        }
+        buf.owner = DmaOwner.CPU
+        return true
+    }
+}

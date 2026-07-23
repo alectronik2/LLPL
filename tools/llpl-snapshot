@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+  printf 'usage: tools/llpl-snapshot <input.llpl> <outdir> [llpl args...]\n' >&2
+  exit 2
+fi
+
+src="$1"
+outdir="$2"
+shift 2
+compiler="${LLPL:-./llpl}"
+mkdir -p "$outdir"
+
+"$compiler" "$src" -o "$outdir/generated.c" \
+  --emit-provenance "$outdir/provenance.json" \
+  --emit-effects "$outdir/effects.json" \
+  --debug-bundle "$outdir/bundle" \
+  "$@"
+
+cp "$src" "$outdir/source.llpl"
+printf 'snapshot: %s\n' "$outdir"
