@@ -46,3 +46,44 @@ func load_start_icon_app() -> u8* {
     let asset = embed("start_icon_app_data.bin")
     return asset.data as u8*
 }
+
+func load_media_terminal_png() -> EmbeddedFile {
+    return embed("../media/terminal.png")
+}
+
+func load_media_files_png() -> EmbeddedFile {
+    return embed("../media/files.png")
+}
+
+func load_media_tasks_png() -> EmbeddedFile {
+    return embed("../media/tasks.png")
+}
+
+func load_media_editor_png() -> EmbeddedFile {
+    return embed("../media/editor.png")
+}
+
+func load_media_ping_png() -> EmbeddedFile {
+    return embed("../media/ping.png")
+}
+
+func load_media_images_png() -> EmbeddedFile {
+    return embed("../media/images.png")
+}
+
+func load_media_tetris_png() -> EmbeddedFile {
+    return embed("../media/tetris.png")
+}
+
+func load_media_settings_png() -> EmbeddedFile {
+    return embed("../media/settings.png")
+}
+
+func load_media_crashviewer_png() -> EmbeddedFile {
+    return embed("../media/crashviewer.png")
+}
+
+func load_default_apps_manifest() -> u8* {
+    let asset = embed("default_apps.txt")
+    return asset.data as u8*
+}

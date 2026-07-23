@@ -74,10 +74,18 @@ namespace Syscall {
     const SYS_CLIPBOARD_SET = 49
     const SYS_CLIPBOARD_GET = 50
     const SYS_TASK_KILL = 51
+    const SYS_CLIPBOARD_IMAGE_INFO = 52
+    const SYS_CLIPBOARD_GET_IMAGE = 53
+    const SYS_SCREENSHOT = 54
+    const SYS_CRASH_INFO = 55
+    const SYS_CRASH_CLEAR = 56
+    const SYS_CLIPBOARD_SET_IMAGE = 57
+    const SYS_CRASH_HISTORY_INFO = 58
 
     const MAX_FDS = 16
     const FD_PATH_MAX = 96
     const IO_MAX = 4096
+    const CLIPBOARD_IMAGE_MAX = 16777216
 
     packed struct FileDesc {
         let used: bool
@@ -94,6 +102,11 @@ namespace Syscall {
     let msg_reply_count: u64 = 0
     let clipboard_len: u64 = 0
     let clipboard_data: u8[4096]
+    let clipboard_image_len: u64 = 0
+    let clipboard_image_width: u64 = 0
+    let clipboard_image_height: u64 = 0
+    let clipboard_image_pitch: u64 = 0
+    let clipboard_image_data: u8[16777216]
 
     func dispatch(number: u64, a: u64, b: u64, c: u64) -> u64 {
         dispatch_count = dispatch_count + 1
@@ -261,6 +274,27 @@ namespace Syscall {
         }
         if number == SYS_TASK_KILL {
             return sys_task_kill(a)
+        }
+        if number == SYS_CLIPBOARD_IMAGE_INFO {
+            return sys_clipboard_image_info(a)
+        }
+        if number == SYS_CLIPBOARD_GET_IMAGE {
+            return sys_clipboard_get_image(a, b)
+        }
+        if number == SYS_SCREENSHOT {
+            return sys_screenshot()
+        }
+        if number == SYS_CRASH_INFO {
+            return sys_crash_info(a)
+        }
+        if number == SYS_CRASH_CLEAR {
+            return sys_crash_clear()
+        }
+        if number == SYS_CLIPBOARD_SET_IMAGE {
+            return sys_clipboard_set_image(a, b, c)
+        }
+        if number == SYS_CRASH_HISTORY_INFO {
+            return sys_crash_history_info(a, b)
         }
         EventLog.add1("syscall", "unknown", number)
         return 0
@@ -622,6 +656,143 @@ namespace Syscall {
             return 0xFFFFFFFFFFFFFFFF
         }
         return n
+    }
+
+    func sys_clipboard_image_info(out_buf: u64) -> u64 {
+        if clipboard_image_len == 0 {
+            return 0
+        }
+        let rec: u64[4]
+        rec[0] = clipboard_image_width
+        rec[1] = clipboard_image_height
+        rec[2] = clipboard_image_pitch
+        rec[3] = clipboard_image_len
+        copy_to_user(out_buf, rec as u8*, 32)
+        return 32
+    }
+
+    func sys_clipboard_get_image(out_buf: u64, max_len: u64) -> u64 {
+        let n: u64 = clipboard_image_len
+        if n > max_len {
+            n = max_len
+        }
+        if n == 0 {
+            return 0
+        }
+        if copy_to_user(out_buf, clipboard_image_data as u8*, n) != n {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return n
+    }
+
+    func sys_screenshot() -> u64 {
+        if !Framebuffer.ready || Framebuffer.addr == 0 || Framebuffer.width == 0 || Framebuffer.height == 0 {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        let total_bytes: u64 = (Framebuffer.pitch as u64) * (Framebuffer.height as u64)
+        let n: u64 = total_bytes
+        if n > CLIPBOARD_IMAGE_MAX {
+            n = CLIPBOARD_IMAGE_MAX
+        }
+        let src: u8* = Framebuffer.addr as u8*
+        let i: u64 = 0
+        while i < n {
+            clipboard_image_data[i] = src[i]
+            i = i + 1
+        }
+        clipboard_image_len = n
+        clipboard_image_width = Framebuffer.width as u64
+        clipboard_image_height = Framebuffer.height as u64
+        clipboard_image_pitch = Framebuffer.pitch as u64
+        return n
+    }
+
+    func sys_clipboard_set_image(src_buf: u64, width: u64, height: u64) -> u64 {
+        if width == 0 || height == 0 {
+            clipboard_image_len = 0
+            clipboard_image_width = 0
+            clipboard_image_height = 0
+            clipboard_image_pitch = 0
+            return 0
+        }
+        let pitch: u64 = width * 4
+        let n: u64 = pitch * height
+        if n > CLIPBOARD_IMAGE_MAX {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        if copy_from_user(src_buf, clipboard_image_data as u8*, n) != n {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        clipboard_image_len = n
+        clipboard_image_width = width
+        clipboard_image_height = height
+        clipboard_image_pitch = pitch
+        return n
+    }
+
+    // Crash report wire format:
+    //   u64[0..8]  = valid, user_mode, pid, error_code, fault_addr,
+    //                rip, rbp, rsp, line
+    //   kind[32]   = offset 80
+    //   detail[96] = offset 112
+    //   task[16]   = offset 208
+    //   symbol[64] = offset 224
+    //   file[32]   = offset 288
+    func sys_crash_info(out_buf: u64) -> u64 {
+        let out: u64* = out_buf as u64*
+        let bytes: u8* = out_buf as u8*
+        out[0] = 0
+        if !CrashLog.valid {
+            return 0
+        }
+        out[0] = 1
+        out[1] = 0
+        if CrashLog.user_mode {
+            out[1] = 1
+        }
+        out[2] = CrashLog.pid as u64
+        out[3] = CrashLog.error_code
+        out[4] = CrashLog.fault_addr
+        out[5] = CrashLog.rip
+        out[6] = CrashLog.rbp
+        out[7] = CrashLog.rsp
+        out[8] = CrashLog.line as u64
+
+        let i: i64 = 0
+        while i < 32 {
+            bytes[80 + i] = CrashLog.kind[i]
+            i = i + 1
+        }
+        i = 0
+        while i < 96 {
+            bytes[112 + i] = CrashLog.detail[i]
+            i = i + 1
+        }
+        i = 0
+        while i < 16 {
+            bytes[208 + i] = CrashLog.task_name[i]
+            i = i + 1
+        }
+        i = 0
+        while i < 64 {
+            bytes[224 + i] = CrashLog.symbol[i]
+            i = i + 1
+        }
+        i = 0
+        while i < 32 {
+            bytes[288 + i] = CrashLog.file[i]
+            i = i + 1
+        }
+        return 1
+    }
+
+    func sys_crash_clear() -> u64 {
+        CrashLog.clear()
+        return 0
+    }
+
+    func sys_crash_history_info(index: u64, out_buf: u64) -> u64 {
+        return CrashLog.write_record(out_buf, index as i64)
     }
 
     // Read-only task snapshot for user-space tools. out_buf receives a

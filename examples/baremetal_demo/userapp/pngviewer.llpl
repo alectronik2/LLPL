@@ -1,6 +1,6 @@
-// Image viewer for the embedded PNG-derived assets shipped with the demo.
-// The target does not yet have a runtime PNG decoder, so this viewer
-// browses the already-converted embedded RGBA assets instead.
+// Image viewer for PNG assets shipped with the demo.
+// It now loads the boot-time PNG files at runtime and falls back to the
+// embedded RGBA blobs only when a file is unavailable.
 
 import "../libsys/imports"
 import "user_runtime"
@@ -20,9 +20,29 @@ const VIEW_X: i64 = 18
 const VIEW_Y: i64 = 40
 const VIEW_W: i64 = 364
 const VIEW_H: i64 = 186
-const IMAGE_COUNT = 5
+const IMAGE_COUNT = 6
+const CLIPBOARD_PIXELS_MAX = 16777216
 
+struct ImageView {
+    let width: u64
+    let height: u64
+    let pitch: u64
+    let data: u8*
+}
+
+let clipboard_image_width: u64 = 0
+let clipboard_image_height: u64 = 0
+let clipboard_image_pitch: u64 = 0
+let clipboard_image_len: u64 = 0
+let clipboard_image_ready: bool = false
+let clipboard_pixels: u8[16777216]
 let images: EmbeddedImage[5]
+let runtime_mode: bool = false
+let runtime_image: DecodedPng
+let runtime_path: u8[96]
+let export_path: u8[96]
+let export_ready: bool = false
+let status: u8[96]
 let selected: i64 = 0
 let zoom: i64 = 1
 
@@ -83,16 +103,111 @@ func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
     Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
 }
 
+func clipboard_view() -> ImageView {
+    let view: ImageView
+    view.width = clipboard_image_width
+    view.height = clipboard_image_height
+    view.pitch = clipboard_image_pitch
+    view.data = clipboard_pixels as u8*
+    return view
+}
+
+func runtime_view() -> ImageView {
+    let view: ImageView
+    view.width = runtime_image.width
+    view.height = runtime_image.height
+    view.pitch = runtime_image.width * 4
+    view.data = runtime_image.data
+    return view
+}
+
+func refresh_clipboard_image() {
+    let info: u64[4]
+    if sys_clipboard_image_info(info as u64*) == 0 {
+        clipboard_image_ready = false
+        clipboard_image_width = 0
+        clipboard_image_height = 0
+        clipboard_image_pitch = 0
+        clipboard_image_len = 0
+        return
+    }
+    clipboard_image_width = info[0]
+    clipboard_image_height = info[1]
+    clipboard_image_pitch = info[2]
+    clipboard_image_len = info[3]
+    if clipboard_image_len == 0 || clipboard_image_len > CLIPBOARD_PIXELS_MAX {
+        clipboard_image_ready = false
+        return
+    }
+    if sys_clipboard_get_image(clipboard_pixels as u8*, clipboard_image_len) != clipboard_image_len {
+        clipboard_image_ready = false
+        return
+    }
+    clipboard_image_ready = true
+}
+
 func image_name_at(index: i64) -> u8* {
-    if index == 0 { return "wallpaper" as u8* }
-    if index == 1 { return "cursor" as u8* }
-    if index == 2 { return "terminal icon" as u8* }
-    if index == 3 { return "file icon" as u8* }
+    if runtime_mode {
+        return runtime_path as u8*
+    }
+    if index == 0 {
+        if clipboard_image_ready {
+            return "clipboard screenshot" as u8*
+        }
+        return "clipboard empty" as u8*
+    }
+    if index == 1 { return "wallpaper" as u8* }
+    if index == 2 { return "cursor" as u8* }
+    if index == 3 { return "terminal icon" as u8* }
+    if index == 4 { return "file icon" as u8* }
     return "app icon" as u8*
 }
 
-func image_at(index: i64) -> EmbeddedImage {
-    return images[index]
+func image_at(index: i64) -> ImageView {
+    if runtime_mode {
+        return runtime_view()
+    }
+    if index == 0 {
+        return clipboard_view()
+    }
+    if index == 1 {
+        let view: ImageView
+        view.width = images[0].width as u64
+        view.height = images[0].height as u64
+        view.pitch = (images[0].width as u64) * 4
+        view.data = images[0].data
+        return view
+    }
+    if index == 2 {
+        let view: ImageView
+        view.width = images[1].width as u64
+        view.height = images[1].height as u64
+        view.pitch = (images[1].width as u64) * 4
+        view.data = images[1].data
+        return view
+    }
+    if index == 3 {
+        let view: ImageView
+        view.width = images[2].width as u64
+        view.height = images[2].height as u64
+        view.pitch = (images[2].width as u64) * 4
+        view.data = images[2].data
+        return view
+    }
+    if index == 4 {
+        let view: ImageView
+        view.width = images[3].width as u64
+        view.height = images[3].height as u64
+        view.pitch = (images[3].width as u64) * 4
+        view.data = images[3].data
+        return view
+    }
+    let view: ImageView
+    view.width = images[4].width as u64
+    view.height = images[4].height as u64
+    view.pitch = (images[4].width as u64) * 4
+    view.data = images[4].data
+    return view
 }
 
 func clamp_selection() {
@@ -110,10 +225,13 @@ func clamp_selection() {
     }
 }
 
-func fit_scale(img: EmbeddedImage) -> i64 {
+func fit_scale(img: ImageView) -> i64 {
     let scale: i64 = zoom
     let max_w: i64 = VIEW_W - 16
     let max_h: i64 = VIEW_H - 16
+    if img.width == 0 || img.height == 0 {
+        return 1
+    }
     let fit_w: i64 = max_w / (img.width as i64)
     let fit_h: i64 = max_h / (img.height as i64)
     let fit: i64 = fit_w
@@ -129,23 +247,27 @@ func fit_scale(img: EmbeddedImage) -> i64 {
     return scale
 }
 
-func draw_image_scaled(img: EmbeddedImage, x0: i64, y0: i64, scale: i64) {
-    let y: u32 = 0
+func draw_image_scaled(img: ImageView, x0: i64, y0: i64, scale: i64) {
+    let y: u64 = 0
     while y < img.height {
-        let x: u32 = 0
+        let x: u64 = 0
         while x < img.width {
-            let alpha: u32 = get_pixel_alpha(img, x, y)
-            if alpha != 0 {
-                let fg: u32 = get_pixel(img, x, y)
+            let offset: u64 = y * img.pitch + x * 4
+            let r: u32 = img.data[offset] as u32
+            let g: u32 = img.data[offset + 1] as u32
+            let b: u32 = img.data[offset + 2] as u32
+            let a: u32 = img.data[offset + 3] as u32
+            if a != 0 {
+                let fg: u32 = (r << 16) | (g << 8) | b
                 let color: u32 = fg
-                if alpha < 255 {
-                    color = blend_alpha(fg, PANEL, alpha)
+                if a < 255 {
+                    color = blend_alpha(fg, PANEL, a)
                 }
                 let sy: i64 = 0
                 while sy < scale {
                     let sx: i64 = 0
                     while sx < scale {
-                        wm_put_pixel((x0 + ((x as i64) * scale) + sx) as u64, (y0 + ((y as i64) * scale) + sy) as u64, color)
+                        wm_put_pixel((x0 + (x as i64) * scale + sx) as u64, (y0 + (y as i64) * scale + sy) as u64, color)
                         sx = sx + 1
                     }
                     sy = sy + 1
@@ -158,6 +280,7 @@ func draw_image_scaled(img: EmbeddedImage, x0: i64, y0: i64, scale: i64) {
 }
 
 func draw_frame() {
+    refresh_clipboard_image()
     fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, BG)
     fill_rect(0, 0, Wm.WIN_W as u64, 28, PANEL)
     draw_text(8, 6, "PNG VIEWER" as u8*, ACCENT, PANEL)
@@ -166,13 +289,17 @@ func draw_frame() {
     fill_rect(VIEW_X as u64, VIEW_Y as u64, VIEW_W as u64, VIEW_H as u64, 0x161B24)
     draw_border(VIEW_X as u64, VIEW_Y as u64, VIEW_W as u64, VIEW_H as u64, BORDER)
 
-    let img: EmbeddedImage = image_at(selected)
+    let img: ImageView = image_at(selected)
     let scale: i64 = fit_scale(img)
     let draw_w: i64 = (img.width as i64) * scale
     let draw_h: i64 = (img.height as i64) * scale
     let draw_x: i64 = VIEW_X + ((VIEW_W - draw_w) / 2)
     let draw_y: i64 = VIEW_Y + ((VIEW_H - draw_h) / 2)
-    draw_image_scaled(img, draw_x, draw_y, scale)
+    if runtime_mode || selected != 0 || clipboard_image_ready {
+        draw_image_scaled(img, draw_x, draw_y, scale)
+    } else {
+        draw_text(VIEW_X as u64 + 98, VIEW_Y as u64 + 84, "clipboard empty" as u8*, MUTED, 0x161B24)
+    }
 
     fill_rect(0, 232, Wm.WIN_W as u64, 24, PANEL)
     let info: u8[32]
@@ -188,6 +315,50 @@ func draw_frame() {
     draw_text(132, 248, "zoom" as u8*, MUTED, PANEL)
     uint_to_dec(info as u8*, zoom as u64)
     draw_text(168, 248, info as u8*, TEXT, PANEL)
+    if export_ready {
+        draw_text(220, 248, status as u8*, ACCENT, PANEL)
+    } else {
+        draw_text(220, 248, "no export path" as u8*, MUTED, PANEL)
+    }
+}
+
+func copy_cstr(dst: u8*, src: u8*) {
+    let i: i64 = 0
+    while i < 95 && src[i] != 0 {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
+}
+
+func save_current_image() {
+    if !export_ready {
+        copy_cstr(status as u8*, "set argv[2] for export" as u8*)
+        return
+    }
+    let img: ImageView = image_at(selected)
+    if img.width == 0 || img.height == 0 {
+        copy_cstr(status as u8*, "nothing to save" as u8*)
+        return
+    }
+    if png_encode_file(export_path as u8*, img.width, img.height, img.pitch, img.data) {
+        copy_cstr(status as u8*, "saved PNG" as u8*)
+    } else {
+        copy_cstr(status as u8*, "save failed" as u8*)
+    }
+}
+
+func copy_current_image() {
+    let img: ImageView = image_at(selected)
+    if img.width == 0 || img.height == 0 {
+        copy_cstr(status as u8*, "nothing to copy" as u8*)
+        return
+    }
+    if sys_clipboard_set_image(img.data, img.width, img.height) == 0 {
+        copy_cstr(status as u8*, "copy failed" as u8*)
+    } else {
+        copy_cstr(status as u8*, "copied to image clipboard" as u8*)
+    }
 }
 
 func _start(argc: u64, argv: u64*) {
@@ -198,11 +369,35 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    images[0] = load_embedded_image(load_wallpaper_photo())
-    images[1] = load_embedded_image(load_cursor_photo())
-    images[2] = load_embedded_image(load_start_icon_terminal())
-    images[3] = load_embedded_image(load_start_icon_file())
-    images[4] = load_embedded_image(load_start_icon_app())
+    if argc > 1 && argv[1] != 0 {
+        runtime_path[0] = 0
+        let i: i64 = 0
+        while i < 95 && (argv[1] as u8*)[i] != 0 {
+            runtime_path[i] = (argv[1] as u8*)[i]
+            i = i + 1
+        }
+        runtime_path[i] = 0
+        if !png_decode_file(argv[1] as u8*, &runtime_image) {
+            sys_putln("pngviewer: png decode failed")
+            rt_exit(1)
+        }
+        runtime_mode = true
+    } else {
+        images[0] = load_png_or_embedded("/boot/wallpaper.png" as u8*, load_wallpaper_photo())
+        images[1] = load_png_or_embedded("/boot/cursor.png" as u8*, load_cursor_photo())
+        images[2] = load_png_or_embedded("/boot/terminal.png" as u8*, load_start_icon_terminal())
+        images[3] = load_png_or_embedded("/boot/files.png" as u8*, load_start_icon_file())
+        images[4] = load_png_or_embedded("/boot/app.png" as u8*, load_start_icon_app())
+    }
+
+    export_ready = false
+    export_path[0] = 0
+    status[0] = 0
+    if argc > 2 && argv[2] != 0 {
+        copy_cstr(export_path as u8*, argv[2] as u8*)
+        export_ready = true
+        copy_cstr(status as u8*, "export ready" as u8*)
+    }
 
     draw_frame()
     while true {
@@ -210,6 +405,26 @@ func _start(argc: u64, argv: u64*) {
         if input.key == KEY_CLOSE_REQ || input.key == KEY_ESC {
             wm_close()
             rt_exit(0)
+        } else if input.key == 115 || input.key == 83 {
+            save_current_image()
+            draw_frame()
+        } else if input.key == 99 || input.key == 67 {
+            copy_current_image()
+            draw_frame()
+        } else if runtime_mode {
+            if input.key == KEY_UP || input.key == 43 {
+                zoom = zoom + 1
+                clamp_selection()
+                draw_frame()
+            } else if input.key == KEY_DOWN || input.key == 45 {
+                zoom = zoom - 1
+                clamp_selection()
+                draw_frame()
+            } else if input.wheel != 0 {
+                zoom = zoom + input.wheel
+                clamp_selection()
+                draw_frame()
+            }
         } else if input.key == KEY_LEFT {
             selected = selected - 1
             clamp_selection()

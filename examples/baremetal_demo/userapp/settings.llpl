@@ -5,6 +5,8 @@ import "user_runtime"
 import "wm_protocol"
 import "wm_client"
 import "font"
+import "png_decoder"
+import "embedded_images"
 
 const BG: u32 = 0x121417
 const BG_ALT: u32 = 0x181411
@@ -19,6 +21,11 @@ const WARN: u32 = 0xF4C95D
 
 let dark_alt: bool = false
 let last_refresh: u64 = 0
+let crash_buf: u8[384]
+let crash_prev: u8[384]
+let crash_ready: bool = false
+let last_mouse_left: bool = false
+let settings_tab: i64 = 0
 
 func bg_color() -> u32 {
     if dark_alt {
@@ -79,6 +86,40 @@ func draw_bool(x: u64, y: u64, yes: bool, bg: u32) {
     }
 }
 
+func copy_cstr(dst: u8*, src: u8*, max: i64) {
+    let i: i64 = 0
+    while i < max - 1 && src[i] != 0 {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
+}
+
+func cstr_len(src: u8*, max: u64) -> u64 {
+    let n: u64 = 0
+    while n < max && src[n] != 0 {
+        n = n + 1
+    }
+    return n
+}
+
+func refresh_crash() {
+    crash_ready = sys_crash_info(crash_buf as u8*) != 0
+    sys_crash_history_info(1, crash_prev as u8*)
+}
+
+func draw_crash_summary(y: u64, buf: u8*, bg: u32) {
+    let kind: u8* = buf + 80
+    let task: u8* = buf + 208
+    let file: u8* = buf + 288
+    let line: u64* = (buf + 64) as u64*
+    fill_rect(8, y, 304, 16, bg)
+    draw_text(14, y + 1, kind, ACCENT, bg)
+    draw_text(110, y + 1, task, TEXT, bg)
+    draw_text(190, y + 1, file, MUTED, bg)
+    draw_num(264, y + 1, line[0], TEXT, bg)
+}
+
 func draw_section(x: u64, y: u64, w: u64, title: u8*) {
     fill_rect(x, y, w, 18, HEADER)
     draw_text(x + 6, y + 2, title, ACCENT, HEADER)
@@ -96,7 +137,138 @@ func draw_row_num(x: u64, y: u64, w: u64, label: u8*, value: u64) {
     draw_num(x + 86, y + 1, value, TEXT, ROW)
 }
 
+func draw_tab(x: u64, label: u8*, tab: i64) {
+    let bg: u32 = HEADER
+    let fg: u32 = MUTED
+    if settings_tab == tab {
+        bg = ROW
+        fg = ACCENT
+    }
+    fill_rect(x, 4, 58, 16, bg)
+    draw_text(x + 5, 5, label, fg, bg)
+}
+
+func hit_tab(mx: i64, my: i64) -> i64 {
+    if my < 4 || my >= 20 {
+        return -1
+    }
+    if mx >= 78 && mx < 136 { return 0 }
+    if mx >= 138 && mx < 196 { return 1 }
+    if mx >= 198 && mx < 256 { return 2 }
+    if mx >= 258 && mx < 316 { return 3 }
+    return -1
+}
+
+func draw_asset_row(x: u64, y: u64, w: u64, label: u8*, asset: EmbeddedFile) {
+    let decoded: DecodedPng
+    fill_rect(x, y, w, 16, ROW)
+    draw_text(x + 6, y + 1, label, MUTED, ROW)
+    if png_decode_bytes(asset.data, asset.len, &decoded) {
+        draw_text(x + 82, y + 1, "ok" as u8*, OK, ROW)
+        draw_num(x + 118, y + 1, decoded.width, TEXT, ROW)
+        draw_text(x + 142, y + 1, "x" as u8*, MUTED, ROW)
+        draw_num(x + 154, y + 1, decoded.height, TEXT, ROW)
+    } else {
+        draw_text(x + 82, y + 1, "fail" as u8*, WARN, ROW)
+        draw_text(x + 126, y + 1, png_decode_last_error(), TEXT, ROW)
+    }
+}
+
+func asset_path_at(idx: i64) -> u8* {
+    if idx == 0 {
+        return "/boot/terminal.png" as u8*
+    }
+    if idx == 1 {
+        return "/boot/files.png" as u8*
+    }
+    if idx == 2 {
+        return "/boot/app.png" as u8*
+    }
+    if idx == 3 {
+        return "/boot/editor.png" as u8*
+    }
+    if idx == 4 {
+        return "/boot/images.png" as u8*
+    }
+    if idx == 5 {
+        return "/boot/ping.png" as u8*
+    }
+    if idx == 6 {
+        return "/boot/tetris.png" as u8*
+    }
+    if idx == 7 {
+        return "/boot/settings.png" as u8*
+    }
+    return "/boot/crashviewer.png" as u8*
+}
+
+func asset_at(idx: i64) -> EmbeddedFile {
+    if idx == 0 {
+        return load_media_terminal_png()
+    }
+    if idx == 1 {
+        return load_media_files_png()
+    }
+    if idx == 2 {
+        return load_media_tasks_png()
+    }
+    if idx == 3 {
+        return load_media_editor_png()
+    }
+    if idx == 4 {
+        return load_media_images_png()
+    }
+    if idx == 5 {
+        return load_media_ping_png()
+    }
+    if idx == 6 {
+        return load_media_tetris_png()
+    }
+    if idx == 7 {
+        return load_media_settings_png()
+    }
+    return load_media_crashviewer_png()
+}
+
+func hit_asset(mx: i64, my: i64) -> i64 {
+    if settings_tab != 1 {
+        return -1
+    }
+    if my >= 54 && my < 70 {
+        if mx >= 8 && mx < 156 { return 0 }
+        if mx >= 164 && mx < 312 { return 1 }
+    }
+    if my >= 72 && my < 88 {
+        if mx >= 8 && mx < 156 { return 2 }
+        if mx >= 164 && mx < 312 { return 3 }
+    }
+    if my >= 90 && my < 106 {
+        if mx >= 8 && mx < 156 { return 4 }
+        if mx >= 164 && mx < 312 { return 5 }
+    }
+    if my >= 108 && my < 124 {
+        if mx >= 8 && mx < 156 { return 6 }
+        if mx >= 164 && mx < 312 { return 7 }
+    }
+    if my >= 126 && my < 142 {
+        if mx >= 8 && mx < 156 { return 8 }
+    }
+    return -1
+}
+
+func activate_asset(idx: i64) {
+    let decoded: DecodedPng
+    let asset: EmbeddedFile = asset_at(idx)
+    if png_decode_bytes(asset.data, asset.len, &decoded) {
+        sys_spawn("/bin/pngviewer.elf" as u8*, asset_path_at(idx))
+    } else {
+        let err: u8* = png_decode_last_error()
+        sys_clipboard_set(err, cstr_len(err, 48))
+    }
+}
+
 func render() {
+    refresh_crash()
     let sys: u64[10]
     let wm: u64[5]
     sys_system_info(sys as u64*)
@@ -106,31 +278,79 @@ func render() {
     fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, bg)
     fill_rect(0, 0, Wm.WIN_W as u64, 24, HEADER)
     draw_text(8, 4, "SETTINGS" as u8*, ACCENT, HEADER)
-    draw_text(224, 4, "desktop" as u8*, MUTED, HEADER)
+    draw_tab(78, "Sys" as u8*, 0)
+    draw_tab(138, "Assets" as u8*, 1)
+    draw_tab(198, "Clip" as u8*, 2)
+    draw_tab(258, "Crash" as u8*, 3)
 
-    draw_section(8, 32, 148, "Display" as u8*)
-    draw_row_num(8, 54, 148, "width" as u8*, sys[0])
-    draw_row_num(8, 72, 148, "height" as u8*, sys[1])
-    draw_row_num(8, 90, 148, "pitch" as u8*, sys[2])
-    fill_rect(8, 108, 148, 16, ROW)
-    draw_text(14, 109, "WC" as u8*, MUTED, ROW)
-    draw_bool(94, 109, sys[3] == 1, ROW)
+    if settings_tab == 0 {
+        draw_section(8, 32, 148, "Display" as u8*)
+        draw_row_num(8, 54, 148, "width" as u8*, sys[0])
+        draw_row_num(8, 72, 148, "height" as u8*, sys[1])
+        draw_row_num(8, 90, 148, "pitch" as u8*, sys[2])
+        fill_rect(8, 108, 148, 16, ROW)
+        draw_text(14, 109, "WC" as u8*, MUTED, ROW)
+        draw_bool(94, 109, sys[3] == 1, ROW)
 
-    draw_section(164, 32, 148, "Kernel" as u8*)
-    draw_row_num(164, 54, 148, "sched" as u8*, sys[4])
-    draw_row_num(164, 72, 148, "switch" as u8*, sys[5])
-    draw_row_num(164, 90, 148, "syscall" as u8*, sys[6])
-    draw_row_num(164, 108, 148, "ipc" as u8*, sys[7] + sys[8] + sys[9])
+        draw_section(164, 32, 148, "Kernel" as u8*)
+        draw_row_num(164, 54, 148, "sched" as u8*, sys[4])
+        draw_row_num(164, 72, 148, "switch" as u8*, sys[5])
+        draw_row_num(164, 90, 148, "syscall" as u8*, sys[6])
+        draw_row_num(164, 108, 148, "ipc" as u8*, sys[7] + sys[8] + sys[9])
 
-    draw_section(8, 134, 148, "Compositor" as u8*)
-    draw_row_num(8, 156, 148, "frames" as u8*, wm[0])
-    draw_row_num(8, 174, 148, "full" as u8*, wm[1])
+        draw_section(8, 134, 148, "Compositor" as u8*)
+        draw_row_num(8, 156, 148, "frames" as u8*, wm[0])
+        draw_row_num(8, 174, 148, "full" as u8*, wm[1])
 
-    draw_section(164, 134, 148, "Options" as u8*)
-    draw_row(164, 156, 148, "boot" as u8*, "gui" as u8*)
-    fill_rect(164, 174, 148, 16, ROW)
-    draw_text(170, 175, "color" as u8*, MUTED, ROW)
-    draw_bool(250, 175, dark_alt, ROW)
+        draw_section(164, 134, 148, "Options" as u8*)
+        draw_row(164, 156, 148, "boot" as u8*, "gui" as u8*)
+        fill_rect(164, 174, 148, 16, ROW)
+        draw_text(170, 175, "color" as u8*, MUTED, ROW)
+        draw_bool(250, 175, dark_alt, ROW)
+    } else if settings_tab == 1 {
+        draw_section(8, 32, 304, "Assets" as u8*)
+        draw_asset_row(8, 54, 148, "term" as u8*, load_media_terminal_png())
+        draw_asset_row(164, 54, 148, "files" as u8*, load_media_files_png())
+        draw_asset_row(8, 72, 148, "tasks" as u8*, load_media_tasks_png())
+        draw_asset_row(164, 72, 148, "edit" as u8*, load_media_editor_png())
+        draw_asset_row(8, 90, 148, "images" as u8*, load_media_images_png())
+        draw_asset_row(164, 90, 148, "ping" as u8*, load_media_ping_png())
+        draw_asset_row(8, 108, 148, "tetris" as u8*, load_media_tetris_png())
+        draw_asset_row(164, 108, 148, "settings" as u8*, load_media_settings_png())
+        draw_asset_row(8, 126, 148, "crash" as u8*, load_media_crashviewer_png())
+    } else if settings_tab == 2 {
+        let clip: u8[96]
+        let info: u64[3]
+        let n: u64 = sys_clipboard_get(clip as u8*, 95)
+        draw_section(8, 32, 304, "Clipboard" as u8*)
+        if n != RT_SYS_ERR && n > 0 {
+            clip[n] = 0
+            draw_row(8, 54, 304, "text" as u8*, clip as u8*)
+        } else {
+            draw_row(8, 54, 304, "text" as u8*, "empty" as u8*)
+        }
+        if sys_clipboard_image_info(info as u64*) != 0 {
+            draw_row_num(8, 72, 148, "width" as u8*, info[0])
+            draw_row_num(164, 72, 148, "height" as u8*, info[1])
+            draw_row_num(8, 90, 148, "bytes" as u8*, info[2])
+        } else {
+            draw_row(8, 72, 304, "image" as u8*, "empty" as u8*)
+        }
+    } else {
+        draw_section(8, 32, 304, "Crash" as u8*)
+        if crash_ready {
+            draw_crash_summary(54, crash_buf as u8*, ROW)
+            if crash_prev[0] != 0 {
+                draw_crash_summary(72, crash_prev as u8*, 0x182028)
+            } else {
+                fill_rect(8, 72, 304, 16, ROW)
+                draw_text(14, 73, "no prior crash" as u8*, MUTED, ROW)
+            }
+        } else {
+            fill_rect(8, 54, 304, 16, ROW)
+            draw_text(14, 55, "no crash recorded" as u8*, MUTED, ROW)
+        }
+    }
 
     wm_present()
 }
@@ -155,6 +375,19 @@ func _start(argc: u64, argv: u64*) {
             wm_close()
             rt_exit(0)
         }
+        if input.mouse_left && !last_mouse_left {
+            let tab_hit: i64 = hit_tab(input.mouse_x, input.mouse_y)
+            if tab_hit >= 0 {
+                settings_tab = tab_hit
+                render()
+            }
+            let asset_hit: i64 = hit_asset(input.mouse_x, input.mouse_y)
+            if asset_hit >= 0 {
+                activate_asset(asset_hit)
+                render()
+            }
+        }
+        last_mouse_left = input.mouse_left
         if input.win_w != last_win_w || input.win_h != last_win_h {
             last_win_w = input.win_w
             last_win_h = input.win_h
@@ -162,6 +395,12 @@ func _start(argc: u64, argv: u64*) {
         }
         if input.key == 32 || input.key == 10 {
             dark_alt = !dark_alt
+            render()
+        } else if input.key >= 49 && input.key <= 52 {
+            settings_tab = (input.key - 49) as i64
+            render()
+        } else if input.key == 99 || input.key == 67 {
+            sys_crash_clear()
             render()
         }
         last_refresh = last_refresh + 1

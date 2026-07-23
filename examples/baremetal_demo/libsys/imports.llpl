@@ -56,6 +56,13 @@ extern func sys_system_info(out_buf: u64*) -> u64
 extern func sys_cpu_info(out_buf: u64*) -> u64
 extern func sys_clipboard_set(buf: u8*, len: u64) -> u64
 extern func sys_clipboard_get(out_buf: u8*, max_len: u64) -> u64
+extern func sys_clipboard_image_info(out_buf: u64*) -> u64
+extern func sys_clipboard_get_image(out_buf: u8*, max_len: u64) -> u64
+extern func sys_screenshot() -> u64
+extern func sys_clipboard_set_image(src_buf: u8*, width: u64, height: u64) -> u64
+extern func sys_crash_info(out_buf: u8*) -> u64
+extern func sys_crash_clear() -> u64
+extern func sys_crash_history_info(index: u64, out_buf: u8*) -> u64
 
 const KEY_UP = 200
 const KEY_DOWN = 201
@@ -72,6 +79,7 @@ const KEY_F2 = 205
 // do with it - immediately wm_close()+rt_exit() if it has nothing to
 // lose, or prompt first if it has unsaved state (see editor.llpl).
 const KEY_CLOSE_REQ = 206
+const KEY_F10 = 207
 
 // Mirrors Keyboard.FOCUS_WM (kbd.llpl) - see sys_focus_state's own doc
 // comment (syscall.llpl) for why a ring-3 program would need this.

@@ -21,6 +21,10 @@ examples/kernel.iso
 examples/isodir/
 examples/baremetal_demo/disk.img
 
+# objects
+examples/baremetal_demo/build/
+
+
 # Editor files
 *.swp
 *~

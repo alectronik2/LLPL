@@ -8,6 +8,7 @@ import std.file;
 import std.format;
 import std.path;
 import std.process;
+import std.regex;
 import std.stdio;
 import std.string;
 import core.thread;
@@ -87,6 +88,49 @@ private string[] allLlplSources(string projectDir, string llplCompiler) {
     return result;
 }
 
+private string[] embeddedAssetInputs(string sourcePath) {
+    string[] result;
+    if (!exists(sourcePath)) return result;
+
+    auto re = regex(`embed\s*\(\s*"([^"]+)"\s*\)`);
+    string base = dirName(sourcePath);
+    foreach (m; matchAll(readText(sourcePath), re)) {
+        string rel = m.captures[1];
+        string path = buildNormalizedPath(base, rel);
+        if (!result.canFind(path)) result ~= path;
+    }
+    return result;
+}
+
+private string[] embeddedAssetInputsForSources(const string[] sourcePaths) {
+    string[] result;
+    foreach (sourcePath; sourcePaths) {
+        foreach (asset; embeddedAssetInputs(sourcePath)) {
+            if (!result.canFind(asset)) result ~= asset;
+        }
+    }
+    return result;
+}
+
+private string[] packageActionInputs(const PackageAction[] actions) {
+    string[] result;
+    foreach (action; actions) {
+        final switch (action.kind) {
+            case ActionKind.copy:
+                if (!result.canFind(action.copyFrom)) result ~= action.copyFrom;
+                break;
+            case ActionKind.requireFile:
+                if (!result.canFind(action.requireFilePath)) result ~= action.requireFilePath;
+                break;
+            case ActionKind.mkdir:
+            case ActionKind.write:
+            case ActionKind.run:
+                break;
+        }
+    }
+    return result;
+}
+
 private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config) {
     PlanStep[] plan;
 
@@ -95,6 +139,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 
     string generatedC = stripExtension(cfg.entry) ~ ".c";
     string[] llplDeps = allLlplSources(".", cfg.llplCompiler);
+    llplDeps ~= embeddedAssetInputsForSources(llplDeps);
 
     plan ~= PlanStep(StepKind.compileLlpl,
         format("Compiling %s", cfg.entry),
@@ -149,9 +194,11 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
     foreach (i, el; cfg.extraLinks) {
         int group = 100 + cast(int)i; // its own asm sources run together, independent of everything else in this group id
         foreach (src; el.llplSources) {
+            string[] srcLlplDeps = llplDeps.dup;
+            srcLlplDeps ~= embeddedAssetInputs(src.src);
             plan ~= PlanStep(StepKind.compileLlpl,
                 format("Compiling %s (%s)", src.src, el.name),
-                llplDeps,
+                srcLlplDeps,
                 [src.cOutput],
                 [cfg.llplCompiler, src.src, "-o", src.cOutput],
                 PackageAction.init, "", "", false, 0);
@@ -218,6 +265,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         string[] pkgInputs;
         if (cfg.hasLink) pkgInputs ~= cfg.link.output;
         foreach (el; cfg.extraLinks) pkgInputs ~= el.link.output;
+        pkgInputs ~= packageActionInputs(cfg.pkg.actions);
 
         plan ~= PlanStep(StepKind.packageGate, format("Packaging %s", cfg.pkg.output),
             pkgInputs, [cfg.pkg.output], [], PackageAction.init, "", "", false, 0);

@@ -57,6 +57,13 @@ const SYS_CPU_INFO = 48
 const SYS_CLIPBOARD_SET = 49
 const SYS_CLIPBOARD_GET = 50
 const SYS_TASK_KILL = 51
+const SYS_CLIPBOARD_IMAGE_INFO = 52
+const SYS_CLIPBOARD_GET_IMAGE = 53
+const SYS_SCREENSHOT = 54
+const SYS_CRASH_INFO = 55
+const SYS_CRASH_CLEAR = 56
+const SYS_CLIPBOARD_SET_IMAGE = 57
+const SYS_CRASH_HISTORY_INFO = 58
 
 const SYS_ERR = 0xFFFFFFFFFFFFFFFF
 const O_RDONLY = 0
@@ -326,6 +333,34 @@ func sys_clipboard_get(out_buf: u8*, max_len: u64) -> u64 {
     return syscall2(SYS_CLIPBOARD_GET, out_buf as u64, max_len)
 }
 
+func sys_clipboard_image_info(out_buf: u64*) -> u64 {
+    return syscall1(SYS_CLIPBOARD_IMAGE_INFO, out_buf as u64)
+}
+
+func sys_clipboard_get_image(out_buf: u8*, max_len: u64) -> u64 {
+    return syscall2(SYS_CLIPBOARD_GET_IMAGE, out_buf as u64, max_len)
+}
+
+func sys_screenshot() -> u64 {
+    return syscall0(SYS_SCREENSHOT)
+}
+
+func sys_clipboard_set_image(buf: u8*, width: u64, height: u64) -> u64 {
+    return syscall3(SYS_CLIPBOARD_SET_IMAGE, buf as u64, width, height)
+}
+
+func sys_crash_info(out_buf: u8*) -> u64 {
+    return syscall1(SYS_CRASH_INFO, out_buf as u64)
+}
+
+func sys_crash_clear() -> u64 {
+    return syscall0(SYS_CRASH_CLEAR)
+}
+
+func sys_crash_history_info(index: u64, out_buf: u8*) -> u64 {
+    return syscall2(SYS_CRASH_HISTORY_INFO, index, out_buf as u64)
+}
+
 func sys_task_kill(pid: u64) -> u64 {
     return syscall1(SYS_TASK_KILL, pid)
 }
@@ -580,9 +615,8 @@ func sys_free(ptr: u8*) -> u64 {
         return 0
     }
     let hdr: AllocHeader* = (ptr - sizeof(AllocHeader)) as AllocHeader*
-    if hdr.magic != ALLOC_MAGIC {
-        return SYS_ERR
-    }
+    return SYS_ERR unless hdr.magic ==  ALLOC_MAGIC
+
     hdr.magic = ALLOC_FREED
     if (hdr.flags & ALLOC_FLAG_LARGE) != 0 {
         if hdr.base == 0 || hdr.pages == 0 {

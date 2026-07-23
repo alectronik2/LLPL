@@ -328,11 +328,15 @@ extra_links:
         output: build/wm.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    c_sources:
+      - path: userapp/png_decode.c
+        output: build/png_decode.o
+        cflags: [-fPIC, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/wm.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/wm.o, build/libsys.so]
+      objects: [build/wm.o, build/png_decode.o, build/libsys.so]
   - name: winball1
     llpl_sources:
       - src: userapp/tests/winball1.llpl
@@ -424,11 +428,15 @@ extra_links:
         output: build/pngviewer.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    c_sources:
+      - path: userapp/png_decode.c
+        output: build/png_decode.o
+        cflags: [-fPIC, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/pngviewer.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/pngviewer.o, build/libsys.so]
+      objects: [build/pngviewer.o, build/png_decode.o, build/libsys.so]
   - name: settings
     llpl_sources:
       - src: userapp/settings.llpl
@@ -436,11 +444,27 @@ extra_links:
         output: build/settings.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    c_sources:
+      - path: userapp/png_decode.c
+        output: build/png_decode.o
+        cflags: [-fPIC, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/settings.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/settings.o, build/libsys.so]
+      objects: [build/settings.o, build/png_decode.o, build/libsys.so]
+  - name: crashviewer
+    llpl_sources:
+      - src: userapp/crashviewer.llpl
+        c_output: build/crashviewer.c
+        output: build/crashviewer.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    link:
+      output: build/crashviewer.elf
+      script: userapp/dyn_linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
+      objects: [build/crashviewer.o, build/libsys.so]
 
 # Includes two small files loaded as multiboot2 modules (grub.cfg's
 # `module2` directive) purely to give tmpfs.llpl something real to
@@ -480,6 +504,21 @@ package:
     - copy: {from: build/taskmgr.elf, to: isodir/boot/taskmgr.elf}
     - copy: {from: build/pngviewer.elf, to: isodir/boot/pngviewer.elf}
     - copy: {from: build/settings.elf, to: isodir/boot/settings.elf}
+    - copy: {from: build/crashviewer.elf, to: isodir/boot/crashviewer.elf}
+    - copy: {from: wallpaper.png, to: isodir/boot/wallpaper.png}
+    - copy: {from: cursor.png, to: isodir/boot/cursor.png}
+    - copy: {from: userapp/start_icon_terminal.png, to: isodir/boot/start_icon_terminal.png}
+    - copy: {from: userapp/start_icon_file.png, to: isodir/boot/start_icon_file.png}
+    - copy: {from: userapp/start_icon_app.png, to: isodir/boot/start_icon_app.png}
+    - copy: {from: media/terminal.png, to: isodir/boot/terminal.png}
+    - copy: {from: media/files.png, to: isodir/boot/files.png}
+    - copy: {from: media/tasks.png, to: isodir/boot/app.png}
+    - copy: {from: media/editor.png, to: isodir/boot/editor.png}
+    - copy: {from: media/ping.png, to: isodir/boot/ping.png}
+    - copy: {from: media/images.png, to: isodir/boot/images.png}
+    - copy: {from: media/tetris.png, to: isodir/boot/tetris.png}
+    - copy: {from: media/settings.png, to: isodir/boot/settings.png}
+    - copy: {from: media/crashviewer.png, to: isodir/boot/crashviewer.png}
     - write:
         to: isodir/boot/hello.txt
         content: "Hello from a GRUB module!"
@@ -497,6 +536,7 @@ package:
           taskmgr.elf|Tasks|app|1
           pngviewer.elf|Images|app|1
           settings.elf|Settings|app|1
+          crashviewer.elf|Crash|app|1
           ui_demo.elf|Widgets|app|0
     - write:
         to: isodir/boot/grub/grub.cfg
@@ -538,6 +578,21 @@ package:
               module2 /boot/taskmgr.elf taskmgr.elf
               module2 /boot/pngviewer.elf pngviewer.elf
               module2 /boot/settings.elf settings.elf
+              module2 /boot/crashviewer.elf crashviewer.elf
+              module2 /boot/wallpaper.png wallpaper.png
+              module2 /boot/cursor.png cursor.png
+              module2 /boot/start_icon_terminal.png start_icon_terminal.png
+              module2 /boot/start_icon_file.png start_icon_file.png
+              module2 /boot/start_icon_app.png start_icon_app.png
+              module2 /boot/terminal.png terminal.png
+              module2 /boot/files.png files.png
+              module2 /boot/app.png app.png
+              module2 /boot/editor.png editor.png
+              module2 /boot/ping.png ping.png
+              module2 /boot/images.png images.png
+              module2 /boot/tetris.png tetris.png
+              module2 /boot/settings.png settings.png
+              module2 /boot/crashviewer.png crashviewer.png
           }
     - run: "grub-mkrescue -o kernel.iso isodir"
       allow_failure: true

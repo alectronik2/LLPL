@@ -476,6 +476,72 @@ func str_len(s: u8*) -> u64 {
     return i
 }
 
+func str_eq(a: u8*, b: u8*) -> bool {
+    let i: u64 = 0
+    while a[i] != 0 && b[i] != 0 {
+        if a[i] != b[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return a[i] == b[i]
+}
+
+func str_has_suffix(s: u8*, suffix: u8*) -> bool {
+    let s_len: u64 = str_len(s)
+    let suf_len: u64 = str_len(suffix)
+    if suf_len > s_len {
+        return false
+    }
+
+    let i: u64 = 0
+    let start: u64 = s_len - suf_len
+    while i < suf_len {
+        if s[start + i] != suffix[i] {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+func copy_cstr(dst: u8*, src: u8*) {
+    let i: u64 = 0
+    while src[i] != 0 {
+        dst[i] = src[i]
+        i = i + 1
+    }
+    dst[i] = 0
+}
+
+func build_boot_module_vfs_path(name: u8*, dst: u8*) -> bool {
+    if str_eq(name, "apps.txt") {
+        copy_cstr(dst, "/etc/apps.txt")
+        return true
+    }
+
+    if str_eq(name, "libsys.so") {
+        copy_cstr(dst, "/lib/libsys.so")
+        return true
+    }
+
+    if str_has_suffix(name, ".elf") {
+        copy_cstr(dst, "/bin/")
+        let off: u64 = str_len(dst)
+        copy_cstr(dst + off, name)
+        return true
+    }
+
+    if str_has_suffix(name, ".png") {
+        copy_cstr(dst, "/pictures/")
+        let off: u64 = str_len(dst)
+        copy_cstr(dst + off, name)
+        return true
+    }
+
+    return false
+}
+
 func skip_spaces(s: u8*) -> u8* {
     while s[0] == 32 {
         s = s + 1
@@ -914,28 +980,17 @@ func install_userland_to_vfs() {
     VFS.mkdir("/lib")
     VFS.mkdir("/bin")
     VFS.mkdir("/etc")
-    install_boot_module_to_vfs("apps.txt", "/etc/apps.txt")
-    install_boot_module_to_vfs("libsys.so", "/lib/libsys.so")
-    install_boot_module_to_vfs("dyn_userapp.elf", "/bin/dyn_userapp.elf")
-    install_boot_module_to_vfs("memtest.elf", "/bin/memtest.elf")
-    install_boot_module_to_vfs("cat.elf", "/bin/cat.elf")
-    install_boot_module_to_vfs("spawnwait.elf", "/bin/spawnwait.elf")
-    install_boot_module_to_vfs("execchain.elf", "/bin/execchain.elf")
-    install_boot_module_to_vfs("echoserver.elf", "/bin/echoserver.elf")
-    install_boot_module_to_vfs("ipcdemo.elf", "/bin/ipcdemo.elf")
-    install_boot_module_to_vfs("echod.elf", "/bin/echod.elf")
-    install_boot_module_to_vfs("echoclient.elf", "/bin/echoclient.elf")
-    install_boot_module_to_vfs("shmserver.elf", "/bin/shmserver.elf")
-    install_boot_module_to_vfs("shmclient.elf", "/bin/shmclient.elf")
-    install_boot_module_to_vfs("tetris.elf", "/bin/tetris.elf")
-    install_boot_module_to_vfs("winball1.elf", "/bin/winball1.elf")
-    install_boot_module_to_vfs("winball2.elf", "/bin/winball2.elf")
-    install_boot_module_to_vfs("filebrowser.elf", "/bin/filebrowser.elf")
-    install_boot_module_to_vfs("editor.elf", "/bin/editor.elf")
-    install_boot_module_to_vfs("terminal.elf", "/bin/terminal.elf")
-    install_boot_module_to_vfs("ui_demo.elf", "/bin/ui_demo.elf")
-    install_boot_module_to_vfs("taskmgr.elf", "/bin/taskmgr.elf")
-    install_boot_module_to_vfs("pngviewer.elf", "/bin/pngviewer.elf")
+    VFS.mkdir("/pictures")
+    let i: i64 = 0
+    let module_name: u8[32]
+    let dst_path: u8[96]
+    while i < TmpFS.count() {
+        TmpFS.name_at(i, module_name as u8*)
+        if build_boot_module_vfs_path(module_name as u8*, dst_path as u8*) {
+            install_boot_module_to_vfs(module_name as u8*, dst_path as u8*)
+        }
+        i = i + 1
+    }
 }
 
 // Runs as its own scheduled kernel task (spawned from kernel_main, after

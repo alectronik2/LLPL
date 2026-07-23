@@ -1,8 +1,10 @@
-// Simplified PNG decoder for embedded images
-// Supports basic PNG format with simple compression
-// For baremetal use, we'll use pre-decompressed embedded data
+// PNG helpers shared by the runtime apps.
+// This module exposes the runtime PNG decoder so apps can load image
+// assets directly from files at startup instead of depending on baked
+// RGBA blobs.
 
 import "../libsys/imports"
+import "embedded_images"
 
 // PNG chunk types
 const PNG_IHDR: u32 = 0x49484452
@@ -21,6 +23,17 @@ struct PngImage {
     let bit_depth: u8
     let data: u32*  // RGBA pixel data
 }
+
+struct DecodedPng {
+    let width: u64
+    let height: u64
+    let data: u8*
+}
+
+extern func png_decode_bytes(data: u8*, len: u64, out: DecodedPng*) -> bool
+extern func png_decode_file(path: u8*, out: DecodedPng*) -> bool
+extern func png_encode_file(path: u8*, width: u64, height: u64, pitch: u64, rgba: u8*) -> bool
+extern func png_decode_last_error() -> u8*
 
 // Simple embedded image format for baremetal
 // Header: width (4 bytes), height (4 bytes), then RGBA data
@@ -77,4 +90,28 @@ func get_pixel_alpha(img: EmbeddedImage, x: u32, y: u32) -> u32 {
     }
     let offset: u32 = (y * img.width + x) * 4
     return img.data[offset + 3] as u32
+}
+
+func png_image_to_embedded(img: DecodedPng) -> EmbeddedImage {
+    let out: EmbeddedImage
+    out.width = img.width as u32
+    out.height = img.height as u32
+    out.data = img.data
+    return out
+}
+
+func load_png_or_embedded(path: u8*, fallback: u8*) -> EmbeddedImage {
+    let decoded: DecodedPng
+    if png_decode_file(path, &decoded) {
+        return png_image_to_embedded(decoded)
+    }
+    return load_embedded_image(fallback)
+}
+
+func load_png_from_embedded(asset: EmbeddedFile, fallback: u8*) -> EmbeddedImage {
+    let decoded: DecodedPng
+    if png_decode_bytes(asset.data, asset.len, &decoded) {
+        return png_image_to_embedded(decoded)
+    }
+    return load_embedded_image(fallback)
 }
