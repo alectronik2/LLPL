@@ -330,13 +330,13 @@ extra_links:
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     c_sources:
       - path: userapp/png_decode.c
-        output: build/png_decode.o
+        output: build/wm_png_decode.o
         cflags: [-fPIC, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/wm.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/wm.o, build/png_decode.o, build/libsys.so]
+      objects: [build/wm.o, build/wm_png_decode.o, build/libsys.so]
   - name: winball1
     llpl_sources:
       - src: userapp/tests/winball1.llpl
@@ -370,14 +370,14 @@ extra_links:
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     c_sources:
       - path: userapp/png_decode.c
-        output: build/png_decode.o
+        output: build/filebrowser_png_decode.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/filebrowser.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/filebrowser.o, build/png_decode.o, build/libsys.so]
+      objects: [build/filebrowser.o, build/filebrowser_png_decode.o, build/libsys.so]
   - name: editor
     llpl_sources:
       - src: userapp/editor.llpl
@@ -435,13 +435,13 @@ extra_links:
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     c_sources:
       - path: userapp/png_decode.c
-        output: build/png_decode.o
+        output: build/pngviewer_png_decode.o
         cflags: [-fPIC, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/pngviewer.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/pngviewer.o, build/png_decode.o, build/libsys.so]
+      objects: [build/pngviewer.o, build/pngviewer_png_decode.o, build/libsys.so]
   - name: settings
     llpl_sources:
       - src: userapp/settings.llpl
@@ -451,13 +451,13 @@ extra_links:
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     c_sources:
       - path: userapp/png_decode.c
-        output: build/png_decode.o
+        output: build/settings_png_decode.o
         cflags: [-fPIC, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/settings.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/settings.o, build/png_decode.o, build/libsys.so]
+      objects: [build/settings.o, build/settings_png_decode.o, build/libsys.so]
   - name: crashviewer
     llpl_sources:
       - src: userapp/crashviewer.llpl

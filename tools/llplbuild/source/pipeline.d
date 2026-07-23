@@ -14,6 +14,7 @@ import std.string;
 import core.thread;
 import core.sync.condition;
 import core.sync.mutex;
+import core.time : MonoTime, Duration;
 import buildconfig;
 import terminal;
 
@@ -63,6 +64,43 @@ private struct PlanStep {
     string persistentCreateCmd;
     bool allowFailure;
     int parallelGroup;
+}
+
+// Cargo-style present-continuous verb for a step's progress line, derived
+// from its kind (and, for `action`, the specific ActionKind) rather than
+// stored on the step itself - keeps every buildPlan() call site as a
+// plain target-name description with no verb baked in (see cargoLine).
+private string stepVerb(const PlanStep step) {
+    final switch (step.kind) {
+        case StepKind.compileLlpl:
+        case StepKind.compileC:
+            return "Compiling";
+        case StepKind.assemble:
+            return "Assembling";
+        case StepKind.link:
+            return "Linking";
+        case StepKind.packageGate:
+            return "Packaging";
+        case StepKind.persistentCreate:
+            return "Creating";
+        case StepKind.action:
+            final switch (step.pkgAction.kind) {
+                case ActionKind.mkdir: return "Creating";
+                case ActionKind.copy: return "Copying";
+                case ActionKind.write: return "Writing";
+                case ActionKind.run: return "Running";
+                case ActionKind.requireFile: return "Checking";
+            }
+    }
+}
+
+// "0.42s" / "1m 03.5s" - Cargo's own general shape, not pixel-identical.
+string formatElapsed(Duration d) {
+    double secs = d.total!"msecs" / 1000.0;
+    if (secs < 60) return format("%.2fs", secs);
+    int mins = cast(int)(secs / 60);
+    double rem = secs - mins * 60;
+    return format("%dm %04.1fs", mins, rem);
 }
 
 private string objPathFor(string srcPath, string defaultOutput = "") {
@@ -142,7 +180,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
     llplDeps ~= embeddedAssetInputsForSources(llplDeps);
 
     plan ~= PlanStep(StepKind.compileLlpl,
-        format("Compiling %s", cfg.entry),
+        cfg.entry,
         llplDeps,
         [generatedC],
         [cfg.llplCompiler, cfg.entry, "-o", generatedC],
@@ -150,7 +188,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 
     foreach (a; cfg.asmSources) {
         plan ~= PlanStep(StepKind.assemble,
-            format("Assembling %s", a.src),
+            a.src,
             [a.src],
             [a.output],
             [cfg.nasm, "-f", "elf64", a.src, "-o", a.output],
@@ -169,7 +207,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         // invalidate the C compilation stage.
         if (src.path == generatedC) inputs ~= llplDeps;
         plan ~= PlanStep(StepKind.compileC,
-            format("Compiling %s", src.path),
+            src.path,
             inputs,
             [obj],
             cmd,
@@ -184,7 +222,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         string[] inputs = cfg.link.objects.dup;
         if (cfg.link.script.length > 0) inputs ~= cfg.link.script;
         plan ~= PlanStep(StepKind.link,
-            format("Linking %s", cfg.link.output),
+            cfg.link.output,
             inputs,
             [cfg.link.output],
             cmd,
@@ -197,7 +235,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
             string[] srcLlplDeps = llplDeps.dup;
             srcLlplDeps ~= embeddedAssetInputs(src.src);
             plan ~= PlanStep(StepKind.compileLlpl,
-                format("Compiling %s (%s)", src.src, el.name),
+                format("%s (%s)", src.src, el.name),
                 srcLlplDeps,
                 [src.cOutput],
                 [cfg.llplCompiler, src.src, "-o", src.cOutput],
@@ -207,7 +245,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
             foreach (dir; src.includeDirs) cmd ~= ["-I", dir];
             cmd ~= ["-c", src.cOutput, "-o", src.objOutput];
             plan ~= PlanStep(StepKind.compileC,
-                format("Compiling %s (%s)", src.cOutput, el.name),
+                format("%s (%s)", src.cOutput, el.name),
                 [src.cOutput, configStampPath] ~ llplDeps,
                 [src.objOutput],
                 cmd,
@@ -215,7 +253,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         }
         foreach (a; el.asmSources) {
             plan ~= PlanStep(StepKind.assemble,
-                format("Assembling %s (%s)", a.src, el.name),
+                format("%s (%s)", a.src, el.name),
                 [a.src],
                 [a.output],
                 [cfg.nasm, "-f", "elf64", a.src, "-o", a.output],
@@ -227,7 +265,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
             foreach (dir; src.includeDirs) ccmd ~= ["-I", dir];
             ccmd ~= ["-c", src.path, "-o", obj];
             plan ~= PlanStep(StepKind.compileC,
-                format("Compiling %s (%s)", src.path, el.name),
+                format("%s (%s)", src.path, el.name),
                 [src.path, configStampPath],
                 [obj],
                 ccmd,
@@ -240,7 +278,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         string[] inputs = el.link.objects.dup;
         if (el.link.script.length > 0) inputs ~= el.link.script;
         plan ~= PlanStep(StepKind.link,
-            format("Linking %s (%s)", el.link.output, el.name),
+            format("%s (%s)", el.link.output, el.name),
             inputs,
             [el.link.output],
             cmd,
@@ -267,7 +305,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
         foreach (el; cfg.extraLinks) pkgInputs ~= el.link.output;
         pkgInputs ~= packageActionInputs(cfg.pkg.actions);
 
-        plan ~= PlanStep(StepKind.packageGate, format("Packaging %s", cfg.pkg.output),
+        plan ~= PlanStep(StepKind.packageGate, cfg.pkg.output,
             pkgInputs, [cfg.pkg.output], [], PackageAction.init, "", "", false, 0);
 
         foreach (action; cfg.pkg.actions) {
@@ -288,7 +326,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 
     foreach (pf; cfg.persistentFiles) {
         plan ~= PlanStep(StepKind.persistentCreate,
-            format("Creating %s", pf.path),
+            pf.path,
             [], [pf.path], [], PackageAction.init, pf.path, pf.create, false, 0);
     }
 
@@ -371,9 +409,6 @@ private void executeStep(PlanStep step) {
 }
 
 private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
-    StepCounter counter;
-    counter.total = cast(int)plan.length;
-
     void runBuildChunk(size_t start, size_t end) {
         if (start >= end) return;
 
@@ -390,7 +425,20 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
 
         foreach (idx, s; steps) {
             foreach (o; s.outputs) {
-                if (o.length > 0) producerByOutput[o] = idx;
+                if (o.length == 0) continue;
+                // Two steps declaring the same output would make the
+                // dependency graph below silently track only one of them,
+                // letting a consumer's link/compile step race ahead of
+                // whichever producer wasn't picked - caught a real bug
+                // this way (four userapp targets all compiling their own
+                // copy of png_decode.c to a shared build/png_decode.o).
+                if (auto existing = o in producerByOutput) {
+                    throw new BuildError(format(
+                        "build.yaml error: output '%s' is produced by both '%s' and '%s' - " ~
+                        "give each its own output path",
+                        o, steps[*existing].description, s.description));
+                }
+                producerByOutput[o] = idx;
             }
             willRun[idx] = !isUpToDate(s.outputs, s.inputs, configPath);
         }
@@ -414,11 +462,10 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
 
         foreach (idx, s; steps) {
             if (!willRun[idx]) {
-                counter.skipped(s.description);
                 done[idx] = true;
                 doneCount++;
             } else {
-                counter.step(s.description);
+                cargoLine(stepVerb(s), s.description);
             }
         }
 
@@ -536,24 +583,21 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
         // reflect reality instead of pre-build state (see buildPlan).
         if (plan[i].kind == StepKind.packageGate) {
             if (isUpToDate(plan[i].outputs, plan[i].inputs, configPath)) {
-                counter.skipped(plan[i].description);
                 i++;
                 // The actions covered by this gate carry no incremental
                 // inputs/outputs of their own (see buildPlan) - without
                 // this, they'd run unconditionally despite the package
                 // itself being up to date.
-                while (i < plan.length && plan[i].kind == StepKind.action) {
-                    counter.skipped(plan[i].description);
-                    i++;
-                }
+                while (i < plan.length && plan[i].kind == StepKind.action) i++;
             } else {
+                cargoLine(stepVerb(plan[i]), plan[i].description);
                 i++;
             }
             continue;
         }
 
         if (plan[i].kind == StepKind.action) {
-            counter.step(plan[i].description);
+            cargoLine(stepVerb(plan[i]), plan[i].description);
             executeStep(plan[i]);
             i++;
             continue;
@@ -578,22 +622,47 @@ private void touchConfigStamp(string resolvedName) {
     }
 }
 
+private const(Configuration)* resolveConfiguration(const BuildConfig cfg, string configName) {
+    if (configName.length > 0) {
+        if (auto c = configName in cfg.configurations) return c;
+        throw new BuildError(format("unknown configuration '%s' (see 'llplbuild configs')", configName));
+    }
+    if (cfg.defaultConfig.length > 0) return cfg.defaultConfig in cfg.configurations;
+    return null;
+}
+
 void build(BuildConfig cfg, string configName, RunOptions opts) {
+    auto start = MonoTime.currTime;
     chdir(cfg.configDir);
 
-    const(Configuration)* config = null;
-    if (configName.length > 0) {
-        if (auto c = configName in cfg.configurations) config = c;
-        else throw new BuildError(format("unknown configuration '%s' (see 'llplbuild configs')", configName));
-    } else if (cfg.defaultConfig.length > 0) {
-        config = cfg.defaultConfig in cfg.configurations;
-    }
-
+    auto config = resolveConfiguration(cfg, configName);
     touchConfigStamp(config !is null ? config.name : "");
 
     auto plan = buildPlan(cfg, config);
     runPlan(plan, cfg.configPath, opts);
-    logOk(format("Build complete (%s)", config !is null ? config.name : "no configuration"));
+
+    cargoLine("Finished", format("%s target(s) in %s",
+        config !is null ? config.name : "default", formatElapsed(MonoTime.currTime - start)));
+}
+
+// Compiles everything (LLPL -> C, C -> object, assembly -> object) without
+// linking or packaging - a fast "does this still build" pass, mirroring
+// `cargo check` vs `cargo build`. Reuses buildPlan()'s own incremental/
+// dependency logic verbatim, just narrowed to the compile-only steps.
+void check(BuildConfig cfg, string configName, RunOptions opts) {
+    auto start = MonoTime.currTime;
+    chdir(cfg.configDir);
+
+    auto config = resolveConfiguration(cfg, configName);
+    touchConfigStamp(config !is null ? config.name : "");
+
+    auto plan = buildPlan(cfg, config)
+        .filter!(s => s.kind == StepKind.compileLlpl || s.kind == StepKind.assemble ||
+            s.kind == StepKind.compileC)
+        .array;
+    runPlan(plan, cfg.configPath, opts);
+
+    cargoLine("Finished", format("checking in %s", formatElapsed(MonoTime.currTime - start)));
 }
 
 void run(BuildConfig cfg, string configName, RunOptions opts) {
@@ -602,7 +671,7 @@ void run(BuildConfig cfg, string configName, RunOptions opts) {
         throw new BuildError("this build.yaml has no 'run:' section");
     }
     string[] cmd = [cfg.qemu] ~ cfg.runArgs;
-    logInfo(format("Running: %s", cmd.join(" ")));
+    cargoLine("Running", cmd.join(" "));
     auto pid = spawnProcess(cmd);
     wait(pid);
 }
@@ -645,16 +714,16 @@ void clean(BuildConfig cfg) {
     foreach (f; files.sort().uniq()) {
         if (exists(f) && isFile(f)) {
             remove(f);
-            logInfo(format("removed %s", f));
+            cargoLine("Removing", f);
         }
     }
     foreach (d; dirs.sort().uniq()) {
         if (exists(d) && isDir(d)) {
             rmdirRecurse(d);
-            logInfo(format("removed %s/", d));
+            cargoLine("Removing", d ~ "/");
         }
     }
-    logOk("Clean complete");
+    cargoLine("Finished", "cleaning");
 }
 
 void listConfigs(BuildConfig cfg) {

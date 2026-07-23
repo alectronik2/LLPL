@@ -151,7 +151,7 @@ func refresh_crash() {
     sys_crash_history_info(1, crash_prev as u8*)
 }
 
-func draw_crash_summary(y: u64, buf: char*, bg: u32) {
+func draw_crash_summary(y: u64, buf: u8*, bg: u32) {
     let kind: char* = (buf + 80) as char*
     let task: char* = (buf + 208) as char*
     let file: char* = (buf + 288) as char*
@@ -206,7 +206,7 @@ func draw_asset_row(x: u64, y: u64, w: u64, label: char*, asset: EmbeddedFile) {
     let decoded: DecodedPng
     fill_rect(x, y, w, 16, ROW)
     draw_text(x + 6, y + 1, label, MUTED, ROW)
-    if png_decode_bytes(asset.data, asset.len, &decoded) {
+    if png_decode_bytes(asset.data as u8*, asset.len, &decoded) {
         draw_text(x + 82, y + 1, "ok" as char*, OK, ROW)
         draw_num(x + 118, y + 1, decoded.width, TEXT, ROW)
         draw_text(x + 142, y + 1, "x" as char*, MUTED, ROW)
@@ -303,7 +303,7 @@ func hit_asset(mx: i64, my: i64) -> i64 {
 func activate_asset(idx: i64) {
     let decoded: DecodedPng
     let asset: EmbeddedFile = asset_at(idx)
-    if png_decode_bytes(asset.data, asset.len, &decoded) {
+    if png_decode_bytes(asset.data as u8*, asset.len, &decoded) {
         sys_free(decoded.data)
         sys_spawn("/boot/pngviewer.elf" as char*, asset_path_at(idx))
     } else {
