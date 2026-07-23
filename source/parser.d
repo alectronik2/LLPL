@@ -3,7 +3,8 @@ module parser;
 import std.stdio;
 import std.format;
 import std.conv;
-import std.string : strip, endsWith;
+import std.string : strip, endsWith, split, indexOf;
+import std.array : join;
 import lexer;
 import ast;
 import errors;
@@ -290,12 +291,9 @@ class Parser {
         return attrs;
     }
 
-    // `#link "NAME"` / `#flags "..."` - see ast.d's LinkDecl/FlagsDecl for
-    // what these actually do. Both are standalone directives (not attached
-    // to any other declaration), so this is checked for and parsed before
-    // parseAttributes()/the rest of declaration() ever runs, the same way
-    // import/using are. Both share the same `# IDENT STRING` shape, so one
-    // function parses either, dispatching on the identifier.
+    // `#link "NAME"` / `#flags "..."` / `#assert_* ...` - standalone
+    // directives, not attached to any declaration, so this is checked before
+    // parseAttributes()/the rest of declaration() ever runs.
     private ASTNode hashDirective() {
         int startLine = current.line;
         int startColumn = current.column;
@@ -307,6 +305,27 @@ class Parser {
         } else if (nameTok.value == "flags") {
             Token flagsTok = expect(TokenType.String, "Expected a string of compiler flags after '#flags'");
             return new FlagsDecl(flagsTok.value, startLine, startColumn);
+        } else if (nameTok.value == "assert_size") {
+            Type target = parseType();
+            Token expectedTok = expect(TokenType.Integer, "Expected an integer byte size after '#assert_size <Type>'");
+            return new AbiAssertDecl(AbiAssertKind.Size, target, parseIntegerValue(expectedTok.value),
+                "", startLine, startColumn);
+        } else if (nameTok.value == "assert_align") {
+            Type target = parseType();
+            Token expectedTok = expect(TokenType.Integer, "Expected an integer alignment after '#assert_align <Type>'");
+            return new AbiAssertDecl(AbiAssertKind.Align, target, parseIntegerValue(expectedTok.value),
+                "", startLine, startColumn);
+        } else if (nameTok.value == "assert_offset") {
+            Type target = parseType();
+            if (target.name.indexOf("_") < 0) {
+                error("Expected '#assert_offset Type.field <bytes>'");
+            }
+            auto pieces = target.name.split("_");
+            string fieldName = pieces[$ - 1];
+            target.name = pieces[0 .. $ - 1].join("_");
+            Token expectedTok = expect(TokenType.Integer, "Expected an integer byte offset after '#assert_offset <Type.field>'");
+            return new AbiAssertDecl(AbiAssertKind.Offset, target, parseIntegerValue(expectedTok.value),
+                fieldName, startLine, startColumn);
         }
         error(format("Unknown compiler directive '#%s'", nameTok.value));
         return null;

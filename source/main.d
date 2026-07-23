@@ -5,6 +5,9 @@ import std.file;
 import std.path;
 import std.array;
 import std.algorithm;
+import std.conv;
+import std.format;
+import std.string : splitLines, startsWith, indexOf, lastIndexOf, replace, strip;
 import std.getopt;
 import std.process : execute, environment;
 import core.stdc.stdlib : exit;
@@ -25,6 +28,9 @@ void main(string[] args) {
     string lspSymbolsFile;
     bool safeMode = false;
     bool enableDCE = true;
+    string targetProfile = "hosted";
+    string provenanceFile;
+    string debugBundleDir;
 
     auto helpInfo = getopt(
         args,
@@ -39,9 +45,15 @@ void main(string[] args) {
         "v|verbose", "Verbose output", &verbose,
         "safe", "Enable runtime safety checks (currently: bounds-check fixed-size array indexing)",
             &safeMode,
+        "target", "Target profile: hosted, freestanding, or kernel (default: hosted)",
+            &targetProfile,
         "dce", "Enable dead-code elimination (default: true)", &enableDCE,
         "lsp-symbols", "Analyze <file> and dump diagnostics/symbols/usages as JSON (for editor tooling)",
-            &lspSymbolsFile
+            &lspSymbolsFile,
+        "emit-provenance", "Write generated-C to LLPL source provenance JSON to <file>",
+            &provenanceFile,
+        "debug-bundle", "Write generated C, provenance, symbols/usages, and manifest artifacts to <dir>",
+            &debugBundleDir
     );
 
     if (lspSymbolsFile.length > 0) {
@@ -86,11 +98,21 @@ void main(string[] args) {
         }
 
         // Code generation for all modules
-        auto codegen = new CodeGenerator(safeMode, enableDCE);
+        auto codegen = new CodeGenerator(safeMode, enableDCE, targetProfile);
         string cCode = codegen.generateMultiple(programs);
 
         if (verbose) {
             writefln("Code generation complete");
+        }
+
+        if (provenanceFile.length > 0) {
+            std.file.write(provenanceFile, buildProvenanceJson(cCode));
+            if (verbose) writefln("Wrote provenance map to %s", provenanceFile);
+        }
+
+        if (debugBundleDir.length > 0) {
+            writeDebugBundle(debugBundleDir, inputFile, outputFile, targetProfile, cCode, codegen);
+            if (verbose) writefln("Wrote debug bundle to %s", debugBundleDir);
         }
 
         if (binaryMode) {
@@ -121,6 +143,116 @@ void main(string[] args) {
         stderr.writefln("error: %s", e.msg);
         exit(1);
     }
+}
+
+private string jsonEscape(string s) {
+    string out_;
+    foreach (ch; s) {
+        switch (ch) {
+            case '\\': out_ ~= "\\\\"; break;
+            case '"': out_ ~= "\\\""; break;
+            case '\n': out_ ~= "\\n"; break;
+            case '\r': out_ ~= "\\r"; break;
+            case '\t': out_ ~= "\\t"; break;
+            default: out_ ~= ch; break;
+        }
+    }
+    return out_;
+}
+
+private ulong fnv1a64(const(ubyte)[] bytes) {
+    ulong hash = 14695981039346656037UL;
+    foreach (b; bytes) {
+        hash ^= b;
+        hash *= 1099511628211UL;
+    }
+    return hash;
+}
+
+private string buildProvenanceJson(string cCode) {
+    string json = "[\n";
+    bool first = true;
+    string currentFile;
+    int currentSourceLine = 0;
+    int generatedLine = 0;
+
+    foreach (line; cCode.splitLines()) {
+        generatedLine++;
+        if (line.startsWith("#line ")) {
+            ptrdiff_t firstQuote = line.indexOf('"');
+            ptrdiff_t lastQuote = line.lastIndexOf('"');
+            if (firstQuote > 6 && lastQuote > firstQuote) {
+                try {
+                    currentSourceLine = to!int(line[6 .. firstQuote].strip());
+                    currentFile = line[firstQuote + 1 .. lastQuote].replace("\\\"", "\"").replace("\\\\", "\\");
+                } catch (Exception) {
+                    currentFile = "";
+                    currentSourceLine = 0;
+                }
+            }
+            continue;
+        }
+        if (currentFile.length == 0 || currentSourceLine <= 0) continue;
+        if (!first) json ~= ",\n";
+        first = false;
+        json ~= format("  { \"generated_line\": %d, \"source_file\": \"%s\", \"source_line\": %d }",
+            generatedLine, jsonEscape(currentFile), currentSourceLine);
+        currentSourceLine++;
+    }
+    json ~= "\n]\n";
+    return json;
+}
+
+private string buildSymbolsJson(CodeGenerator gen) {
+    string json = "{\n  \"symbols\": [\n";
+    bool first = true;
+    foreach (sym; gen.symbols()) {
+        if (!first) json ~= ",\n";
+        first = false;
+        json ~= format("    { \"name\": \"%s\", \"kind\": \"%s\", \"file\": \"%s\", " ~
+            "\"line\": %d, \"column\": %d, \"signature\": \"%s\" }",
+            jsonEscape(sym.name), jsonEscape(sym.kind), jsonEscape(sym.file),
+            sym.line, sym.column, jsonEscape(sym.signature));
+    }
+    json ~= "\n  ],\n  \"usages\": [\n";
+    first = true;
+    foreach (u; gen.usages()) {
+        if (!first) json ~= ",\n";
+        first = false;
+        json ~= format("    { \"name\": \"%s\", \"file\": \"%s\", \"line\": %d, \"column\": %d }",
+            jsonEscape(u.name), jsonEscape(u.file), u.line, u.column);
+    }
+    json ~= "\n  ]\n}\n";
+    return json;
+}
+
+private void writeDebugBundle(string dir, string inputFile, string outputFile, string targetProfile,
+        string cCode, CodeGenerator gen) {
+    mkdirRecurse(dir);
+    string generatedCPath = buildNormalizedPath(dir, "generated.c");
+    string provenancePath = buildNormalizedPath(dir, "provenance.json");
+    string symbolsPath = buildNormalizedPath(dir, "symbols.json");
+    string manifestPath = buildNormalizedPath(dir, "manifest.json");
+
+    std.file.write(generatedCPath, cCode);
+    std.file.write(provenancePath, buildProvenanceJson(cCode));
+    std.file.write(symbolsPath, buildSymbolsJson(gen));
+
+    ulong sourceHash = exists(inputFile) ? fnv1a64(cast(const(ubyte)[])read(inputFile)) : 0;
+    string manifest = format(
+        "{\n" ~
+        "  \"input\": \"%s\",\n" ~
+        "  \"output\": \"%s\",\n" ~
+        "  \"target\": \"%s\",\n" ~
+        "  \"source_hash_fnv1a64\": \"%016x\",\n" ~
+        "  \"generated_c\": \"%s\",\n" ~
+        "  \"provenance\": \"%s\",\n" ~
+        "  \"symbols\": \"%s\"\n" ~
+        "}\n",
+        jsonEscape(inputFile), jsonEscape(outputFile), jsonEscape(targetProfile),
+        sourceHash, jsonEscape(generatedCPath), jsonEscape(provenancePath),
+        jsonEscape(symbolsPath));
+    std.file.write(manifestPath, manifest);
 }
 
 // Compiles generated C `cCode` straight down to a native binary at

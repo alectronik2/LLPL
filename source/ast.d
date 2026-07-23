@@ -17,6 +17,7 @@ enum NodeType {
     UnionDecl,
     LinkDecl,
     FlagsDecl,
+    AbiAssertDecl,
     EnumDecl,
     GrammarDecl,
     VarDecl,
@@ -229,6 +230,32 @@ class FlagsDecl : ASTNode {
     this(string flags, int line = 0, int column = 0) {
         super(NodeType.FlagsDecl, line, column);
         this.flags = flags;
+    }
+}
+
+enum AbiAssertKind {
+    Size,
+    Align,
+    Offset
+}
+
+// Compile-time ABI/layout checks, emitted as C11 `_Static_assert`s:
+//   #assert_size Type 16
+//   #assert_align Type 8
+//   #assert_offset Type.field 4
+class AbiAssertDecl : ASTNode {
+    AbiAssertKind kind;
+    Type targetType;
+    string fieldName;
+    long expected;
+
+    this(AbiAssertKind kind, Type targetType, long expected, string fieldName = "",
+         int line = 0, int column = 0) {
+        super(NodeType.AbiAssertDecl, line, column);
+        this.kind = kind;
+        this.targetType = targetType;
+        this.fieldName = fieldName;
+        this.expected = expected;
     }
 }
 

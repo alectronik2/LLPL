@@ -302,12 +302,67 @@ class CodeGenerator {
     private string[] deferredFunctionBodies;
 
     private bool safeMode;
+    private string targetProfile;
+    private bool currentFunctionIsInterrupt;
+    private bool suppressSourceLineDirectives;
 
-    this(bool safeMode = false, bool enableDCE = true) {
+    this(bool safeMode = false, bool enableDCE = true, string targetProfile = "hosted") {
         indentLevel = 0;
         tempVarCounter = 0;
         this.safeMode = safeMode;
         this.enableDCE = enableDCE;
+        this.targetProfile = targetProfile;
+    }
+
+    private bool isFreestandingTarget() {
+        return targetProfile == "freestanding" || targetProfile == "kernel";
+    }
+
+    private string normalizedPathForPolicy(string path) {
+        return path.replace("\\", "/");
+    }
+
+    private bool isHostedOnlyModulePath(string path) {
+        string p = normalizedPathForPolicy(path);
+        return p.canFind("/stdlib/io/") || p.canFind("/stdlib/net/") ||
+            p.canFind("/stdlib/sdl/") || p.canFind("/examples/stdlib/") ||
+            p.canFind("/examples/sdl/");
+    }
+
+    private string hostedOnlyCapability(string path) {
+        string p = normalizedPathForPolicy(path);
+        if (p.canFind("/stdlib/io/")) return "filesystem I/O";
+        if (p.canFind("/stdlib/net/")) return "host networking";
+        if (p.canFind("/stdlib/sdl/")) return "SDL";
+        if (p.canFind("/examples/stdlib/")) return "hosted stdlib example";
+        if (p.canFind("/examples/sdl/")) return "SDL example";
+        return "hosted runtime";
+    }
+
+    private void checkTargetProfile(Program[] programs) {
+        if (targetProfile != "hosted" && targetProfile != "freestanding" && targetProfile != "kernel") {
+            throw new CompileError(format("Unknown target profile '%s' (expected hosted, freestanding, or kernel)",
+                targetProfile), "", 1, 1);
+        }
+        if (!isFreestandingTarget()) return;
+
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            if (isHostedOnlyModulePath(prog.modulePath)) {
+                throw new CompileError(
+                    format("Target '%s' forbids %s module '%s'",
+                        targetProfile, hostedOnlyCapability(prog.modulePath), prog.modulePath),
+                    prog.modulePath, 1, 1);
+            }
+            foreach (decl; prog.declarations) {
+                if (auto linkDecl = cast(LinkDecl)decl) {
+                    throw new CompileError(
+                        format("Target '%s' forbids '#link \"%s\"'; provide freestanding link flags in the external build",
+                            targetProfile, linkDecl.libraryName),
+                        prog.modulePath, linkDecl.line, linkDecl.column);
+                }
+            }
+        }
     }
 
     // Computes a conservative set of reachable free functions. This is the
@@ -325,6 +380,7 @@ class CodeGenerator {
                 string key = mangleFreeFunctionName(funcDecl);
                 if (funcDecl.isExtern || funcDecl.name == "main" ||
                     funcDecl.name == "_start" || funcDecl.name == "kernel_main" ||
+                    funcDecl.isInterrupt ||
                     isExternalAbiRoot(key)) {
                     markFunctionReachable(key);
                 }
@@ -571,6 +627,7 @@ class CodeGenerator {
     }
 
     private string sourceLineDirective(ASTNode node) {
+        if (suppressSourceLineDirectives) return "";
         if (node is null || node.line <= 0 || currentModulePath.length == 0) {
             return "";
         }
@@ -1155,6 +1212,8 @@ class CodeGenerator {
         foreach (prog; programs) {
             prog.declarations = flattenNamespaces(prog.declarations, [], prog.modulePath);
         }
+
+        checkTargetProfile(programs);
 
         // Collect `#link "NAME"` directives from every module into a flat,
         // deduplicated list (see linkLibraries' own doc comment) - a shared
@@ -2043,6 +2102,8 @@ class CodeGenerator {
             }
         }
 
+        string abiAssertCode = generateAbiAssertions(programs);
+
         // genericForwardDecls/genericInstanceDecls may have been populated
         // as a side effect of *any* pass above (the early forward-decl
         // passes buffered into earlyDeclCode, or declCode generation just
@@ -2137,6 +2198,8 @@ class CodeGenerator {
             }
             code ~= "\n";
         }
+
+        code ~= abiAssertCode;
 
         // 3. Regular structs
         code ~= structDeclCode;
@@ -2850,6 +2913,47 @@ class CodeGenerator {
             return "";
         }
         return "__attribute__((" ~ attrs.join(", ") ~ ")) ";
+    }
+
+    private string generateAbiAssert(AbiAssertDecl decl) {
+        Type t = cloneType(decl.targetType);
+        resolveType(t);
+        string cType = typeToC(t);
+        string msg;
+        string expr;
+        final switch (decl.kind) {
+            case AbiAssertKind.Size:
+                msg = format("sizeof(%s) == %d", t.toString(), decl.expected);
+                expr = format("sizeof(%s) == %d", cType, decl.expected);
+                break;
+            case AbiAssertKind.Align:
+                msg = format("_Alignof(%s) == %d", t.toString(), decl.expected);
+                expr = format("_Alignof(%s) == %d", cType, decl.expected);
+                break;
+            case AbiAssertKind.Offset:
+                if (decl.fieldName.length == 0) {
+                    throw new CompileError("#assert_offset requires a field name",
+                        currentModulePath, decl.line, decl.column);
+                }
+                msg = format("offsetof(%s.%s) == %d", t.toString(), decl.fieldName, decl.expected);
+                expr = format("offsetof(%s, %s) == %d", cType, decl.fieldName, decl.expected);
+                break;
+        }
+        return format("_Static_assert(%s, \"%s\");\n", expr, escapeCString(msg));
+    }
+
+    private string generateAbiAssertions(Program[] programs) {
+        string code = "";
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                if (auto abi = cast(AbiAssertDecl)decl) {
+                    code ~= sourceLineDirective(abi);
+                    code ~= generateAbiAssert(abi);
+                }
+            }
+        }
+        return code.length > 0 ? "// ABI/layout assertions\n" ~ code ~ "\n" : "";
     }
 
     // Just the `struct Name { RefCount ref_count; ... };` header/fields -
@@ -3694,6 +3798,8 @@ class CodeGenerator {
         }
 
         currentNamespaceSegments = funcDecl.namespaceSegments;
+        bool prevInterrupt = currentFunctionIsInterrupt;
+        currentFunctionIsInterrupt = true;
         // See generateStructConstructor's matching comment.
         variableCNames = null;
         shadowRenameCounter = 0;
@@ -3730,6 +3836,7 @@ class CodeGenerator {
         if (funcDecl.params.length == 1) {
             variableTypes.remove(funcDecl.params[0].name);
         }
+        currentFunctionIsInterrupt = prevInterrupt;
 
         return code;
     }
@@ -3923,6 +4030,29 @@ class CodeGenerator {
 
     private string generateNumericCoercedExpression(ASTNode expr, Type targetType) {
         return generateExpression(insertNumericCoercionIfNeeded(expr, targetType));
+    }
+
+    private void rejectInInterrupt(ASTNode node, string feature) {
+        if (!currentFunctionIsInterrupt) return;
+        throw new CompileError(format("%s is not allowed inside an interrupt function", feature),
+            currentModulePath, node.line, node.column);
+    }
+
+    private void checkInterruptSafeCall(CallExpr callExpr) {
+        if (!currentFunctionIsInterrupt) return;
+        auto ident = cast(Identifier)callExpr.callee;
+        if (ident is null) return;
+        switch (ident.name) {
+            case "llpl_alloc":
+            case "llpl_free":
+            case "rc_alloc":
+            case "rc_release":
+            case "llpl_panic":
+                rejectInInterrupt(callExpr, format("Call to '%s'", ident.name));
+                break;
+            default:
+                break;
+        }
     }
 
     private int nearestCatchFrameIndex() {
@@ -4382,6 +4512,9 @@ class CodeGenerator {
         // block (see inferIfExprType's matching comment).
         ASTNode thenValue = ifExprBranchValue(ifExpr.thenBlock, "then", ifExpr);
         string thenPrefix = "";
+        bool prevSuppressSourceLines = suppressSourceLineDirectives;
+        suppressSourceLineDirectives = true;
+        scope(exit) suppressSourceLineDirectives = prevSuppressSourceLines;
         foreach (stmt; ifExpr.thenBlock.statements[0 .. $ - 1]) thenPrefix ~= generateBodyStatement(stmt, false);
         Type thenType = inferType(thenValue);
         string thenValueCode = generateExpression(thenValue);
@@ -4425,6 +4558,11 @@ class CodeGenerator {
             Type declaredTypeAsWritten = cloneType(varDecl.type);
             resolveType(varDecl.type);
             checkArrayLiteralInit(varDecl);
+            if (currentFunctionIsInterrupt && !varDecl.type.isPointer && !varDecl.type.isArray &&
+                    (varDecl.type.name in classRegistry) !is null) {
+                throw new CompileError("Class-typed locals are not allowed inside an interrupt function",
+                    currentModulePath, varDecl.line, varDecl.column);
+            }
 
             // A `let name = ...` re-declaring a name already `let` earlier
             // in this function body shadows it - see variableCNames' own
@@ -4577,10 +4715,22 @@ class CodeGenerator {
         } else if (cast(BreakStmt)node) {
             code ~= indent() ~ "break;\n";
         } else if (auto deferStmt = cast(DeferStmt)node) {
+            if (currentFunctionIsInterrupt) {
+                throw new CompileError("'defer' is not allowed inside an interrupt function",
+                    currentModulePath, deferStmt.line, deferStmt.column);
+            }
             code ~= generateDeferStmt(deferStmt);
         } else if (auto throwStmt = cast(ThrowStmt)node) {
+            if (currentFunctionIsInterrupt) {
+                throw new CompileError("'throw' is not allowed inside an interrupt function",
+                    currentModulePath, throwStmt.line, throwStmt.column);
+            }
             code ~= generateThrowStmt(throwStmt, isDeferred);
         } else if (auto tryStmt = cast(TryStmt)node) {
+            if (currentFunctionIsInterrupt) {
+                throw new CompileError("'try' is not allowed inside an interrupt function",
+                    currentModulePath, tryStmt.line, tryStmt.column);
+            }
             code ~= generateTryStmt(tryStmt, isDeferred);
         } else if (auto deleteStmt = cast(DeleteStmt)node) {
             code ~= generateDeleteStmt(deleteStmt);
@@ -7727,6 +7877,7 @@ class CodeGenerator {
     // capture of an outer reference capture just copies the pointer, so all
     // closures involved alias the same original variable.
     private string generateLambdaExpr(LambdaExpr lambdaExpr) {
+        rejectInInterrupt(lambdaExpr, "Lambda allocation");
         int id = lambdaCounter++;
         string envType = format("__LambdaEnv%d", id);
         string trampolineName = format("__lambda%d", id);
@@ -7986,6 +8137,7 @@ class CodeGenerator {
             }
             return unaryExpr.op ~ generateExpression(unaryExpr.operand);
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
+            rejectInInterrupt(lambdaExpr, "Lambda allocation");
             return generateLambdaExpr(lambdaExpr);
         } else if (auto sizeofExpr = cast(SizeofExpr)node) {
             resolveType(sizeofExpr.type);
@@ -8013,6 +8165,7 @@ class CodeGenerator {
         } else if (auto ifExpr = cast(IfExpr)node) {
             return generateIfExpr(ifExpr);
         } else if (auto callExpr = cast(CallExpr)node) {
+            checkInterruptSafeCall(callExpr);
             if (isEmbedCall(callExpr)) {
                 return generateEmbedCall(callExpr);
             }
@@ -8575,6 +8728,7 @@ class CodeGenerator {
         } else if (auto nullLit = cast(NullLiteral)node) {
             return "NULL";
         } else if (auto newExpr = cast(NewExpr)node) {
+            rejectInInterrupt(newExpr, "'new'");
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
             recordUsage(newExpr.type.name, newExpr.line, newExpr.column);

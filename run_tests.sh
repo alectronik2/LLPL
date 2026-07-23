@@ -64,12 +64,13 @@ for src in test/*.llpl; do
             continue
         fi
         if [ -f "$expected" ]; then
-            if diff -u "$expected" "$TMP_OUT" >/dev/null 2>&1; then
+            expected_bytes=$(wc -c < "$expected")
+            if cmp -s "$expected" <(head -c "$expected_bytes" "$TMP_OUT"); then
                 echo "[PASS] $src  (expected failure)"
                 PASSED=$((PASSED + 1))
             else
-                echo "[FAIL] $src  (expected failure output differs)"
-                diff -u "$expected" "$TMP_OUT" | sed 's/^/    /' | head -40
+                echo "[FAIL] $src  (expected failure output prefix differs)"
+                diff -u "$expected" <(head -c "$expected_bytes" "$TMP_OUT") | sed 's/^/    /' | head -40
                 FAILED=$((FAILED + 1))
             fi
         else

@@ -318,8 +318,11 @@ All CLI flags:
 | `--keep-c` | Keep the intermediate `.c` file in `--binary` mode even on success. |
 | `-v`, `--verbose` | Verbose output. |
 | `--safe` | Enable runtime safety checks - currently, bounds-checked fixed-size array indexing. Off by default. |
+| `--target` | Target profile: `hosted`, `freestanding`, or `kernel`. Freestanding/kernel profiles refuse clearly hosted-only modules and link directives. |
 | `--dce` | Dead-code elimination. On by default. |
 | `--lsp-symbols` | Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling. |
+| `--emit-provenance` | Write a JSON map from generated C lines back to LLPL source locations. |
+| `--debug-bundle` | Write generated C, provenance, symbol/usage JSON, and a manifest into a replay/debug artifact directory. |
 | `-h`, `--help` | Help text. |
 
 Or compile straight to a native binary with `-b`/`--binary`, which
@@ -340,6 +343,13 @@ Add `--safe` to enable runtime bounds checks on fixed-size array indexing:
 This currently checks one-dimensional fixed-size arrays (`T[N]`) declared
 as locals, globals, or class fields; pointer indexing and array parameters
 that have decayed to pointers are not checked.
+
+Use `--target=freestanding` or `--target=kernel` for preflight checks that
+fail closed on hosted-only pieces such as `stdlib/io`, `stdlib/net`,
+`stdlib/sdl`, hosted examples, and `#link` directives. Use
+`--emit-provenance=prov.json` when debugging generated C, or
+`--debug-bundle=dir` to capture generated C, provenance, symbols/usages, and
+a manifest with the input/output/target and source hash.
 
 This targets ordinary hosted programs only - a freestanding/kernel target
 like `examples/baremetal_demo` needs its own `tools/llplbuild` build
@@ -688,6 +698,25 @@ All LLPL objects start with a `RefCount` structure, allowing the runtime to mana
 3. **Use Classes**: Organize hardware drivers as classes
 4. **External Functions**: Declare low-level x86 operations as `extern func` and `volatile`
 5. **Debug with Serial**: Use COM1 serial port for debugging output
+
+### Low-Level Layout and ISR Checks
+
+Global variables support `@section("name")`, `@used`, and `@align(bytes)`.
+ABI layout checks compile to C `_Static_assert`s:
+
+```swift
+struct Pair {
+    let a: i64
+    let b: u8
+}
+
+#assert_size Pair 16
+#assert_align Pair 8
+#assert_offset Pair.b 8
+```
+
+`interrupt func` bodies reject hidden runtime paths such as `new`, `defer`,
+`try`, `throw`, class-typed locals, and direct allocator/refcount calls.
 
 ## Troubleshooting
 
