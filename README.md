@@ -19,6 +19,7 @@ A low-level programming language with familiary syntax that compiles to C for ba
 - **Assert Statement**: `assert(condition)` and `assert(condition, "message")` abort with a panic on failure
 - **Optional Bounds Checking**: `--safe` enables runtime bounds checks on fixed-size array indexing
 - **C FFI**: Easy interoperability with C code
+- **Hardware Support**: MMIO register wrappers, DMA descriptors, cache barriers, page-region helpers, and `#device` descriptor generation
 - **Pipe operator**: And syntactic sugar like `unless`
 - **Bare Metal**: Compiles to efficient C code for kernel development
 - **Grammars**: ANTLR-like grammars inlined with your code
@@ -322,7 +323,9 @@ All CLI flags:
 | `--dce` | Dead-code elimination. On by default. |
 | `--lsp-symbols` | Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling. |
 | `--emit-provenance` | Write a JSON map from generated C lines back to LLPL source locations. |
-| `--debug-bundle` | Write generated C, provenance, symbol/usage JSON, and a manifest into a replay/debug artifact directory. |
+| `--emit-effects` | Write conservative per-function capability/effect JSON (`ffi`, `alloc`, `mmio`, `dma`, `cache`, `paging`, `unsafe`, etc.). |
+| `--debug-bundle` | Write generated C, provenance, symbol/usage JSON, effects JSON, ABI assertions, and a manifest into a replay/debug artifact directory. |
+| `--audit-dir` | Artifact directory for `llpl audit` mode. Defaults to `<input>.llpl-audit`. |
 | `-h`, `--help` | Help text. |
 
 Or compile straight to a native binary with `-b`/`--binary`, which
@@ -348,8 +351,27 @@ Use `--target=freestanding` or `--target=kernel` for preflight checks that
 fail closed on hosted-only pieces such as `stdlib/io`, `stdlib/net`,
 `stdlib/sdl`, hosted examples, and `#link` directives. Use
 `--emit-provenance=prov.json` when debugging generated C, or
-`--debug-bundle=dir` to capture generated C, provenance, symbols/usages, and
-a manifest with the input/output/target and source hash.
+`--emit-effects=effects.json` to inspect conservative capability/effect
+analysis for every function. `--debug-bundle=dir` captures generated C,
+provenance, symbols/usages, effects, ABI assertions, and a self-describing
+manifest with the input/output/target and source hash.
+
+`llpl audit` runs the normal compiler checks and writes a complete confidence
+bundle plus `audit.json`:
+
+```bash
+./llpl audit --target=kernel --audit-dir out/audit test/hw_features_demo.llpl
+```
+
+Repo-local tooling lives under `tools/`:
+
+| Tool | Purpose |
+|---|---|
+| `tools/llpl-fuzz [count] [outdir]` | Generate small programs and compile/run them to exercise parser/type/codegen invariants. |
+| `tools/llpl-snapshot <input.llpl> <outdir>` | Capture generated C, provenance, effects, and debug-bundle files for golden snapshot review. |
+| `tools/llpl-replay record|replay ...` | Record and replay a compiled binary run, comparing exit status/stdout/stderr. |
+| `tools/llpl-bindgen <header.h>` | Narrow C header importer written in LLPL with `grammar {}` token parsing, emitting LLPL `extern func` bindings. |
+| `tools/llpl-pkg init|list|vendor` | Tiny manifest workflow for pinned git dependencies in `llpl.pkg`. |
 
 This targets ordinary hosted programs only - a freestanding/kernel target
 like `examples/baremetal_demo` needs its own `tools/llplbuild` build
@@ -717,6 +739,24 @@ struct Pair {
 
 `interrupt func` bodies reject hidden runtime paths such as `new`, `defer`,
 `try`, `throw`, class-typed locals, and direct allocator/refcount calls.
+
+The hardware stdlib (`import "stdlib/hw/hw.llpl"`) provides volatile MMIO
+read/write helpers, cache/memory barriers, DMA buffer descriptors with
+CPU/device ownership, typed page-region helpers, and device descriptor
+generation:
+
+```text
+device E1000
+base 0xF0000000
+irq 11
+reg CTRL 0x0000 u32
+dma RX_RING 16 4096 16
+```
+
+```swift
+#device "e1000.lldev"
+let ctrl = hw.device_register(E1000.BASE, E1000.Reg.CTRL, E1000.Width.CTRL)
+```
 
 ## Troubleshooting
 

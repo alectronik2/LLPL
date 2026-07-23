@@ -18,6 +18,7 @@ enum NodeType {
     LinkDecl,
     FlagsDecl,
     AbiAssertDecl,
+    DeviceDecl,
     EnumDecl,
     GrammarDecl,
     VarDecl,
@@ -256,6 +257,18 @@ class AbiAssertDecl : ASTNode {
         this.targetType = targetType;
         this.fieldName = fieldName;
         this.expected = expected;
+    }
+}
+
+// `#device "path.lldev"` - imports a small hardware descriptor file and
+// expands it into namespace constants for base address, IRQs, register
+// offsets/widths, and DMA resource requirements.
+class DeviceDecl : ASTNode {
+    string descriptorPath;
+
+    this(string descriptorPath, int line = 0, int column = 0) {
+        super(NodeType.DeviceDecl, line, column);
+        this.descriptorPath = descriptorPath;
     }
 }
 
@@ -681,6 +694,7 @@ enum GrammarAtomKind {
     Literal,    // a quoted string, matched verbatim: 'if', "+="
     CharClass,  // [0-9], [a-zA-Z_], negated [^\n] - see CharRange/`negated`
     Wildcard,   // `.` - matches any single character
+    End,        // `<EOF>` - succeeds only at the end of the parser input
     RuleRef,    // a reference to another rule by name
     Group       // `( alt | alt | ... )` - a parenthesized sub-choice
 }
@@ -725,6 +739,12 @@ class GrammarAtom {
     static GrammarAtom makeWildcard() {
         auto a = new GrammarAtom();
         a.kind = GrammarAtomKind.Wildcard;
+        return a;
+    }
+
+    static GrammarAtom makeEnd() {
+        auto a = new GrammarAtom();
+        a.kind = GrammarAtomKind.End;
         return a;
     }
 

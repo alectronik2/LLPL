@@ -42,6 +42,19 @@ struct UsageInfo {
     int column;
 }
 
+// Conservative per-function capability/effect summary. This is intentionally
+// a compiler side-channel rather than new syntax for now: audit/debug tooling
+// can consume it today, and later language-level capability checks can reuse
+// the same walker.
+struct EffectInfo {
+    string name;
+    string kind; // "function", "method", "constructor", "destructor"
+    string file;
+    int line;
+    int column;
+    string[] effects; // sorted labels: alloc, asm, cache, dma, ffi, mmio, paging, panic, throw, unsafe
+}
+
 // One active `try` block's redirect/replay state - see generateTryStmt,
 // generateThrowStmt, and generatePropagateExpr's use of tryFrameStack below.
 private struct TryFrame {
@@ -179,6 +192,7 @@ class CodeGenerator {
     private int macroExpansionDepth; // Guards against (possibly indirect) macro self-recursion
     private SymbolInfo[] collectedSymbols; // Declaration-site symbol table, built by generateMultiple; see symbols()
     private UsageInfo[] usageRecords; // Resolved reference sites, recorded via recordUsage; see usages()
+    private EffectInfo[] effectRecords; // Conservative per-function effect summaries; see effects()
     // Every CompileError caught instead of letting it abort the whole
     // compile - see errors.MultiCompileError, thrown with this list once
     // generateMultiple finishes (or returned normally if it's still
@@ -363,6 +377,134 @@ class CodeGenerator {
                 }
             }
         }
+    }
+
+    private long parseDeviceInteger(string value, string path, int lineNo) {
+        string s = value.strip();
+        if (s.startsWith("0x") || s.startsWith("0X")) {
+            long result = 0;
+            foreach (ch; s[2 .. $]) {
+                int digit;
+                if (ch >= '0' && ch <= '9') digit = ch - '0';
+                else if (ch >= 'a' && ch <= 'f') digit = ch - 'a' + 10;
+                else if (ch >= 'A' && ch <= 'F') digit = ch - 'A' + 10;
+                else throw new CompileError(format("Invalid hex integer '%s' in device descriptor", value),
+                    path, lineNo, 1);
+                result = result * 16 + digit;
+            }
+            return result;
+        }
+        try {
+            return to!long(s);
+        } catch (Exception) {
+            throw new CompileError(format("Invalid integer '%s' in device descriptor", value),
+                path, lineNo, 1);
+        }
+    }
+
+    private string deviceWidthName(string width, string path, int lineNo) {
+        switch (width) {
+            case "u8": return "8";
+            case "u16": return "16";
+            case "u32": return "32";
+            case "u64": return "64";
+            default:
+                throw new CompileError(format("Unsupported register width '%s' (expected u8, u16, u32, or u64)",
+                    width), path, lineNo, 1);
+        }
+    }
+
+    private VarDecl deviceConst(string name, long value, int line, int column) {
+        return new VarDecl(name, new Type("u64"), new IntLiteral(value, line, column), true, line, column);
+    }
+
+    private NamespaceDecl expandDeviceDescriptor(DeviceDecl decl, string modulePath) {
+        string baseDir = modulePath.length > 0 ? dirName(modulePath) : ".";
+        string path = isAbsolute(decl.descriptorPath) ? decl.descriptorPath :
+            buildNormalizedPath(baseDir, decl.descriptorPath);
+        if (!exists(path)) {
+            throw new CompileError(format("Device descriptor not found: %s", path),
+                modulePath, decl.line, decl.column);
+        }
+
+        string deviceName;
+        ASTNode[] rootDecls;
+        ASTNode[] regDecls;
+        ASTNode[] widthDecls;
+        ASTNode[] dmaDecls;
+        bool sawBase = false;
+
+        foreach (i, rawLine; readText(path).splitLines()) {
+            int lineNo = cast(int)i + 1;
+            string line = rawLine;
+            ptrdiff_t comment = line.indexOf("#");
+            if (comment >= 0) line = line[0 .. comment];
+            auto parts = line.strip().split();
+            if (parts.length == 0) continue;
+
+            string directive = parts[0];
+            if (directive == "device") {
+                if (parts.length != 2) {
+                    throw new CompileError("'device' expects exactly one name", path, lineNo, 1);
+                }
+                deviceName = parts[1];
+            } else if (directive == "base") {
+                if (parts.length != 2) {
+                    throw new CompileError("'base' expects one address", path, lineNo, 1);
+                }
+                rootDecls ~= deviceConst("BASE", parseDeviceInteger(parts[1], path, lineNo), decl.line, decl.column);
+                sawBase = true;
+            } else if (directive == "irq") {
+                if (parts.length != 2) {
+                    throw new CompileError("'irq' expects one interrupt number", path, lineNo, 1);
+                }
+                rootDecls ~= deviceConst("IRQ", parseDeviceInteger(parts[1], path, lineNo), decl.line, decl.column);
+            } else if (directive == "reg") {
+                if (parts.length != 4) {
+                    throw new CompileError("'reg' expects: reg NAME OFFSET WIDTH", path, lineNo, 1);
+                }
+                regDecls ~= deviceConst(parts[1], parseDeviceInteger(parts[2], path, lineNo), decl.line, decl.column);
+                widthDecls ~= deviceConst(parts[1], parseDeviceInteger(deviceWidthName(parts[3], path, lineNo), path, lineNo),
+                    decl.line, decl.column);
+            } else if (directive == "dma") {
+                if (parts.length != 5) {
+                    throw new CompileError("'dma' expects: dma NAME ENTRIES BYTES ALIGN", path, lineNo, 1);
+                }
+                string prefix = parts[1] ~ "_";
+                dmaDecls ~= deviceConst(prefix ~ "ENTRIES", parseDeviceInteger(parts[2], path, lineNo),
+                    decl.line, decl.column);
+                dmaDecls ~= deviceConst(prefix ~ "BYTES", parseDeviceInteger(parts[3], path, lineNo),
+                    decl.line, decl.column);
+                dmaDecls ~= deviceConst(prefix ~ "ALIGN", parseDeviceInteger(parts[4], path, lineNo),
+                    decl.line, decl.column);
+            } else {
+                throw new CompileError(format("Unknown device descriptor directive '%s'", directive),
+                    path, lineNo, 1);
+            }
+        }
+
+        if (deviceName.length == 0) {
+            throw new CompileError("Device descriptor must start with 'device NAME'", path, 1, 1);
+        }
+        if (!sawBase) {
+            throw new CompileError("Device descriptor must declare a base address", path, 1, 1);
+        }
+        if (regDecls.length > 0) rootDecls ~= new NamespaceDecl("Reg", regDecls, decl.line, decl.column);
+        if (widthDecls.length > 0) rootDecls ~= new NamespaceDecl("Width", widthDecls, decl.line, decl.column);
+        if (dmaDecls.length > 0) rootDecls ~= new NamespaceDecl("Dma", dmaDecls, decl.line, decl.column);
+        return new NamespaceDecl(deviceName, rootDecls, decl.line, decl.column);
+    }
+
+    private ASTNode[] expandDeviceDescriptors(ASTNode[] declarations, string modulePath) {
+        ASTNode[] result;
+        foreach (decl; declarations) {
+            if (auto dev = cast(DeviceDecl)decl) {
+                result ~= expandDeviceDescriptor(dev, modulePath);
+            } else {
+                result ~= decl;
+            }
+        }
+        return result;
     }
 
     // Computes a conservative set of reachable free functions. This is the
@@ -823,6 +965,7 @@ class CodeGenerator {
     // after it's been called. See SymbolInfo/UsageInfo above and lspquery.d.
     SymbolInfo[] symbols() { return collectedSymbols; }
     UsageInfo[] usages() { return usageRecords; }
+    EffectInfo[] effects() { return effectRecords; }
 
     private void recordUsage(string name, int line, int column) {
         usageRecords ~= UsageInfo(name, currentModulePath, line, column);
@@ -1001,6 +1144,231 @@ class CodeGenerator {
             foreach (method; impl.methods) {
                 collectedSymbols ~= SymbolInfo(targetKey ~ "." ~ method.name, "method", pendingImplModulePaths[i],
                     method.line, method.column, methodSignature(method, targetKey));
+            }
+        }
+    }
+
+    private void addEffect(ref bool[string] set, string effect) {
+        set[effect] = true;
+    }
+
+    private string[] sortedEffects(bool[string] set) {
+        auto result = set.keys.array;
+        sort(result);
+        return result;
+    }
+
+    private string qualifiedExprName(ASTNode node) {
+        if (auto ident = cast(Identifier)node) return ident.name;
+        if (auto member = cast(MemberExpr)node) {
+            string prefix = qualifiedExprName(member.object);
+            return prefix.length > 0 ? prefix ~ "." ~ member.member : member.member;
+        }
+        return "";
+    }
+
+    private void addPathEffects(string path, ref bool[string] effects) {
+        string lower = path.toLower();
+        if (lower.indexOf("mmio") >= 0) {
+            addEffect(effects, "mmio");
+            addEffect(effects, "unsafe");
+        }
+        if (lower.indexOf("dma") >= 0) addEffect(effects, "dma");
+        if (lower.indexOf("cache") >= 0 || lower.indexOf("barrier") >= 0) {
+            addEffect(effects, "cache");
+            addEffect(effects, "unsafe");
+        }
+        if (lower.indexOf("paging") >= 0 || lower.indexOf("page_table") >= 0) {
+            addEffect(effects, "paging");
+            addEffect(effects, "unsafe");
+        }
+        if (lower.indexOf("device") >= 0) addEffect(effects, "device");
+    }
+
+    private void addCallEffects(CallExpr call, ref bool[string] effects) {
+        string qname = qualifiedExprName(call.callee);
+        string lookupName = qname.replace(".", "_");
+        string resolved = lookupName;
+
+        if (qname.length > 0) {
+            addPathEffects(qname, effects);
+            if (qname == "llpl_panic" || qname.endsWith(".panic")) addEffect(effects, "panic");
+            if (qname == "llpl_alloc" || qname == "rc_alloc" || qname.endsWith(".alloc")) {
+                addEffect(effects, "alloc");
+                addEffect(effects, "unsafe");
+            }
+        }
+
+        try {
+            if (qname.indexOf(".") >= 0) {
+                auto member = cast(MemberExpr)call.callee;
+                string qualified = tryResolveQualifiedPath(member, (n) => (n in functionRegistry) !is null);
+                if (qualified.length > 0) resolved = qualified;
+            } else if (auto ident = cast(Identifier)call.callee) {
+                resolved = resolveName(ident.name, (n) => (n in functionRegistry) !is null);
+            }
+        } catch (Exception) {
+            resolved = lookupName;
+        }
+
+        if (auto fn = resolved in functionRegistry) {
+            if (fn.isExtern) addEffect(effects, "ffi");
+            if (auto mod = resolved in functionModulePath) addPathEffects(*mod, effects);
+        }
+
+        foreach (arg; call.args) collectNodeEffects(arg, effects);
+        collectNodeEffects(call.callee, effects);
+    }
+
+    private bool isClassAllocation(NewExpr expr) {
+        Type t = cloneType(expr.type);
+        try resolveType(t); catch (Exception) {}
+        return (t.name in classRegistry) !is null;
+    }
+
+    private void collectNodeEffects(ASTNode node, ref bool[string] effects) {
+        if (node is null) return;
+
+        if (auto block = cast(Block)node) {
+            foreach (stmt; block.statements) collectNodeEffects(stmt, effects);
+        } else if (auto v = cast(VarDecl)node) {
+            collectNodeEffects(v.initializer, effects);
+        } else if (auto d = cast(DestructuringStmt)node) {
+            collectNodeEffects(d.initializer, effects);
+        } else if (auto e = cast(ExprStmt)node) {
+            collectNodeEffects(e.expression, effects);
+        } else if (auto i = cast(IfStmt)node) {
+            collectNodeEffects(i.condition, effects);
+            collectNodeEffects(i.thenBlock, effects);
+            collectNodeEffects(i.elseBlock, effects);
+        } else if (auto i = cast(IfExpr)node) {
+            collectNodeEffects(i.condition, effects);
+            collectNodeEffects(i.thenBlock, effects);
+            collectNodeEffects(i.elseBlock, effects);
+        } else if (auto w = cast(WhileStmt)node) {
+            collectNodeEffects(w.condition, effects);
+            collectNodeEffects(w.body_, effects);
+        } else if (auto f = cast(ForStmt)node) {
+            collectNodeEffects(f.initializer, effects);
+            collectNodeEffects(f.condition, effects);
+            collectNodeEffects(f.update, effects);
+            collectNodeEffects(f.body_, effects);
+        } else if (auto f = cast(ForeachStmt)node) {
+            collectNodeEffects(f.iterable, effects);
+            collectNodeEffects(f.body_, effects);
+        } else if (auto r = cast(ReturnStmt)node) {
+            collectNodeEffects(r.value, effects);
+        } else if (auto d = cast(DeferStmt)node) {
+            addEffect(effects, "defer");
+            collectNodeEffects(d.statement, effects);
+        } else if (auto a = cast(AsmStmt)node) {
+            addEffect(effects, "asm");
+            addEffect(effects, "unsafe");
+            foreach (op; a.outputs) collectNodeEffects(op.expr, effects);
+            foreach (op; a.inputs) collectNodeEffects(op.expr, effects);
+        } else if (auto t = cast(TryStmt)node) {
+            addEffect(effects, "throw");
+            collectNodeEffects(t.tryBlock, effects);
+            collectNodeEffects(t.catchBlock, effects);
+            collectNodeEffects(t.finallyBlock, effects);
+        } else if (auto t = cast(ThrowStmt)node) {
+            addEffect(effects, "throw");
+            collectNodeEffects(t.value, effects);
+        } else if (auto d = cast(DeleteStmt)node) {
+            addEffect(effects, "alloc");
+            collectNodeEffects(d.value, effects);
+        } else if (auto a = cast(AssertStmt)node) {
+            addEffect(effects, "panic");
+            collectNodeEffects(a.condition, effects);
+            collectNodeEffects(a.message, effects);
+        } else if (auto m = cast(MatchStmt)node) {
+            collectNodeEffects(m.subject, effects);
+            foreach (c; m.cases) {
+                foreach (p; c.patterns) collectNodeEffects(p, effects);
+                collectNodeEffects(c.body_, effects);
+            }
+        } else if (auto b = cast(BinaryExpr)node) {
+            collectNodeEffects(b.left, effects);
+            collectNodeEffects(b.right, effects);
+        } else if (auto u = cast(UnaryExpr)node) {
+            if (u.op == "*") addEffect(effects, "unsafe");
+            collectNodeEffects(u.operand, effects);
+        } else if (auto c = cast(CallExpr)node) {
+            addCallEffects(c, effects);
+        } else if (auto m = cast(MemberExpr)node) {
+            addPathEffects(qualifiedExprName(m), effects);
+            collectNodeEffects(m.object, effects);
+        } else if (auto idx = cast(IndexExpr)node) {
+            collectNodeEffects(idx.array, effects);
+            collectNodeEffects(idx.index, effects);
+        } else if (auto n = cast(NewExpr)node) {
+            if (isClassAllocation(n)) addEffect(effects, "alloc");
+            foreach (arg; n.args) collectNodeEffects(arg, effects);
+        } else if (auto c = cast(CastExpr)node) {
+            if (c.type.isPointer) addEffect(effects, "unsafe");
+            collectNodeEffects(c.expression, effects);
+        } else if (auto l = cast(LambdaExpr)node) {
+            addEffect(effects, "alloc");
+            collectNodeEffects(l.body_, effects);
+        } else if (auto s = cast(StructLiteral)node) {
+            foreach (value; s.fieldValues) collectNodeEffects(value, effects);
+        } else if (auto t = cast(TupleLiteral)node) {
+            foreach (elem; t.elements) collectNodeEffects(elem, effects);
+        } else if (auto p = cast(PropagateExpr)node) {
+            addEffect(effects, "throw");
+            collectNodeEffects(p.operand, effects);
+        } else if (auto r = cast(RangeExpr)node) {
+            collectNodeEffects(r.start, effects);
+            collectNodeEffects(r.end, effects);
+        } else if (auto a = cast(ArrayLiteral)node) {
+            foreach (elem; a.elements) collectNodeEffects(elem, effects);
+        } else if (auto i = cast(InterpolatedStringLiteral)node) {
+            addEffect(effects, "io");
+            foreach (expr; i.expressions) collectNodeEffects(expr, effects);
+        } else if (auto q = cast(QuoteExpr)node) {
+            collectNodeEffects(q.body, effects);
+        } else if (auto u = cast(UnquoteExpr)node) {
+            collectNodeEffects(u.expression, effects);
+        } else if (auto m = cast(MacroInvocation)node) {
+            foreach (arg; m.args) collectNodeEffects(arg, effects);
+        }
+    }
+
+    private void collectFunctionEffects(FunctionDecl fn, string name, string kind, string file) {
+        bool[string] effects;
+        if (fn.isExtern) addEffect(effects, "ffi");
+        if (fn.isInterrupt) addEffect(effects, "interrupt");
+        addPathEffects(file, effects);
+
+        string oldModule = currentModulePath;
+        string[] oldNamespace = currentNamespaceSegments;
+        currentModulePath = file;
+        currentNamespaceSegments = fn.namespaceSegments;
+        collectNodeEffects(fn.body_, effects);
+        currentModulePath = oldModule;
+        currentNamespaceSegments = oldNamespace;
+
+        effectRecords ~= EffectInfo(name, kind, file, fn.line, fn.column, sortedEffects(effects));
+    }
+
+    private void collectEffects(Program[] programs) {
+        effectRecords.length = 0;
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (auto fn = cast(FunctionDecl)decl) {
+                    collectFunctionEffects(fn, mangledFunc(fn), "function", prog.modulePath);
+                } else if (auto cls = cast(ClassDecl)decl) {
+                    string owner = mangledClass(cls);
+                    foreach (ctor; cls.constructors) {
+                        collectFunctionEffects(ctor, owner ~ ".new", "constructor", prog.modulePath);
+                    }
+                    if (cls.destructor !is null) {
+                        collectFunctionEffects(cls.destructor, owner ~ ".destroy", "destructor", prog.modulePath);
+                    }
+                    foreach (method; cls.methods) {
+                        collectFunctionEffects(method, owner ~ "." ~ method.name, "method", prog.modulePath);
+                    }
+                }
             }
         }
     }
@@ -1206,6 +1574,13 @@ class CodeGenerator {
         // emitting another `typedef struct {...} __LLPL_Closure;` here
         // would be a duplicate-definition error.
         structRegistry["__LLPL_Closure"] = new StructDecl("__LLPL_Closure", [], false);
+
+        // Expand hardware descriptor imports before namespace flattening so
+        // generated device constants use the same namespace/name-resolution
+        // path as handwritten LLPL declarations.
+        foreach (prog; programs) {
+            prog.declarations = expandDeviceDescriptors(prog.declarations, prog.modulePath);
+        }
 
         // Resolve namespace blocks into flat, mangled top-level declarations
         // before anything else looks at prog.declarations.
@@ -2227,6 +2602,7 @@ class CodeGenerator {
             code ~= backtraceSymbolTable;
         }
 
+        collectEffects(programs);
         collectSymbolTable(programs);
 
         // Collected symbols/usages above are still valid (if partial) even

@@ -192,6 +192,7 @@ private bool atomNullable(GrammarAtom atom, RuleInfo[string] infos) {
         case GrammarAtomKind.Literal: return atom.literal.length == 0;
         case GrammarAtomKind.CharClass: return false;
         case GrammarAtomKind.Wildcard: return false;
+        case GrammarAtomKind.End: return false;
         case GrammarAtomKind.RuleRef: return infos[atom.ruleRef].nullable;
         case GrammarAtomKind.Group: assert(false, "Group atoms must be flattened before analysis");
     }
@@ -206,6 +207,8 @@ private CharSet atomFirst(GrammarAtom atom, RuleInfo[string] infos) {
             return atom.negated ? csNegate(normalized) : normalized;
         case GrammarAtomKind.Wildcard:
             return csFull();
+        case GrammarAtomKind.End:
+            return [];
         case GrammarAtomKind.RuleRef:
             return infos[atom.ruleRef].first;
         case GrammarAtomKind.Group:
@@ -327,6 +330,12 @@ private void checkAmbiguity(RuleInfo[string] infos, string[] order, string modul
         foreach (alt; allSequences(info)) {
             foreach (i, elem; alt.elements) {
                 if (elem.quantifier != GrammarQuantifier.Star && elem.quantifier != GrammarQuantifier.Plus) continue;
+                // Lexer-style rules intentionally use maximal munch. In a
+                // rule like `IDENT : [A-Za-z_][A-Za-z0-9_]*`, the repeated
+                // tail can overlap the next token's FIRST set, but the
+                // correct lexer behavior is to keep consuming until the
+                // character class no longer matches.
+                if (isLexerRuleName(name)) continue;
                 auto elemFirst = atomFirst(elem.atom, infos);
                 auto rest = alt.elements[i + 1 .. $];
                 auto after = sequenceFirst(rest, infos);
@@ -422,6 +431,9 @@ private ASTNode firstSetCondition(GrammarAtom atom, RuleInfo[string] infos) {
     if (atom.kind == GrammarAtomKind.Wildcard) {
         return posInBoundsExpr();
     }
+    if (atom.kind == GrammarAtomKind.End) {
+        return new BinaryExpr("==", selfField("pos"), selfField("len"));
+    }
     return new BinaryExpr("&&", posInBoundsExpr(), charInSet(peekCharExpr(), atomFirst(atom, infos)));
 }
 
@@ -440,6 +452,7 @@ private string describeAtom(GrammarAtom atom) {
         case GrammarAtomKind.Literal: return atom.literal;
         case GrammarAtomKind.CharClass: return "a matching character";
         case GrammarAtomKind.Wildcard: return "any character";
+        case GrammarAtomKind.End: return "end of input";
         case GrammarAtomKind.RuleRef: return atom.ruleRef;
         case GrammarAtomKind.Group: return "(...)";
     }
@@ -459,6 +472,8 @@ private ASTNode[] generateAtomConsume(GrammarAtom atom, string childVar, string 
         case GrammarAtomKind.CharClass:
         case GrammarAtomKind.Wildcard:
             return [new VarDecl(childVar, new Type("ParseNode"), selfMethodCall("__match_one_char", []))];
+        case GrammarAtomKind.End:
+            return [new VarDecl(childVar, new Type("ParseNode"), selfMethodCall("__match_eof", []))];
         case GrammarAtomKind.RuleRef:
             if (selfRefName.length > 0 && atom.ruleRef == selfRefName) {
                 return [new VarDecl(childVar, new Type("ParseNode"),
@@ -663,17 +678,28 @@ private FunctionDecl[] sharedHelperMethods() {
     ];
     result ~= new FunctionDecl("__match_one_char", [], new Type("ParseNode"), blk(oneCharBody));
 
+    // func __match_eof() -> ParseNode
+    ASTNode[] eofBody = [
+        new IfStmt(new BinaryExpr("!=", selfField("pos"), selfField("len")),
+            blk([new ExprStmt(selfMethodCall("__parse_error", [strLit("end of input")]))])),
+        new VarDecl("node", new Type("ParseNode"), new NewExpr(new Type("ParseNode"), [])),
+        assign(member(ident("node"), "rule_name"), new NewExpr(new Type("String"), [strLit("<EOF>")])),
+        assign(member(ident("node"), "text_val"), new NewExpr(new Type("String"), [strLit("")])),
+        assign(member(ident("node"), "is_terminal"), boolLit(true)),
+        new ReturnStmt(ident("node")),
+    ];
+    result ~= new FunctionDecl("__match_eof", [], new Type("ParseNode"), blk(eofBody));
+
     // func __match_literal(lit: u8*, lit_len: i64) -> ParseNode
     auto litParams = [new Parameter("lit", new Type("u8", 1)), new Parameter("lit_len", new Type("i64"))];
     ASTNode[] litBody = [
+        new VarDecl("__lit_piece", new Type("String"),
+            methodCall(selfField("text"), "byte_substring", [selfField("pos"), ident("lit_len")])),
         new IfStmt(new UnaryExpr("!",
-                new BinaryExpr("==",
-                    methodCall(selfField("text"), "byte_substring", [selfField("pos"), ident("lit_len")]),
-                    ident("lit"))),
+                methodCall(ident("__lit_piece"), "op_eq", [new CastExpr(new Type("char", 1), ident("lit"))])),
             blk([new ExprStmt(selfMethodCall("__parse_error", [ident("lit")]))])),
         new VarDecl("node", new Type("ParseNode"), new NewExpr(new Type("ParseNode"), [])),
-        assign(member(ident("node"), "text_val"),
-            methodCall(selfField("text"), "byte_substring", [selfField("pos"), ident("lit_len")])),
+        assign(member(ident("node"), "text_val"), ident("__lit_piece")),
         assign(member(ident("node"), "is_terminal"), boolLit(true)),
         selfAssign("pos", new BinaryExpr("+", selfField("pos"), ident("lit_len"))),
         new ReturnStmt(ident("node")),

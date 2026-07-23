@@ -19,6 +19,12 @@ import errors;
 import lspquery;
 
 void main(string[] args) {
+    bool auditMode = false;
+    if (args.length >= 2 && args[1] == "audit") {
+        auditMode = true;
+        args = args[0 .. 1] ~ args[2 .. $];
+    }
+
     string inputFile;
     string outputFile;
     bool verbose = false;
@@ -30,7 +36,9 @@ void main(string[] args) {
     bool enableDCE = true;
     string targetProfile = "hosted";
     string provenanceFile;
+    string effectsFile;
     string debugBundleDir;
+    string auditDir;
 
     auto helpInfo = getopt(
         args,
@@ -52,8 +60,12 @@ void main(string[] args) {
             &lspSymbolsFile,
         "emit-provenance", "Write generated-C to LLPL source provenance JSON to <file>",
             &provenanceFile,
+        "emit-effects", "Write conservative per-function capability/effect JSON to <file>",
+            &effectsFile,
         "debug-bundle", "Write generated C, provenance, symbols/usages, and manifest artifacts to <dir>",
-            &debugBundleDir
+            &debugBundleDir,
+        "audit-dir", "Directory for `llpl audit` artifacts (default: <input>.llpl-audit)",
+            &auditDir
     );
 
     if (lspSymbolsFile.length > 0) {
@@ -64,6 +76,7 @@ void main(string[] args) {
     if (helpInfo.helpWanted || args.length < 2) {
         defaultGetoptPrinter("LLPL Compiler - Low Level Programming Language\n" ~
                            "Usage: llpl [options] <input.llpl>\n" ~
+                           "       llpl audit [options] <input.llpl>\n" ~
                            "Options:",
                            helpInfo.options);
         return;
@@ -110,9 +123,22 @@ void main(string[] args) {
             if (verbose) writefln("Wrote provenance map to %s", provenanceFile);
         }
 
+        if (effectsFile.length > 0) {
+            std.file.write(effectsFile, buildEffectsJson(codegen));
+            if (verbose) writefln("Wrote effect report to %s", effectsFile);
+        }
+
         if (debugBundleDir.length > 0) {
             writeDebugBundle(debugBundleDir, inputFile, outputFile, targetProfile, cCode, codegen);
             if (verbose) writefln("Wrote debug bundle to %s", debugBundleDir);
+        }
+
+        if (auditMode) {
+            if (auditDir.length == 0) auditDir = stripExtension(inputFile) ~ ".llpl-audit";
+            writeDebugBundle(auditDir, inputFile, outputFile, targetProfile, cCode, codegen);
+            writeAuditVerdict(auditDir, inputFile, outputFile, targetProfile, cCode, codegen);
+            writefln("Audit passed: %s", auditDir);
+            return;
         }
 
         if (binaryMode) {
@@ -226,17 +252,54 @@ private string buildSymbolsJson(CodeGenerator gen) {
     return json;
 }
 
+private string buildEffectsJson(CodeGenerator gen) {
+    string json = "[\n";
+    bool first = true;
+    foreach (effect; gen.effects()) {
+        if (!first) json ~= ",\n";
+        first = false;
+        json ~= format("  { \"name\": \"%s\", \"kind\": \"%s\", \"file\": \"%s\", " ~
+            "\"line\": %d, \"column\": %d, \"effects\": [",
+            jsonEscape(effect.name), jsonEscape(effect.kind), jsonEscape(effect.file),
+            effect.line, effect.column);
+        foreach (i, label; effect.effects) {
+            if (i > 0) json ~= ", ";
+            json ~= "\"" ~ jsonEscape(label) ~ "\"";
+        }
+        json ~= "] }";
+    }
+    json ~= "\n]\n";
+    return json;
+}
+
+private string buildAbiReportJson(string cCode) {
+    string json = "{\n  \"static_asserts\": [\n";
+    bool first = true;
+    foreach (line; cCode.splitLines()) {
+        if (line.indexOf("_Static_assert(") < 0) continue;
+        if (!first) json ~= ",\n";
+        first = false;
+        json ~= format("    { \"c\": \"%s\" }", jsonEscape(line.strip()));
+    }
+    json ~= "\n  ]\n}\n";
+    return json;
+}
+
 private void writeDebugBundle(string dir, string inputFile, string outputFile, string targetProfile,
         string cCode, CodeGenerator gen) {
     mkdirRecurse(dir);
     string generatedCPath = buildNormalizedPath(dir, "generated.c");
     string provenancePath = buildNormalizedPath(dir, "provenance.json");
     string symbolsPath = buildNormalizedPath(dir, "symbols.json");
+    string effectsPath = buildNormalizedPath(dir, "effects.json");
+    string abiPath = buildNormalizedPath(dir, "abi.json");
     string manifestPath = buildNormalizedPath(dir, "manifest.json");
 
     std.file.write(generatedCPath, cCode);
     std.file.write(provenancePath, buildProvenanceJson(cCode));
     std.file.write(symbolsPath, buildSymbolsJson(gen));
+    std.file.write(effectsPath, buildEffectsJson(gen));
+    std.file.write(abiPath, buildAbiReportJson(cCode));
 
     ulong sourceHash = exists(inputFile) ? fnv1a64(cast(const(ubyte)[])read(inputFile)) : 0;
     string manifest = format(
@@ -247,12 +310,43 @@ private void writeDebugBundle(string dir, string inputFile, string outputFile, s
         "  \"source_hash_fnv1a64\": \"%016x\",\n" ~
         "  \"generated_c\": \"%s\",\n" ~
         "  \"provenance\": \"%s\",\n" ~
-        "  \"symbols\": \"%s\"\n" ~
+        "  \"symbols\": \"%s\",\n" ~
+        "  \"effects\": \"%s\",\n" ~
+        "  \"abi_report\": \"%s\",\n" ~
+        "  \"artifact_schema\": \"llpl.build-artifact.v1\"\n" ~
         "}\n",
         jsonEscape(inputFile), jsonEscape(outputFile), jsonEscape(targetProfile),
         sourceHash, jsonEscape(generatedCPath), jsonEscape(provenancePath),
-        jsonEscape(symbolsPath));
+        jsonEscape(symbolsPath), jsonEscape(effectsPath), jsonEscape(abiPath));
     std.file.write(manifestPath, manifest);
+}
+
+private void writeAuditVerdict(string dir, string inputFile, string outputFile, string targetProfile,
+        string cCode, CodeGenerator gen) {
+    size_t unsafeFunctions = 0;
+    size_t ffiFunctions = 0;
+    foreach (effect; gen.effects()) {
+        if (effect.effects.canFind("unsafe")) unsafeFunctions++;
+        if (effect.effects.canFind("ffi")) ffiFunctions++;
+    }
+
+    string auditPath = buildNormalizedPath(dir, "audit.json");
+    string audit = format(
+        "{\n" ~
+        "  \"verdict\": \"pass\",\n" ~
+        "  \"input\": \"%s\",\n" ~
+        "  \"output\": \"%s\",\n" ~
+        "  \"target\": \"%s\",\n" ~
+        "  \"generated_lines\": %d,\n" ~
+        "  \"functions_with_effects\": %d,\n" ~
+        "  \"unsafe_functions\": %d,\n" ~
+        "  \"ffi_functions\": %d,\n" ~
+        "  \"debug_bundle\": \"%s\"\n" ~
+        "}\n",
+        jsonEscape(inputFile), jsonEscape(outputFile), jsonEscape(targetProfile),
+        cCode.splitLines().length, gen.effects().length, unsafeFunctions, ffiFunctions,
+        jsonEscape(dir));
+    std.file.write(auditPath, audit);
 }
 
 // Compiles generated C `cCode` straight down to a native binary at

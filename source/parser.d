@@ -326,6 +326,9 @@ class Parser {
             Token expectedTok = expect(TokenType.Integer, "Expected an integer byte offset after '#assert_offset <Type.field>'");
             return new AbiAssertDecl(AbiAssertKind.Offset, target, parseIntegerValue(expectedTok.value),
                 fieldName, startLine, startColumn);
+        } else if (nameTok.value == "device") {
+            Token pathTok = expect(TokenType.String, "Expected a descriptor path after '#device'");
+            return new DeviceDecl(pathTok.value, startLine, startColumn);
         }
         error(format("Unknown compiler directive '#%s'", nameTok.value));
         return null;
@@ -977,6 +980,14 @@ class Parser {
     }
 
     private GrammarAtom grammarAtom() {
+        if (match(TokenType.Less)) {
+            string marker = expectName("Expected EOF in grammar end marker").value;
+            expect(TokenType.Greater, "Expected '>' to close grammar end marker");
+            if (marker != "EOF") {
+                error("Unknown grammar angle-bracket atom '<" ~ marker ~ ">' (expected '<EOF>')");
+            }
+            return GrammarAtom.makeEnd();
+        }
         // Single- and double-quoted terminal literals both lex to plain
         // TokenType.String while insideGrammar (see Lexer.grammarLiteral_'s
         // own comment) - no need to distinguish quote style here.

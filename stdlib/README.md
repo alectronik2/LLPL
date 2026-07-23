@@ -9,6 +9,7 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 - **String Utilities**: Advanced text processing, formatting, and manipulation
 - **Data Structures**: Comprehensive collection of efficient data structures (linked lists, trees, heaps, hash maps, graphs, tries)
 - **SDL3 Bindings**: Complete graphics, audio, and input handling with high-level wrappers
+- **Hardware Support**: MMIO registers, DMA buffer descriptors, cache barriers, page-region helpers, and device descriptor generation
 - **Command-line Arguments**: `--name value`/`-n value` flags, positional arguments, `func main(args: string[])` support
 - **YAML Parsing**: Block/flow mappings and sequences, typed scalars
 - **JSON Parsing**: RFC 8259 parser and serializer, typed values
@@ -25,6 +26,7 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 - [String Utilities](#string-utilities)
 - [Data Structures](#data-structures)
 - [SDL3 Graphics & Audio](#sdl3-graphics--audio)
+- [Hardware Support](#hardware-support)
 - [Command-line Arguments](#command-line-arguments)
 - [YAML Parsing](#yaml-parsing)
 - [JSON Parsing](#json-parsing)
@@ -54,12 +56,32 @@ Or import specific modules:
 import "stdlib/io/file.llpl"
 import "stdlib/net/socket.llpl"
 import "stdlib/text/string_utils.llpl"
+import "stdlib/hw/hw.llpl"
 ```
 
 (Compiling from within the repo's own root directory works even without
 `LLPL_HOME` set, since the compiler also falls back to resolving imports
 relative to the current working directory - but any other location needs
 `LLPL_HOME`.)
+
+## Hardware Support
+
+The hardware layer is imported separately so hosted programs do not pull in
+kernel-oriented inline assembly unless they need it:
+
+```swift
+import "stdlib/hw/hw.llpl"
+```
+
+It provides plain struct descriptors and namespace functions for:
+
+- `hw.MmioU8/U16/U32/U64` with volatile read/write helpers.
+- `hw.Barrier` compiler/read/write/full barriers, cache flush, prefetch, and page invalidation intrinsics.
+- `hw.DmaBuffer` plus alignment, cache policy, and CPU/device ownership helpers.
+- `hw.PageRegion` plus page alignment and permission flag helpers.
+- `#device "file.lldev"` descriptor expansion for device base addresses, IRQs, register offsets/widths, and DMA resource constants.
+
+See `stdlib/hw/README.md` and `test/hw_features_demo.llpl`.
 
 ## File I/O
 
