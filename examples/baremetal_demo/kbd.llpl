@@ -91,10 +91,10 @@ namespace Keyboard {
     // port 0x60. Scancode set 1: bit 7 set means "key released" (we only
     // care about key-down); 0x2A/0x36 are the left/right shift make-codes.
     //
-    // `code as i64` sign-extends (LLPL's `u8` is a plain, signed C
-    // `u8`), so a byte like 0xAA would come back as -86, not 170 - `&
-    // 255` recovers the true 0-255 value before any comparison against
-    // 0x80 or bit-masking against 0x7F.
+    // `code as i64` zero-extends (LLPL's `u8` is a genuine C `uint8_t`),
+    // so this already comes back as the true 0-255 value with no sign
+    // issues - the `& 255` mask is just defensive belt-and-suspenders
+    // before comparison against 0x80 or bit-masking against 0x7F.
     func on_scancode(code: u8) {
         let raw: i64 = (code as i64) & 255
 

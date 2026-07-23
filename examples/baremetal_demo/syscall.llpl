@@ -1550,14 +1550,12 @@ namespace Syscall {
         if Keyboard.input_focus != Keyboard.FOCUS_WM || !Keyboard.has_char() {
             return 0
         }
-        // `& 255` undoes u8's signedness, exactly like on_scancode's own
-        // comment (kbd.llpl) describes for the identical hazard: the
-        // KEY_UP/DOWN/LEFT/RIGHT/ESC/F2 sentinels (200-205) don't fit in
-        // a signed 8-bit u8, so a bare `as u64` sign-extends them into
-        // huge 64-bit garbage (201 becomes 0xFFFFFFFFFFFFFFC9, not 201) -
-        // silently breaking every ring-3 comparison against
-        // `KEY_UP as u64` etc., which are plain positive i64 constants
-        // that never pass through a signed u8 at all.
+        // `& 255` is defensive belt-and-suspenders, exactly like
+        // on_scancode's own comment (kbd.llpl) describes for the identical
+        // spot: u8 is a genuine unsigned C uint8_t, so a bare `as u64`
+        // already zero-extends correctly - the KEY_UP/DOWN/LEFT/RIGHT/
+        // ESC/F2 sentinels (200-205) come back as plain positive values,
+        // matching `KEY_UP as u64` etc. on the ring-3 comparison side.
         return ((Keyboard.pop_char() as i64) & 255) as u64
     }
 

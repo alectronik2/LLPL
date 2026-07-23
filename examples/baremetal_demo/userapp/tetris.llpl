@@ -248,17 +248,17 @@ func piece_color(p: i64) -> u32 {
 // in user_runtime.llpl (rt_print_uint only ever writes straight to
 // serial), so this does its own digit extraction, least-significant
 // first into a scratch array, then reverses into buf.
-func format_uint(buf: u8*, n: u64) -> i64 {
+func format_uint(buf: char*, n: u64) -> i64 {
     if n == 0 {
         buf[0] = 48
         buf[1] = 0
         return 1
     }
-    let tmp: u8[20]
+    let tmp: char[20]
     let len: i64 = 0
     let v: u64 = n
     while v > 0 {
-        tmp[len] = (48 + (v % 10)) as u8
+        tmp[len] = (48 + (v % 10)) as char
         len = len + 1
         v = v / 10
     }
@@ -313,17 +313,17 @@ func draw_panel() {
     let buf: u32* = wm_buffer()
     let win_w: u64 = Wm.WIN_W as u64
     let win_h: u64 = Wm.WIN_H as u64
-    let numbuf: u8[20]
+    let numbuf: char[20]
 
     Font.draw_string(buf, win_w, win_h, PANEL_X, 8, "TETRIS", 0x00FFFF, BG_COLOR)
 
     Font.draw_string(buf, win_w, win_h, PANEL_X, 32, "LINES", 0xFFFFFF, BG_COLOR)
-    format_uint(numbuf as u8*, lines_total as u64)
-    Font.draw_string(buf, win_w, win_h, PANEL_X, 48, numbuf as u8*, 0xFFFFFF, BG_COLOR)
+    format_uint(numbuf as char*, lines_total as u64)
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 48, numbuf as char*, 0xFFFFFF, BG_COLOR)
 
     Font.draw_string(buf, win_w, win_h, PANEL_X, 72, "SCORE", 0xFFFFFF, BG_COLOR)
-    format_uint(numbuf as u8*, score)
-    Font.draw_string(buf, win_w, win_h, PANEL_X, 88, numbuf as u8*, 0xFFFFFF, BG_COLOR)
+    format_uint(numbuf as char*, score)
+    Font.draw_string(buf, win_w, win_h, PANEL_X, 88, numbuf as char*, 0xFFFFFF, BG_COLOR)
 
     Font.draw_string(buf, win_w, win_h, PANEL_X, 112, "NEXT", 0xFFFFFF, BG_COLOR)
 

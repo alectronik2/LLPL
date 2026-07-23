@@ -43,7 +43,7 @@ const THUMB_PATH_LEN = 160
 const IMAGE_CLIPBOARD_MAX = 16777216
 
 let cur_path: char[96]
-let entries: u8[2304] // MAX_ENTRIES(48) * ENTRY_SIZE(48)
+let entries: char[2304] // MAX_ENTRIES(48) * ENTRY_SIZE(48)
 let entry_count: i64 = 0
 let selected: i64 = 0
 let scroll: i64 = 0
@@ -61,7 +61,7 @@ let status: char[64]
 let clipboard_path: char[160]
 let clipboard_name: char[32]
 let clipboard_valid: bool = false
-let copy_buf: u8[4096]
+let copy_buf: char[4096]
 let prev_mouse_left: bool = false
 let dialog_mode: i64 = 0
 let dialog_text: char[32]
@@ -108,7 +108,7 @@ func rows_visible() -> i64 {
     return rows
 }
 
-func path_len(p: u8*) -> u64 {
+func path_len(p: char*) -> u64 {
     let i: u64 = 0
     while p[i] != 0 {
         i = i + 1
@@ -116,8 +116,8 @@ func path_len(p: u8*) -> u64 {
     return i
 }
 
-func entry_at(i: i64) -> u8* {
-    return (entries as u8*) + i * ENTRY_SIZE
+func entry_at(i: i64) -> char* {
+    return (entries as char*) + i * ENTRY_SIZE
 }
 
 func entry_kind(i: i64) -> u64 {
@@ -130,7 +130,7 @@ func entry_size(i: i64) -> u64 {
     return fields[1]
 }
 
-func name_starts_with(name: u8*, prefix: u8*) -> bool {
+func name_starts_with(name: char*, prefix: char*) -> bool {
     let i: i64 = 0
     while prefix[i] != 0 {
         if name[i] != prefix[i] {
@@ -141,7 +141,7 @@ func name_starts_with(name: u8*, prefix: u8*) -> bool {
     return true
 }
 
-func has_elf_suffix(name: u8*) -> bool {
+func has_elf_suffix(name: char*) -> bool {
     let len: i64 = 0
     while name[len] != 0 {
         len = len + 1
@@ -152,7 +152,7 @@ func has_elf_suffix(name: u8*) -> bool {
     return name[len - 4] == 46 && name[len - 3] == 101 && name[len - 2] == 108 && name[len - 1] == 102
 }
 
-func has_png_suffix(name: u8*) -> bool {
+func has_png_suffix(name: char*) -> bool {
     let len: i64 = 0
     while name[len] != 0 {
         len = len + 1
@@ -163,7 +163,7 @@ func has_png_suffix(name: u8*) -> bool {
     return name[len - 4] == 46 && name[len - 3] == 112 && name[len - 2] == 110 && name[len - 1] == 103
 }
 
-func has_any_suffix(name: u8*, suffix: u8*) -> bool {
+func has_any_suffix(name: char*, suffix: char*) -> bool {
     let len: i64 = 0
     while name[len] != 0 {
         len = len + 1
@@ -185,19 +185,19 @@ func has_any_suffix(name: u8*, suffix: u8*) -> bool {
     return true
 }
 
-func open_file(path: u8*, name: u8*) {
+func open_file(path: char*, name: char*) {
     if has_elf_suffix(name) {
-        sys_spawn(path, "" as u8*)
+        sys_spawn(path, "" as char*)
     } else if has_png_suffix(name) {
-        sys_spawn("/boot/pngviewer.elf" as u8*, path)
-    } else if has_any_suffix(name, ".txt" as u8*) || has_any_suffix(name, ".md" as u8*) || has_any_suffix(name, ".log" as u8*) || has_any_suffix(name, ".json" as u8*) || has_any_suffix(name, ".cfg" as u8*) || has_any_suffix(name, ".ini" as u8*) || has_any_suffix(name, ".llpl" as u8*) || has_any_suffix(name, ".c" as u8*) || has_any_suffix(name, ".h" as u8*) {
-        sys_spawn("/boot/editor.elf" as u8*, path)
+        sys_spawn("/boot/pngviewer.elf" as char*, path)
+    } else if has_any_suffix(name, ".txt" as char*) || has_any_suffix(name, ".md" as char*) || has_any_suffix(name, ".log" as char*) || has_any_suffix(name, ".json" as char*) || has_any_suffix(name, ".cfg" as char*) || has_any_suffix(name, ".ini" as char*) || has_any_suffix(name, ".llpl" as char*) || has_any_suffix(name, ".c" as char*) || has_any_suffix(name, ".h" as char*) {
+        sys_spawn("/boot/editor.elf" as char*, path)
     } else {
         sys_spawn("/boot/editor.elf", path)
     }
 }
 
-func set_status(s: u8*) {
+func set_status(s: char*) {
     let i: i64 = 0
     while i < 63 && s[i] != 0 {
         status[i] = s[i]
@@ -206,20 +206,20 @@ func set_status(s: u8*) {
     status[i] = 0
 }
 
-func append_dec(dst: u8*, pos: u64, n: u64) -> u64 {
+func append_dec(dst: char*, pos: u64, n: u64) -> u64 {
     if n >= 10 {
         pos = append_dec(dst, pos, n / 10)
     }
-    dst[pos] = ((n % 10) + 48) as u8
+    dst[pos] = ((n % 10) + 48) as char
     return pos + 1
 }
 
-func uint_to_dec(dst: u8*, n: u64) {
+func uint_to_dec(dst: char*, n: u64) {
     let pos: u64 = append_dec(dst, 0, n)
     dst[pos] = 0
 }
 
-func make_generated_name(dst: u8*, prefix: u8*, suffix: u8*) {
+func make_generated_name(dst: char*, prefix: char*, suffix: char*) {
     let pos: u64 = 0
     let i: u64 = 0
     while prefix[i] != 0 && pos < 31 {
@@ -238,15 +238,15 @@ func make_generated_name(dst: u8*, prefix: u8*, suffix: u8*) {
     op_counter = op_counter + 1
 }
 
-func selected_path(dst: u8*) {
+func selected_path(dst: char*) {
     if entry_count <= 0 {
         dst[0] = 0
         return
     }
-    join_path(dst, cur_path as u8*, entry_at(selected))
+    join_path(dst, cur_path as char*, entry_at(selected))
 }
 
-func copy_name32(dst: u8*, src: u8*) {
+func copy_name32(dst: char*, src: char*) {
     let i: i64 = 0
     while i < 31 && src[i] != 0 {
         dst[i] = src[i]
@@ -255,11 +255,11 @@ func copy_name32(dst: u8*, src: u8*) {
     dst[i] = 0
 }
 
-func icon_for_entry(name: u8*, kind: u64) -> EmbeddedImage {
+func icon_for_entry(name: char*, kind: u64) -> EmbeddedImage {
     if kind == VFS_KIND_DIR {
         return icon_file
     }
-    if name_starts_with(name, "terminal" as u8*) {
+    if name_starts_with(name, "terminal" as char*) {
         return icon_terminal
     }
     if has_elf_suffix(name) {
@@ -272,7 +272,7 @@ func icon_for_entry(name: u8*, kind: u64) -> EmbeddedImage {
 // writing the result into dst - safe to call with dst == base (every
 // byte written past position path_len(base) never aliases a byte still
 // being read).
-func join_path(dst: u8*, base: u8*, name: u8*) {
+func join_path(dst: char*, base: char*, name: char*) {
     let base_len: u64 = path_len(base)
     let i: u64 = 0
     while i < base_len {
@@ -293,7 +293,7 @@ func join_path(dst: u8*, base: u8*, name: u8*) {
     dst[pos] = 0
 }
 
-func str_eq(a: u8*, b: u8*) -> bool {
+func str_eq(a: char*, b: char*) -> bool {
     let i: i64 = 0
     while a[i] != 0 || b[i] != 0 {
         if a[i] != b[i] {
@@ -304,7 +304,7 @@ func str_eq(a: u8*, b: u8*) -> bool {
     return true
 }
 
-func copy_path(dst: u8*, src: u8*) {
+func copy_path(dst: char*, src: char*) {
     let i: i64 = 0
     while i < THUMB_PATH_LEN - 1 && src[i] != 0 {
         dst[i] = src[i]
@@ -313,11 +313,11 @@ func copy_path(dst: u8*, src: u8*) {
     dst[i] = 0
 }
 
-func thumb_cache_path_at(i: i64) -> u8* {
-    return (thumb_cache_paths as u8*) + i * THUMB_PATH_LEN
+func thumb_cache_path_at(i: i64) -> char* {
+    return (thumb_cache_paths as char*) + i * THUMB_PATH_LEN
 }
 
-func find_thumb_cache(path: u8*) -> i64 {
+func find_thumb_cache(path: char*) -> i64 {
     let i: i64 = 0
     while i < THUMB_CACHE_SIZE {
         if thumb_cache_valid[i] && str_eq(thumb_cache_path_at(i), path) {
@@ -328,7 +328,7 @@ func find_thumb_cache(path: u8*) -> i64 {
     return -1
 }
 
-func store_thumb_cache(path: u8*, image: EmbeddedImage) {
+func store_thumb_cache(path: char*, image: EmbeddedImage) {
     let slot: i64 = thumb_cache_next
     thumb_cache_valid[slot] = true
     copy_path(thumb_cache_path_at(slot), path)
@@ -339,7 +339,7 @@ func store_thumb_cache(path: u8*, image: EmbeddedImage) {
     }
 }
 
-func load_thumbnail_for_entry(idx: i64, full: u8*) {
+func load_thumbnail_for_entry(idx: i64, full: char*) {
     let cached: i64 = find_thumb_cache(full)
     if cached >= 0 {
         thumb_image[idx] = thumb_cache_images[cached]
@@ -355,7 +355,7 @@ func load_thumbnail_for_entry(idx: i64, full: u8*) {
 }
 
 func go_up() {
-    let len: u64 = path_len(cur_path as u8*)
+    let len: u64 = path_len(cur_path as char*)
     if len <= 1 {
         return
     }
@@ -378,12 +378,12 @@ func refresh_listing() {
     let i: u64 = 0
     let done: bool = false
     while (i as i64) < MAX_ENTRIES && !done {
-        let buf: u8[48]
-        let ok: u64 = sys_readdir(cur_path as u8*, i, buf as u8*)
+        let buf: char[48]
+        let ok: u64 = sys_readdir(cur_path as char*, i, buf as char*)
         if ok == RT_SYS_ERR {
             done = true
         } else {
-            let dst: u8* = entry_at(entry_count)
+            let dst: char* = entry_at(entry_count)
             let j: i64 = 0
             while j < 48 {
                 dst[j] = buf[j]
@@ -391,9 +391,9 @@ func refresh_listing() {
             }
             thumb_valid[entry_count] = false
             if entry_kind(entry_count) != VFS_KIND_DIR && has_png_suffix(dst) {
-                let full: u8[160]
-                join_path(full as u8*, cur_path as u8*, dst)
-                load_thumbnail_for_entry(entry_count, full as u8*)
+                let full: char[160]
+                join_path(full as char*, cur_path as char*, dst)
+                load_thumbnail_for_entry(entry_count, full as char*)
             }
             entry_count = entry_count + 1
             i = i + 1
@@ -493,7 +493,7 @@ func render() {
     let win_w: u64 = Wm.WIN_W as u64
     let win_h: u64 = Wm.WIN_H as u64
     draw_icon(buf, icon_file, ICON_X, 4)
-    Font.draw_string(buf, win_w, win_h, ICON_TEXT_X, 4, cur_path as u8*, HEADER_COLOR, BG_COLOR)
+    Font.draw_string(buf, win_w, win_h, ICON_TEXT_X, 4, cur_path as char*, HEADER_COLOR, BG_COLOR)
 
     let visible: i64 = rows_visible()
     let row: i64 = 0
@@ -525,7 +525,7 @@ func render() {
     draw_scrollbar()
     let status_y: u64 = (wm_visible_height() - 16)
     fill_row(buf, status_y, 0x151922)
-    Font.draw_string(buf, win_w, win_h, 8, status_y, status as u8*, FILE_COLOR, 0x151922)
+    Font.draw_string(buf, win_w, win_h, 8, status_y, status as char*, FILE_COLOR, 0x151922)
 
     if dialog_mode != DIALOG_NONE {
         let box_y: u64 = 72
@@ -538,51 +538,51 @@ func render() {
             fill_row(buf, box_y + 80, 0x202030)
         }
         if dialog_mode == DIALOG_NEW_FILE {
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "New file name:" as u8*, HEADER_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "New file name:" as char*, HEADER_COLOR, 0x202030)
         } else if dialog_mode == DIALOG_NEW_FOLDER {
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "New folder name:" as u8*, HEADER_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "New folder name:" as char*, HEADER_COLOR, 0x202030)
         } else if dialog_mode == DIALOG_RENAME {
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Rename to:" as u8*, HEADER_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Rename to:" as char*, HEADER_COLOR, 0x202030)
         } else if dialog_mode == DIALOG_DELETE {
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Delete selected? Enter=yes Esc=no" as u8*, CONFIRM_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Delete selected? Enter=yes Esc=no" as char*, CONFIRM_COLOR, 0x202030)
         } else if dialog_mode == DIALOG_PROPERTIES {
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Properties" as u8*, HEADER_COLOR, 0x202030)
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 20, dialog_old_name as u8*, FILE_COLOR, 0x202030)
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 36, dialog_old_path as u8*, FILE_COLOR, 0x202030)
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 52, "type" as u8*, HEADER_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 4, "Properties" as char*, HEADER_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 20, dialog_old_name as char*, FILE_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 36, dialog_old_path as char*, FILE_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 52, "type" as char*, HEADER_COLOR, 0x202030)
             if entry_kind(selected) == VFS_KIND_DIR {
-                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "folder" as u8*, FILE_COLOR, 0x202030)
-            } else if has_png_suffix(dialog_old_name as u8*) {
-                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "png image" as u8*, FILE_COLOR, 0x202030)
-            } else if has_elf_suffix(dialog_old_name as u8*) {
-                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "program" as u8*, FILE_COLOR, 0x202030)
+                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "folder" as char*, FILE_COLOR, 0x202030)
+            } else if has_png_suffix(dialog_old_name as char*) {
+                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "png image" as char*, FILE_COLOR, 0x202030)
+            } else if has_elf_suffix(dialog_old_name as char*) {
+                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "program" as char*, FILE_COLOR, 0x202030)
             } else {
-                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "file" as u8*, FILE_COLOR, 0x202030)
+                Font.draw_string(buf, win_w, win_h, 58, box_y + 52, "file" as char*, FILE_COLOR, 0x202030)
             }
-            let szbuf: u8[24]
-            uint_to_dec(szbuf as u8*, entry_size(selected))
-            Font.draw_string(buf, win_w, win_h, 148, box_y + 52, "size" as u8*, HEADER_COLOR, 0x202030)
-            Font.draw_string(buf, win_w, win_h, 194, box_y + 52, szbuf as u8*, FILE_COLOR, 0x202030)
-            if has_png_suffix(dialog_old_name as u8*) {
+            let szbuf: char[24]
+            uint_to_dec(szbuf as char*, entry_size(selected))
+            Font.draw_string(buf, win_w, win_h, 148, box_y + 52, "size" as char*, HEADER_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 194, box_y + 52, szbuf as char*, FILE_COLOR, 0x202030)
+            if has_png_suffix(dialog_old_name as char*) {
                 let png: DecodedPng
-                if png_decode_file(dialog_old_path as u8*, &png) {
-                    let wbuf: u8[24]
-                    let hbuf: u8[24]
-                    uint_to_dec(wbuf as u8*, png.width)
-                    uint_to_dec(hbuf as u8*, png.height)
-                    Font.draw_string(buf, win_w, win_h, 12, box_y + 68, "image" as u8*, HEADER_COLOR, 0x202030)
-                    Font.draw_string(buf, win_w, win_h, 58, box_y + 68, wbuf as u8*, FILE_COLOR, 0x202030)
-                    Font.draw_string(buf, win_w, win_h, 90, box_y + 68, "x" as u8*, HEADER_COLOR, 0x202030)
-                    Font.draw_string(buf, win_w, win_h, 106, box_y + 68, hbuf as u8*, FILE_COLOR, 0x202030)
+                if png_decode_file(dialog_old_path as char*, &png) {
+                    let wbuf: char[24]
+                    let hbuf: char[24]
+                    uint_to_dec(wbuf as char*, png.width)
+                    uint_to_dec(hbuf as char*, png.height)
+                    Font.draw_string(buf, win_w, win_h, 12, box_y + 68, "image" as char*, HEADER_COLOR, 0x202030)
+                    Font.draw_string(buf, win_w, win_h, 58, box_y + 68, wbuf as char*, FILE_COLOR, 0x202030)
+                    Font.draw_string(buf, win_w, win_h, 90, box_y + 68, "x" as char*, HEADER_COLOR, 0x202030)
+                    Font.draw_string(buf, win_w, win_h, 106, box_y + 68, hbuf as char*, FILE_COLOR, 0x202030)
                     sys_free(png.data)
                 } else {
                     Font.draw_string(buf, win_w, win_h, 12, box_y + 68, png_decode_last_error(), CONFIRM_COLOR, 0x202030)
                 }
             }
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 84, "Enter copies path" as u8*, HEADER_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 84, "Enter copies path" as char*, HEADER_COLOR, 0x202030)
         }
         if dialog_mode != DIALOG_DELETE && dialog_mode != DIALOG_PROPERTIES {
-            Font.draw_string(buf, win_w, win_h, 12, box_y + 22, dialog_text as u8*, FILE_COLOR, 0x202030)
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 22, dialog_text as char*, FILE_COLOR, 0x202030)
         }
     }
     draw_context_menu()
@@ -609,7 +609,7 @@ func move_selection_down() {
     }
 }
 
-func start_text_dialog(mode: i64, initial: u8*) {
+func start_text_dialog(mode: i64, initial: char*) {
     dialog_mode = mode
     dialog_len = 0
     let i: i64 = 0
@@ -629,11 +629,11 @@ func close_dialog() {
 
 func open_properties_dialog() {
     if entry_count <= 0 {
-        set_status("properties unavailable" as u8*)
+        set_status("properties unavailable" as char*)
         return
     }
-    selected_path(dialog_old_path as u8*)
-    copy_name32(dialog_old_name as u8*, entry_at(selected))
+    selected_path(dialog_old_path as char*)
+    copy_name32(dialog_old_name as char*, entry_at(selected))
     dialog_mode = DIALOG_PROPERTIES
 }
 
@@ -654,12 +654,12 @@ func close_context_menu() {
     open_with_menu_entry = -1
 }
 
-func open_selected_path(dst: u8*) {
+func open_selected_path(dst: char*) {
     if context_menu_entry < 0 || context_menu_entry >= entry_count {
         dst[0] = 0
         return
     }
-    join_path(dst, cur_path as u8*, entry_at(context_menu_entry))
+    join_path(dst, cur_path as char*, entry_at(context_menu_entry))
 }
 
 func open_with_selected(choice: i64) {
@@ -667,14 +667,14 @@ func open_with_selected(choice: i64) {
         close_context_menu()
         return
     }
-    let full: u8[160]
-    join_path(full as u8*, cur_path as u8*, entry_at(open_with_menu_entry))
+    let full: char[160]
+    join_path(full as char*, cur_path as char*, entry_at(open_with_menu_entry))
     if choice == OPEN_WITH_EDITOR {
-        sys_spawn("/boot/editor.elf" as u8*, full as u8*)
+        sys_spawn("/boot/editor.elf" as char*, full as char*)
     } else if choice == OPEN_WITH_PNG {
-        sys_spawn("/boot/pngviewer.elf" as u8*, full as u8*)
+        sys_spawn("/boot/pngviewer.elf" as char*, full as char*)
     } else if choice == OPEN_WITH_TERMINAL {
-        sys_spawn("/boot/terminal.elf" as u8*, full as u8*)
+        sys_spawn("/boot/terminal.elf" as char*, full as char*)
     }
     close_context_menu()
 }
@@ -742,11 +742,11 @@ func draw_context_menu() {
         wm_put_pixel((draw_x + j) as u64, (draw_y + menu_h - 1) as u64, 0x707080)
         j = j + 1
     }
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 6) as u64, "Open" as u8*, HEADER_COLOR, 0x181C24)
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 24) as u64, "Open with" as u8*, HEADER_COLOR, 0x181C24)
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 42) as u64, "Rename" as u8*, HEADER_COLOR, 0x181C24)
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 60) as u64, "Delete" as u8*, HEADER_COLOR, 0x181C24)
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 78) as u64, "Properties" as u8*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 6) as u64, "Open" as char*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 24) as u64, "Open with" as char*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 42) as u64, "Rename" as char*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 60) as u64, "Delete" as char*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 78) as u64, "Properties" as char*, HEADER_COLOR, 0x181C24)
 }
 
 func draw_open_with_menu() {
@@ -787,9 +787,9 @@ func draw_open_with_menu() {
         wm_put_pixel((draw_x + j) as u64, (draw_y + menu_h - 1) as u64, 0x707080)
         j = j + 1
     }
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 6) as u64, "Editor" as u8*, HEADER_COLOR, 0x181C24)
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 24) as u64, "PNG viewer" as u8*, HEADER_COLOR, 0x181C24)
-    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 42) as u64, "Terminal" as u8*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 6) as u64, "Editor" as char*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 24) as u64, "PNG viewer" as char*, HEADER_COLOR, 0x181C24)
+    Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, (draw_x + 8) as u64, (draw_y + 42) as u64, "Terminal" as char*, HEADER_COLOR, 0x181C24)
 }
 
 func context_menu_action(mx: i64, my: i64) -> i64 {
@@ -836,26 +836,26 @@ func open_with_menu_action(mx: i64, my: i64) -> i64 {
 
 func invoke_context_menu(action: i64) {
     if action == 1 {
-        let full: u8[160]
+        let full: char[160]
         if entry_count > 0 {
-            selected_path(full as u8*)
-            open_file(full as u8*, entry_at(selected))
+            selected_path(full as char*)
+            open_file(full as char*, entry_at(selected))
         }
     } else if action == 2 {
         open_open_with_menu()
     } else if action == 3 {
         if entry_count > 0 {
-            let name: u8[32]
+            let name: char[32]
             let i: i64 = 0
             while i < 31 && entry_at(selected)[i] != 0 {
                 name[i] = entry_at(selected)[i]
                 i = i + 1
             }
             name[i] = 0
-            start_text_dialog(DIALOG_RENAME, name as u8*)
+            start_text_dialog(DIALOG_RENAME, name as char*)
         }
     } else if action == 4 {
-        start_text_dialog(DIALOG_DELETE, "" as u8*)
+        start_text_dialog(DIALOG_DELETE, "" as char*)
     } else if action == 5 {
         open_properties_dialog()
     }
@@ -881,7 +881,7 @@ func dialog_backspace() {
     }
 }
 
-func dialog_insert(c: u8) {
+func dialog_insert(c: char) {
     if dialog_len < 31 && c != 47 {
         dialog_text[dialog_len] = c
         dialog_len = dialog_len + 1
@@ -889,47 +889,47 @@ func dialog_insert(c: u8) {
     }
 }
 
-func create_named_file(name: u8*) {
-    let full: u8[160]
-    join_path(full as u8*, cur_path as u8*, name)
-    let text: u8* = "" as u8*
-    if sys_write_all(full as u8*, text, 0) == RT_SYS_ERR {
-        set_status("create file failed" as u8*)
+func create_named_file(name: char*) {
+    let full: char[160]
+    join_path(full as char*, cur_path as char*, name)
+    let text: char* = "" as char*
+    if sys_write_all(full as char*, text, 0) == RT_SYS_ERR {
+        set_status("create file failed" as char*)
     } else {
-        set_status("file created" as u8*)
+        set_status("file created" as char*)
     }
     refresh_listing()
 }
 
-func create_named_folder(name: u8*) {
-    let full: u8[160]
-    join_path(full as u8*, cur_path as u8*, name)
-    if sys_mkdir(full as u8*) == RT_SYS_ERR {
-        set_status("create folder failed" as u8*)
+func create_named_folder(name: char*) {
+    let full: char[160]
+    join_path(full as char*, cur_path as char*, name)
+    if sys_mkdir(full as char*) == RT_SYS_ERR {
+        set_status("create folder failed" as char*)
     } else {
-        set_status("folder created" as u8*)
+        set_status("folder created" as char*)
     }
     refresh_listing()
 }
 
-func rename_selected_to(new_name: u8*) {
+func rename_selected_to(new_name: char*) {
     if dialog_old_path[0] == 0 || new_name[0] == 0 {
-        set_status("rename failed" as u8*)
+        set_status("rename failed" as char*)
         return
     }
-    let n: u64 = sys_read_all(dialog_old_path as u8*, copy_buf as u8*, 4096)
+    let n: u64 = sys_read_all(dialog_old_path as char*, copy_buf as char*, 4096)
     if n == RT_SYS_ERR {
-        set_status("read failed" as u8*)
+        set_status("read failed" as char*)
         return
     }
-    let full: u8[160]
-    join_path(full as u8*, cur_path as u8*, new_name)
-    if sys_write_all(full as u8*, copy_buf as u8*, n) == RT_SYS_ERR {
-        set_status("write failed" as u8*)
+    let full: char[160]
+    join_path(full as char*, cur_path as char*, new_name)
+    if sys_write_all(full as char*, copy_buf as char*, n) == RT_SYS_ERR {
+        set_status("write failed" as char*)
         return
     }
-    sys_rm(dialog_old_path as u8*)
-    set_status("renamed" as u8*)
+    sys_rm(dialog_old_path as char*)
+    set_status("renamed" as char*)
     refresh_listing()
 }
 
@@ -940,48 +940,48 @@ func accept_dialog() {
         return
     }
     if dialog_mode == DIALOG_PROPERTIES {
-        sys_clipboard_set(dialog_old_path as char*, path_len(dialog_old_path as u8*))
-        set_status("path copied" as u8*)
+        sys_clipboard_set(dialog_old_path as char*, path_len(dialog_old_path as char*))
+        set_status("path copied" as char*)
         close_dialog()
         return
     }
     if dialog_text[0] == 0 {
-        set_status("name required" as u8*)
+        set_status("name required" as char*)
         return
     }
     if dialog_mode == DIALOG_NEW_FILE {
-        create_named_file(dialog_text as u8*)
+        create_named_file(dialog_text as char*)
     } else if dialog_mode == DIALOG_NEW_FOLDER {
-        create_named_folder(dialog_text as u8*)
+        create_named_folder(dialog_text as char*)
     } else if dialog_mode == DIALOG_RENAME {
-        rename_selected_to(dialog_text as u8*)
+        rename_selected_to(dialog_text as char*)
     }
     close_dialog()
 }
 
 func create_generated_file() {
-    let name: u8[32]
-    let full: u8[160]
-    make_generated_name(name as u8*, "file" as u8*, ".txt" as u8*)
-    join_path(full as u8*, cur_path as u8*, name as u8*)
-    let text: u8* = "" as u8*
-    if sys_write_all(full as u8*, text, 0) == RT_SYS_ERR {
-        set_status("create file failed" as u8*)
+    let name: char[32]
+    let full: char[160]
+    make_generated_name(name as char*, "file" as char*, ".txt" as char*)
+    join_path(full as char*, cur_path as char*, name as char*)
+    let text: char* = "" as char*
+    if sys_write_all(full as char*, text, 0) == RT_SYS_ERR {
+        set_status("create file failed" as char*)
     } else {
-        set_status("file created" as u8*)
+        set_status("file created" as char*)
     }
     refresh_listing()
 }
 
 func create_generated_folder() {
-    let name: u8[32]
-    let full: u8[160]
-    make_generated_name(name as u8*, "folder" as u8*, "" as u8*)
-    join_path(full as u8*, cur_path as u8*, name as u8*)
-    if sys_mkdir(full as u8*) == RT_SYS_ERR {
-        set_status("create folder failed" as u8*)
+    let name: char[32]
+    let full: char[160]
+    make_generated_name(name as char*, "folder" as char*, "" as char*)
+    join_path(full as char*, cur_path as char*, name as char*)
+    if sys_mkdir(full as char*) == RT_SYS_ERR {
+        set_status("create folder failed" as char*)
     } else {
-        set_status("folder created" as u8*)
+        set_status("folder created" as char*)
     }
     refresh_listing()
 }
@@ -990,23 +990,23 @@ func delete_selected() {
     if entry_count <= 0 {
         return
     }
-    let full: u8[160]
-    selected_path(full as u8*)
-    if sys_rm(full as u8*) == RT_SYS_ERR {
-        set_status("delete failed" as u8*)
+    let full: char[160]
+    selected_path(full as char*)
+    if sys_rm(full as char*) == RT_SYS_ERR {
+        set_status("delete failed" as char*)
     } else {
-        set_status("deleted" as u8*)
+        set_status("deleted" as char*)
     }
     refresh_listing()
 }
 
 func copy_selected() {
     if entry_count <= 0 || entry_kind(selected) == VFS_KIND_DIR {
-        set_status("copy failed" as u8*)
+        set_status("copy failed" as char*)
         return
     }
-    selected_path(clipboard_path as u8*)
-    let name: u8* = entry_at(selected)
+    selected_path(clipboard_path as char*)
+    let name: char* = entry_at(selected)
     let i: i64 = 0
     while i < 31 && name[i] != 0 {
         clipboard_name[i] = name[i]
@@ -1014,21 +1014,21 @@ func copy_selected() {
     }
     clipboard_name[i] = 0
     clipboard_valid = true
-    sys_clipboard_set(clipboard_path as u8*, path_len(clipboard_path as u8*))
+    sys_clipboard_set(clipboard_path as char*, path_len(clipboard_path as char*))
     if has_png_suffix(name) {
         let decoded: DecodedPng
-        if png_decode_file(clipboard_path as u8*, &decoded) {
+        if png_decode_file(clipboard_path as char*, &decoded) {
             sys_clipboard_set_image(decoded.data, decoded.width, decoded.height)
             sys_free(decoded.data)
-            set_status("copied image" as u8*)
+            set_status("copied image" as char*)
             return
         }
     }
-    set_status("copied path" as u8*)
+    set_status("copied path" as char*)
 }
 
 func system_clipboard_path() -> bool {
-    let n: u64 = sys_clipboard_get(clipboard_path as u8*, 159)
+    let n: u64 = sys_clipboard_get(clipboard_path as char*, 159)
     if n == RT_SYS_ERR || n == 0 {
         return false
     }
@@ -1040,27 +1040,27 @@ func system_clipboard_path() -> bool {
     return true
 }
 
-func paste_file(prefix: u8*) -> bool {
+func paste_file(prefix: char*) -> bool {
     if !clipboard_valid {
         if !system_clipboard_path() {
-            set_status("paste failed" as u8*)
+            set_status("paste failed" as char*)
             return false
         }
     }
-    let n: u64 = sys_read_all(clipboard_path as u8*, copy_buf as u8*, 4096)
+    let n: u64 = sys_read_all(clipboard_path as char*, copy_buf as char*, 4096)
     if n == RT_SYS_ERR {
-        set_status("read failed" as u8*)
+        set_status("read failed" as char*)
         return false
     }
-    let name: u8[32]
-    let full: u8[160]
-    make_generated_name(name as u8*, prefix, ".txt" as u8*)
-    join_path(full as u8*, cur_path as u8*, name as u8*)
-    if sys_write_all(full as u8*, copy_buf as u8*, n) == RT_SYS_ERR {
-        set_status("write failed" as u8*)
+    let name: char[32]
+    let full: char[160]
+    make_generated_name(name as char*, prefix, ".txt" as char*)
+    join_path(full as char*, cur_path as char*, name as char*)
+    if sys_write_all(full as char*, copy_buf as char*, n) == RT_SYS_ERR {
+        set_status("write failed" as char*)
         return false
     }
-    set_status("pasted" as u8*)
+    set_status("pasted" as char*)
     refresh_listing()
     return true
 }
@@ -1072,28 +1072,28 @@ func paste_image_file() -> bool {
     }
     let needed: u64 = info[2]
     if needed == 0 || needed > IMAGE_CLIPBOARD_MAX {
-        set_status("image too large" as u8*)
+        set_status("image too large" as char*)
         return true
     }
-    let image_clip_buf: u8* = sys_malloc(needed)
+    let image_clip_buf: char* = sys_malloc(needed)
     if image_clip_buf == null {
-        set_status("image alloc failed" as u8*)
+        set_status("image alloc failed" as char*)
         return true
     }
     if sys_clipboard_get_image(image_clip_buf, needed) != needed {
         sys_free(image_clip_buf)
-        set_status("image paste failed" as u8*)
+        set_status("image paste failed" as char*)
         return true
     }
-    let name: u8[32]
-    let full: u8[160]
-    make_generated_name(name as u8*, "image" as u8*, ".png" as u8*)
-    join_path(full as u8*, cur_path as u8*, name as u8*)
-    if png_encode_file(full as u8*, info[0], info[1], info[0] * 4, image_clip_buf) {
-        set_status("pasted image" as u8*)
+    let name: char[32]
+    let full: char[160]
+    make_generated_name(name as char*, "image" as char*, ".png" as char*)
+    join_path(full as char*, cur_path as char*, name as char*)
+    if png_encode_file(full as char*, info[0], info[1], info[0] * 4, image_clip_buf) {
+        set_status("pasted image" as char*)
         refresh_listing()
     } else {
-        set_status("png save failed" as u8*)
+        set_status("png save failed" as char*)
     }
     sys_free(image_clip_buf)
     return true
@@ -1101,15 +1101,15 @@ func paste_image_file() -> bool {
 
 func rename_selected() {
     if entry_count <= 0 || entry_kind(selected) == VFS_KIND_DIR {
-        set_status("rename failed" as u8*)
+        set_status("rename failed" as char*)
         return
     }
     copy_selected()
-    let old: u8[160]
-    selected_path(old as u8*)
-    if paste_file("renamed" as u8*) {
-        sys_rm(old as u8*)
-        set_status("renamed" as u8*)
+    let old: char[160]
+    selected_path(old as char*)
+    if paste_file("renamed" as char*) {
+        sys_rm(old as char*)
+        set_status("renamed" as char*)
         refresh_listing()
     }
 }
@@ -1118,9 +1118,9 @@ func open_selected_with_terminal() {
     if entry_count <= 0 {
         return
     }
-    let full: u8[160]
-    selected_path(full as u8*)
-    sys_spawn("/boot/terminal.elf" as u8*, full as u8*)
+    let full: char[160]
+    selected_path(full as char*)
+    sys_spawn("/boot/terminal.elf" as char*, full as char*)
 }
 
 func entry_index_from_mouse(mx: i64, my: i64) -> i64 {
@@ -1160,7 +1160,7 @@ func _start(argc: u64, argv: u64*) {
 
     cur_path[0] = 47
     cur_path[1] = 0
-    set_status("ready" as u8*)
+    set_status("ready" as char*)
     refresh_listing()
     let press_row: i64 = -1
 
@@ -1185,23 +1185,23 @@ func _start(argc: u64, argv: u64*) {
             press_row = entry_index_from_mouse(input.mouse_x, input.mouse_y)
         if press_row >= 0 {
             selected = press_row
-            let full: u8[160]
-            selected_path(full as u8*)
-            wm_begin_file_drag(full as u8*)
+            let full: char[160]
+            selected_path(full as char*)
+            wm_begin_file_drag(full as char*)
         }
         } else if !input.mouse_left && prev_mouse_left {
             let release_row: i64 = entry_index_from_mouse(input.mouse_x, input.mouse_y)
             if press_row >= 0 && release_row == press_row {
                 if entry_count > 0 {
-                    let name: u8* = entry_at(selected)
+                    let name: char* = entry_at(selected)
                     let kind: u64 = entry_kind(selected)
                     if kind == VFS_KIND_DIR {
-                        join_path(cur_path as u8*, cur_path as u8*, name)
+                        join_path(cur_path as char*, cur_path as char*, name)
                         refresh_listing()
                     } else {
-                        let full: u8[160]
-                        join_path(full as u8*, cur_path as u8*, name)
-                        open_file(full as u8*, name)
+                        let full: char[160]
+                        join_path(full as char*, cur_path as char*, name)
+                        open_file(full as char*, name)
                     }
                 }
             }
@@ -1229,7 +1229,7 @@ func _start(argc: u64, argv: u64*) {
             } else if key == 8 {
                 dialog_backspace()
             } else if key >= 32 && key < 127 {
-                dialog_insert(key as u8)
+                dialog_insert(key as char)
             }
         } else if key == (KEY_CLOSE_REQ as u64) {
             // Nothing here worth keeping around to ask about (unlike
@@ -1244,54 +1244,54 @@ func _start(argc: u64, argv: u64*) {
             move_selection_down()
         } else if key == 10 {
             if entry_count > 0 {
-                let name: u8* = entry_at(selected)
+                let name: char* = entry_at(selected)
                 let kind: u64 = entry_kind(selected)
                 if kind == VFS_KIND_DIR {
-                    join_path(cur_path as u8*, cur_path as u8*, name)
+                    join_path(cur_path as char*, cur_path as char*, name)
                     refresh_listing()
                 } else {
-                    let full: u8[160]
-                    join_path(full as u8*, cur_path as u8*, name)
-                    open_file(full as u8*, name)
+                    let full: char[160]
+                    join_path(full as char*, cur_path as char*, name)
+                    open_file(full as char*, name)
                 }
             }
         } else if key == (KEY_ESC as u64) {
             go_up()
             refresh_listing()
         } else if key == 102 || key == 70 {
-            start_text_dialog(DIALOG_NEW_FILE, "new.txt" as u8*)
+            start_text_dialog(DIALOG_NEW_FILE, "new.txt" as char*)
         } else if key == 110 || key == 78 {
-            start_text_dialog(DIALOG_NEW_FOLDER, "folder" as u8*)
+            start_text_dialog(DIALOG_NEW_FOLDER, "folder" as char*)
         } else if key == 100 || key == 68 {
             if entry_count > 0 {
-                start_text_dialog(DIALOG_DELETE, "" as u8*)
+                start_text_dialog(DIALOG_DELETE, "" as char*)
             }
         } else if key == 99 || key == 67 {
             copy_selected()
         } else if key == 118 || key == 86 {
             if !paste_image_file() {
-                paste_file("copy" as u8*)
+                paste_file("copy" as char*)
             }
         } else if key == 114 || key == 82 {
             if entry_count > 0 && entry_kind(selected) != VFS_KIND_DIR {
-                selected_path(dialog_old_path as u8*)
-                copy_name32(dialog_old_name as u8*, entry_at(selected))
-                start_text_dialog(DIALOG_RENAME, dialog_old_name as u8*)
+                selected_path(dialog_old_path as char*)
+                copy_name32(dialog_old_name as char*, entry_at(selected))
+                start_text_dialog(DIALOG_RENAME, dialog_old_name as char*)
             } else {
-                set_status("rename failed" as u8*)
+                set_status("rename failed" as char*)
             }
         } else if key == 101 || key == 69 {
             if entry_count > 0 {
-                let full: u8[160]
-                selected_path(full as u8*)
-                sys_spawn("/boot/editor.elf" as u8*, full as u8*)
+                let full: char[160]
+                selected_path(full as char*)
+                sys_spawn("/boot/editor.elf" as char*, full as char*)
             }
     } else if key == 120 || key == 88 {
         open_selected_with_terminal()
     } else if input.drop_valid {
         if input.drop_path[0] != 0 {
-            open_file(input.drop_path as u8*, input.drop_path as u8*)
-            set_status("dropped" as u8*)
+            open_file(input.drop_path as char*, input.drop_path as char*)
+            set_status("dropped" as char*)
         }
     }
 

@@ -472,9 +472,9 @@ namespace Framebuffer {
 
         let row: i64 = 0
         while row < GLYPH_HEIGHT {
-            // `& 255` undoes u8's signedness before testing bits - a
-            // glyph row byte like 254 would otherwise read back negative
-            // and corrupt every bit test below.
+            // `& 255` is defensive belt-and-suspenders before testing bits
+            // (u8 is a genuine unsigned C uint8_t, so this already comes
+            // back as the true 0-255 value with no sign issues).
             let bits: i64 = (font_data[glyph_offset + row] as i64) & 255
             let col: i64 = 0
             while col < GLYPH_WIDTH {
