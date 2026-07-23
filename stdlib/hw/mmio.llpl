@@ -45,46 +45,139 @@ namespace hw {
         return new MmioU64(addr)
     }
 
-    func mmio_read_u8(reg: MmioU8) -> u8 {
-        Barrier.read()
+    // Three tiers, from fastest to strongest-ordered - same shape for
+    // every width below:
+    //   - `_relaxed`: the bare asm access, no barrier at all. Caller is
+    //     responsible for ordering (e.g. several back-to-back accesses to
+    //     the same device under one manual Barrier.* call).
+    //   - plain (`mmio_read_u32`/`mmio_write_u32`): today's existing
+    //     behavior, unchanged - a per-access lfence/sfence, the right
+    //     default for ordinary same-device register access.
+    //   - `_fenced`: a full `mfence` instead of the lighter read/write
+    //     barrier - for the stronger ordering DMA/CPU cache-coherency
+    //     boundaries need (the same Barrier.full() dma.llpl's own
+    //     dma_sync_for_device/dma_sync_for_cpu already reach for).
+
+    func mmio_read_u8_relaxed(reg: MmioU8) -> u8 {
         let value: u8 = 0
         asm("movb %1, %b0" : "=q"(value) : "m"(*(reg.addr as u8*)) : "memory")
+        return value
+    }
+
+    func mmio_write_u8_relaxed(reg: MmioU8, value: u8) {
+        asm("movb %b0, %1" : : "q"(value), "m"(*(reg.addr as u8*)) : "memory")
+    }
+
+    func mmio_read_u8(reg: MmioU8) -> u8 {
+        Barrier.read()
+        let value: u8 = mmio_read_u8_relaxed(reg)
         Barrier.read()
         return value
     }
 
     func mmio_write_u8(reg: MmioU8, value: u8) {
         Barrier.write()
-        asm("movb %b0, %1" : : "q"(value), "m"(*(reg.addr as u8*)) : "memory")
+        mmio_write_u8_relaxed(reg, value)
         Barrier.write()
+    }
+
+    func mmio_read_u8_fenced(reg: MmioU8) -> u8 {
+        Barrier.full()
+        let value: u8 = mmio_read_u8_relaxed(reg)
+        Barrier.full()
+        return value
+    }
+
+    func mmio_write_u8_fenced(reg: MmioU8, value: u8) {
+        Barrier.full()
+        mmio_write_u8_relaxed(reg, value)
+        Barrier.full()
+    }
+
+    func mmio_update_u8(reg: MmioU8, clear_mask: u8, set_mask: u8) -> u8 {
+        let old: u8 = mmio_read_u8(reg)
+        let next: u8 = (old & ~clear_mask) | set_mask
+        mmio_write_u8(reg, next)
+        return next
+    }
+
+    func mmio_read_u16_relaxed(reg: MmioU16) -> u16 {
+        let value: u16 = 0
+        asm("movw %1, %w0" : "=r"(value) : "m"(*(reg.addr as u16*)) : "memory")
+        return value
+    }
+
+    func mmio_write_u16_relaxed(reg: MmioU16, value: u16) {
+        asm("movw %w0, %1" : : "r"(value), "m"(*(reg.addr as u16*)) : "memory")
     }
 
     func mmio_read_u16(reg: MmioU16) -> u16 {
         Barrier.read()
-        let value: u16 = 0
-        asm("movw %1, %w0" : "=r"(value) : "m"(*(reg.addr as u16*)) : "memory")
+        let value: u16 = mmio_read_u16_relaxed(reg)
         Barrier.read()
         return value
     }
 
     func mmio_write_u16(reg: MmioU16, value: u16) {
         Barrier.write()
-        asm("movw %w0, %1" : : "r"(value), "m"(*(reg.addr as u16*)) : "memory")
+        mmio_write_u16_relaxed(reg, value)
         Barrier.write()
+    }
+
+    func mmio_read_u16_fenced(reg: MmioU16) -> u16 {
+        Barrier.full()
+        let value: u16 = mmio_read_u16_relaxed(reg)
+        Barrier.full()
+        return value
+    }
+
+    func mmio_write_u16_fenced(reg: MmioU16, value: u16) {
+        Barrier.full()
+        mmio_write_u16_relaxed(reg, value)
+        Barrier.full()
+    }
+
+    func mmio_update_u16(reg: MmioU16, clear_mask: u16, set_mask: u16) -> u16 {
+        let old: u16 = mmio_read_u16(reg)
+        let next: u16 = (old & ~clear_mask) | set_mask
+        mmio_write_u16(reg, next)
+        return next
+    }
+
+    func mmio_read_u32_relaxed(reg: MmioU32) -> u32 {
+        let value: u32 = 0
+        asm("movl %1, %k0" : "=r"(value) : "m"(*(reg.addr as u32*)) : "memory")
+        return value
+    }
+
+    func mmio_write_u32_relaxed(reg: MmioU32, value: u32) {
+        asm("movl %k0, %1" : : "r"(value), "m"(*(reg.addr as u32*)) : "memory")
     }
 
     func mmio_read_u32(reg: MmioU32) -> u32 {
         Barrier.read()
-        let value: u32 = 0
-        asm("movl %1, %k0" : "=r"(value) : "m"(*(reg.addr as u32*)) : "memory")
+        let value: u32 = mmio_read_u32_relaxed(reg)
         Barrier.read()
         return value
     }
 
     func mmio_write_u32(reg: MmioU32, value: u32) {
         Barrier.write()
-        asm("movl %k0, %1" : : "r"(value), "m"(*(reg.addr as u32*)) : "memory")
+        mmio_write_u32_relaxed(reg, value)
         Barrier.write()
+    }
+
+    func mmio_read_u32_fenced(reg: MmioU32) -> u32 {
+        Barrier.full()
+        let value: u32 = mmio_read_u32_relaxed(reg)
+        Barrier.full()
+        return value
+    }
+
+    func mmio_write_u32_fenced(reg: MmioU32, value: u32) {
+        Barrier.full()
+        mmio_write_u32_relaxed(reg, value)
+        Barrier.full()
     }
 
     func mmio_update_u32(reg: MmioU32, clear_mask: u32, set_mask: u32) -> u32 {
@@ -94,17 +187,105 @@ namespace hw {
         return next
     }
 
-    func mmio_read_u64(reg: MmioU64) -> u64 {
-        Barrier.read()
+    func mmio_read_u64_relaxed(reg: MmioU64) -> u64 {
         let value: u64 = 0
         asm("movq %1, %0" : "=r"(value) : "m"(*(reg.addr as u64*)) : "memory")
+        return value
+    }
+
+    func mmio_write_u64_relaxed(reg: MmioU64, value: u64) {
+        asm("movq %0, %1" : : "r"(value), "m"(*(reg.addr as u64*)) : "memory")
+    }
+
+    func mmio_read_u64(reg: MmioU64) -> u64 {
+        Barrier.read()
+        let value: u64 = mmio_read_u64_relaxed(reg)
         Barrier.read()
         return value
     }
 
     func mmio_write_u64(reg: MmioU64, value: u64) {
         Barrier.write()
-        asm("movq %0, %1" : : "r"(value), "m"(*(reg.addr as u64*)) : "memory")
+        mmio_write_u64_relaxed(reg, value)
         Barrier.write()
+    }
+
+    func mmio_read_u64_fenced(reg: MmioU64) -> u64 {
+        Barrier.full()
+        let value: u64 = mmio_read_u64_relaxed(reg)
+        Barrier.full()
+        return value
+    }
+
+    func mmio_write_u64_fenced(reg: MmioU64, value: u64) {
+        Barrier.full()
+        mmio_write_u64_relaxed(reg, value)
+        Barrier.full()
+    }
+
+    func mmio_update_u64(reg: MmioU64, clear_mask: u64, set_mask: u64) -> u64 {
+        let old: u64 = mmio_read_u64(reg)
+        let next: u64 = (old & ~clear_mask) | set_mask
+        mmio_write_u64(reg, next)
+        return next
+    }
+
+    // A typed window over one device's register file - `base` plus a
+    // byte offset per access, rather than a fresh absolute address for
+    // every register (compare hw.device_register in device.llpl, which
+    // pairs a single base+offset but no per-width typed accessors or
+    // alignment check). `align` is normally the natural width of the
+    // *widest* register in the block (8 for a block with any u64
+    // register) so every offset handed to reg8/16/32/64 below lands on a
+    // naturally-aligned address for its width - required on most non-x86
+    // architectures and good practice even where x86 tolerates it.
+    struct RegisterBlock {
+        let base: u64
+        let size: u64
+        let align: u64
+
+        constructor(base: u64, size: u64, align: u64) {
+            self.base = base
+            self.size = size
+            self.align = align
+        }
+    }
+
+    func register_block(base: u64, size: u64, align: u64) -> RegisterBlock {
+        return new RegisterBlock(base, size, align)
+    }
+
+    func register_block_is_valid(rb: RegisterBlock) -> bool {
+        if rb.base == 0 || rb.size == 0 || rb.align == 0 {
+            return false
+        }
+        return (rb.base % rb.align) == 0
+    }
+
+    // True when a `width` byte-wide access at `offset` both lands on a
+    // `width`-aligned address and stays inside the block's declared size
+    // - the two mistakes a hand-computed register address is most likely
+    // to make.
+    func register_block_offset_valid(rb: RegisterBlock, offset: u64, width: u64) -> bool {
+        if offset + width > rb.size {
+            return false
+        }
+        return ((rb.base + offset) % width) == 0
+    }
+
+    func reg8(rb: RegisterBlock, offset: u64) -> MmioU8 {
+        return mmio_u8(rb.base + offset)
+    }
+
+    func reg16(rb: RegisterBlock, offset: u64) -> MmioU16 {
+        return mmio_u16(rb.base + offset)
+    }
+
+    func reg32(rb: RegisterBlock, offset: u64) -> MmioU32 {
+        return mmio_u32(rb.base + offset)
+    }
+
+    func reg64(rb: RegisterBlock, offset: u64) -> MmioU64 {
+        return mmio_u64(rb.base + offset)
     }
 }

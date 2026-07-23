@@ -1,0 +1,87 @@
+// hw.RegisterBlock demo - a fake 12-byte "device" (DATA/STATUS/CTRL, one
+// u32 register each) built entirely on stack memory, proving out
+// RegisterBlock's offset math plus the read/write/update and
+// relaxed/plain/fenced tiers added to stdlib/hw/mmio.llpl, all without
+// needing real hardware.
+//
+// DeviceRegs below exists purely to keep the DATA/STATUS/CTRL offset
+// constants honest: if its field order or widths ever drift out of sync
+// with those constants, the #assert_offset lines fail to compile - the
+// same technique abi_assert_align_demo.llpl already uses for ABI layout,
+// applied here to a register map instead.
+
+import stdlib.hw.hw
+
+extern func puts(s: char*) -> i64
+
+packed struct DeviceRegs {
+    let data: u32
+    let status: u32
+    let ctrl: u32
+}
+
+#assert_size DeviceRegs 12
+#assert_offset DeviceRegs.data 0
+#assert_offset DeviceRegs.status 4
+#assert_offset DeviceRegs.ctrl 8
+
+const DATA_OFFSET: u64 = 0
+const STATUS_OFFSET: u64 = 4
+const CTRL_OFFSET: u64 = 8
+
+const CTRL_ENABLE: u32 = 0x1
+const CTRL_MODE_MASK: u32 = 0x6 // bits [1:3)
+
+func main() -> i64 {
+    let mem: u8[12]
+    let base: u64 = (mem as u8*) as u64
+    let rb: hw.RegisterBlock = hw.register_block(base, 12, 4)
+
+    if !hw.register_block_is_valid(rb) {
+        puts("register block invalid")
+        return 1
+    }
+    if !hw.register_block_offset_valid(rb, CTRL_OFFSET, 4) {
+        puts("ctrl offset invalid")
+        return 2
+    }
+
+    let data_reg: hw.MmioU32 = hw.reg32(rb, DATA_OFFSET)
+    let status_reg: hw.MmioU32 = hw.reg32(rb, STATUS_OFFSET)
+    let ctrl_reg: hw.MmioU32 = hw.reg32(rb, CTRL_OFFSET)
+
+    hw.mmio_write_u32(data_reg, 0xDEADBEEF)
+    if hw.mmio_read_u32(data_reg) != 0xDEADBEEF {
+        puts("data readback mismatch")
+        return 3
+    }
+
+    hw.mmio_write_u32_relaxed(status_reg, 0x1)
+    if hw.mmio_read_u32_relaxed(status_reg) != 0x1 {
+        puts("relaxed readback mismatch")
+        return 4
+    }
+
+    hw.mmio_write_u32_fenced(ctrl_reg, CTRL_ENABLE)
+    if hw.mmio_read_u32_fenced(ctrl_reg) != CTRL_ENABLE {
+        puts("fenced readback mismatch")
+        return 5
+    }
+
+    // update(): flip on "enabled" and set mode = 2, leaving every other
+    // bit alone - the read-modify-write pattern real register
+    // programming always needs (a plain overwrite would clobber whatever
+    // else happened to be set).
+    let updated: u32 = hw.mmio_update_u32(ctrl_reg, CTRL_MODE_MASK, 0x4)
+    if updated != (CTRL_ENABLE | 0x4) {
+        puts("update result mismatch")
+        return 6
+    }
+    if hw.mmio_read_u32(ctrl_reg) != (CTRL_ENABLE | 0x4) {
+        puts("update readback mismatch")
+        return 7
+    }
+
+    puts("register block ok")
+    return 0
+}
