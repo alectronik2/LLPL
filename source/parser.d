@@ -1415,17 +1415,24 @@ class Parser {
     // Short Rust-style spellings for the fixed-width integer types, resolved
     // to their canonical internal names right here so every other type-name
     // check in the parser and code generator only ever has to know about one
-    // spelling per width. i64/u64/u8 are canonical now; legacy int/uint/char
-    // are no longer accepted as LLPL type names.
+    // spelling per width. Every short form is canonical (identity) now,
+    // matching i64/u64/u8; long forms (int16/uint16/int32/uint32/int64/
+    // uint64) still work as accepted alternate spellings elsewhere (see
+    // isPrimitiveTypeName/primitiveToC), they're just no longer what this
+    // rewrite produces. char is an ordinary identity mapping like the others.
+    // int/uint are a THIRD, separate integer family - not aliases of i64/u64
+    // - native machine-word-sized (C intptr_t/uintptr_t: 4 bytes on i386, 8
+    // on x86_64), also identity-mapped here since there's no separate short
+    // form to rewrite from.
     private static string canonicalIntTypeName(string name) {
         switch (name) {
             case "u8": return "u8";
-            case "u16": return "uint16";
-            case "u32": return "uint32";
+            case "u16": return "u16";
+            case "u32": return "u32";
             case "u64": return "u64";
-            case "i8": return "int8";
-            case "i16": return "int16";
-            case "i32": return "int32";
+            case "i8": return "i8";
+            case "i16": return "i16";
+            case "i32": return "i32";
             case "i64": return "i64";
             default: return name;
         }
@@ -1436,12 +1443,6 @@ class Parser {
             return parseParenType();
         }
         auto nameTok = expect(TokenType.Identifier);
-        if (nameTok.value == "int" || nameTok.value == "uint" || nameTok.value == "char") {
-            errorAt(nameTok.line, nameTok.column,
-                format("'%s' is no longer a type; use '%s' instead",
-                    nameTok.value,
-                    nameTok.value == "int" ? "i64" : (nameTok.value == "uint" ? "u64" : "u8")));
-        }
         string name = canonicalIntTypeName(nameTok.value);
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
         // Graphics_Point, matching how the code generator mangles namespaced

@@ -382,7 +382,7 @@ export LLPL_HOME=$(pwd)</pre>
         <h3>Variables</h3>
         <div class="code-card"><pre><span class="kw">let</span> x: <span class="ty">i64</span> = <span class="num">42</span>              <span class="cm">// mutable</span>
 <span class="kw">const</span> MAX: <span class="ty">i64</span> = <span class="num">100</span>        <span class="cm">// constant</span>
-<span class="kw">let</span> name: <span class="ty">u8</span>* = <span class="str">"Bob"</span>     <span class="cm">// string literals are already u8*, no cast needed</span>
+<span class="kw">let</span> name: <span class="ty">char</span>* = <span class="str">"Bob"</span>     <span class="cm">// string literals are already char*, no cast needed</span>
 <span class="kw">let</span> x = <span class="num">42</span>                    <span class="cm">// type inferred</span>
 <span class="kw">volatile</span> <span class="kw">let</span> ready: <span class="ty">bool</span> = <span class="kw">false</span>   <span class="cm">// never cached in a register - for MMIO/shared state</span></pre></div>
       </div>
@@ -395,13 +395,18 @@ export LLPL_HOME=$(pwd)</pre>
 <span class="kw">func</span> add(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>, c: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> {   <span class="cm">// overload by parameter shape</span>
     <span class="kw">return</span> a + b + c
 }
-<span class="kw">func</span> greet(name: <span class="ty">u8</span>*) {
+<span class="kw">func</span> greet(name: <span class="ty">char</span>*) {
     print(name)
 }</pre></div>
         <p>
-          Overloads are picked by exact argument type at each call site — no
-          implicit numeric coercion decides between them. Two declarations
-          with identical parameter types is a compile error, and a call
+          Overloads are picked by exact argument type at each call site where
+          one exists; failing that, a candidate reachable only through
+          implicit numeric coercion (int-to-float, signed-to-unsigned, or a
+          narrower-to-wider integer of the same signedness) is still
+          eligible, and the lowest-total-coercion-cost candidate wins - a
+          tie between two equally-costed candidates is an "Ambiguous call"
+          error. Two declarations with identical parameter types is a
+          compile error, and a call
           matching no overload is a compile error. Overloaded <em>generic
           function templates</em> aren't supported (only one <code>func
           foo&lt;T&gt;</code> per name), though a generic class's own methods
@@ -409,7 +414,7 @@ export LLPL_HOME=$(pwd)</pre>
         </p>
 
         <h4>Named arguments and defaults</h4>
-        <div class="code-card"><pre><span class="kw">func</span> greet(name: <span class="ty">u8</span>*, greeting: <span class="ty">u8</span>* = <span class="str">"Hello"</span>) {
+        <div class="code-card"><pre><span class="kw">func</span> greet(name: <span class="ty">char</span>*, greeting: <span class="ty">char</span>* = <span class="str">"Hello"</span>) {
     puts(greeting); puts(name)
 }
 greet(<span class="str">"Alice"</span>, <span class="str">"Hi"</span>)                  <span class="cm">// positional</span>
@@ -469,7 +474,7 @@ greet(greeting: <span class="str">"Hey"</span>, name: <span class="str">"Dave"</
         </p>
 
         <h4><code>if</code> as an expression, and implicit returns</h4>
-        <div class="code-card"><pre><span class="kw">func</span> classify(n: <span class="ty">i64</span>) -&gt; <span class="ty">u8</span>* {
+        <div class="code-card"><pre><span class="kw">func</span> classify(n: <span class="ty">i64</span>) -&gt; <span class="ty">char</span>* {
     <span class="kw">return</span> <span class="kw">if</span> n &lt; <span class="num">0</span> { <span class="str">"negative"</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="num">0</span> { <span class="str">"zero"</span> } <span class="kw">else</span> { <span class="str">"positive"</span> }
 }
 <span class="kw">let</span> y = <span class="kw">if</span> <span class="kw">false</span> { <span class="num">1</span> } <span class="kw">else</span> { <span class="num">2</span> }   <span class="cm">// type inferred from both branches</span>
@@ -489,7 +494,7 @@ greet(greeting: <span class="str">"Hey"</span>, name: <span class="str">"Dave"</
       <div class="doc-sub" id="lang-syntax-cast">
         <h3>Type casting &amp; sizeof</h3>
         <div class="code-card"><pre><span class="kw">let</span> addr: <span class="ty">u64</span> = <span class="num">0xB8000</span>
-<span class="kw">let</span> buffer: <span class="ty">u8</span>* = addr <span class="kw">as</span> <span class="ty">u8</span>*
+<span class="kw">let</span> buffer: <span class="ty">char</span>* = addr <span class="kw">as</span> <span class="ty">char</span>*
 
 x.sizeof            <span class="cm">// no parens - infers the value's own type</span>
 sizeof(<span class="ty">SomeType</span>)     <span class="cm">// explicit type reference</span></pre></div>
@@ -567,7 +572,7 @@ sizeof(<span class="ty">SomeType</span>)     <span class="cm">// explicit type r
     <span class="kw">virtual</span> <span class="kw">func</span> click(px: <span class="ty">i64</span>, py: <span class="ty">i64</span>) {}
 }
 <span class="kw">class</span> Button : Widget {
-    constructor(x: <span class="ty">i64</span>, y: <span class="ty">i64</span>, w: <span class="ty">i64</span>, h: <span class="ty">i64</span>, label: <span class="ty">u8</span>*) {
+    constructor(x: <span class="ty">i64</span>, y: <span class="ty">i64</span>, w: <span class="ty">i64</span>, h: <span class="ty">i64</span>, label: <span class="ty">char</span>*) {
         <span class="kw">super</span>(x, y, w, h)
         self.label = label
     }
@@ -643,13 +648,13 @@ sizeof(<span class="ty">SomeType</span>)     <span class="cm">// explicit type r
           releasing one doesn't cascade back through the other.
         </p>
         <div class="code-card"><pre><span class="kw">class</span> Child {
-    <span class="kw">let</span> name: <span class="ty">u8</span>*
+    <span class="kw">let</span> name: <span class="ty">char</span>*
     <span class="kw">let</span> parent: Weak&lt;Parent&gt;
     <span class="kw">func</span> link_parent(p: Parent) { self.parent = <span class="kw">new</span> Weak&lt;Parent&gt;(p) }
 }
 <span class="kw">class</span> Parent {
     <span class="kw">let</span> child: Child
-    constructor(name: <span class="ty">u8</span>*) { self.child = <span class="kw">new</span> Child(name); self.child.link_parent(self) }
+    constructor(name: <span class="ty">char</span>*) { self.child = <span class="kw">new</span> Child(name); self.child.link_parent(self) }
 }
 <span class="kw">let</span> parent_ref: Parent = p.child.parent.upgrade()   <span class="cm">// real retained ref if alive, else null</span>
 <span class="kw">if</span> parent_ref != <span class="kw">null</span> { <span class="kw">delete</span> parent_ref }
@@ -720,14 +725,14 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
       <p>
         <code>prelude.llpl</code> ships <code>Hashable</code>
         (<code>hash()</code>/<code>equals(other: Self)</code> — implemented
-        for <code>i64</code>/<code>u64</code>/<code>u8</code>/<code>u8*</code>/<code>String</code>,
+        for <code>i64</code>/<code>u64</code>/<code>u8</code>/<code>char*</code>/<code>String</code>,
         the last two hashing/comparing by content via FNV-1a, not pointer
         identity), <code>Comparable</code>, <code>StringOperators</code>
         (content-based <code>==</code>/<code>&lt;</code>/etc. for
-        <code>u8*</code>), and the operator traits <code>Add</code>/<code>Sub</code>/<code>Neg</code>/<code>Mul</code>
+        <code>char*</code>), and the operator traits <code>Add</code>/<code>Sub</code>/<code>Neg</code>/<code>Mul</code>
         — deliberately <em>without</em> impls for primitives, since plain
         <code>+</code>/<code>-</code>/<code>*</code> already works on
-        <code>i64</code>/<code>u64</code>/<code>u8</code> and an impl
+        <code>i64</code>/<code>u64</code>/<code>u8</code>/<code>char</code> and an impl
         for them would recurse.
       </p>
 
@@ -754,7 +759,7 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
           <span class="k">Known limitation</span>
           <p>
             <code>Vector&lt;T&gt;</code> cannot hold an explicit pointer
-            element type (<code>Vector&lt;u8*&gt;</code>/<code>Vector&lt;string&gt;</code>)
+            element type (<code>Vector&lt;char*&gt;</code>/<code>Vector&lt;string&gt;</code>)
             — it needs a genuine C pointer-to-pointer type this system
             can't express yet. Wrap the pointer in a one-field struct
             instead.
@@ -849,14 +854,14 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
       </div>
 
       <div class="callout">
-        <span class="k">Why prelude.llpl doesn't implement these for i64/u64/u8</span>
+        <span class="k">Why prelude.llpl doesn't implement these for i64/u64/u8/char</span>
         <p>
           <code>prelude.llpl</code> ships the operator traits
           <code>Add</code>/<code>Sub</code>/<code>Neg</code>/<code>Mul</code>
           themselves (so your own bounded generics can require them), but
           deliberately leaves them <em>unimplemented</em> for the
           primitives — plain <code>+</code>/<code>-</code>/<code>*</code>
-          already works on <code>i64</code>/<code>u64</code>/<code>u8</code>
+          already works on <code>i64</code>/<code>u64</code>/<code>u8</code>/<code>char</code>
           via the compiler's built-in arithmetic, and an <code>impl Add
           for i64</code> here would recurse, since operator lookup can't
           distinguish "the native operator" from "this exact impl".
@@ -925,7 +930,7 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
     <span class="kw">func</span> get_ok() -&gt; T { <span class="kw">return</span> self.value }
     <span class="kw">func</span> unwrap() -&gt; T { <span class="kw">return</span> self.value }     <span class="cm">// alias for get_ok()</span>
     <span class="kw">func</span> get_err() -&gt; E { <span class="kw">return</span> self.error }
-    <span class="kw">func</span> get_trace() -&gt; <span class="ty">u8</span>* { <span class="kw">return</span> self.trace }
+    <span class="kw">func</span> get_trace() -&gt; <span class="ty">char</span>* { <span class="kw">return</span> self.trace }
     <span class="kw">func</span> is_ok() -&gt; <span class="ty">bool</span> { <span class="kw">return</span> self.ok }
     <span class="kw">func</span> is_err() -&gt; <span class="ty">bool</span> { <span class="kw">return</span> !self.ok }
 }</pre></div>
@@ -936,16 +941,16 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
         function</strong> with an equivalent None/Err otherwise — the
         enclosing function must itself return a compatible Optional/Result.
       </p>
-      <div class="code-card"><pre><span class="kw">func</span> safe_div(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; {
-    <span class="kw">let</span> r: Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; = <span class="kw">new</span> Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;()
+      <div class="code-card"><pre><span class="kw">func</span> safe_div(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt; {
+    <span class="kw">let</span> r: Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt; = <span class="kw">new</span> Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt;()
     <span class="kw">if</span> b == <span class="num">0</span> { r.set_err(<span class="str">"division by zero"</span>); <span class="kw">return</span> r }
     r.set_ok(a / b)
     <span class="kw">return</span> r
 }
-<span class="kw">func</span> sum_of_divisions(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>, c: <span class="ty">i64</span>, d: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; {
+<span class="kw">func</span> sum_of_divisions(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>, c: <span class="ty">i64</span>, d: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt; {
     <span class="kw">let</span> first: <span class="ty">i64</span> = safe_div(a, b)?    <span class="cm">// early-return on failure, never reaching the addition</span>
     <span class="kw">let</span> second: <span class="ty">i64</span> = safe_div(c, d)?
-    <span class="kw">let</span> result: Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; = <span class="kw">new</span> Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;()
+    <span class="kw">let</span> result: Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt; = <span class="kw">new</span> Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt;()
     result.set_ok(first + second)
     <span class="kw">return</span> result
 }</pre></div>
@@ -955,7 +960,7 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
         <code>Result</code>'s trace field. If the error travels through
         multiple functions, the trace chains textually as
         <code>"file:line -&gt; file:line"</code>. Read it with
-        <code>r.get_trace()</code> (returns <code>u8*</code>,
+        <code>r.get_trace()</code> (returns <code>char*</code>,
         <code>null</code> if none was set).
       </p>
     </section>
@@ -1005,10 +1010,10 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
 
     <section class="doc-section" id="lang-panics">
       <h2>Panics</h2>
-      <div class="code-card"><pre><span class="kw">extern</span> <span class="kw">func</span> llpl_panic(msg: <span class="ty">u8</span>*)
-<span class="kw">extern</span> <span class="kw">func</span> llpl_set_panic_handler(handler: (<span class="ty">u8</span>*) -&gt; <span class="ty">void</span>)
+      <div class="code-card"><pre><span class="kw">extern</span> <span class="kw">func</span> llpl_panic(msg: <span class="ty">char</span>*)
+<span class="kw">extern</span> <span class="kw">func</span> llpl_set_panic_handler(handler: (<span class="ty">char</span>*) -&gt; <span class="ty">void</span>)
 
-<span class="kw">func</span> my_handler(msg: <span class="ty">u8</span>*) {
+<span class="kw">func</span> my_handler(msg: <span class="ty">char</span>*) {
     <span class="cm">// log msg, clean up resources, etc.</span>
 }
 <span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
@@ -1064,12 +1069,12 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
 
     <section class="doc-section" id="lang-defer">
       <h2>Defer</h2>
-      <div class="code-card"><pre><span class="kw">func</span> process_file(path: <span class="ty">u8</span>*) -&gt; <span class="ty">i64</span> {
+      <div class="code-card"><pre><span class="kw">func</span> process_file(path: <span class="ty">char</span>*) -&gt; <span class="ty">i64</span> {
     <span class="kw">let</span> fd: <span class="ty">i64</span> = open_file(path)
     <span class="kw">if</span> fd &lt; <span class="num">0</span> { <span class="kw">return</span> -<span class="num">1</span> }
     <span class="kw">defer</span> close_file(fd)
-    <span class="kw">let</span> buffer: <span class="ty">u8</span>[<span class="num">1024</span>]
-    <span class="kw">let</span> bytes: <span class="ty">i64</span> = read_file(fd, buffer <span class="kw">as</span> <span class="ty">u8</span>*, <span class="num">1024</span>)
+    <span class="kw">let</span> buffer: <span class="ty">char</span>[<span class="num">1024</span>]
+    <span class="kw">let</span> bytes: <span class="ty">i64</span> = read_file(fd, buffer <span class="kw">as</span> <span class="ty">char</span>*, <span class="num">1024</span>)
     <span class="kw">return</span> bytes   <span class="cm">// close_file(fd) runs automatically here</span>
 }</pre></div>
       <p>
@@ -1199,7 +1204,7 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
         Returns an <code>EmbeddedFile</code> (<code>prelude.llpl</code>):
       </p>
       <div class="code-card"><pre><span class="kw">struct</span> EmbeddedFile {
-    <span class="kw">let</span> data: <span class="ty">u8</span>*
+    <span class="kw">let</span> data: <span class="ty">char</span>*
     <span class="kw">let</span> len: <span class="ty">u64</span>
 }</pre></div>
       <p>
@@ -1272,25 +1277,35 @@ Graphics.Utils.describe()</pre></div>
         <h4>Primitive types</h4>
 
         <div class="callout warn">
-          <span class="k">Breaking change: int / uint / char are gone</span>
+          <span class="k">History: int / uint / char were removed, then both came back with new meanings</span>
           <p>
-            The bare, unsized <code>int</code>, <code>uint</code>, and
-            <code>char</code> spellings have been removed entirely —
-            attempting to use any of them is now a hard compile error, not
-            a warning:
+            The bare, unsized <code>int</code>/<code>uint</code> and
+            <code>char</code> were removed entirely for a while — using any
+            of them was a hard compile error telling you to spell out
+            <code>i64</code>/<code>u64</code>/<code>u8</code> instead. All
+            three are back now, but not as the old aliases:
           </p>
-          <div class="code-card"><pre><span class="cm">error: 'int' is no longer a type; use 'i64' instead
-error: 'uint' is no longer a type; use 'u64' instead
-error: 'char' is no longer a type; use 'u8' instead</span></pre></div>
+          <ul>
+            <li><code>u8</code> is a genuinely numeric unsigned byte
+            (generates C <code>uint8_t</code>, like every other sized
+            unsigned integer).</li>
+            <li><code>char</code> is one byte of <em>text</em> (generates C
+            <code>char</code>) — distinct from <code>u8</code> even though
+            both are 8 bits — and is what <code>string</code> is actually
+            built from: <code>alias string = char*</code> in
+            <code>prelude.llpl</code>.</li>
+            <li><code>int</code>/<code>uint</code> are a third, separate
+            integer family, <em>not</em> aliases of <code>i64</code>/
+            <code>u64</code> — native machine-word-sized (C
+            <code>intptr_t</code>/<code>uintptr_t</code>: 4 bytes on i386, 8
+            on x86_64). Since the actual width isn't known until the
+            generated C is compiled for its target, they never implicitly
+            widen to or from a fixed-width type — an explicit <code>as</code>
+            cast is always required in both directions.</li>
+          </ul>
           <p>
-            Always write the explicitly-sized name instead:
-            <code>i64</code> for <code>int</code>, <code>u64</code> for
-            <code>uint</code>, <code>u8</code> for <code>char</code>. The
-            other widths (<code>i8/i16/i32</code>, <code>u8/u16/u32</code>)
-            were never affected — this only removed the three
-            <em>unsized</em> aliases. <code>string</code> still works,
-            now defined as <code>alias string = u8*</code> (it used to be
-            <code>char*</code>).
+            The other widths (<code>i8/i16/i32</code>, <code>u16/u32</code>)
+            were never affected by any of this.
           </p>
         </div>
 
@@ -1298,24 +1313,39 @@ error: 'char' is no longer a type; use 'u8' instead</span></pre></div>
           <table>
             <tr><th>LLPL</th><th>C type</th></tr>
             <tr><td><code>int8</code>/<code>i8</code> … <code>int64</code>/<code>i64</code></td><td><code>int8_t</code> … <code>int64_t</code></td></tr>
-            <tr><td><code>uint8</code>/<code>u8</code> … <code>uint64</code>/<code>u64</code></td><td><code>uint8_t</code> … <code>uint64_t</code></td></tr>
+            <tr><td><code>uint8</code>/<code>u8</code> … <code>uint64</code>/<code>u64</code></td><td><code>uint8_t</code> … <code>uint64_t</code> — genuinely numeric</td></tr>
+            <tr><td><code>char</code></td><td><code>char</code> — one byte of text, distinct from <code>u8</code> even though both are 8 bits</td></tr>
+            <tr><td><code>int</code>/<code>uint</code></td><td><code>intptr_t</code>/<code>uintptr_t</code> — native machine word (4 bytes on i386, 8 on x86_64), <em>not</em> aliases of <code>i64</code>/<code>u64</code>; no implicit widening to/from a fixed-width type</td></tr>
             <tr><td><code>bool</code></td><td>real C99 <code>bool</code> (<code>&lt;stdbool.h&gt;</code>) — so <code>extern func</code> bindings to real C libraries returning actual <code>bool</code> (e.g. SDL3) don't conflict</td></tr>
             <tr><td><code>void</code></td><td><code>void</code></td></tr>
             <tr><td><code>float</code> / <code>double</code></td><td><code>float</code> / <code>double</code></td></tr>
-            <tr><td><code>string</code></td><td><code>u8*</code> (alias — <code>prelude.llpl</code>: <code>alias string = u8*</code>)</td></tr>
+            <tr><td><code>string</code></td><td><code>char*</code> (alias — <code>prelude.llpl</code>: <code>alias string = char*</code>)</td></tr>
           </table>
         </div>
         <p>
           <code>String</code> is a distinct, full owned/heap-allocated
           class (<code>prelude.llpl</code>) — separate from the bare
-          <code>string</code>/<code>u8*</code> alias, which owns nothing.
+          <code>string</code>/<code>char*</code> alias, which owns nothing.
+        </p>
+
+        <div class="code-card"><pre><span class="kw">let</span> count: <span class="ty">uint</span> = <span class="num">3</span>
+<span class="kw">let</span> word_bytes: <span class="ty">uint</span> = sizeof(<span class="ty">int</span>)   <span class="cm">// 4 on i386, 8 on x86_64</span>
+
+<span class="cm">// explicit cast required both ways - width isn't known until the C is compiled</span>
+<span class="kw">let</span> n: <span class="ty">i64</span> = count <span class="kw">as</span> <span class="ty">i64</span></pre></div>
+        <p>
+          <code>int</code>/<code>uint</code> still take part in the
+          coercions that don't depend on width — an <code>int</code> flows
+          to <code>float</code>/<code>double</code> like any other integer,
+          and a signed <code>int</code> flows to any unsigned target
+          (<code>uint</code> included) the same way <code>i64</code> does.
         </p>
       </div>
 
       <div class="doc-sub" id="lang-types-pointers">
         <h4>Pointers &amp; arrays</h4>
         <div class="code-card"><pre><span class="kw">let</span> ptr: <span class="ty">i64</span>* = &amp;value
-<span class="kw">let</span> arr: <span class="ty">u8</span>[<span class="num">80</span>]           <span class="cm">// fixed-size array</span></pre></div>
+<span class="kw">let</span> arr: <span class="ty">char</span>[<span class="num">80</span>]           <span class="cm">// fixed-size array</span></pre></div>
         <p>
           Any depth of indirection is allowed (<code>i64*</code>,
           <code>i64**</code>, ...). <code>T[]</code> (no size) denotes a
@@ -1549,18 +1579,18 @@ SEEK_SET = <span class="num">0</span>     SEEK_CUR = <span class="num">1</span> 
       <div class="tblwrap">
         <table>
           <tr><th>Member</th><th>Signature</th></tr>
-          <tr><td>constructor</td><td><code>(path: u8*, flags: i64)</code> — mode defaults to <code>0o644</code></td></tr>
-          <tr><td>constructor</td><td><code>(path: u8*, flags: i64, mode: i64)</code></td></tr>
+          <tr><td>constructor</td><td><code>(path: char*, flags: i64)</code> — mode defaults to <code>0o644</code></td></tr>
+          <tr><td>constructor</td><td><code>(path: char*, flags: i64, mode: i64)</code></td></tr>
           <tr><td>destructor</td><td>calls <code>close(fd)</code> if still open</td></tr>
           <tr><td><code>is_valid</code></td><td><code>() -&gt; bool</code></td></tr>
-          <tr><td><code>read_bytes</code></td><td><code>(buffer: u8*, size: u64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
-          <tr><td><code>write_bytes</code></td><td><code>(buffer: u8*, size: u64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
-          <tr><td><code>read_string</code></td><td><code>(max_size: u64) -&gt; Result&lt;String, u8*&gt;</code></td></tr>
-          <tr><td><code>write_string</code></td><td><code>(s: String) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
-          <tr><td><code>seek</code></td><td><code>(offset: i64, whence: i64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
-          <tr><td><code>tell</code></td><td><code>() -&gt; Result&lt;i64, u8*&gt;</code> (<code>self.seek(0, SEEK_CUR)</code>)</td></tr>
-          <tr><td><code>size</code></td><td><code>() -&gt; Result&lt;i64, u8*&gt;</code> (seeks to end, records length, restores position)</td></tr>
-          <tr><td><code>read_all</code></td><td><code>() -&gt; Result&lt;String, u8*&gt;</code></td></tr>
+          <tr><td><code>read_bytes</code></td><td><code>(buffer: char*, size: u64) -&gt; Result&lt;i64, char*&gt;</code></td></tr>
+          <tr><td><code>write_bytes</code></td><td><code>(buffer: char*, size: u64) -&gt; Result&lt;i64, char*&gt;</code></td></tr>
+          <tr><td><code>read_string</code></td><td><code>(max_size: u64) -&gt; Result&lt;String, char*&gt;</code></td></tr>
+          <tr><td><code>write_string</code></td><td><code>(s: String) -&gt; Result&lt;i64, char*&gt;</code></td></tr>
+          <tr><td><code>seek</code></td><td><code>(offset: i64, whence: i64) -&gt; Result&lt;i64, char*&gt;</code></td></tr>
+          <tr><td><code>tell</code></td><td><code>() -&gt; Result&lt;i64, char*&gt;</code> (<code>self.seek(0, SEEK_CUR)</code>)</td></tr>
+          <tr><td><code>size</code></td><td><code>() -&gt; Result&lt;i64, char*&gt;</code> (seeks to end, records length, restores position)</td></tr>
+          <tr><td><code>read_all</code></td><td><code>() -&gt; Result&lt;String, char*&gt;</code></td></tr>
           <tr><td><code>flush</code></td><td><code>() -&gt; bool</code> — <strong>stubbed</strong>, always returns <code>true</code>; not a real <code>fsync</code></td></tr>
         </table>
       </div>
@@ -1569,18 +1599,18 @@ SEEK_SET = <span class="num">0</span>     SEEK_CUR = <span class="num">1</span> 
       <div class="tblwrap">
         <table>
           <tr><th>Function</th><th>Signature</th><th>Notes</th></tr>
-          <tr><td><code>read_file</code></td><td><code>(path: u8*) -&gt; Result&lt;String, u8*&gt;</code></td><td>opens <code>O_RDONLY</code>, calls <code>read_all()</code></td></tr>
-          <tr><td><code>write_file</code></td><td><code>(path: u8*, content: String) -&gt; Result&lt;i64, u8*&gt;</code></td><td>opens <code>O_WRONLY | O_CREAT | O_TRUNC</code></td></tr>
-          <tr><td><code>append_file</code></td><td><code>(path: u8*, content: String) -&gt; Result&lt;i64, u8*&gt;</code></td><td>opens <code>O_WRONLY | O_CREAT | O_APPEND</code></td></tr>
-          <tr><td><code>file_exists</code></td><td><code>(path: u8*) -&gt; bool</code></td><td>tries opening <code>O_RDONLY</code></td></tr>
-          <tr><td><code>delete_file</code></td><td><code>(path: u8*) -&gt; bool</code></td><td>wraps <code>unlink</code></td></tr>
-          <tr><td><code>rename_file</code></td><td><code>(oldpath: u8*, newpath: u8*) -&gt; bool</code></td><td>wraps <code>rename</code></td></tr>
+          <tr><td><code>read_file</code></td><td><code>(path: char*) -&gt; Result&lt;String, char*&gt;</code></td><td>opens <code>O_RDONLY</code>, calls <code>read_all()</code></td></tr>
+          <tr><td><code>write_file</code></td><td><code>(path: char*, content: String) -&gt; Result&lt;i64, char*&gt;</code></td><td>opens <code>O_WRONLY | O_CREAT | O_TRUNC</code></td></tr>
+          <tr><td><code>append_file</code></td><td><code>(path: char*, content: String) -&gt; Result&lt;i64, char*&gt;</code></td><td>opens <code>O_WRONLY | O_CREAT | O_APPEND</code></td></tr>
+          <tr><td><code>file_exists</code></td><td><code>(path: char*) -&gt; bool</code></td><td>tries opening <code>O_RDONLY</code></td></tr>
+          <tr><td><code>delete_file</code></td><td><code>(path: char*) -&gt; bool</code></td><td>wraps <code>unlink</code></td></tr>
+          <tr><td><code>rename_file</code></td><td><code>(oldpath: char*, newpath: char*) -&gt; bool</code></td><td>wraps <code>rename</code></td></tr>
         </table>
       </div>
 
       <div class="code-card">
         <div class="titlebar"><span>quick start</span></div>
-        <pre><span class="kw">let</span> content: Result&lt;String, <span class="ty">u8</span>*&gt; = std.io.read_file(<span class="str">"test.txt"</span>)
+        <pre><span class="kw">let</span> content: Result&lt;String, <span class="ty">char</span>*&gt; = std.io.read_file(<span class="str">"test.txt"</span>)
 <span class="kw">if</span> content.is_ok() {
     <span class="kw">let</span> text: String = content.unwrap()
 }
@@ -1593,7 +1623,7 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
 <span class="kw">if</span> f.is_valid() {
     f.write_string(<span class="kw">new</span> String(<span class="str">"Line 1\n"</span>))
     f.seek(<span class="num">0</span>, std.io.SEEK_SET)
-    <span class="kw">let</span> result: Result&lt;String, <span class="ty">u8</span>*&gt; = f.read_string(<span class="num">100</span>)
+    <span class="kw">let</span> result: Result&lt;String, <span class="ty">char</span>*&gt; = f.read_string(<span class="num">100</span>)
     <span class="kw">if</span> result.is_ok() { <span class="kw">let</span> data: String = result.unwrap() }
 }
 <span class="cm">// File automatically closed when f goes out of scope</span></pre>
@@ -1604,7 +1634,7 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
           <code>std.io.ERR_FILE_NOT_FOUND</code>/<code>ERR_PERMISSION_DENIED</code>/<code>ERR_IO_ERROR</code>
           constants exist in source but are never actually returned by
           anything — the real error convention throughout is always a
-          <code>u8*</code> message inside a <code>Result</code>, not
+          <code>char*</code> message inside a <code>Result</code>, not
           these codes.
         </p>
       </div>
@@ -1624,28 +1654,28 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
           <tr><th>Member</th><th>Signature</th></tr>
           <tr><td>constructor</td><td><code>(domain: i64, type: i64, protocol: i64)</code></td></tr>
           <tr><td><code>is_valid</code></td><td><code>() -&gt; bool</code></td></tr>
-          <tr><td><code>bind_addr</code></td><td><code>(addr: SockAddrIn) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
-          <tr><td><code>listen_backlog</code></td><td><code>(backlog: i64) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
-          <tr><td><code>accept_connection</code></td><td><code>() -&gt; Result&lt;Socket, u8*&gt;</code></td></tr>
-          <tr><td><code>connect_to</code></td><td><code>(addr: SockAddrIn) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
-          <tr><td><code>send_data</code> / <code>recv_data</code></td><td><code>(buffer: u8*, size: u64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
-          <tr><td><code>send_string</code> / <code>recv_string</code></td><td><code>(s: String)</code> / <code>(max_size: u64) -&gt; Result&lt;..., u8*&gt;</code></td></tr>
-          <tr><td><code>set_reuse_addr</code></td><td><code>(enable: bool) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
-          <tr><td><code>shutdown_socket</code></td><td><code>(how: i64) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
+          <tr><td><code>bind_addr</code></td><td><code>(addr: SockAddrIn) -&gt; Result&lt;bool, char*&gt;</code></td></tr>
+          <tr><td><code>listen_backlog</code></td><td><code>(backlog: i64) -&gt; Result&lt;bool, char*&gt;</code></td></tr>
+          <tr><td><code>accept_connection</code></td><td><code>() -&gt; Result&lt;Socket, char*&gt;</code></td></tr>
+          <tr><td><code>connect_to</code></td><td><code>(addr: SockAddrIn) -&gt; Result&lt;bool, char*&gt;</code></td></tr>
+          <tr><td><code>send_data</code> / <code>recv_data</code></td><td><code>(buffer: char*, size: u64) -&gt; Result&lt;i64, char*&gt;</code></td></tr>
+          <tr><td><code>send_string</code> / <code>recv_string</code></td><td><code>(s: String)</code> / <code>(max_size: u64) -&gt; Result&lt;..., char*&gt;</code></td></tr>
+          <tr><td><code>set_reuse_addr</code></td><td><code>(enable: bool) -&gt; Result&lt;bool, char*&gt;</code></td></tr>
+          <tr><td><code>shutdown_socket</code></td><td><code>(how: i64) -&gt; Result&lt;bool, char*&gt;</code></td></tr>
         </table>
       </div>
 
       <h4><code>class std.net.TcpServer</code> <span class="pill ghost">alias std.TcpServer</span></h4>
       <div class="code-card"><pre>constructor(port: <span class="ty">u16</span>)
-<span class="kw">func</span> start_server(backlog: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
-<span class="kw">func</span> accept_client() -&gt; Result&lt;Socket, <span class="ty">u8</span>*&gt;
+<span class="kw">func</span> start_server(backlog: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">char</span>*&gt;
+<span class="kw">func</span> accept_client() -&gt; Result&lt;Socket, <span class="ty">char</span>*&gt;
 <span class="kw">func</span> is_valid() -&gt; <span class="ty">bool</span></pre></div>
 
       <h4><code>class std.net.TcpClient</code> <span class="pill ghost">alias std.TcpClient</span></h4>
       <div class="code-card"><pre>constructor()
-<span class="kw">func</span> connect_to_host(host_a: <span class="ty">u8</span>, host_b: <span class="ty">u8</span>, host_c: <span class="ty">u8</span>, host_d: <span class="ty">u8</span>, port: <span class="ty">u16</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
-<span class="kw">func</span> send_message(data: String) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;
-<span class="kw">func</span> recv_message(max_size: <span class="ty">u64</span>) -&gt; Result&lt;String, <span class="ty">u8</span>*&gt;
+<span class="kw">func</span> connect_to_host(host_a: <span class="ty">u8</span>, host_b: <span class="ty">u8</span>, host_c: <span class="ty">u8</span>, host_d: <span class="ty">u8</span>, port: <span class="ty">u16</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">char</span>*&gt;
+<span class="kw">func</span> send_message(data: String) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt;
+<span class="kw">func</span> recv_message(max_size: <span class="ty">u64</span>) -&gt; Result&lt;String, <span class="ty">char</span>*&gt;
 <span class="kw">func</span> is_valid() -&gt; <span class="ty">bool</span>
 <span class="kw">func</span> close_connection()</pre></div>
 
@@ -1655,7 +1685,7 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
 <span class="kw">using</span> <span class="kw">namespace</span> std.net
 
 <span class="kw">func</span> handle_client(client: Socket) {
-    <span class="kw">let</span> recv_result: Result&lt;String, <span class="ty">u8</span>*&gt; = client.recv_string(<span class="num">1024</span>)
+    <span class="kw">let</span> recv_result: Result&lt;String, <span class="ty">char</span>*&gt; = client.recv_string(<span class="num">1024</span>)
     <span class="kw">if</span> recv_result.is_ok() {
         <span class="kw">let</span> message: String = recv_result.unwrap()
         client.send_string(<span class="kw">new</span> String(<span class="str">"Echo: "</span>) + message.c_str())
@@ -1667,7 +1697,7 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
     <span class="kw">if</span> !server.start_server(<span class="num">10</span>).is_ok() { <span class="kw">return</span> <span class="num">1</span> }
 
     <span class="kw">while</span> <span class="kw">true</span> {
-        <span class="kw">let</span> client_result: Result&lt;Socket, <span class="ty">u8</span>*&gt; = server.accept_client()
+        <span class="kw">let</span> client_result: Result&lt;Socket, <span class="ty">char</span>*&gt; = server.accept_client()
         <span class="kw">if</span> client_result.is_ok() {
             handle_client(client_result.unwrap())
             <span class="cm">// Client socket automatically closed when it goes out of scope</span>
@@ -1681,15 +1711,15 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
         <pre><span class="kw">let</span> client: std.net.TcpClient = <span class="kw">new</span> std.net.TcpClient()
 client.connect_to_host(<span class="num">127</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">0</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">0</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">1</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">8080</span> <span class="kw">as</span> <span class="ty">u16</span>)
 client.send_message(<span class="kw">new</span> String(<span class="str">"Hello, Server!"</span>))
-<span class="kw">let</span> recv_result: Result&lt;String, <span class="ty">u8</span>*&gt; = client.recv_message(<span class="num">1024</span>)  <span class="cm">// "Echo: Hello, Server!"</span>
+<span class="kw">let</span> recv_result: Result&lt;String, <span class="ty">char</span>*&gt; = client.recv_message(<span class="num">1024</span>)  <span class="cm">// "Echo: Hello, Server!"</span>
 client.close_connection()</pre>
       </div>
 
       <h4><code>class std.net.UdpSocket</code> <span class="pill ghost">alias std.UdpSocket</span></h4>
       <div class="code-card"><pre><span class="kw">let</span> udp: std.UdpSocket = <span class="kw">new</span> std.UdpSocket(<span class="num">9000</span>)
 <span class="kw">if</span> udp.bind_socket().is_ok() {
-    <span class="kw">let</span> buffer: <span class="ty">u8</span>[<span class="num">1024</span>]
-    <span class="kw">let</span> recv_result: Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; = udp.recv_from(buffer, <span class="num">1024</span>)
+    <span class="kw">let</span> buffer: <span class="ty">char</span>[<span class="num">1024</span>]
+    <span class="kw">let</span> recv_result: Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt; = udp.recv_from(buffer, <span class="num">1024</span>)
     <span class="kw">if</span> recv_result.is_ok() {
         <span class="kw">let</span> dest_addr: std.SockAddrIn = <span class="kw">new</span> std.SockAddrIn()
         dest_addr.set_port(<span class="num">9001</span>)
@@ -1717,7 +1747,7 @@ SHUT_RD=<span class="num">0</span>  SHUT_WR=<span class="num">1</span>  SHUT_RDW
       </p>
 
       <h4><code>class std.text.StringUtils</code> <span class="pill ghost">alias std.StringUtils</span> — all static</h4>
-      <div class="code-card"><pre>split(s: String, delimiter: <span class="ty">u8</span>) -&gt; Vector&lt;String&gt;
+      <div class="code-card"><pre>split(s: String, delimiter: <span class="ty">char</span>) -&gt; Vector&lt;String&gt;
 split_str(s: String, delimiter: String) -&gt; Vector&lt;String&gt;
 join(strings: Vector&lt;String&gt;, delimiter: String) -&gt; String
 trim(s) / trim_start(s) / trim_end(s) -&gt; String
@@ -1762,7 +1792,7 @@ args.push(<span class="kw">new</span> String(<span class="str">"Alice"</span>));
       <h4><code>class std.text.CharUtils</code> <span class="pill ghost">alias std.CharUtils</span> — all static</h4>
       <div class="code-card"><pre>is_alpha(c) / is_digit(c) / is_alphanumeric(c) / is_whitespace(c) -&gt; <span class="ty">bool</span>
 is_upper(c) / is_lower(c) -&gt; <span class="ty">bool</span>
-to_upper(c) / to_lower(c) -&gt; <span class="ty">u8</span></pre></div>
+to_upper(c) / to_lower(c) -&gt; <span class="ty">char</span></pre></div>
     </section>
 
     <section class="doc-section" id="std-collections">
@@ -1777,10 +1807,10 @@ to_upper(c) / to_lower(c) -&gt; <span class="ty">u8</span></pre></div>
       <h4>Linear — <code>LinkedList&lt;T&gt;</code>, <code>DoublyLinkedList&lt;T&gt;</code>, <code>Stack&lt;T&gt;</code>, <code>Queue&lt;T&gt;</code>, <code>Deque&lt;T&gt;</code>, <code>CircularBuffer&lt;T&gt;</code></h4>
       <div class="code-card"><pre><span class="cm">// LinkedList&lt;T&gt; / DoublyLinkedList&lt;T&gt; (the latter adds pop_back, reverse_iterate)</span>
 push_front(v) / push_back(v)
-pop_front() -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;
-front() / back() / get(index) -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;
-insert(index, v) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
-remove(index) -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;
+pop_front() -&gt; Result&lt;T, <span class="ty">char</span>*&gt;
+front() / back() / get(index) -&gt; Result&lt;T, <span class="ty">char</span>*&gt;
+insert(index, v) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">char</span>*&gt;
+remove(index) -&gt; Result&lt;T, <span class="ty">char</span>*&gt;
 size() -&gt; <span class="ty">i64</span> / is_empty() -&gt; <span class="ty">bool</span> / clear() / to_vector() -&gt; Vector&lt;T&gt;
 
 <span class="cm">// Stack&lt;T&gt;: push(v), pop(), peek(), size(), is_empty(), clear()</span>
@@ -1789,15 +1819,15 @@ size() -&gt; <span class="ty">i64</span> / is_empty() -&gt; <span class="ty">boo
 
 <span class="cm">// CircularBuffer&lt;T&gt;(capacity: i64)</span>
 is_full() / is_empty() -&gt; <span class="ty">bool</span>
-push(v) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;    <span class="cm">// fails if full</span>
+push(v) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">char</span>*&gt;    <span class="cm">// fails if full</span>
 push_overwrite(v)             <span class="cm">// overwrites oldest if full</span>
-pop() / peek() -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;</pre></div>
+pop() / peek() -&gt; Result&lt;T, <span class="ty">char</span>*&gt;</pre></div>
 
       <h4><code>RBTree&lt;K, V&gt;</code></h4>
       <div class="code-card"><pre>insert(key: K, value: V)
-find(key: K) -&gt; Result&lt;V, <span class="ty">u8</span>*&gt;
+find(key: K) -&gt; Result&lt;V, <span class="ty">char</span>*&gt;
 contains(key: K) -&gt; <span class="ty">bool</span>
-min_key() / max_key() -&gt; Result&lt;K, <span class="ty">u8</span>*&gt;
+min_key() / max_key() -&gt; Result&lt;K, <span class="ty">char</span>*&gt;
 keys() -&gt; Vector&lt;K&gt; / values() -&gt; Vector&lt;V&gt;
 height() -&gt; <span class="ty">i64</span> / clear()</pre></div>
       <div class="callout"><span class="k">Note</span><p>Delete is not yet implemented, despite the general complexity table elsewhere listing an O(log n) delete.</p></div>
@@ -1810,9 +1840,9 @@ height() -&gt; <span class="ty">i64</span> / clear()</pre></div>
       <h4><code>EnhancedHashMap&lt;K: Hashable, V&gt;</code></h4>
       <div class="code-card"><pre>constructor() / constructor(initial_capacity: <span class="ty">i64</span>)
 insert(key: K, value: V)
-get(key: K) -&gt; Result&lt;V, <span class="ty">u8</span>*&gt;
+get(key: K) -&gt; Result&lt;V, <span class="ty">char</span>*&gt;
 contains(key: K) -&gt; <span class="ty">bool</span>
-remove(key: K) -&gt; Result&lt;V, <span class="ty">u8</span>*&gt;
+remove(key: K) -&gt; Result&lt;V, <span class="ty">char</span>*&gt;
 keys() / values() -&gt; Vector&lt;...&gt;
 get_load_factor() -&gt; <span class="ty">i64</span>       <span class="cm">// percentage; resizes automatically at 75%</span>
 get_collision_count() -&gt; <span class="ty">i64</span></pre></div>
@@ -1825,14 +1855,14 @@ intersection(other: HashSet&lt;T&gt;) -&gt; HashSet&lt;T&gt;
 difference(other: HashSet&lt;T&gt;) -&gt; HashSet&lt;T&gt;</pre></div>
 
       <h4><code>Trie</code></h4>
-      <div class="code-card"><pre>insert(word: <span class="ty">u8</span>*) / insert_with_value(word: <span class="ty">u8</span>*, value: <span class="ty">i64</span>)
-search(word: <span class="ty">u8</span>*) -&gt; <span class="ty">bool</span> / search_value(word) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;
-starts_with(prefix: <span class="ty">u8</span>*) -&gt; <span class="ty">bool</span>
+      <div class="code-card"><pre>insert(word: <span class="ty">char</span>*) / insert_with_value(word: <span class="ty">char</span>*, value: <span class="ty">i64</span>)
+search(word: <span class="ty">char</span>*) -&gt; <span class="ty">bool</span> / search_value(word) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">char</span>*&gt;
+starts_with(prefix: <span class="ty">char</span>*) -&gt; <span class="ty">bool</span>
 get_words_with_prefix(prefix) -&gt; Vector&lt;String&gt;
 get_all_words() -&gt; Vector&lt;String&gt;
 count_prefix(prefix) -&gt; <span class="ty">i64</span>
 longest_common_prefix() -&gt; String</pre></div>
-      <p>Note: takes bare <code>u8*</code> for word/prefix arguments, not <code>String</code>.</p>
+      <p>Note: takes bare <code>char*</code> for word/prefix arguments, not <code>String</code>.</p>
 
       <h4><code>Graph</code> (adjacency list) / <code>GraphMatrix</code> (adjacency matrix)</h4>
       <div class="code-card"><pre>Graph(vertices: <span class="ty">i64</span>, directed: <span class="ty">bool</span>)
@@ -1841,7 +1871,7 @@ has_edge(from_v, to_v) -&gt; <span class="ty">bool</span>
 get_neighbors(vertex) -&gt; Vector&lt;<span class="ty">i64</span>&gt;
 bfs(start) / dfs(start) -&gt; Vector&lt;<span class="ty">i64</span>&gt;
 is_connected() -&gt; <span class="ty">bool</span>
-topological_sort() -&gt; Result&lt;Vector&lt;<span class="ty">i64</span>&gt;, <span class="ty">u8</span>*&gt;   <span class="cm">// DAG only</span>
+topological_sort() -&gt; Result&lt;Vector&lt;<span class="ty">i64</span>&gt;, <span class="ty">char</span>*&gt;   <span class="cm">// DAG only</span>
 has_cycle_directed() -&gt; <span class="ty">bool</span>
 
 <span class="cm">// GraphMatrix adds: get_weight(from_v, to_v), floyd_warshall() -&gt; i64** (all-pairs shortest paths)</span></pre></div>
@@ -1884,7 +1914,7 @@ graph.add_edge(<span class="num">0</span>, <span class="num">1</span>, <span cla
       </p>
 
       <h4>namespace <code>std.sdl.SDL</code></h4>
-      <div class="code-card"><pre>init(flags: <span class="ty">u32</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
+      <div class="code-card"><pre>init(flags: <span class="ty">u32</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">char</span>*&gt;
 quit()
 get_error() -&gt; String
 get_ticks() -&gt; <span class="ty">u64</span>
@@ -1902,7 +1932,7 @@ clear() -&gt; <span class="ty">bool</span> / present()
 set_draw_color(r: <span class="ty">u8</span>, g: <span class="ty">u8</span>, b: <span class="ty">u8</span>, a: <span class="ty">u8</span>) -&gt; <span class="ty">bool</span>
 draw_point / draw_line / draw_rect / fill_rect / draw_frect / fill_frect -&gt; <span class="ty">bool</span>
 render_texture(texture, src: <span class="ty">SDL_FRect</span>*, dst: <span class="ty">SDL_FRect</span>*) -&gt; <span class="ty">bool</span>
-load_texture(filepath: <span class="ty">u8</span>*) -&gt; Result&lt;Texture, <span class="ty">u8</span>*&gt;</pre></div>
+load_texture(filepath: <span class="ty">char</span>*) -&gt; Result&lt;Texture, <span class="ty">char</span>*&gt;</pre></div>
 
       <h4><code>class EventHandler</code></h4>
       <div class="code-card"><pre>poll() -&gt; <span class="ty">bool</span> / wait() -&gt; <span class="ty">bool</span> / wait_timeout(ms: <span class="ty">i32</span>) -&gt; <span class="ty">bool</span>
@@ -1939,7 +1969,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
       </div>
       <div class="code-card">
         <div class="titlebar"><span>keyboard state &amp; mouse events</span></div>
-        <pre><span class="kw">let</span> keys: <span class="ty">u8</span>* = std.sdl.Input.get_keyboard_state()
+        <pre><span class="kw">let</span> keys: <span class="ty">bool</span>* = std.sdl.Input.get_keyboard_state()
 <span class="kw">if</span> keys[std.sdl.SDLK_w <span class="kw">as</span> <span class="ty">i64</span>] != <span class="num">0</span> { y = y - speed * dt }
 
 <span class="kw">if</span> events.is_mouse_button_down() {
@@ -1973,7 +2003,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
         Two supported <code>main</code> shapes: <code>func main(args:
         string[]) -&gt; i64</code> (preferred — pass <code>args</code> to
         <code>parser.parse_args(args)</code>), or the literal C signature
-        <code>func main(argc: i32, argv: u8**) -&gt; i64</code> (pass to
+        <code>func main(argc: i32, argv: char**) -&gt; i64</code> (pass to
         <code>parser.parse(argc, argv)</code>).
       </p>
       <div class="code-card"><pre><span class="kw">class</span> ArgParser {
@@ -1982,7 +2012,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
     <span class="kw">func</span> add_option(name, short_name, description: String)
     <span class="kw">func</span> add_option_default(name, short_name, default_value, description: String)
     <span class="kw">func</span> add_required(name, short_name, description: String)
-    <span class="kw">func</span> parse(argc: <span class="ty">i32</span>, argv: <span class="ty">u8</span>**) -&gt; <span class="ty">bool</span>
+    <span class="kw">func</span> parse(argc: <span class="ty">i32</span>, argv: <span class="ty">char</span>**) -&gt; <span class="ty">bool</span>
     <span class="kw">func</span> parse_args(args: <span class="ty">string</span>[]) -&gt; <span class="ty">bool</span>
     <span class="kw">func</span> has_flag(name: String) -&gt; <span class="ty">bool</span>
     <span class="kw">func</span> get_value(name: String) -&gt; Optional&lt;String&gt;
@@ -2049,7 +2079,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
 <span class="kw">using</span> <span class="kw">namespace</span> std.io
 
 <span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
-    <span class="kw">let</span> content: Result&lt;String, <span class="ty">u8</span>*&gt; = read_file(<span class="str">"config.yaml"</span>)
+    <span class="kw">let</span> content: Result&lt;String, <span class="ty">char</span>*&gt; = read_file(<span class="str">"config.yaml"</span>)
     <span class="kw">if</span> !content.is_ok() { <span class="kw">return</span> <span class="num">1</span> }
     <span class="kw">let</span> doc: YamlValue = parse(content.unwrap())
 

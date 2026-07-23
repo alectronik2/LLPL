@@ -3,7 +3,7 @@ packed struct LimineFramebuffer {
     let width: u64
     let height: u64
     let pitch: u64
-    let bpp: uint16
+    let bpp: u16
     let memory_model: u8
     let red_mask_size: u8
     let red_mask_shift: u8

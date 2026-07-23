@@ -652,11 +652,12 @@ class CodeGenerator {
         bool isPlainInt = !t.isPointer && !t.isArray &&
             (t.name == "i64" || t.name == "u64" ||
              t.name == "u8" ||
-             t.name == "int8" || t.name == "uint8" ||
-             t.name == "int16" || t.name == "uint16" ||
-             t.name == "int32" || t.name == "uint32");
+             t.name == "i8" || t.name == "int8" || t.name == "uint8" ||
+             t.name == "i16" || t.name == "u16" || t.name == "int16" || t.name == "uint16" ||
+             t.name == "i32" || t.name == "u32" || t.name == "int32" || t.name == "uint32");
         bool isUnsigned = t.name == "u64" || t.name == "u8" ||
-            t.name == "uint8" || t.name == "uint16" || t.name == "uint32";
+            t.name == "uint8" || t.name == "u16" || t.name == "uint16" ||
+            t.name == "u32" || t.name == "uint32";
 
         if (spec.radix.length > 0 || spec.width > 0) {
             if (!isPlainInt) {
@@ -677,18 +678,18 @@ class CodeGenerator {
             }
         }
 
-        if (t.isPointer && t.name == "u8") return "%s";
-        if (!t.isPointer && !t.isArray && t.name == "u8") return "%c";
+        if (t.isPointer && t.name == "char") return "%s";
+        if (!t.isPointer && !t.isArray && t.name == "char") return "%c";
         if (!t.isPointer && !t.isArray && t.name == "bool") return "%d";
         if (t.isPointer) return "%p";
 
         switch (t.name) {
-            case "i64": case "int8": case "int16": case "int32": return "%d";
-            case "u64": case "u8": case "uint8": case "uint16": case "uint32": return "%u";
+            case "i64": case "i8": case "int8": case "i16": case "int16": case "i32": case "int32": return "%d";
+            case "u64": case "u8": case "uint8": case "u16": case "uint16": case "u32": case "uint32": return "%u";
             default:
                 throw new CompileError(
                     format("Cannot interpolate a value of type '%s' inside a string - only " ~
-                        "integers, u8, bool, u8* and other pointers are supported", t.toString()),
+                        "integers, char, bool, char* and other pointers are supported", t.toString()),
                     currentModulePath, expr.line, expr.column);
         }
     }
@@ -3806,10 +3807,15 @@ class CodeGenerator {
         if (t is null || t.isPointer || t.isArray) return false;
         switch (t.name) {
             case "i64": case "u64":
-            case "int8": case "uint8":
-            case "int16": case "uint16":
-            case "int32": case "uint32":
+            case "u8": case "char":
+            case "i8": case "int8": case "uint8":
+            case "i16": case "u16": case "int16": case "uint16":
+            case "i32": case "u32": case "int32": case "uint32":
             case "int64": case "uint64":
+            // int/uint are a third, separate integer family - native
+            // machine-word-sized (C intptr_t/uintptr_t), not aliases of
+            // i64/u64. See primitiveToC and integerRank's own comments.
+            case "int": case "uint":
                 return true;
             default:
                 return false;
@@ -3819,7 +3825,12 @@ class CodeGenerator {
     private bool isSignedIntegerType(Type t) {
         if (!isIntegerType(t)) return false;
         switch (t.name) {
-            case "u64": case "u8": case "uint8": case "uint16": case "uint32": case "uint64":
+            // char is treated as unsigned here to match how it's actually
+            // compiled (run_tests.sh passes -funsigned-char) and to avoid a
+            // signed/unsigned surprise against u8, the other 8-bit type.
+            case "u64": case "u8": case "char": case "uint8":
+            case "u16": case "uint16": case "u32": case "uint32": case "uint64":
+            case "uint":
                 return false;
             default:
                 return true;
@@ -3839,18 +3850,40 @@ class CodeGenerator {
         return isIntegerType(t) || isFloatType(t);
     }
 
+    // Bit width of an integer type, or -1 if not one. Used to allow
+    // same-signedness widening (i32->i64, u8->u64) without also allowing
+    // narrowing (i64->i32) - narrowing still needs an explicit `as` cast,
+    // same rationale as float-narrowing/uint->int below. Reuses
+    // primitiveBitSize (originally added for bit-field validation) rather
+    // than duplicating its width table.
+    private int integerRank(Type t) {
+        if (!isIntegerType(t)) return -1;
+        return primitiveBitSize(t.name);
+    }
+
     private int numericCoercionCost(Type source, Type target) {
         if (sameErrorType(source, target)) return 0;
         if (source is null || target is null) return -1;
         if (source.isPointer || source.isArray || target.isPointer || target.isArray) return -1;
 
         // Limited implicit numeric conversions: integer values can flow to
-            // float/double, and signed integer values can flow to unsigned
-        // integer parameters/targets. Keep float narrowing and uint->int
-        // explicit; those lose information in ways that are hard to spot at
-        // a call site.
+            // float/double, signed integer values can flow to unsigned
+        // integer parameters/targets, and a narrower integer can flow to a
+        // wider one of the same signedness. Keep float narrowing and
+        // uint->int explicit; those lose information in ways that are hard
+        // to spot at a call site. The width-widening rule needs both sides'
+        // bit width known (integerRank >= 0) - int/uint are native machine-
+        // word-sized (4 bytes on i386, 8 on x86_64: see primitiveToC), so
+        // their actual width isn't known at LLPL-compile-time, and silently
+        // treating them as narrower/wider than a specific fixed-width type
+        // could be wrong depending on target - int/uint always need an
+        // explicit `as` cast to/from a fixed-width integer type.
         if (isIntegerType(source) && isFloatType(target)) return 1;
         if (isSignedIntegerType(source) && isUnsignedIntegerType(target)) return 1;
+        if (integerRank(source) >= 0 && integerRank(target) >= 0) {
+            if (isSignedIntegerType(source) && isSignedIntegerType(target) && integerRank(source) < integerRank(target)) return 1;
+            if (isUnsignedIntegerType(source) && isUnsignedIntegerType(target) && integerRank(source) < integerRank(target)) return 1;
+        }
         return -1;
     }
 
@@ -3862,6 +3895,12 @@ class CodeGenerator {
         if (!isNumericType(left) || !isNumericType(right)) return null;
         if (left.name == "double" || right.name == "double") return new Type("double");
         if (left.name == "float" || right.name == "float") return new Type("float");
+        if (isSignedIntegerType(left) && isSignedIntegerType(right)) {
+            return integerRank(left) >= integerRank(right) ? cloneType(left) : cloneType(right);
+        }
+        if (isUnsignedIntegerType(left) && isUnsignedIntegerType(right)) {
+            return integerRank(left) >= integerRank(right) ? cloneType(left) : cloneType(right);
+        }
         if (isUnsignedIntegerType(left) && canNumericCoerce(right, left)) return cloneType(left);
         if (isUnsignedIntegerType(right) && canNumericCoerce(left, right)) return cloneType(right);
         return cloneType(left);
@@ -5144,7 +5183,7 @@ class CodeGenerator {
     private string generateMatch(MatchStmt matchStmt, bool isDeferred) {
         Type subjectType = inferType(matchStmt.subject);
         resolveType(subjectType);
-        bool isString = subjectType.isPointer && subjectType.name == "u8";
+        bool isString = subjectType.isPointer && subjectType.name == "char";
 
         tempVarCounter++;
         string tmpName = format("__match%d", tempVarCounter);
@@ -5388,12 +5427,12 @@ class CodeGenerator {
     private static string canonicalIntTypeName(string name) {
         switch (name) {
             case "u8": return "u8";
-            case "u16": return "uint16";
-            case "u32": return "uint32";
+            case "u16": return "u16";
+            case "u32": return "u32";
             case "u64": return "u64";
-            case "i8": return "int8";
-            case "i16": return "int16";
-            case "i32": return "int32";
+            case "i8": return "i8";
+            case "i16": return "i16";
+            case "i32": return "i32";
             case "i64": return "i64";
             default: return name;
         }
@@ -5402,7 +5441,7 @@ class CodeGenerator {
     private bool isPrimitiveTypeName(string name) {
         switch (name) {
             case "i64": case "u64":
-            case "u8":
+            case "u8": case "char":
             case "int8": case "uint8":
             case "int16": case "uint16":
             case "int32": case "uint32":
@@ -5421,6 +5460,7 @@ class CodeGenerator {
             case "u32": case "i32":
             case "bool": case "void": case "string":
             case "float": case "double":
+            case "int": case "uint":
                 return true;
             default:
                 return false;
@@ -5432,9 +5472,9 @@ class CodeGenerator {
     private int primitiveBitSize(string name) {
         switch (name) {
             case "i64": case "u64": return 64;
-            case "int32": case "uint32": return 32;
-            case "int16": case "uint16": return 16;
-            case "u8": case "int8": case "uint8": return 8;
+            case "i32": case "u32": case "int32": case "uint32": return 32;
+            case "i16": case "u16": case "int16": case "uint16": return 16;
+            case "u8": case "char": case "i8": case "int8": case "uint8": return 8;
             case "bool": return 8; // backed by C `_Bool` (1 byte)
             default: return -1;
         }
@@ -6445,7 +6485,7 @@ class CodeGenerator {
         // keys, operator lookup and C type emission see it, so every existing
         // char* feature also applies to string.
         if (t.name == "string") {
-            t.name = "u8";
+            t.name = "char";
             t.pointerDepth += 1;
         }
 
@@ -6727,10 +6767,11 @@ class CodeGenerator {
     // completely unaffected. Otherwise, each candidate is tried through
     // the existing named/default-argument resolver (resolveCallArguments)
     // - a candidate only "fits" if that succeeds *and* every resolved
-    // argument's inferred type exactly matches (via sameErrorType - no
-    // implicit numeric coercion, matching this compiler's existing
-    // nominal-exact-type stance elsewhere, e.g. if-expression branch
-    // matching) that parameter's declared type.
+    // argument's type is an exact match or numerically coercible (see
+    // numericCoercionCost) to that parameter's declared type. Each
+    // candidate's total coercion cost is summed; the lowest-cost fit wins,
+    // an exact match always beating a coerced one, and a tie between two
+    // equally-costed fits is an "Ambiguous call" error.
     private FunctionDecl resolveOverload(FunctionDecl[] candidates, ASTNode[] args, string[] argNames,
             string calleeDescription, int line, int column) {
         if (candidates.length == 1) return candidates[0];
@@ -6871,7 +6912,7 @@ class CodeGenerator {
         Type t = fn.params[0].type;
         if (!t.isArray || t.arraySize != 0) return false;
         if (t.name == "string" && t.pointerDepth == 0) return true;
-        if (t.name == "u8" && t.pointerDepth == 1) return true;
+        if (t.name == "char" && t.pointerDepth == 1) return true;
         return false;
     }
 
@@ -7240,11 +7281,13 @@ class CodeGenerator {
     // name "char", pointerDepth 1 (see resolveType's own comment on that).
     private string implicitConversionKind(Type target) {
         if (target.isArray || target.pointerDepth > 1) return "";
-        if (target.name == "u8" && target.pointerDepth == 1) return "string";
+        if (target.name == "char" && target.pointerDepth == 1) return "string";
         if (target.pointerDepth != 0) return "";
         switch (target.name) {
-            case "i64": case "u64": case "int8": case "uint8":
-            case "int16": case "uint16": case "int32": case "uint32":
+            case "i64": case "u64": case "u8":
+            case "i8": case "int8": case "uint8":
+            case "i16": case "u16": case "int16": case "uint16":
+            case "i32": case "u32": case "int32": case "uint32":
             case "int64": case "uint64":
                 return "int";
             case "float": return "float";
@@ -8615,13 +8658,13 @@ class CodeGenerator {
             }
             return new Type("double"); // default to double
         } else if (cast(CharLiteral)expr) {
-            return new Type("u8");
+            return new Type("char");
         } else if (cast(StringLiteral)expr) {
-            return new Type("u8", true);
+            return new Type("char", true);
         } else if (cast(RegexLiteral)expr) {
             return new Type("Regex");
         } else if (cast(InterpolatedStringLiteral)expr) {
-            return new Type("u8", true);
+            return new Type("char", true);
         } else if (cast(BoolLiteral)expr) {
             return new Type("bool");
         } else if (cast(NullLiteral)expr) {
@@ -8674,7 +8717,7 @@ class CodeGenerator {
             throw inferError(expr, format("Cannot infer type: unknown variable '%s'", ident.name));
         } else if (auto memberExpr = cast(MemberExpr)expr) {
             if (memberExpr.member == "as_string") {
-                return new Type("u8", true);
+                return new Type("char", true);
             }
             if (memberExpr.member == "sizeof") {
                 return new Type("u64");
@@ -8864,13 +8907,30 @@ class CodeGenerator {
         switch (name) {
             case "i64": return "int64_t";    // 64-bit signed
             case "u64": return "uint64_t";   // 64-bit unsigned
-            case "int8": return "int8_t";
-            case "u8": return "char";
-            case "uint8": return "uint8_t";
-            case "int16": return "int16_t";
-            case "uint16": return "uint16_t";
-            case "int32": return "int32_t";
-            case "uint32": return "uint32_t";
+            case "i8": case "int8": return "int8_t";
+            // u8 is a genuinely numeric unsigned byte (matching every other
+            // sized unsigned integer's mapping to a real C integer type) -
+            // distinct from `char`, which is the text/string byte type (see
+            // primitiveToC's caller comments and interpFormatSpecifier/
+            // generateMatch/implicitConversionKind, all of which key off the
+            // literal name "char" for string semantics, not "u8").
+            case "u8": case "uint8": return "uint8_t";
+            case "char": return "char";
+            // A third, separate integer family from the fixed-width ones
+            // above - native machine-word-sized (4 bytes on i386, 8 on
+            // x86_64), matching C's own `intptr_t`/`uintptr_t` exactly by
+            // construction (unlike C's plain `int`, which stays 32-bit even
+            // on 64-bit Linux/macOS - intptr_t/uintptr_t are what's
+            // guaranteed pointer/word-sized on every target, including
+            // Windows' LLP64 model where plain `long` isn't). See
+            // integerRank's own comment on why these don't participate in
+            // the same-signedness width-widening coercion.
+            case "int": return "intptr_t";
+            case "uint": return "uintptr_t";
+            case "i16": case "int16": return "int16_t";
+            case "u16": case "uint16": return "uint16_t";
+            case "i32": case "int32": return "int32_t";
+            case "u32": case "uint32": return "uint32_t";
             // "int64"/"uint64" (unlike the u8/u16/.../i64 short forms,
             // which the parser always rewrites to a long form before
             // codegen ever sees them - see isPrimitiveTypeName's own

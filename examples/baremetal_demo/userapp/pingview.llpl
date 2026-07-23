@@ -68,17 +68,17 @@ func status_color(status: u64) -> u32 {
 // Writes n's decimal digits into buf and null-terminates, returning the
 // digit count - no shared itoa-into-buffer helper exists in
 // user_runtime.llpl (rt_print_uint only ever writes straight to serial).
-func format_uint(buf: u8*, n: u64) -> i64 {
+func format_uint(buf: char*, n: u64) -> i64 {
     if n == 0 {
         buf[0] = 48
         buf[1] = 0
         return 1
     }
-    let tmp: u8[20]
+    let tmp: char[20]
     let len: i64 = 0
     let v: u64 = n
     while v > 0 {
-        tmp[len] = (48 + (v % 10)) as u8
+        tmp[len] = (48 + (v % 10)) as char
         len = len + 1
         v = v / 10
     }
@@ -91,9 +91,9 @@ func format_uint(buf: u8*, n: u64) -> i64 {
     return len
 }
 
-func format_ip_octet(buf: u8*, pos: i64, octet: u64) -> i64 {
-    let part: u8[20]
-    let n: i64 = format_uint(part as u8*, octet)
+func format_ip_octet(buf: char*, pos: i64, octet: u64) -> i64 {
+    let part: char[20]
+    let n: i64 = format_uint(part as char*, octet)
     let i: i64 = 0
     let p: i64 = pos
     while i < n {
@@ -104,7 +104,7 @@ func format_ip_octet(buf: u8*, pos: i64, octet: u64) -> i64 {
     return p
 }
 
-func format_ip(buf: u8*, ip: u64) -> i64 {
+func format_ip(buf: char*, ip: u64) -> i64 {
     let pos: i64 = format_ip_octet(buf, 0, (ip >> 24) & 0xFF)
     buf[pos] = 46 // '.'
     pos = format_ip_octet(buf, pos + 1, (ip >> 16) & 0xFF)
@@ -204,7 +204,7 @@ func draw_graph() {
     }
 }
 
-func draw_stats(target_ip_str: u8*, last_rtt: u64, last_status: u64) {
+func draw_stats(target_ip_str: char*, last_rtt: u64, last_status: u64) {
     let buf: u32* = wm_buffer()
     let win_w: u64 = Wm.WIN_W as u64
     let win_h: u64 = Wm.WIN_H as u64
@@ -212,29 +212,29 @@ func draw_stats(target_ip_str: u8*, last_rtt: u64, last_status: u64) {
     Font.draw_string(buf, win_w, win_h, 8, 4, "PING", 0x00CCFF, BG_COLOR)
     Font.draw_string(buf, win_w, win_h, 56, 4, target_ip_str, TEXT_COLOR, BG_COLOR)
 
-    let numbuf: u8[24]
+    let numbuf: char[24]
 
     Font.draw_string(buf, win_w, win_h, 8, 156, "SENT", LABEL_COLOR, BG_COLOR)
-    format_uint(numbuf as u8*, sent)
-    Font.draw_string(buf, win_w, win_h, 48, 156, numbuf as u8*, TEXT_COLOR, BG_COLOR)
+    format_uint(numbuf as char*, sent)
+    Font.draw_string(buf, win_w, win_h, 48, 156, numbuf as char*, TEXT_COLOR, BG_COLOR)
 
     Font.draw_string(buf, win_w, win_h, 96, 156, "RECV", LABEL_COLOR, BG_COLOR)
-    format_uint(numbuf as u8*, received)
-    Font.draw_string(buf, win_w, win_h, 136, 156, numbuf as u8*, TEXT_COLOR, BG_COLOR)
+    format_uint(numbuf as char*, received)
+    Font.draw_string(buf, win_w, win_h, 136, 156, numbuf as char*, TEXT_COLOR, BG_COLOR)
 
     let loss_pct: u64 = 0
     if sent > 0 {
         loss_pct = ((sent - received) * 100) / sent
     }
     Font.draw_string(buf, win_w, win_h, 184, 156, "LOSS", LABEL_COLOR, BG_COLOR)
-    let n: i64 = format_uint(numbuf as u8*, loss_pct)
-    Font.draw_string(buf, win_w, win_h, 224, 156, numbuf as u8*, TEXT_COLOR, BG_COLOR)
+    let n: i64 = format_uint(numbuf as char*, loss_pct)
+    Font.draw_string(buf, win_w, win_h, 224, 156, numbuf as char*, TEXT_COLOR, BG_COLOR)
     Font.draw_string(buf, win_w, win_h, 224 + (n as u64) * 8, 156, "%", TEXT_COLOR, BG_COLOR)
 
     Font.draw_string(buf, win_w, win_h, 8, 176, "LAST", LABEL_COLOR, BG_COLOR)
     if last_status == PING_STATUS_ECHO_REPLY {
-        format_uint(numbuf as u8*, last_rtt)
-        Font.draw_string(buf, win_w, win_h, 48, 176, numbuf as u8*, REPLY_COLOR, BG_COLOR)
+        format_uint(numbuf as char*, last_rtt)
+        Font.draw_string(buf, win_w, win_h, 48, 176, numbuf as char*, REPLY_COLOR, BG_COLOR)
         Font.draw_string(buf, win_w, win_h, 48 + (n as u64) * 8 + 80, 176, "iters", LABEL_COLOR, BG_COLOR)
     } else if last_status == PING_STATUS_TIME_EXCEEDED {
         Font.draw_string(buf, win_w, win_h, 48, 176, "TTL EXCEEDED", TIME_EXCEEDED_COLOR, BG_COLOR)
@@ -255,7 +255,7 @@ func record_sample(rtt: u64, status: u64) {
 }
 
 func _start(argc: u64, argv: u64*) {
-    let ip_str: u8* = rt_arg(argc, argv, 1, "10.0.2.2")
+    let ip_str: char* = rt_arg(argc, argv, 1, "10.0.2.2")
     let dest_ip: u64 = rt_parse_ip(ip_str)
     if dest_ip == RT_IP_INVALID {
         sys_puts("pingview: bad address: ")
@@ -277,10 +277,10 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("pingview: create_window failed")
         rt_exit(1)
     }
-    wm_notify("Ping" as u8*, "Started network monitor" as u8*, 1)
+    wm_notify("Ping" as char*, "Started network monitor" as char*, 1)
 
-    let target_ip_str: u8[20]
-    format_ip(target_ip_str as u8*, dest_ip)
+    let target_ip_str: char[20]
+    format_ip(target_ip_str as char*, dest_ip)
 
     let seq: u64 = 1
     let last_rtt: u64 = 0
@@ -324,7 +324,7 @@ func _start(argc: u64, argv: u64*) {
         wm_fill(BG_COLOR)
         draw_graph_border()
         draw_graph()
-        draw_stats(target_ip_str as u8*, last_rtt, last_status)
+        draw_stats(target_ip_str as char*, last_rtt, last_status)
         wm_present()
 
         seq = seq + 1

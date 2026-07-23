@@ -19,7 +19,7 @@ class ListNode<T> {
 class LinkedList<T> {
     let head: ListNode<T>*
     let tail: ListNode<T>*
-    let count: i64
+    let count: int
 
     constructor() {
         self.head = null
@@ -31,7 +31,7 @@ class LinkedList<T> {
         self.clear()
     }
 
-    func size() -> i64 {
+    func size() -> int {
         return self.count
     }
 
@@ -80,8 +80,8 @@ class LinkedList<T> {
         self.count = self.count + 1
     }
 
-    func pop_front() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func pop_front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.head == null {
             result.set_err("List is empty")
@@ -96,15 +96,15 @@ class LinkedList<T> {
             self.tail = null
         }
 
-        llpl_free(old_head as u8*)
+        llpl_free(old_head as char*)
         self.count = self.count - 1
 
         result.set_ok(value)
         return result
     }
 
-    func front() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.head == null {
             result.set_err("List is empty")
@@ -115,8 +115,8 @@ class LinkedList<T> {
         return result
     }
 
-    func back() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func back() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.tail == null {
             result.set_err("List is empty")
@@ -127,8 +127,8 @@ class LinkedList<T> {
         return result
     }
 
-    func get(index: i64) -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func get(index: i64) -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if index < 0 || index >= self.count {
             result.set_err("Index out of bounds")
@@ -144,8 +144,8 @@ class LinkedList<T> {
         return result
     }
 
-    func insert(index: i64, value: T) -> Result<bool, u8*> {
-        let result: Result<bool, u8*> = new Result<bool, u8*>()
+    func insert(index: i64, value: T) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
 
         if index < 0 || index > self.count {
             result.set_err("Index out of bounds")
@@ -181,8 +181,8 @@ class LinkedList<T> {
         return result
     }
 
-    func remove(index: i64) -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func remove(index: i64) -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if index < 0 || index >= self.count {
             result.set_err("Index out of bounds")
@@ -207,7 +207,7 @@ class LinkedList<T> {
             self.tail = current
         }
 
-        llpl_free(to_remove as u8*)
+        llpl_free(to_remove as char*)
         self.count = self.count - 1
 
         result.set_ok(value)
@@ -311,8 +311,8 @@ class DoublyLinkedList<T> {
         self.count = self.count + 1
     }
 
-    func pop_front() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func pop_front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.head == null {
             result.set_err("List is empty")
@@ -329,15 +329,15 @@ class DoublyLinkedList<T> {
             (*self.head).prev = null
         }
 
-        llpl_free(old_head as u8*)
+        llpl_free(old_head as char*)
         self.count = self.count - 1
 
         result.set_ok(value)
         return result
     }
 
-    func pop_back() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func pop_back() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.tail == null {
             result.set_err("List is empty")
@@ -354,15 +354,15 @@ class DoublyLinkedList<T> {
             (*self.tail).next = null
         }
 
-        llpl_free(old_tail as u8*)
+        llpl_free(old_tail as char*)
         self.count = self.count - 1
 
         result.set_ok(value)
         return result
     }
 
-    func front() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func front() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.head == null {
             result.set_err("List is empty")
@@ -373,8 +373,8 @@ class DoublyLinkedList<T> {
         return result
     }
 
-    func back() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func back() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.tail == null {
             result.set_err("List is empty")

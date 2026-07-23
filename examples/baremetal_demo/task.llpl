@@ -116,7 +116,7 @@ namespace Task {
         let ipc_recv_buf: u64
         let ipc_recv_len: u64
         let ipc_msg: u8[128]
-        let name: u8[16]
+        let name: char[16]
         let handle_valid: bool[8]
         let handle_target: i64[8]
         let handle_rights: u64[8]
@@ -133,12 +133,12 @@ namespace Task {
     packed struct ServiceEntry {
         let used: bool
         let pid: i64
-        let name: u8[16]
+        let name: char[16]
     }
 
     let registry: ServiceEntry[8]
 
-    func name_eq(a: u8*, b: u8*) -> bool {
+    func name_eq(a: char*, b: char*) -> bool {
         let i: i64 = 0
         while true {
             if a[i] != b[i] {
@@ -152,7 +152,7 @@ namespace Task {
         return false
     }
 
-    func name_copy(dst: u8*, src: u8*) {
+    func name_copy(dst: char*, src: char*) {
         let i: i64 = 0
         while src[i] != 0 && i < SERVICE_NAME_MAX - 1 {
             dst[i] = src[i]
@@ -181,13 +181,13 @@ namespace Task {
     // One name names at most one owner at a time; a pid can register more
     // than one name. Fails if the caller isn't boot-spawned, the name is
     // already taken by a live service, or the registry is full.
-    func register_service(pid: i64, name: u8*) -> bool {
+    func register_service(pid: i64, name: char*) -> bool {
         if !is_boot_spawned(pid) {
             return false
         }
         let i: i64 = 0
         while i < MAX_SERVICES {
-            if registry[i].used && name_eq(registry[i].name as u8*, name) {
+            if registry[i].used && name_eq(registry[i].name as char*, name) {
                 if exists(registry[i].pid) {
                     return false
                 }
@@ -200,7 +200,7 @@ namespace Task {
             if !registry[i].used {
                 registry[i].used = true
                 registry[i].pid = pid
-                name_copy(registry[i].name as u8*, name)
+                name_copy(registry[i].name as char*, name)
                 return true
             }
             i = i + 1
@@ -211,10 +211,10 @@ namespace Task {
     // Returns the registered owner's pid, or -1 if no live service holds
     // that name (also clearing a stale entry left by one that died without
     // ever unregistering - this demo has no explicit unregister syscall).
-    func lookup_service(name: u8*) -> i64 {
+    func lookup_service(name: char*) -> i64 {
         let i: i64 = 0
         while i < MAX_SERVICES {
-            if registry[i].used && name_eq(registry[i].name as u8*, name) {
+            if registry[i].used && name_eq(registry[i].name as char*, name) {
                 if exists(registry[i].pid) {
                     return registry[i].pid
                 }
@@ -514,7 +514,7 @@ namespace Task {
         set_tss_rsp0(tcb.kernel_stack_top)
     }
 
-    func copy_name(tcb: TCB*, name: u8*) {
+    func copy_name(tcb: TCB*, name: char*) {
         let i: i64 = 0
         while name[i] != 0 && i < 15 {
             tcb.name[i] = name[i]
@@ -523,7 +523,7 @@ namespace Task {
         tcb.name[i] = 0
     }
 
-    func task_name_starts_with(tcb: TCB*, prefix: u8*) -> bool {
+    func task_name_starts_with(tcb: TCB*, prefix: char*) -> bool {
         let i: i64 = 0
         while prefix[i] != 0 {
             if tcb.name[i] != prefix[i] {
@@ -540,7 +540,7 @@ namespace Task {
         }
         tcb.cpu_ticks = tcb.cpu_ticks + 1
         total_cpu_ticks = total_cpu_ticks + 1
-        if task_name_starts_with(tcb, "idle" as u8*) {
+        if task_name_starts_with(tcb, "idle" as char*) {
             idle_cpu_ticks = idle_cpu_ticks + 1
         }
     }
@@ -722,7 +722,7 @@ namespace Task {
     // Creates a new kernel task ready to run `entry`, a plain `func() -> void`
     // referenced by bare name. Returns the new task's id, or -1 if the heap is
     // out of memory.
-    func spawn_named_arg(entry: u64, name: u8*, arg0: u64) -> i64 {
+    func spawn_named_arg(entry: u64, name: char*, arg0: u64) -> i64 {
         let block: u64 = KHeap.kmalloc(STACK_SIZE)
         if block == 0 {
             return -1
@@ -799,7 +799,7 @@ namespace Task {
         return tcb.id
     }
 
-    func spawn_named(entry: u64, name: u8*) -> i64 {
+    func spawn_named(entry: u64, name: char*) -> i64 {
         return spawn_named_arg(entry, name, 0)
     }
 
@@ -809,7 +809,7 @@ namespace Task {
 
     // Creates a new ring-3 user task starting at `entry` with its own
     // address space. `stack_top` is the initial user-mode RSP.
-    func spawn_user_with_args_parent(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*, argc: u64, argv: u64, parent_id: i64) -> i64 {
+    func spawn_user_with_args_parent(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64, parent_id: i64) -> i64 {
         let block: u64 = KHeap.kmalloc(STACK_SIZE)
         if block == 0 {
             return -1
@@ -899,11 +899,11 @@ namespace Task {
         return tcb.id
     }
 
-    func spawn_user_with_args(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*, argc: u64, argv: u64) -> i64 {
+    func spawn_user_with_args(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64) -> i64 {
         return spawn_user_with_args_parent(entry, stack_top, aspace, name, argc, argv, current_id())
     }
 
-    func spawn_user_named(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*) -> i64 {
+    func spawn_user_named(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*) -> i64 {
         return spawn_user_with_args(entry, stack_top, aspace, name, 0, 0)
     }
 
@@ -911,7 +911,7 @@ namespace Task {
         return spawn_user_with_args(entry, stack_top, aspace, "user", 0, 0)
     }
 
-    func replace_current_user(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: u8*, argc: u64, argv: u64) -> bool {
+    func replace_current_user(entry: u64, stack_top: u64, aspace: VMM.AddressSpace*, name: char*, argc: u64, argv: u64) -> bool {
         let cur: TCB* = current_tcb()
         if cur == null || aspace == null || cur.saved_rsp == 0 {
             return false
@@ -1234,7 +1234,7 @@ namespace Task {
         return null
     }
 
-    func state_name_at(index: i64) -> u8* {
+    func state_name_at(index: i64) -> char* {
         let state: i64 = state_at(index)
         if state == STATE_ALIVE {
             return "alive"
@@ -1491,12 +1491,12 @@ namespace Task {
         return t.exit_status
     }
 
-    func name_at(index: i64) -> u8* {
+    func name_at(index: i64) -> char* {
         let t: TCB* = nth(index)
         if t == null {
             return ""
         }
-        return t.name as u8*
+        return t.name as char*
     }
 
     func canary_addr_at(index: i64) -> u64 {

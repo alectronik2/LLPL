@@ -22,8 +22,8 @@ func demo_linked_lists() {
     slist.push_back(3)
     slist.push_front(0)  // [0, 1, 2, 3]
 
-    let first: Result<i64, u8*> = slist.pop_front()  // 0
-    let value: Result<i64, u8*> = slist.get(1)  // 2
+    let first: Result<i64, char*> = slist.pop_front()  // 0
+    let value: Result<i64, char*> = slist.get(1)  // 2
 
     // Doubly linked list
     let dlist: DoublyLinkedList<String> = new DoublyLinkedList<String>()
@@ -31,7 +31,7 @@ func demo_linked_lists() {
     dlist.push_back(new String("second"))
     dlist.push_back(new String("third"))
 
-    let last: Result<String, u8*> = dlist.pop_back()  // "third"
+    let last: Result<String, char*> = dlist.pop_back()  // "third"
     let reversed: Vector<String> = dlist.reverse_iterate()
 }
 
@@ -42,8 +42,8 @@ func demo_stack_queue() {
     stack.push(20)
     stack.push(30)
 
-    let top: Result<i64, u8*> = stack.pop()  // 30
-    let peek: Result<i64, u8*> = stack.peek()  // 20
+    let top: Result<i64, char*> = stack.pop()  // 30
+    let peek: Result<i64, char*> = stack.peek()  // 20
 
     // Queue (FIFO)
     let queue: Queue<String> = new Queue<String>()
@@ -51,7 +51,7 @@ func demo_stack_queue() {
     queue.enqueue(new String("second"))
     queue.enqueue(new String("third"))
 
-    let item: Result<String, u8*> = queue.dequeue()  // "first"
+    let item: Result<String, char*> = queue.dequeue()  // "first"
 
     // Deque (double-ended)
     let deque: Deque<i64> = new Deque<i64>()
@@ -59,8 +59,8 @@ func demo_stack_queue() {
     deque.push_back(2)
     deque.push_front(0)  // [0, 1, 2]
 
-    let front: Result<i64, u8*> = deque.pop_front()  // 0
-    let back: Result<i64, u8*> = deque.pop_back()  // 2
+    let front: Result<i64, char*> = deque.pop_front()  // 0
+    let back: Result<i64, char*> = deque.pop_back()  // 2
 }
 
 func demo_circular_buffer() {
@@ -75,7 +75,7 @@ func demo_circular_buffer() {
         buffer.push_overwrite(4)  // Now contains [2, 3, 4]
     }
 
-    let value: Result<i64, u8*> = buffer.pop()  // 2
+    let value: Result<i64, char*> = buffer.pop()  // 2
 }
 
 func demo_rbtree() {
@@ -90,7 +90,7 @@ func demo_rbtree() {
     tree.insert(80, new String("eighty"))
 
     // Search
-    let result: Result<String, u8*> = tree.find(40)
+    let result: Result<String, char*> = tree.find(40)
     if result.is_ok() {
         let value: String = result.unwrap()  // "forty"
     }
@@ -99,8 +99,8 @@ func demo_rbtree() {
     let keys: Vector<i64> = tree.keys()  // [20, 30, 40, 50, 60, 70, 80]
 
     // Min and max
-    let min: Result<i64, u8*> = tree.min_key()  // 20
-    let max: Result<i64, u8*> = tree.max_key()  // 80
+    let min: Result<i64, char*> = tree.min_key()  // 20
+    let max: Result<i64, char*> = tree.max_key()  // 80
 
     // Tree height
     let height: i64 = tree.height()
@@ -114,7 +114,7 @@ func demo_heaps() {
     min_heap.insert(70)
     min_heap.insert(10)
 
-    let min: Result<i64, u8*> = min_heap.extract_min()  // 10
+    let min: Result<i64, char*> = min_heap.extract_min()  // 10
 
     // Max heap
     let max_heap: MaxHeap<i64> = new MaxHeap<i64>()
@@ -123,7 +123,7 @@ func demo_heaps() {
     max_heap.insert(70)
     max_heap.insert(10)
 
-    let max: Result<i64, u8*> = max_heap.extract_max()  // 70
+    let max: Result<i64, char*> = max_heap.extract_max()  // 70
 
     // Priority queue
     let pq: PriorityQueue<String> = new PriorityQueue<String>()
@@ -131,7 +131,7 @@ func demo_heaps() {
     pq.enqueue(new String("High priority task"), 1)
     pq.enqueue(new String("Medium priority task"), 5)
 
-    let urgent: Result<String, u8*> = pq.dequeue()  // "High priority task"
+    let urgent: Result<String, char*> = pq.dequeue()  // "High priority task"
 }
 
 func demo_hashmap() {
@@ -141,7 +141,7 @@ func demo_hashmap() {
     map.insert(new String("banana"), 2)
     map.insert(new String("cherry"), 3)
 
-    let value: Result<i64, u8*> = map.get(new String("banana"))  // 2
+    let value: Result<i64, char*> = map.get(new String("banana"))  // 2
 
     let has_apple: bool = map.contains(new String("apple"))  // true
 
@@ -207,7 +207,7 @@ func demo_trie() {
     trie.insert_with_value("api_v1", 1)
     trie.insert_with_value("api_v2", 2)
 
-    let version: Result<i64, u8*> = trie.search_value("api_v1")  // 1
+    let version: Result<i64, char*> = trie.search_value("api_v1")  // 1
 
     // Delete
     trie.remove("car")
@@ -247,7 +247,7 @@ func demo_graph() {
     dag.add_edge_unweighted(2, 3)
     dag.add_edge_unweighted(3, 1)
 
-    let topo_result: Result<Vector<i64>, u8*> = dag.topological_sort()
+    let topo_result: Result<Vector<i64>, char*> = dag.topological_sort()
     if topo_result.is_ok() {
         let order: Vector<i64> = topo_result.unwrap()
         // Possible: [5, 4, 2, 3, 1, 0] or other valid orderings
@@ -285,7 +285,7 @@ func demo_real_world_use_cases() {
 
     // Process tasks by priority
     while !task_queue.is_empty() {
-        let task: Result<String, u8*> = task_queue.dequeue()
+        let task: Result<String, char*> = task_queue.dequeue()
         // Execute task...
     }
 

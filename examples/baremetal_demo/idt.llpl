@@ -49,7 +49,7 @@ func park_crashed_user() {
     }
 }
 
-func handle_user_fault(kind: u8*, status: u64, fault_addr: u64, error_code: u64, frame: InterruptFrame*) -> bool {
+func handle_user_fault(kind: char*, status: u64, fault_addr: u64, error_code: u64, frame: InterruptFrame*) -> bool {
     if frame == null {
         return false
     }
@@ -59,11 +59,11 @@ func handle_user_fault(kind: u8*, status: u64, fault_addr: u64, error_code: u64,
 
     CrashLog.record(kind, true, fault_addr, error_code, frame.rip, 0, frame.rsp)
     EventLog.add2("fault", kind, Task.current_id() as u64, frame.rip)
-    HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
+    HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
                       "USER FAULT: %s - killing task %d\n",
                       kind, Task.current_id())
     HAL.Log.flush()
-    HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
+    HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
                       "  rip=0x%016x rsp=0x%016x err=0x%x\n",
                       frame.rip, frame.rsp, error_code)
     HAL.Log.flush()
@@ -122,7 +122,7 @@ interrupt func isr_page_fault(error_code: u64) {
     CrashLog.record("page fault", false, addr, error_code, frame.rip, 0, 0)
     EventLog.add2("fault", "page fault", addr, error_code)
     hsw("FAULT: page fault (#PF) - halting\n")
-    HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
+    HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
                       "  cr2=0x%016x error=0x%x task=%d\n",
                       addr, error_code, Task.current_id())
     HAL.Log.flush()
@@ -166,17 +166,17 @@ interrupt func isr_mouse() {
 namespace IDT {
     // One 16-byte interrupt gate descriptor (long mode).
     packed struct Entry {
-        let offset_low: uint16
-        let selector: uint16
+        let offset_low: u16
+        let selector: u16
         let ist: u8
         let type_attr: u8
-        let offset_mid: uint16
-        let offset_high: uint32
-        let zero: uint32
+        let offset_mid: u16
+        let offset_high: u32
+        let zero: u32
     }
 
     packed struct Pointer {
-        let limit: uint16
+        let limit: u16
         let base: u64
     }
 
@@ -187,12 +187,12 @@ namespace IDT {
 
     // flags: 0x8E = present, ring 0, 64-bit interrupt gate.
     func set_gate_ist(vector: i64, handler_addr: u64, selector: u64, flags: u8, ist: u8) {
-        entries[vector].offset_low = (handler_addr & 0xFFFF) as uint16
-        entries[vector].selector = selector as uint16
+        entries[vector].offset_low = (handler_addr & 0xFFFF) as u16
+        entries[vector].selector = selector as u16
         entries[vector].ist = ist
         entries[vector].type_attr = flags
-        entries[vector].offset_mid = ((handler_addr >> 16) & 0xFFFF) as uint16
-        entries[vector].offset_high = ((handler_addr >> 32) & 0xFFFFFFFF) as uint32
+        entries[vector].offset_mid = ((handler_addr >> 16) & 0xFFFF) as u16
+        entries[vector].offset_high = ((handler_addr >> 32) & 0xFFFFFFFF) as u32
         entries[vector].zero = 0
     }
 

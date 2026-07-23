@@ -12,13 +12,13 @@ func main() -> i64 {
     // Example 1: Write and read a file
     let content: String = new String("Hello from LLPL!\nThis is line 2.\n")
 
-    let write_result: Result<i64, u8*> = std.io.write_file("test_output.txt", content)
+    let write_result: Result<i64, char*> = std.io.write_file("test_output.txt", content)
     if !write_result.is_ok() {
         return 1
     }
 
     // Example 2: Read the file back
-    let read_result: Result<String, u8*> = std.io.read_file("test_output.txt")
+    let read_result: Result<String, char*> = std.io.read_file("test_output.txt")
     if read_result.is_ok() {
         let data: String = read_result.unwrap()
         // In a real program, you would print this
@@ -37,7 +37,7 @@ func main() -> i64 {
         f.write_string(new String("Line 3\n"))
 
         // Get file size
-        let size_result: Result<i64, u8*> = f.size()
+        let size_result: Result<i64, char*> = f.size()
         if size_result.is_ok() {
             let file_size: i64 = size_result.unwrap()
             // File size is available here
@@ -47,7 +47,7 @@ func main() -> i64 {
         f.seek(0, std.io.SEEK_SET)
 
         // Read all content
-        let all_content: Result<String, u8*> = f.read_all()
+        let all_content: Result<String, char*> = f.read_all()
         if all_content.is_ok() {
             let text: String = all_content.unwrap()
             // Text contains all file content
@@ -63,8 +63,8 @@ func main() -> i64 {
     // Example 6: Read file in chunks
     let chunk_file: File = new File("renamed_output.txt", std.io.O_RDONLY)
     if chunk_file.is_valid() {
-        let buffer: u8[128]
-        let bytes_result: Result<i64, u8*> = chunk_file.read_bytes(buffer, 128)
+        let buffer: char[128]
+        let bytes_result: Result<i64, char*> = chunk_file.read_bytes(buffer, 128)
 
         if bytes_result.is_ok() {
             let bytes_read: i64 = bytes_result.unwrap()

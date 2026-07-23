@@ -345,7 +345,7 @@
         self.buffer = <span class="str">0xB8000</span> <span class="kw">as</span> <span class="ty">u8</span>*
     }
 
-    <span class="kw">func</span> write(msg: <span class="ty">u8</span>*) {
+    <span class="kw">func</span> write(msg: <span class="ty">char</span>*) {
         <span class="cm">// writes straight into video memory</span>
     }
 }</pre>
@@ -509,11 +509,13 @@ puts(<span class="str">"hello, \(name) — \(queued) items queued"</span>)
 
         <div class="doc-group" id="doc-types">
           <div class="gh"><h3>Types &amp; values</h3><span>primitives · arrays · casts</span></div>
-          <p>Explicitly-sized integers, a float, bool, a byte, and a plain <code>u8*</code> string alias — fixed arrays are <code>T[N]</code>; growable ones are <code>Vector&lt;T&gt;</code> from the standard library, not a built-in array type.</p>
+          <p>Explicitly-sized integers, a float, bool, and a text <code>char</code>/<code>char*</code> string — fixed arrays are <code>T[N]</code>; growable ones are <code>Vector&lt;T&gt;</code> from the standard library, not a built-in array type.</p>
           <div class="sig-list">
-            <div class="row"><code>i8/16/32/64, u8/16/32/64</code><span class="d">explicitly sized integers — the bare <code>int</code>/<code>uint</code> aliases were removed; use <code>i64</code>/<code>u64</code> instead</span></div>
-            <div class="row"><code>float, bool, u8</code><span class="d">32-bit float, boolean, one byte (<code>char</code> was removed; use <code>u8</code>)</span></div>
-            <div class="row"><code>string</code><span class="d">alias for <code>u8*</code> — no distinct string type at the ABI level</span></div>
+            <div class="row"><code>i8/16/32/64, u8/16/32/64</code><span class="d">explicitly sized integers, genuinely numeric. <code>u8</code> is <code>uint8_t</code>, not text</span></div>
+            <div class="row"><code>char</code><span class="d">one byte of text (C <code>char</code>) — distinct from <code>u8</code> even though both are 8 bits</span></div>
+            <div class="row"><code>int, uint</code><span class="d">native machine word (C <code>intptr_t</code>/<code>uintptr_t</code>: 4 bytes on i386, 8 on x86_64) — not aliases of <code>i64</code>/<code>u64</code>; no implicit widening to/from a fixed-width type</span></div>
+            <div class="row"><code>float, bool</code><span class="d">32-bit float, boolean</span></div>
+            <div class="row"><code>string</code><span class="d">alias for <code>char*</code> — no distinct string type at the ABI level</span></div>
             <div class="row"><code>T[N]</code><span class="d">fixed-size array, e.g. <code>u8[256]</code></span></div>
             <div class="row"><code>expr as T</code><span class="d">explicit cast</span></div>
             <div class="row"><code>sizeof(T), expr.sizeof</code><span class="d">compile-time size in bytes</span></div>
@@ -528,7 +530,7 @@ puts(<span class="str">"hello, \(name) — \(queued) items queued"</span>)
 <span class="kw">const</span> MAX: <span class="ty">i64</span> = 100
 <span class="kw">volatile</span> <span class="kw">let</span> ready: <span class="ty">bool</span> = <span class="kw">false</span>    <span class="cm">// never cached in a register</span>
 
-<span class="kw">func</span> greet(name: <span class="ty">u8</span>*, loud: <span class="ty">bool</span> = <span class="kw">false</span>) -&gt; <span class="ty">u8</span>* { ... }
+<span class="kw">func</span> greet(name: <span class="ty">char</span>*, loud: <span class="ty">bool</span> = <span class="kw">false</span>) -&gt; <span class="ty">char</span>* { ... }
 <span class="kw">func</span> total(values: <span class="ty">i64</span>...) -&gt; <span class="ty">i64</span> { ... }</pre>
           </div>
         </div>
@@ -562,8 +564,8 @@ puts(<span class="str">"hello, \(name) — \(queued) items queued"</span>)
 }
 
 <span class="kw">packed</span> <span class="kw">struct</span> Header {
-    <span class="kw">let</span> magic: uint32
-    <span class="kw">let</span> version: uint8
+    <span class="kw">let</span> magic: u32
+    <span class="kw">let</span> version: u8
 }</pre>
           </div>
         </div>
@@ -684,7 +686,7 @@ puts(<span class="str">"hello, \(name) — \(queued) items queued"</span>)
             <pre><span class="kw">let</span> a: MyClass = <span class="kw">new</span> MyClass()               <span class="cm">// ref-counted</span>
 <span class="kw">let</span> w: Weak&lt;MyClass&gt; = <span class="kw">new</span> Weak&lt;MyClass&gt;(a)  <span class="cm">// doesn't keep it alive</span>
 
-<span class="kw">let</span> raw: <span class="ty">u8</span>* = llpl_alloc(64)                <span class="cm">// manual buffer</span>
+<span class="kw">let</span> raw: <span class="ty">char</span>* = llpl_alloc(64)                <span class="cm">// manual buffer</span>
 llpl_free(raw)</pre>
           </div>
         </div>
@@ -694,7 +696,7 @@ llpl_free(raw)</pre>
           <p>Binding a C library is an <code>extern func</code> declaration plus a <code>#link</code> directive; a bare-metal target adds interrupt handlers, inline assembly, and placement attributes for linker sections and alignment.</p>
           <div class="code-card">
             <pre><span class="hash">#link</span> <span class="str">"SDL3"</span>
-<span class="kw">extern</span> <span class="kw">func</span> SDL_Init(flags: uint32) -&gt; <span class="ty">i64</span>
+<span class="kw">extern</span> <span class="kw">func</span> SDL_Init(flags: u32) -&gt; <span class="ty">i64</span>
 
 <span class="kw">interrupt</span> <span class="kw">func</span> isr_divide_by_zero() { ... }
 

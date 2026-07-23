@@ -9,8 +9,8 @@ namespace GDT {
     // One 8-byte GDT descriptor. `packed` is essential here: without it the
     // compiler could insert padding and the CPU would read garbage.
     packed struct Entry {
-        let limit_low: uint16
-        let base_low: uint16
+        let limit_low: u16
+        let base_low: u16
         let base_mid: u8
         let access: u8
         let granularity: u8
@@ -18,7 +18,7 @@ namespace GDT {
     }
 
     // The 10-byte operand `lgdt`/`sgdt` read/write directly. `packed` is
-    // required here too: a bare uint16 followed by a u64 would otherwise be
+    // required here too: a bare u16 followed by a u64 would otherwise be
     // padded to put the u64 on an 8-byte boundary, breaking the layout.
     packed struct Pointer {
         let limit: u16
@@ -67,16 +67,16 @@ namespace GDT {
     // 8 bytes hold the usual limit/base fields with the "available 64-bit TSS"
     // access byte (0x89); the high 8 bytes hold base bits 32-63.
     func set_tss_descriptor(index: i64, base: u64, limit: u64) {
-        entries[index].limit_low = (limit & 0xFFFF) as uint16
-        entries[index].base_low = (base & 0xFFFF) as uint16
+        entries[index].limit_low = (limit & 0xFFFF) as u16
+        entries[index].base_low = (base & 0xFFFF) as u16
         entries[index].base_mid = ((base >> 16) & 0xFF) as u8
         entries[index].access = 0x89 as u8
         entries[index].granularity = 0 as u8
         entries[index].base_high = ((base >> 24) & 0xFF) as u8
 
         let upper: u64 = base >> 32
-        entries[index + 1].limit_low = (upper & 0xFFFF) as uint16
-        entries[index + 1].base_low = ((upper >> 16) & 0xFFFF) as uint16
+        entries[index + 1].limit_low = (upper & 0xFFFF) as u16
+        entries[index + 1].base_low = ((upper >> 16) & 0xFFFF) as u16
         entries[index + 1].base_mid = 0
         entries[index + 1].access = 0
         entries[index + 1].granularity = 0
@@ -100,7 +100,7 @@ namespace GDT {
         tss.ist7 = 0
         tss.reserved2 = 0
         tss.reserved3 = 0
-        tss.iomap_base = (104 as uint16)
+        tss.iomap_base = (104 as u16)
     }
 
     func init() {

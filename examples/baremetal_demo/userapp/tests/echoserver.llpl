@@ -5,7 +5,7 @@
 import "../../libsys/imports"
 import "../user_runtime"
 
-func upper_char(c: u8) -> u8 {
+func upper_char(c: char) -> char {
     if c >= 97 && c <= 122 {
         return c - 32
     }
@@ -22,7 +22,7 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("hijack-register=ALLOWED (bug!)")
     }
 
-    let buf: u8[64]
+    let buf: char[64]
     let sender: u64 = sys_msg_recv(buf as u8*, 64)
     if sender == RT_SYS_ERR {
         rt_exit(1)

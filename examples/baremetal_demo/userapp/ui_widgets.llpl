@@ -105,7 +105,7 @@ func draw_rect_outline(buf: u32*, buf_w: i64, buf_h: i64,
 // painted (no background box), the shared rendering helper every widget's
 // own draw() below uses for its label/caption text.
 func draw_text_transparent(buf: u32*, buf_w: i64, buf_h: i64,
-                            x: i64, y: i64, text: u8*, color: u32) {
+                            x: i64, y: i64, text: char*, color: u32) {
     let i: i64 = 0
     let cur_x: i64 = x
     while text[i] != 0 {
@@ -134,7 +134,7 @@ func draw_text_transparent(buf: u32*, buf_w: i64, buf_h: i64,
 
 // Pixel width of `text` if drawn with draw_text_transparent - used to
 // center a button's label.
-func text_width(text: u8*) -> i64 {
+func text_width(text: char*) -> i64 {
     let len: i64 = 0
     while text[len] != 0 {
         len = len + 1
@@ -144,7 +144,7 @@ func text_width(text: u8*) -> i64 {
 
 // Formats `value` (0-100) as a decimal string into `buf` (must have room
 // for at least 4 bytes) - used to redraw the slider's live value label.
-func format_int(buf: u8*, value: i64) {
+func format_int(buf: char*, value: i64) {
     if value == 100 {
         buf[0] = 49
         buf[1] = 48
@@ -156,10 +156,10 @@ func format_int(buf: u8*, value: i64) {
     let ones: i64 = value % 10
     let idx: i64 = 0
     if tens > 0 {
-        buf[idx] = (48 + tens) as u8
+        buf[idx] = (48 + tens) as char
         idx = idx + 1
     }
-    buf[idx] = (48 + ones) as u8
+    buf[idx] = (48 + ones) as char
     idx = idx + 1
     buf[idx] = 0
 }
@@ -203,10 +203,10 @@ class Widget {
 
 // A plain, non-interactive line of text - section headings and captions.
 class Label : Widget {
-    let text: u8*
+    let text: char*
     let color: u32
 
-    constructor(x: i64, y: i64, text: u8*, color: u32) {
+    constructor(x: i64, y: i64, text: char*, color: u32) {
         super(x, y, 0, 0)
         self.text = text
         self.color = color
@@ -224,9 +224,9 @@ class Label : Widget {
 // demonstrating that a 3-level hierarchy overrides just one hook while
 // inheriting draw() unchanged from Button.
 class Button : Widget {
-    let label: u8*
+    let label: char*
 
-    constructor(x: i64, y: i64, w: i64, h: i64, label: u8*) {
+    constructor(x: i64, y: i64, w: i64, h: i64, label: char*) {
         super(x, y, w, h)
         self.label = label
     }
@@ -284,7 +284,7 @@ class Button : Widget {
 class ActionButton : Button {
     let target: ProgressBar
 
-    constructor(x: i64, y: i64, w: i64, h: i64, label: u8*, target: ProgressBar) {
+    constructor(x: i64, y: i64, w: i64, h: i64, label: char*, target: ProgressBar) {
         super(x, y, w, h, label)
         self.target = target
     }
@@ -299,9 +299,9 @@ class ActionButton : Button {
 
 class Checkbox : Widget {
     let checked: bool
-    let label: u8*
+    let label: char*
 
-    constructor(x: i64, y: i64, size: i64, label: u8*, checked: bool) {
+    constructor(x: i64, y: i64, size: i64, label: char*, checked: bool) {
         super(x, y, size, size)
         self.label = label
         self.checked = checked
@@ -371,11 +371,11 @@ class RadioGroup {
 }
 
 class RadioButton : Widget {
-    let label: u8*
+    let label: char*
     let index: i64
     let group: RadioGroup
 
-    constructor(x: i64, y: i64, size: i64, label: u8*, index: i64, group: RadioGroup) {
+    constructor(x: i64, y: i64, size: i64, label: char*, index: i64, group: RadioGroup) {
         super(x, y, size, size)
         self.label = label
         self.index = index
@@ -458,11 +458,11 @@ class RadioButton : Widget {
 }
 
 class TextBox : Widget {
-    let text: u8*
+    let text: char*
     let cursor: i64
     let focused: bool
 
-    constructor(x: i64, y: i64, w: i64, h: i64, text: u8*, cursor: i64) {
+    constructor(x: i64, y: i64, w: i64, h: i64, text: char*, cursor: i64) {
         super(x, y, w, h)
         self.text = text
         self.cursor = cursor
@@ -519,7 +519,7 @@ class TextBox : Widget {
             }
         } else if key >= 32 && key < 127 {
             if self.cursor < 63 {
-                self.text[self.cursor] = key as u8
+                self.text[self.cursor] = key as char
                 self.cursor = self.cursor + 1
                 self.text[self.cursor] = 0
             }

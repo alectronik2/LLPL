@@ -27,7 +27,7 @@ const TIMEOUT_ITERS = 500000 // see netd.llpl's own header comment on
                                // wall-clock timeout
 
 func _start(argc: u64, argv: u64*) {
-    let ip_str: u8* = rt_arg(argc, argv, 1, "10.0.2.2")
+    let ip_str: char* = rt_arg(argc, argv, 1, "10.0.2.2")
     let dest_ip: u64 = rt_parse_ip(ip_str)
     if dest_ip == RT_IP_INVALID {
         sys_puts("ping: bad address: ")
@@ -35,7 +35,7 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    let count_str: u8* = rt_arg(argc, argv, 2, "4")
+    let count_str: char* = rt_arg(argc, argv, 2, "4")
     let count: u64 = 0
     let i: i64 = 0
     while count_str[i] != 0 {

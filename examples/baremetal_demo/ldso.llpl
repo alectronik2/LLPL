@@ -62,24 +62,24 @@ namespace LdSo {
 
     packed struct LdElf64Header {
         let ident: u8[16]
-        let elf_type: uint16
-        let machine: uint16
-        let version: uint32
+        let elf_type: u16
+        let machine: u16
+        let version: u32
         let entry: u64
         let phoff: u64
         let shoff: u64
-        let flags: uint32
-        let ehsize: uint16
-        let phentsize: uint16
-        let phnum: uint16
-        let shentsize: uint16
-        let shnum: uint16
-        let shstrndx: uint16
+        let flags: u32
+        let ehsize: u16
+        let phentsize: u16
+        let phnum: u16
+        let shentsize: u16
+        let shnum: u16
+        let shstrndx: u16
     }
 
     packed struct LdElf64ProgramHeader {
-        let ph_type: uint32
-        let flags: uint32
+        let ph_type: u32
+        let flags: u32
         let offset: u64
         let vaddr: u64
         let paddr: u64
@@ -94,10 +94,10 @@ namespace LdSo {
     }
 
     packed struct LdElf64Sym {
-        let name: uint32
+        let name: u32
         let info: u8
         let other: u8
-        let shndx: uint16
+        let shndx: u16
         let value: u64
         let size: u64
     }
@@ -109,40 +109,40 @@ namespace LdSo {
     }
 
     packed struct LdElf64Verdef {
-        let version: uint16
-        let flags: uint16
-        let ndx: uint16
-        let cnt: uint16
-        let hash: uint32
-        let aux: uint32
-        let next: uint32
+        let version: u16
+        let flags: u16
+        let ndx: u16
+        let cnt: u16
+        let hash: u32
+        let aux: u32
+        let next: u32
     }
 
     packed struct LdElf64Verdaux {
-        let name: uint32
-        let next: uint32
+        let name: u32
+        let next: u32
     }
 
     packed struct LdElf64Verneed {
-        let version: uint16
-        let cnt: uint16
-        let file: uint32
-        let aux: uint32
-        let next: uint32
+        let version: u16
+        let cnt: u16
+        let file: u32
+        let aux: u32
+        let next: u32
     }
 
     packed struct LdElf64Vernaux {
-        let hash: uint32
-        let flags: uint16
-        let other: uint16
-        let name: uint32
-        let next: uint32
+        let hash: u32
+        let flags: u16
+        let other: u16
+        let name: u32
+        let next: u32
     }
 
     packed struct Library {
         let used: bool
         let aspace: VMM.AddressSpace*
-        let name: u8[48]
+        let name: char[48]
         let base: u64
         let end: u64
         let strtab: u64
@@ -179,7 +179,7 @@ namespace LdSo {
         return (addr + 4095) & ~4095
     }
 
-    func copy_name(dst: u8*, src: u8*) {
+    func copy_name(dst: char*, src: char*) {
         let i: i64 = 0
         while src[i] != 0 && i < NAME_MAX - 1 {
             dst[i] = src[i]
@@ -188,7 +188,7 @@ namespace LdSo {
         dst[i] = 0
     }
 
-    func str_eq(a: u8*, b: u8*) -> bool {
+    func str_eq(a: char*, b: char*) -> bool {
         let i: i64 = 0
         while a[i] != 0 && b[i] != 0 {
             if a[i] != b[i] {
@@ -199,11 +199,11 @@ namespace LdSo {
         return a[i] == b[i]
     }
 
-    func basename(path: u8*) -> u8* {
-        let last: u8* = path
+    func basename(path: char*) -> char* {
+        let last: char* = path
         let i: i64 = 0
         while path[i] != 0 {
-            if path[i] == 47 as u8 {
+            if path[i] == 47 as char {
                 last = path + i + 1
             }
             i = i + 1
@@ -211,11 +211,11 @@ namespace LdSo {
         return last
     }
 
-    func name_matches_loaded(stored: u8*, requested: u8*) -> bool {
+    func name_matches_loaded(stored: char*, requested: char*) -> bool {
         return str_eq(stored, requested) || str_eq(basename(stored), requested)
     }
 
-    func path_for_boot_module(dst: u8*, name: u8*) {
+    func path_for_boot_module(dst: char*, name: char*) {
         dst[0] = 47 // '/'
         dst[1] = 98 // 'b'
         dst[2] = 111 // 'o'
@@ -242,10 +242,10 @@ namespace LdSo {
         if hdr.ident[4] != 2 as u8 || hdr.ident[5] != 1 as u8 {
             return false
         }
-        if hdr.elf_type != ET_DYN as uint16 || hdr.machine != EM_X86_64 as uint16 {
+        if hdr.elf_type != ET_DYN as u16 || hdr.machine != EM_X86_64 as u16 {
             return false
         }
-        if hdr.phentsize != sizeof(LdElf64ProgramHeader) as uint16 || hdr.phnum == 0 as uint16 {
+        if hdr.phentsize != sizeof(LdElf64ProgramHeader) as u16 || hdr.phnum == 0 as u16 {
             return false
         }
         let ph_end: u64 = hdr.phoff + (hdr.phnum as u64) * sizeof(LdElf64ProgramHeader)
@@ -299,7 +299,7 @@ namespace LdSo {
     // demo's own binaries is well under any reasonable buffer size, so
     // truncation here only ever means "definitely won't match anything,"
     // not a silent wrong match.
-    func user_read_cstring(aspace: VMM.AddressSpace*, virt: u64, dst: u8*, max_len: u64) -> bool {
+    func user_read_cstring(aspace: VMM.AddressSpace*, virt: u64, dst: char*, max_len: u64) -> bool {
         let i: u64 = 0
         while i < max_len - 1 {
             let p: u8* = user_ptr(aspace, virt + i)
@@ -326,7 +326,7 @@ namespace LdSo {
     }
 
     func user_read_u32(aspace: VMM.AddressSpace*, virt: u64) -> u64 {
-        let p: uint32* = user_ptr(aspace, virt) as uint32*
+        let p: u32* = user_ptr(aspace, virt) as u32*
         if p == null {
             return 0
         }
@@ -377,14 +377,14 @@ namespace LdSo {
     // and ld.so started failing to resolve it - in a program that
     // doesn't even reference any of the four new symbols - with no
     // indication beyond "unresolved symbol, index N".
-    func user_str_eq(aspace: VMM.AddressSpace*, virt: u64, name: u8*) -> bool {
+    func user_str_eq(aspace: VMM.AddressSpace*, virt: u64, name: char*) -> bool {
         let i: u64 = 0
         while true {
             let c: u8* = user_ptr(aspace, virt + i)
             if c == null {
                 return false
             }
-            let ch: u8 = c[0]
+            let ch: char = c[0] as char
             if ch != name[i] {
                 return false
             }
@@ -505,10 +505,10 @@ namespace LdSo {
         return idx
     }
 
-    func find_loaded(aspace: VMM.AddressSpace*, name: u8*) -> i64 {
+    func find_loaded(aspace: VMM.AddressSpace*, name: char*) -> i64 {
         let i: i64 = 0
         while i < lib_count {
-            if libs[i].used && libs[i].aspace == aspace && name_matches_loaded(libs[i].name as u8*, name) {
+            if libs[i].used && libs[i].aspace == aspace && name_matches_loaded(libs[i].name as char*, name) {
                 return i
             }
             i = i + 1
@@ -516,7 +516,7 @@ namespace LdSo {
         return -1
     }
 
-    func symbol_value(lib_idx: i64, name: u8*) -> u64 {
+    func symbol_value(lib_idx: i64, name: char*) -> u64 {
         let lib: Library* = &libs[lib_idx]
         if lib.symtab == 0 || lib.strtab == 0 || lib.symcount == 0 {
             return 0
@@ -535,7 +535,7 @@ namespace LdSo {
                 return 0
             }
             let sym: LdElf64Sym* = (sym_buf as u8*) as LdElf64Sym*
-            if sym.name != 0 as uint32 && sym.shndx != 0 as uint16 {
+            if sym.name != 0 as u32 && sym.shndx != 0 as u16 {
                 let name_addr: u64 = lib.strtab + (sym.name as u64)
                 if user_str_eq(lib.aspace, name_addr, name) {
                     return lib.base + sym.value
@@ -546,7 +546,7 @@ namespace LdSo {
         return 0
     }
 
-    func resolve_symbol(aspace: VMM.AddressSpace*, name: u8*) -> u64 {
+    func resolve_symbol(aspace: VMM.AddressSpace*, name: char*) -> u64 {
         let i: i64 = 0
         while i < lib_count {
             if libs[i].used && libs[i].aspace == aspace {
@@ -598,7 +598,7 @@ namespace LdSo {
                     let sym_buf: u8[24]
                     if user_read_bytes(lib.aspace, lib.symtab + sym_index * lib.syment, sym_buf as u8*, sizeof(LdElf64Sym)) {
                         let sym: LdElf64Sym* = (sym_buf as u8*) as LdElf64Sym*
-                        if sym.shndx != 0 as uint16 {
+                        if sym.shndx != 0 as u16 {
                             target = lib.base + sym.value + r_addend
                             resolved_ok = true
                         } else {
@@ -614,9 +614,9 @@ namespace LdSo {
                             // exports elsewhere shifted string-table
                             // layouts enough to push this *particular*
                             // name across a page boundary).
-                            let nm_buf: u8[64]
-                            if user_read_cstring(lib.aspace, lib.strtab + (sym.name as u64), nm_buf as u8*, 64) {
-                                let resolved: u64 = resolve_symbol(lib.aspace, nm_buf as u8*)
+                            let nm_buf: char[64]
+                            if user_read_cstring(lib.aspace, lib.strtab + (sym.name as u64), nm_buf as char*, 64) {
+                                let resolved: u64 = resolve_symbol(lib.aspace, nm_buf as char*)
                                 if resolved != 0 {
                                     target = resolved + r_addend
                                     resolved_ok = true
@@ -657,7 +657,7 @@ namespace LdSo {
         return true
     }
 
-    func map_dyn_object(file: u8*, size: u64, aspace: VMM.AddressSpace*, name: u8*, load_base: u64) -> i64 {
+    func map_dyn_object(file: u8*, size: u64, aspace: VMM.AddressSpace*, name: char*, load_base: u64) -> i64 {
         if !valid_dyn_elf(file, size) || aspace == null || !lib_slot_available() {
             return -1
         }
@@ -674,7 +674,7 @@ namespace LdSo {
         let i: i64 = 0
         while i < hdr.phnum as i64 {
             let ph: LdElf64ProgramHeader* = (file + hdr.phoff + (i as u64) * sizeof(LdElf64ProgramHeader)) as LdElf64ProgramHeader*
-            if ph.ph_type == PT_LOAD as uint32 && ph.memsz > 0 {
+            if ph.ph_type == PT_LOAD as u32 && ph.memsz > 0 {
                 let first: u64 = align_down_page(ph.vaddr)
                 let last: u64 = align_up_page(ph.vaddr + ph.memsz)
                 if first < min_vaddr {
@@ -704,7 +704,7 @@ namespace LdSo {
         i = 0
         while i < hdr.phnum as i64 {
             let ph: LdElf64ProgramHeader* = (file + hdr.phoff + (i as u64) * sizeof(LdElf64ProgramHeader)) as LdElf64ProgramHeader*
-            if ph.ph_type == PT_LOAD as uint32 && ph.memsz > 0 {
+            if ph.ph_type == PT_LOAD as u32 && ph.memsz > 0 {
                 if ph.memsz < ph.filesz || ph.offset + ph.filesz > size {
                     return -1
                 }
@@ -720,7 +720,7 @@ namespace LdSo {
                         return -1
                     }
                     let flags: u64 = VMM.PTE_PRESENT | VMM.PTE_USER
-                    if (ph.flags & PF_W as uint32) != 0 {
+                    if (ph.flags & PF_W as u32) != 0 {
                         flags = flags | VMM.PTE_WRITABLE
                     }
                     if !VMM.map_in_aspace(aspace, bias + obj_page, phys, flags) {
@@ -743,7 +743,7 @@ namespace LdSo {
         // .used is already set - see alloc_lib_slot's own doc comment for
         // why that has to happen atomically, inside it, not here.
         libs[idx].aspace = aspace
-        copy_name(libs[idx].name as u8*, name)
+        copy_name(libs[idx].name as char*, name)
         libs[idx].base = bias
         libs[idx].end = mapped_end
         libs[idx].strtab = 0
@@ -764,7 +764,7 @@ namespace LdSo {
         i = 0
         while i < hdr.phnum as i64 {
             let ph: LdElf64ProgramHeader* = (file + hdr.phoff + (i as u64) * sizeof(LdElf64ProgramHeader)) as LdElf64ProgramHeader*
-            if ph.ph_type == PT_DYNAMIC as uint32 {
+            if ph.ph_type == PT_DYNAMIC as u32 {
                 let dyn_count: u64 = ph.filesz / sizeof(LdElf64Dyn)
                 let d: u64 = 0
                 while d < dyn_count {
@@ -818,7 +818,7 @@ namespace LdSo {
                 libs[idx].used = false
                 return -1
             }
-            let dep_name: u8* = user_ptr(aspace, libs[idx].strtab + needed[dep_i])
+            let dep_name: char* = user_ptr(aspace, libs[idx].strtab + needed[dep_i]) as char*
             if dep_name == null || !load_dependency(aspace, dep_name) {
                 log("<LIGHT_RED>ld.so: failed dependency </>")
                 if dep_name != null {
@@ -858,23 +858,23 @@ namespace LdSo {
         return idx
     }
 
-    func map_library(file: u8*, size: u64, aspace: VMM.AddressSpace*, name: u8*) -> i64 {
+    func map_library(file: u8*, size: u64, aspace: VMM.AddressSpace*, name: char*) -> i64 {
         return map_dyn_object(file, size, aspace, name, 0)
     }
 
-    func load_dependency(aspace: VMM.AddressSpace*, name: u8*) -> bool {
+    func load_dependency(aspace: VMM.AddressSpace*, name: char*) -> bool {
         if find_loaded(aspace, name) >= 0 {
             return true
         }
-        if name[0] == 47 as u8 {
+        if name[0] == 47 as char {
             return load_path(aspace, name)
         }
-        let boot_path: u8[48]
-        path_for_boot_module(boot_path as u8*, name)
-        if load_path(aspace, boot_path as u8*) {
+        let boot_path: char[48]
+        path_for_boot_module(boot_path as char*, name)
+        if load_path(aspace, boot_path as char*) {
             return true
         }
-        let lib_path: u8[48]
+        let lib_path: char[48]
         lib_path[0] = 47
         lib_path[1] = 108
         lib_path[2] = 105
@@ -886,7 +886,7 @@ namespace LdSo {
             i = i + 1
         }
         lib_path[i + 5] = 0
-        if load_path(aspace, lib_path as u8*) {
+        if load_path(aspace, lib_path as char*) {
             return true
         }
         log("<LIGHT_RED>ld.so: dependency not found in /lib or /boot: </>")
@@ -895,7 +895,7 @@ namespace LdSo {
         return false
     }
 
-    func library_has_version(lib_idx: i64, version_name: u8*) -> bool {
+    func library_has_version(lib_idx: i64, version_name: char*) -> bool {
         let lib: Library* = &libs[lib_idx]
         if lib.verdef == 0 || lib.verdefnum == 0 || lib.strtab == 0 {
             return false
@@ -913,7 +913,7 @@ namespace LdSo {
                     return true
                 }
             }
-            if vd.next == 0 as uint32 {
+            if vd.next == 0 as u32 {
                 return false
             }
             cur = cur + (vd.next as u64)
@@ -933,7 +933,7 @@ namespace LdSo {
         let i: i64 = 0
         while i < hdr.phnum as i64 {
             let ph: LdElf64ProgramHeader* = (file + hdr.phoff + (i as u64) * sizeof(LdElf64ProgramHeader)) as LdElf64ProgramHeader*
-            if ph.ph_type == PT_DYNAMIC as uint32 {
+            if ph.ph_type == PT_DYNAMIC as u32 {
                 let dyn_count: u64 = ph.filesz / sizeof(LdElf64Dyn)
                 let d: u64 = 0
                 while d < dyn_count {
@@ -958,11 +958,11 @@ namespace LdSo {
             if !user_read_verneed(lib.aspace, cur, &vn) {
                 return false
             }
-            let dep_name_buf: u8[48]
-            let dep_name_ok: bool = user_read_cstring(lib.aspace, lib.strtab + (vn.file as u64), dep_name_buf as u8*, 48)
+            let dep_name_buf: char[48]
+            let dep_name_ok: bool = user_read_cstring(lib.aspace, lib.strtab + (vn.file as u64), dep_name_buf as char*, 48)
             let dep_idx: i64 = -1
             if dep_name_ok {
-                dep_idx = find_loaded(lib.aspace, dep_name_buf as u8*)
+                dep_idx = find_loaded(lib.aspace, dep_name_buf as char*)
             }
             if dep_idx < 0 {
                 return false
@@ -974,19 +974,19 @@ namespace LdSo {
                 if !user_read_vernaux(lib.aspace, aux_addr, &aux) {
                     return false
                 }
-                let version_name_buf: u8[48]
-                if !user_read_cstring(lib.aspace, lib.strtab + (aux.name as u64), version_name_buf as u8*, 48) ||
-                   !library_has_version(dep_idx, version_name_buf as u8*) {
+                let version_name_buf: char[48]
+                if !user_read_cstring(lib.aspace, lib.strtab + (aux.name as u64), version_name_buf as char*, 48) ||
+                   !library_has_version(dep_idx, version_name_buf as char*) {
                     return false
                 }
-                if aux.next == 0 as uint32 {
+                if aux.next == 0 as u32 {
                     aux_i = vn.cnt as u64
                 } else {
                     aux_addr = aux_addr + (aux.next as u64)
                     aux_i = aux_i + 1
                 }
             }
-            if vn.next == 0 as uint32 {
+            if vn.next == 0 as u32 {
                 return true
             }
             cur = cur + (vn.next as u64)
@@ -1012,7 +1012,7 @@ namespace LdSo {
         }
     }
 
-    func load_executable(file: u8*, size: u64, aspace: VMM.AddressSpace*, name: u8*) -> ExecImage {
+    func load_executable(file: u8*, size: u64, aspace: VMM.AddressSpace*, name: char*) -> ExecImage {
         let image: ExecImage
         image.entry = 0
         image.base = 0
@@ -1035,7 +1035,7 @@ namespace LdSo {
         return image
     }
 
-    func load_path(aspace: VMM.AddressSpace*, path: u8*) -> bool {
+    func load_path(aspace: VMM.AddressSpace*, path: char*) -> bool {
         match VFS.resolve(path) {
             case VFS.Node.TmpfsFile(idx) => {
                 let size: u64 = TmpFS.size_at(idx)
@@ -1088,7 +1088,7 @@ namespace LdSo {
         let i: i64 = 0
         while i < lib_count {
             if libs[i].used {
-                log("<CYAN>\(libs[i].name as u8*)")
+                log("<CYAN>\(libs[i].name as char*)")
                 log("base=\(libs[i].base:016:hex) end=\(libs[i].end:016:hex) symbols=\(libs[i].symcount)\n")
             }
             i = i + 1

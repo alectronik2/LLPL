@@ -395,7 +395,7 @@ let upper: char = std::CharUtils::to_upper('b') // 'B'
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `constructor` | `(port: uint16)` | Create server on port |
+| `constructor` | `(port: u16)` | Create server on port |
 | `start` | `(backlog: int) -> Result<bool, char*>` | Bind and listen |
 | `accept` | `() -> Result<Socket, char*>` | Accept connection |
 | `is_valid` | `() -> bool` | Check if valid |
@@ -405,7 +405,7 @@ let upper: char = std::CharUtils::to_upper('b') // 'B'
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `constructor` | `()` | Create client |
-| `connect` | `(a: uint8, b: uint8, c: uint8, d: uint8, port: uint16) -> Result<bool, char*>` | Connect to IP |
+| `connect` | `(a: uint8, b: uint8, c: uint8, d: uint8, port: u16) -> Result<bool, char*>` | Connect to IP |
 | `send` | `(data: String) -> Result<int, char*>` | Send data |
 | `recv` | `(max_size: uint) -> Result<String, char*>` | Receive data |
 | `close` | `()` | Close connection |

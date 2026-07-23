@@ -83,17 +83,17 @@ func draw_hline(x: u64, y: u64, w: u64, color: u32) {
     }
 }
 
-func uint_to_dec(buf: u8*, n: u64) -> i64 {
+func uint_to_dec(buf: char*, n: u64) -> i64 {
     if n == 0 {
         buf[0] = 48
         buf[1] = 0
         return 1
     }
-    let tmp: u8[20]
+    let tmp: char[20]
     let len: i64 = 0
     let v: u64 = n
     while v > 0 {
-        tmp[len] = (48 + (v % 10)) as u8
+        tmp[len] = (48 + (v % 10)) as char
         len = len + 1
         v = v / 10
     }
@@ -106,19 +106,19 @@ func uint_to_dec(buf: u8*, n: u64) -> i64 {
     return len
 }
 
-func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
+func draw_text(x: u64, y: u64, s: char*, fg: u32, bg: u32) {
     Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
 }
 
 func draw_num(x: u64, y: u64, n: u64, fg: u32, bg: u32) {
-    let buf: u8[24]
-    uint_to_dec(buf as u8*, n)
-    draw_text(x, y, buf as u8*, fg, bg)
+    let buf: char[24]
+    uint_to_dec(buf as char*, n)
+    draw_text(x, y, buf as char*, fg, bg)
 }
 
 func draw_num_limited(x: u64, y: u64, n: u64, max_digits: i64, fg: u32, bg: u32) {
-    let buf: u8[24]
-    let len: i64 = uint_to_dec(buf as u8*, n)
+    let buf: char[24]
+    let len: i64 = uint_to_dec(buf as char*, n)
     if len > max_digits {
         let i: i64 = 0
         while i < max_digits - 1 {
@@ -128,29 +128,29 @@ func draw_num_limited(x: u64, y: u64, n: u64, max_digits: i64, fg: u32, bg: u32)
         buf[max_digits - 1] = 43
         buf[max_digits] = 0
     }
-    draw_text(x, y, buf as u8*, fg, bg)
+    draw_text(x, y, buf as char*, fg, bg)
 }
 
-func draw_name_limited(x: u64, y: u64, name: u8*, max_chars: i64, fg: u32, bg: u32) {
-    let buf: u8[16]
+func draw_name_limited(x: u64, y: u64, name: char*, max_chars: i64, fg: u32, bg: u32) {
+    let buf: char[16]
     let i: i64 = 0
     while i < max_chars && i < 15 && name[i] != 0 {
         buf[i] = name[i]
         i = i + 1
     }
     buf[i] = 0
-    draw_text(x, y, buf as u8*, fg, bg)
+    draw_text(x, y, buf as char*, fg, bg)
 }
 
-func state_name(state: u64) -> u8* {
-    if state == 0 { return "run" as u8* }
-    if state == 2 { return "sleep" as u8* }
-    if state == 3 { return "send" as u8* }
-    if state == 4 { return "recv" as u8* }
-    if state == 5 { return "reply" as u8* }
-    if state == 6 { return "zombie" as u8* }
-    if state == 7 { return "wait" as u8* }
-    return "dead" as u8*
+func state_name(state: u64) -> char* {
+    if state == 0 { return "run" as char* }
+    if state == 2 { return "sleep" as char* }
+    if state == 3 { return "send" as char* }
+    if state == 4 { return "recv" as char* }
+    if state == 5 { return "reply" as char* }
+    if state == 6 { return "zombie" as char* }
+    if state == 7 { return "wait" as char* }
+    return "dead" as char*
 }
 
 func state_color(state: u64) -> u32 {
@@ -160,9 +160,9 @@ func state_color(state: u64) -> u32 {
     return BLOCKED
 }
 
-func mode_name(mode: u64) -> u8* {
-    if mode == 1 { return "user" as u8* }
-    return "kern" as u8*
+func mode_name(mode: u64) -> char* {
+    if mode == 1 { return "user" as char* }
+    return "kern" as char*
 }
 
 func rec_at(index: i64) -> u8* {
@@ -173,8 +173,8 @@ func fields_at(index: i64) -> u64* {
     return (rec_at(index) + 16) as u64*
 }
 
-func task_name_at(index: i64) -> u8* {
-    return rec_at(index)
+func task_name_at(index: i64) -> char* {
+    return rec_at(index) as char*
 }
 
 func task_pid_at(index: i64) -> i64 {
@@ -359,7 +359,7 @@ func selected_display_row() -> i64 {
     return display_rows[selected]
 }
 
-func ensure_name_rooted(name: u8*, dst: u8*) {
+func ensure_name_rooted(name: char*, dst: char*) {
     if name[0] == 47 {
         let i: i64 = 0
         while name[i] != 0 && i < 63 {
@@ -377,7 +377,7 @@ func ensure_name_rooted(name: u8*, dst: u8*) {
     dst[i] = 0
 }
 
-func build_launch_path(dst: u8*, prefix: u8*, name: u8*) {
+func build_launch_path(dst: char*, prefix: char*, name: char*) {
     let i: i64 = 0
     while prefix[i] != 0 && i < 63 {
         dst[i] = prefix[i]
@@ -392,18 +392,18 @@ func build_launch_path(dst: u8*, prefix: u8*, name: u8*) {
     dst[i] = 0
 }
 
-func spawn_from_task_name(name: u8*) -> bool {
-    let path: u8[64]
+func spawn_from_task_name(name: char*) -> bool {
+    let path: char[64]
     if name[0] == 47 {
-        ensure_name_rooted(name, path as u8*)
-        return sys_spawn(path as u8*, "" as u8*) != RT_SYS_ERR
+        ensure_name_rooted(name, path as char*)
+        return sys_spawn(path as char*, "" as char*) != RT_SYS_ERR
     }
-    build_launch_path(path as u8*, "/bin/" as u8*, name)
-    if sys_spawn(path as u8*, "" as u8*) != RT_SYS_ERR {
+    build_launch_path(path as char*, "/bin/" as char*, name)
+    if sys_spawn(path as char*, "" as char*) != RT_SYS_ERR {
         return true
     }
-    build_launch_path(path as u8*, "/boot/" as u8*, name)
-    return sys_spawn(path as u8*, "" as u8*) != RT_SYS_ERR
+    build_launch_path(path as char*, "/boot/" as char*, name)
+    return sys_spawn(path as char*, "" as char*) != RT_SYS_ERR
 }
 
 func kill_selected_task() {
@@ -421,7 +421,7 @@ func restart_selected_task() {
         return
     }
     let pid: i64 = task_pid_at(row)
-    let name: u8[16]
+    let name: char[16]
     let i: i64 = 0
     while i < 15 && task_name_at(row)[i] != 0 {
         name[i] = task_name_at(row)[i]
@@ -429,23 +429,23 @@ func restart_selected_task() {
     }
     name[i] = 0
     if sys_task_kill(pid as u64) != RT_SYS_ERR {
-        spawn_from_task_name(name as u8*)
+        spawn_from_task_name(name as char*)
     }
 }
 
 func draw_header() {
     fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, BG)
     fill_rect(0, 0, Wm.WIN_W as u64, 26, HEADER)
-    draw_text(8, 5, "TASK MANAGER" as u8*, ACCENT, HEADER)
-    draw_text(214, 5, "tasks" as u8*, MUTED, HEADER)
+    draw_text(8, 5, "TASK MANAGER" as char*, ACCENT, HEADER)
+    draw_text(214, 5, "tasks" as char*, MUTED, HEADER)
     draw_num(262, 5, task_total_seen, TEXT, HEADER)
 
     fill_rect(6, 32, 388, 18, PANEL)
-    draw_text(10, 34, "PID" as u8*, MUTED, PANEL)
-    draw_text(50, 34, "NAME" as u8*, MUTED, PANEL)
-    draw_text(190, 34, "STATE" as u8*, MUTED, PANEL)
-    draw_text(258, 34, "CPU" as u8*, MUTED, PANEL)
-    draw_text(318, 34, "MAPS" as u8*, MUTED, PANEL)
+    draw_text(10, 34, "PID" as char*, MUTED, PANEL)
+    draw_text(50, 34, "NAME" as char*, MUTED, PANEL)
+    draw_text(190, 34, "STATE" as char*, MUTED, PANEL)
+    draw_text(258, 34, "CPU" as char*, MUTED, PANEL)
+    draw_text(318, 34, "MAPS" as char*, MUTED, PANEL)
 }
 
 func draw_row(view_row: i64, model_row: i64, depth: i64) {
@@ -468,7 +468,7 @@ func draw_row(view_row: i64, model_row: i64, depth: i64) {
 func draw_details() {
     fill_rect(0, DETAILS_Y - 4, Wm.WIN_W as u64, 72, HEADER)
     if display_count <= 0 {
-        draw_text(8, DETAILS_Y, "no tasks" as u8*, MUTED, HEADER)
+        draw_text(8, DETAILS_Y, "no tasks" as char*, MUTED, HEADER)
         return
     }
     let row: i64 = selected_display_row()
@@ -476,19 +476,19 @@ func draw_details() {
         return
     }
     let f: u64* = fields_at(row)
-    draw_text(8, DETAILS_Y, "pid" as u8*, MUTED, HEADER)
+    draw_text(8, DETAILS_Y, "pid" as char*, MUTED, HEADER)
     draw_num(32, DETAILS_Y, f[0], TEXT, HEADER)
-    draw_text(74, DETAILS_Y, "parent" as u8*, MUTED, HEADER)
+    draw_text(74, DETAILS_Y, "parent" as char*, MUTED, HEADER)
     draw_num(124, DETAILS_Y, f[6], TEXT, HEADER)
-    draw_text(174, DETAILS_Y, "ipc" as u8*, MUTED, HEADER)
+    draw_text(174, DETAILS_Y, "ipc" as char*, MUTED, HEADER)
     if f[7] == 0xFFFFFFFFFFFFFFFF {
-        draw_text(204, DETAILS_Y, "-" as u8*, TEXT, HEADER)
+        draw_text(204, DETAILS_Y, "-" as char*, TEXT, HEADER)
     } else {
         draw_num_limited(204, DETAILS_Y, f[7], 4, TEXT, HEADER)
     }
-    draw_text(248, DETAILS_Y, "len" as u8*, MUTED, HEADER)
+    draw_text(248, DETAILS_Y, "len" as char*, MUTED, HEADER)
     draw_num_limited(278, DETAILS_Y, f[8], 5, TEXT, HEADER)
-    draw_text(318, DETAILS_Y, "maps" as u8*, MUTED, HEADER)
+    draw_text(318, DETAILS_Y, "maps" as char*, MUTED, HEADER)
     draw_num_limited(352, DETAILS_Y, f[11], 4, TEXT, HEADER)
 
     draw_rect_buttons()
@@ -499,11 +499,11 @@ func draw_rect_buttons() {
     let restart_x: i64 = kill_x + ACTION_W + ACTION_GAP
     draw_rect(kill_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x403038)
     draw_border(kill_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x905060)
-    draw_text((kill_x + 20) as u64, (ACTION_Y + 5) as u64, "KILL" as u8*, TEXT, 0x403038)
+    draw_text((kill_x + 20) as u64, (ACTION_Y + 5) as u64, "KILL" as char*, TEXT, 0x403038)
     draw_rect(restart_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x304050)
     draw_border(restart_x as u64, ACTION_Y as u64, ACTION_W as u64, ACTION_H as u64, 0x6080A0)
-    draw_text((restart_x + 10) as u64, (ACTION_Y + 5) as u64, "RESTART" as u8*, TEXT, 0x304050)
-    draw_text(204, (ACTION_Y + 5) as u64, "K kill, R restart" as u8*, MUTED, HEADER)
+    draw_text((restart_x + 10) as u64, (ACTION_Y + 5) as u64, "RESTART" as char*, TEXT, 0x304050)
+    draw_text(204, (ACTION_Y + 5) as u64, "K kill, R restart" as char*, MUTED, HEADER)
 }
 
 func hit_test_action(mx: i64, my: i64) -> i64 {

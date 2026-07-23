@@ -6,28 +6,28 @@ extern func syscall2(number: u64, a: u64, b: u64) -> u64
 extern func syscall3(number: u64, a: u64, b: u64, c: u64) -> u64
 
 extern func sys_exit(code: u64) -> u64
-extern func sys_print(buf: u8*, len: u64) -> u64
+extern func sys_print(buf: char*, len: u64) -> u64
 extern func sys_mmap(virt_hint: u64, pages: u64, flags: u64) -> u64
 extern func sys_munmap(addr: u64, pages: u64) -> u64
 extern func sys_getpid() -> u64
 extern func sys_yield() -> u64
 extern func sys_sleep(ticks: u64) -> u64
-extern func sys_open(path: u8*, mode: u64) -> u64
+extern func sys_open(path: char*, mode: u64) -> u64
 extern func sys_read(fd: u64, buf: u8*, len: u64) -> u64
 extern func sys_write(fd: u64, buf: u8*, len: u64) -> u64
 extern func sys_close(fd: u64) -> u64
 extern func sys_msg_send(handle: u64, buf: u8*, len: u64) -> u64
 extern func sys_msg_recv(buf: u8*, len: u64) -> u64
 extern func sys_msg_try_recv(buf: u8*, len: u64) -> u64
-extern func sys_readdir(path: u8*, index: u64, out_buf: u8*) -> u64
+extern func sys_readdir(path: char*, index: u64, out_buf: u8*) -> u64
 extern func sys_focus_state() -> u64
 extern func sys_msg_reply(peer: u64, buf: u8*, len: u64) -> u64
-extern func sys_spawn(path: u8*, args: u8*) -> u64
-extern func sys_exec(path: u8*, args: u8*) -> u64
+extern func sys_spawn(path: char*, args: char*) -> u64
+extern func sys_exec(path: char*, args: char*) -> u64
 extern func sys_wait(handle: u64) -> u64
 extern func sys_kill(handle: u64) -> u64
-extern func sys_register(name: u8*) -> u64
-extern func sys_lookup(name: u8*) -> u64
+extern func sys_register(name: char*) -> u64
+extern func sys_lookup(name: char*) -> u64
 extern func sys_shm_create(pages: u64) -> u8*
 extern func sys_shm_map(handle: u64) -> u8*
 extern func sys_inb(port: u64) -> u64
@@ -47,15 +47,15 @@ extern func sys_task_info(index: u64, out_buf: u8*) -> u64
 extern func sys_task_kill(pid: u64) -> u64
 extern func sys_pty_create() -> u64
 extern func sys_pty_spawn_shell(pty_id: u64) -> u64
-extern func sys_pty_write(pty_id: u64, buf: u8*, len: u64) -> u64
-extern func sys_pty_read(pty_id: u64, out_buf: u8*, len: u64) -> u64
+extern func sys_pty_write(pty_id: u64, buf: char*, len: u64) -> u64
+extern func sys_pty_read(pty_id: u64, out_buf: char*, len: u64) -> u64
 extern func sys_pty_close(pty_id: u64) -> u64
-extern func sys_mkdir(path: u8*) -> u64
-extern func sys_rm(path: u8*) -> u64
+extern func sys_mkdir(path: char*) -> u64
+extern func sys_rm(path: char*) -> u64
 extern func sys_system_info(out_buf: u64*) -> u64
 extern func sys_cpu_info(out_buf: u64*) -> u64
-extern func sys_clipboard_set(buf: u8*, len: u64) -> u64
-extern func sys_clipboard_get(out_buf: u8*, max_len: u64) -> u64
+extern func sys_clipboard_set(buf: char*, len: u64) -> u64
+extern func sys_clipboard_get(out_buf: char*, max_len: u64) -> u64
 extern func sys_clipboard_image_info(out_buf: u64*) -> u64
 extern func sys_clipboard_get_image(out_buf: u8*, max_len: u64) -> u64
 extern func sys_screenshot() -> u64
@@ -85,16 +85,16 @@ const KEY_F10 = 207
 // comment (syscall.llpl) for why a ring-3 program would need this.
 const FOCUS_WM = 1
 
-extern func sys_strlen(s: u8*) -> u64
-extern func sys_puts(s: u8*) -> u64
-extern func sys_putln(s: u8*) -> u64
+extern func sys_strlen(s: char*) -> u64
+extern func sys_puts(s: char*) -> u64
+extern func sys_putln(s: char*) -> u64
 extern func sys_memset(dst: u8*, value: u8, len: u64) -> u8*
 extern func sys_memcpy(dst: u8*, src: u8*, len: u64) -> u8*
-extern func sys_strcmp(a: u8*, b: u8*) -> i64
-extern func sys_streq(a: u8*, b: u8*) -> bool
-extern func sys_strcpy(dst: u8*, src: u8*) -> u8*
-extern func sys_read_all(path: u8*, buf: u8*, len: u64) -> u64
-extern func sys_write_all(path: u8*, buf: u8*, len: u64) -> u64
+extern func sys_strcmp(a: char*, b: char*) -> i64
+extern func sys_streq(a: char*, b: char*) -> bool
+extern func sys_strcpy(dst: char*, src: char*) -> char*
+extern func sys_read_all(path: char*, buf: u8*, len: u64) -> u64
+extern func sys_write_all(path: char*, buf: u8*, len: u64) -> u64
 extern func sys_alloc_pages(pages: u64) -> u8*
 extern func sys_malloc(size: u64) -> u8*
 extern func sys_free(ptr: u8*) -> u64

@@ -148,7 +148,14 @@ private void compileToBinary(string cCode, string outputFile, string ccOverride,
     std.file.write(cFile, cCode);
 
     string cc = ccOverride.length > 0 ? ccOverride : environment.get("CC", "cc");
-    string[] cmd = [cc, cFile, runtimeC, "-I", runtimeDir];
+    // Plain C `char` signedness is implementation-defined (signed by
+    // default on most x86 targets); this compiler's own type-checking
+    // (isSignedIntegerType in codegen.d) treats `char` as unsigned, so the
+    // generated C needs to match that at the actual C-compiler level too,
+    // not just at the LLPL level - otherwise e.g. a `char` byte value above
+    // 127 round-trips as negative in the compiled binary despite LLPL's own
+    // rules saying it shouldn't.
+    string[] cmd = [cc, cFile, runtimeC, "-I", runtimeDir, "-funsigned-char"];
     // `#flags "..."` directives (see ast.d's FlagsDecl) - split on
     // whitespace since execute() takes an argv array, not a shell string;
     // a single "-O2 -Wall" entry passed through whole would otherwise be

@@ -9,7 +9,7 @@ import "embedded_font"
 import "font"
 
 let demo_size: i16 = 24
-let demo_text: u8[128]
+let demo_text: char[128]
 
 // ui_widgets.llpl's static UI chrome (title, captions, the panel behind
 // the sample glyph) - built once in _start() and drawn each frame through
@@ -17,7 +17,7 @@ let demo_text: u8[128]
 // font-size slider and its numeric label actually change frame to frame.
 let widgets: Vector<Widget>
 let size_slider: Slider
-let size_str: u8[16]
+let size_str: char[16]
 
 func render_demo() {
     wm_clear(0xF8F8F8)
@@ -32,10 +32,10 @@ func render_demo() {
     let size_val: i64 = demo_size as i64
     let idx: i64 = 0
     if size_val >= 10 {
-        size_str[idx] = (48 + size_val / 10) as u8
+        size_str[idx] = (48 + size_val / 10) as char
         idx = idx + 1
     }
-    size_str[idx] = (48 + size_val % 10) as u8
+    size_str[idx] = (48 + size_val % 10) as char
     idx = idx + 1
     size_str[idx] = 0
 
@@ -47,9 +47,9 @@ func render_demo() {
 
     // Demo of smooth rendering (vector font, not part of the Widget
     // hierarchy - drawn directly on top of the panel/labels above).
-    render_smooth_text("A" as u8*, demo_size, buf, buf_w as i16, buf_h as i16,
+    render_smooth_text("A" as char*, demo_size, buf, buf_w as i16, buf_h as i16,
                       20, 110, 0x0066CC, 0xFAFAFA)
-    render_smooth_text("A" as u8*, 48, buf, buf_w as i16, buf_h as i16,
+    render_smooth_text("A" as char*, 48, buf, buf_w as i16, buf_h as i16,
                       20, 320, 0x0066CC, 0xF8F8F8)
 
     wm_present()
@@ -77,7 +77,7 @@ func _start(argc: u64, argv: u64*) {
     wm_init()
 
     // Initialize demo text
-    let sample: u8* = "Hello TrueType!" as u8*
+    let sample: char* = "Hello TrueType!" as char*
     let i: i64 = 0
     while sample[i] != 0 && i < 127 {
         demo_text[i] = sample[i]
@@ -86,21 +86,21 @@ func _start(argc: u64, argv: u64*) {
     demo_text[i] = 0
 
     widgets = new Vector<Widget>()
-    widgets.push(new Label(10, 10, "TrueType Font Demo" as u8*, 0x000000))
-    widgets.push(new Label(10, 40, "Font Size:" as u8*, 0x333333))
+    widgets.push(new Label(10, 10, "TrueType Font Demo" as char*, 0x000000))
+    widgets.push(new Label(10, 40, "Font Size:" as char*, 0x333333))
     size_slider = new Slider(100, 35, 150, (demo_size - 12) * 100 / 48)
     widgets.push(size_slider)
-    widgets.push(new Label(260, 40, size_str as u8*, 0x000000))
+    widgets.push(new Label(260, 40, size_str as char*, 0x000000))
     widgets.push(new Panel(10, 80, 300, 100))
-    widgets.push(new Label(20, 90, "Sample:" as u8*, 0x666666))
-    widgets.push(new Label(10, 190, "Features:" as u8*, 0x333333))
-    widgets.push(new Label(20, 210, "- Vector glyph outlines" as u8*, 0x666666))
-    widgets.push(new Label(20, 225, "- Scalable rendering" as u8*, 0x666666))
-    widgets.push(new Label(20, 240, "- Anti-aliased edges" as u8*, 0x666666))
-    widgets.push(new Label(20, 255, "- Smooth text rendering" as u8*, 0x666666))
-    widgets.push(new Label(10, 280, "Bitmap vs TrueType:" as u8*, 0x333333))
-    widgets.push(new Label(20, 300, "Bitmap: Fixed size" as u8*, 0x666666))
-    widgets.push(new Label(80, 340, "<- Vector: Scalable" as u8*, 0x666666))
+    widgets.push(new Label(20, 90, "Sample:" as char*, 0x666666))
+    widgets.push(new Label(10, 190, "Features:" as char*, 0x333333))
+    widgets.push(new Label(20, 210, "- Vector glyph outlines" as char*, 0x666666))
+    widgets.push(new Label(20, 225, "- Scalable rendering" as char*, 0x666666))
+    widgets.push(new Label(20, 240, "- Anti-aliased edges" as char*, 0x666666))
+    widgets.push(new Label(20, 255, "- Smooth text rendering" as char*, 0x666666))
+    widgets.push(new Label(10, 280, "Bitmap vs TrueType:" as char*, 0x333333))
+    widgets.push(new Label(20, 300, "Bitmap: Fixed size" as char*, 0x666666))
+    widgets.push(new Label(80, 340, "<- Vector: Scalable" as char*, 0x666666))
 
     while true {
         handle_input()

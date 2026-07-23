@@ -5,10 +5,10 @@
 import "../../libsys/imports"
 
 func print_digit(n: u64) {
-    let buf: u8[2]
-    buf[0] = (48 + n) as u8
+    let buf: char[2]
+    buf[0] = (48 + n) as char
     buf[1] = 0
-    sys_puts(buf as u8*)
+    sys_puts(buf as char*)
 }
 
 func print_uint(n: u64) {
@@ -29,7 +29,7 @@ func _start(argc: u64, argv: u64*) {
     let i: u64 = 0
     while i < argc {
         sys_puts(" ")
-        sys_puts(argv[i] as u8*)
+        sys_puts(argv[i] as char*)
         i = i + 1
     }
     sys_puts("\n")

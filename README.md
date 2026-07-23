@@ -46,7 +46,7 @@ func add(a: i64, b: i64, c: i64) -> i64 {
     return a + b + c
 }
 
-func greet(name: u8*) {
+func greet(name: char*) {
     print(name)
 }
 ```
@@ -193,8 +193,8 @@ operator unwraps a `Result` or returns early with the error; each propagation
 step records the call-site location, building a chained trace.
 
 ```swift
-func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
-    let r: Result<i64, u8*> = new Result<i64, u8*>()
+func safe_div(a: i64, b: i64) -> Result<i64, char*> {
+    let r: Result<i64, char*> = new Result<i64, char*>()
     if b == 0 {
         r.set_err("division by zero")
         return r
@@ -203,16 +203,16 @@ func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
     return r
 }
 
-func sum_of_divisions(a: i64, b: i64, c: i64, d: i64) -> Result<i64, u8*> {
+func sum_of_divisions(a: i64, b: i64, c: i64, d: i64) -> Result<i64, char*> {
     let first: i64 = safe_div(a, b)?   // trace starts here on error
     let second: i64 = safe_div(c, d)?  // chained here if this fails
-    let r: Result<i64, u8*> = new Result<i64, u8*>()
+    let r: Result<i64, char*> = new Result<i64, char*>()
     r.set_ok(first + second)
     return r
 }
 
 func main() -> i64 {
-    let r: Result<i64, u8*> = sum_of_divisions(10, 0, 20, 4)
+    let r: Result<i64, char*> = sum_of_divisions(10, 0, 20, 4)
     if r.is_err() {
         // r.get_trace() might return "file:14 -> file:21"
     }
@@ -227,10 +227,10 @@ panic handler can be installed for logging or cleanup; it runs before the
 default halt/abort.
 
 ```swift
-extern func llpl_panic(msg: u8*)
-extern func llpl_set_panic_handler(handler: (u8*) -> void)
+extern func llpl_panic(msg: char*)
+extern func llpl_set_panic_handler(handler: (char*) -> void)
 
-func my_handler(msg: u8*) {
+func my_handler(msg: char*) {
     // log msg, clean up resources, etc.
 }
 
@@ -490,16 +490,27 @@ LLPL/
 
 ### Primitive Types
 
-> **Breaking change:** the old unsized `int`/`uint`/`char` aliases have
-> been removed entirely - using any of them is now a compile error
-> (`'int' is no longer a type; use 'i64' instead`, and similarly for
-> `uint` -> `u64` and `char` -> `u8`). Always spell out the width.
+> **History:** the old unsized `int`/`uint` were removed for a while (a
+> compile error telling you to spell out `i64`/`u64` instead), then
+> brought back with new, different semantics - see below. `char` went
+> through the same removed-then-restored arc, also with new semantics
+> (split from `u8` rather than merged into it).
 
 - `i8/i16/i32/i64` - sized signed integers
-- `u8/u16/u32/u64` - sized unsigned integers
+- `u8/u16/u32/u64` - sized unsigned integers, genuinely numeric (`u8`
+  generates C `uint8_t`, not `char`)
+- `char` - one byte of *text* (generates C `char`); `char*` is a C
+  string. Distinct from `u8` even though both are 8 bits - a raw numeric
+  byte (a pixel value, a network octet) is `u8`; a character is `char`
+- `int`/`uint` - a third, separate integer family, **not** aliases of
+  `i64`/`u64` - native machine-word-sized (C `intptr_t`/`uintptr_t`: 4
+  bytes on i386, 8 bytes on x86_64). No implicit widening to/from a
+  fixed-width type in either direction (an explicit `as` cast is always
+  required), since the actual width isn't known until the generated C is
+  compiled for its target
 - `bool` - Boolean (true/false)
 - `void` - No value
-- `string` - alias for `u8*`, a C string, null terminated
+- `string` - alias for `char*`, a C string, null terminated
 - `String` - Sugar class 
 
 ### Pointer Types
@@ -606,9 +617,9 @@ MIT License - feel free to use for any purpose.
 ### Hello World
 
 ```swift
-extern func print_char(c: u8)
+extern func print_char(c: char)
 
-func print(msg: u8*) {
+func print(msg: char*) {
     let i: i64 = 0
     while msg[i] != 0 {
         print_char(msg[i])

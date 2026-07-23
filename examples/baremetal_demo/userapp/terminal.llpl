@@ -25,15 +25,15 @@ const VISIBLE_ROWS = 12
 // characters, minus a few pixels on the right for the scrollbar.
 const MAX_COLS = 37
 const SCROLLBAR_W = 4
-const SCROLLBAR_TRACK: uint32 = 0x202020
-const SCROLLBAR_THUMB: uint32 = 0x506080
+const SCROLLBAR_TRACK: u32 = 0x202020
+const SCROLLBAR_THUMB: u32 = 0x506080
 
-const BG_COLOR: uint32 = 0x0C0C14
-const TEXT_COLOR: uint32 = 0xD8D8D8
-const PROMPT_COLOR: uint32 = 0x70D0FF
-const ERROR_COLOR: uint32 = 0xFF6060
-const CARET_COLOR: uint32 = 0xFFD000
-const SELECTION_BG: uint32 = 0x304C78
+const BG_COLOR: u32 = 0x0C0C14
+const TEXT_COLOR: u32 = 0xD8D8D8
+const PROMPT_COLOR: u32 = 0x70D0FF
+const ERROR_COLOR: u32 = 0xFF6060
+const CARET_COLOR: u32 = 0xFFD000
+const SELECTION_BG: u32 = 0x304C78
 
 const VFS_KIND_DIR = 2
 const MAX_LS_ENTRIES = 48
@@ -642,7 +642,7 @@ func position_from_mouse(mx: i64, my: i64) -> u64 {
     return pos
 }
 
-func draw_selection_for_line(bufp: uint32*, row_y: u64, line_start: u64, line_end: u64) {
+func draw_selection_for_line(bufp: u32*, row_y: u64, line_start: u64, line_end: u64) {
     if !has_selection() {
         return
     }
@@ -665,7 +665,7 @@ func draw_selection_for_line(bufp: uint32*, row_y: u64, line_start: u64, line_en
     fill_rect(bufp, 4 + sx * 8, row_y, (ex - sx) * 8, ROW_H as u64, SELECTION_BG)
 }
 
-func draw_text_line(bufp: uint32*, win_w: u64, win_h: u64, x: u64, y: u64, linebuf: u8*, line_start: u64, fg: uint32) {
+func draw_text_line(bufp: u32*, win_w: u64, win_h: u64, x: u64, y: u64, linebuf: u8*, line_start: u64, fg: u32) {
     if !has_selection() {
         Font.draw_string(bufp, win_w, win_h, x, y, linebuf, fg, BG_COLOR)
         return
@@ -674,7 +674,7 @@ func draw_text_line(bufp: uint32*, win_w: u64, win_h: u64, x: u64, y: u64, lineb
     let b: u64 = max_u64(sel_start, sel_end)
     let i: u64 = 0
     while linebuf[i] != 0 {
-        let bg: uint32 = BG_COLOR
+        let bg: u32 = BG_COLOR
         let pos: u64 = line_start + i
         if pos >= a && pos < b {
             bg = SELECTION_BG
@@ -717,7 +717,7 @@ func paste_clipboard_to_pty() {
     }
 }
 
-func draw_scrollbar(fb: uint32*, win_w: u64) {
+func draw_scrollbar(fb: u32*, win_w: u64) {
     let total: u64 = line_number_of(buf_len) + 1
     let rows_visible: u64 = visible_rows()
     if total <= rows_visible {
@@ -774,7 +774,7 @@ func scroll_down_one() {
     }
 }
 
-func fill_rect(bufp: uint32*, x: u64, y: u64, w: u64, h: u64, color: uint32) {
+func fill_rect(bufp: u32*, x: u64, y: u64, w: u64, h: u64, color: u32) {
     let dy: u64 = 0
     while dy < h {
         let dx: u64 = 0
@@ -813,7 +813,7 @@ func render_input_line_fast() -> bool {
         return false
     }
 
-    let win_buf: uint32* = wm_buffer()
+    let win_buf: u32* = wm_buffer()
     let win_w: u64 = Wm.WIN_W as u64
     let win_h: u64 = Wm.WIN_H as u64
     let y: u64 = (TOP as u64) + row_of_end * ROW_H
@@ -850,7 +850,7 @@ func render_input_line_fast() -> bool {
 
 func render() {
     wm_fill(BG_COLOR)
-    let win_buf: uint32* = wm_buffer()
+    let win_buf: u32* = wm_buffer()
     let win_w: u64 = Wm.WIN_W as u64
     let win_h: u64 = Wm.WIN_H as u64
 
@@ -886,7 +886,7 @@ func render() {
             }
             linebuf[col] = 0
             let is_prompt_line: bool = offset <= input_start && input_start <= line_end
-            let fg: uint32 = TEXT_COLOR
+            let fg: u32 = TEXT_COLOR
             if is_prompt_line {
                 fg = PROMPT_COLOR
             }

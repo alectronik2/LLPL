@@ -4,7 +4,7 @@ import "../../libsys/imports"
 import "../user_runtime"
 
 func _start(argc: u64, argv: u64*) {
-    let path: u8* = rt_arg(argc, argv, 1, "/boot/hello.txt")
+    let path: char* = rt_arg(argc, argv, 1, "/boot/hello.txt")
     let fd: u64 = sys_open(path, 0)
     if fd == RT_SYS_ERR {
         sys_puts("cat: open failed: ")
@@ -21,7 +21,7 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
-    sys_print(buf as u8*, n)
+    sys_print(buf as char*, n)
     sys_puts("\n")
     rt_exit(0)
 }

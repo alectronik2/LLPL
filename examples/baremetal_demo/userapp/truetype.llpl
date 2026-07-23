@@ -273,7 +273,7 @@ func ttf_render_glyph(font: TtfFont, glyph_index: u16, size: i16,
 }
 
 // Calculate text width
-func ttf_measure_text(font: TtfFont, text: u8*, size: i16) -> i16 {
+func ttf_measure_text(font: TtfFont, text: char*, size: i16) -> i16 {
     let width: i16 = 0
     let i: i64 = 0
 

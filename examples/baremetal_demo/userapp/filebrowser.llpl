@@ -24,17 +24,17 @@ const ROWS_VISIBLE = 14
 const ROW_H = 16
 const LIST_TOP = 24
 
-const BG_COLOR: uint32 = 0x101018
-const HEADER_COLOR: uint32 = 0x60A0FF
-const DIR_COLOR: uint32 = 0x70D0FF
-const FILE_COLOR: uint32 = 0xD0D0D0
-const SEL_BG: uint32 = 0x30609F
-const SEL_FG: uint32 = 0xFFFFFF
-const CONFIRM_COLOR: uint32 = 0xFF9090
+const BG_COLOR: u32 = 0x101018
+const HEADER_COLOR: u32 = 0x60A0FF
+const DIR_COLOR: u32 = 0x70D0FF
+const FILE_COLOR: u32 = 0xD0D0D0
+const SEL_BG: u32 = 0x30609F
+const SEL_FG: u32 = 0xFFFFFF
+const CONFIRM_COLOR: u32 = 0xFF9090
 const VFS_KIND_DIR = 2
 const SCROLLBAR_W = 4
-const SCROLLBAR_TRACK: uint32 = 0x202020
-const SCROLLBAR_THUMB: uint32 = 0x506080
+const SCROLLBAR_TRACK: u32 = 0x202020
+const SCROLLBAR_THUMB: u32 = 0x506080
 const ICON_X = 4
 const ICON_TEXT_X = 24
 const ICON_SIZE = 16
@@ -42,7 +42,7 @@ const THUMB_CACHE_SIZE = 16
 const THUMB_PATH_LEN = 160
 const IMAGE_CLIPBOARD_MAX = 16777216
 
-let cur_path: u8[96]
+let cur_path: char[96]
 let entries: u8[2304] // MAX_ENTRIES(48) * ENTRY_SIZE(48)
 let entry_count: i64 = 0
 let selected: i64 = 0
@@ -53,22 +53,22 @@ let icon_app: EmbeddedImage
 let thumb_valid: bool[48]
 let thumb_image: EmbeddedImage[48]
 let thumb_cache_valid: bool[16]
-let thumb_cache_paths: u8[2560] // THUMB_CACHE_SIZE(16) * THUMB_PATH_LEN(160)
+let thumb_cache_paths: char[2560] // THUMB_CACHE_SIZE(16) * THUMB_PATH_LEN(160)
 let thumb_cache_images: EmbeddedImage[16]
 let thumb_cache_next: i64 = 0
 let op_counter: u64 = 1
-let status: u8[64]
-let clipboard_path: u8[160]
-let clipboard_name: u8[32]
+let status: char[64]
+let clipboard_path: char[160]
+let clipboard_name: char[32]
 let clipboard_valid: bool = false
 let copy_buf: u8[4096]
 let image_clip_buf: u8[16777216]
 let prev_mouse_left: bool = false
 let dialog_mode: i64 = 0
-let dialog_text: u8[32]
+let dialog_text: char[32]
 let dialog_len: i64 = 0
-let dialog_old_path: u8[160]
-let dialog_old_name: u8[32]
+let dialog_old_path: char[160]
+let dialog_old_name: char[32]
 let context_menu_open: bool = false
 let context_menu_entry: i64 = -1
 let context_menu_x: i64 = 0
@@ -404,7 +404,7 @@ func refresh_listing() {
     scroll = 0
 }
 
-func fill_row(buf: uint32*, y: u64, color: uint32) {
+func fill_row(buf: u32*, y: u64, color: u32) {
     let ry: u64 = 0
     while ry < ROW_H {
         let rx: u64 = 0
@@ -416,7 +416,7 @@ func fill_row(buf: uint32*, y: u64, color: uint32) {
     }
 }
 
-func draw_icon(buf: uint32*, img: EmbeddedImage, x0: i64, y0: i64) {
+func draw_icon(buf: u32*, img: EmbeddedImage, x0: i64, y0: i64) {
     let y: u32 = 0
     while y < ICON_SIZE {
         let x: u32 = 0
@@ -490,7 +490,7 @@ func draw_scrollbar() {
 
 func render() {
     wm_fill(BG_COLOR)
-    let buf: uint32* = wm_buffer()
+    let buf: u32* = wm_buffer()
     let win_w: u64 = Wm.WIN_W as u64
     let win_h: u64 = Wm.WIN_H as u64
     draw_icon(buf, icon_file, ICON_X, 4)
@@ -503,11 +503,11 @@ func render() {
         let y: u64 = (LIST_TOP as u64) + (row as u64) * ROW_H
         if idx < entry_count {
             let kind: u64 = entry_kind(idx)
-            let fg: uint32 = FILE_COLOR
+            let fg: u32 = FILE_COLOR
             if kind == VFS_KIND_DIR {
                 fg = DIR_COLOR
             }
-            let bg: uint32 = BG_COLOR
+            let bg: u32 = BG_COLOR
             if idx == selected {
                 fg = SEL_FG
                 bg = SEL_BG
@@ -726,7 +726,7 @@ func draw_context_menu() {
         draw_y = 2
     }
     fill_row(wm_buffer(), draw_y as u64, 0x181C24)
-    let buf: uint32* = wm_buffer()
+    let buf: u32* = wm_buffer()
     fill_row(buf, draw_y as u64, 0x181C24)
     fill_row(buf, (draw_y + menu_h - 1) as u64, 0x181C24)
     let i: i64 = 0
@@ -771,7 +771,7 @@ func draw_open_with_menu() {
         draw_y = 2
     }
     fill_row(wm_buffer(), draw_y as u64, 0x181C24)
-    let buf: uint32* = wm_buffer()
+    let buf: u32* = wm_buffer()
     fill_row(buf, draw_y as u64, 0x181C24)
     fill_row(buf, (draw_y + menu_h - 1) as u64, 0x181C24)
     let i: i64 = 0

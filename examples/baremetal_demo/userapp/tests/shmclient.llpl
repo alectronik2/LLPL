@@ -42,8 +42,8 @@ func _start(argc: u64, argv: u64*) {
     // sys_msg_send's buffer gets overwritten in place with the reply once
     // it arrives, so it must be a real writable local, not a string literal
     // (see ipcdemo.llpl's same precaution).
-    let poke: u8[16]
-    sys_strcpy(poke as u8*, "poke")
+    let poke: char[16]
+    sys_strcpy(poke as char*, "poke")
     let n: u64 = sys_msg_send(handle, poke as u8*, 5)
     if n == RT_SYS_ERR {
         sys_putln("shmclient send=fail")

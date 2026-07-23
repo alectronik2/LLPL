@@ -36,21 +36,21 @@ func fill_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
     }
 }
 
-func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
+func draw_text(x: u64, y: u64, s: char*, fg: u32, bg: u32) {
     Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
 }
 
-func uint_to_dec(buf: u8*, n: u64) -> i64 {
+func uint_to_dec(buf: char*, n: u64) -> i64 {
     if n == 0 {
         buf[0] = 48
         buf[1] = 0
         return 1
     }
-    let tmp: u8[20]
+    let tmp: char[20]
     let len: i64 = 0
     let v: u64 = n
     while v > 0 {
-        tmp[len] = (48 + (v % 10)) as u8
+        tmp[len] = (48 + (v % 10)) as char
         len = len + 1
         v = v / 10
     }
@@ -63,7 +63,7 @@ func uint_to_dec(buf: u8*, n: u64) -> i64 {
     return len
 }
 
-func copy_cstr(dst: u8*, src: u8*, max: i64) {
+func copy_cstr(dst: char*, src: char*, max: i64) {
     let i: i64 = 0
     while i < max - 1 && src[i] != 0 {
         dst[i] = src[i]
@@ -81,11 +81,11 @@ func rec_valid(buf: u8*) -> bool {
     return r[0] != 0
 }
 
-func rec_kind(buf: u8*) -> u8* { return buf + 80 }
-func rec_detail(buf: u8*) -> u8* { return buf + 112 }
-func rec_task(buf: u8*) -> u8* { return buf + 208 }
-func rec_symbol(buf: u8*) -> u8* { return buf + 224 }
-func rec_file(buf: u8*) -> u8* { return buf + 288 }
+func rec_kind(buf: u8*) -> char* { return (buf + 80) as char* }
+func rec_detail(buf: u8*) -> char* { return (buf + 112) as char* }
+func rec_task(buf: u8*) -> char* { return (buf + 208) as char* }
+func rec_symbol(buf: u8*) -> char* { return (buf + 224) as char* }
+func rec_file(buf: u8*) -> char* { return (buf + 288) as char* }
 func rec_u64(buf: u8*, offset: u64) -> u64 {
     let p: u64* = (buf + offset) as u64*
     return p[0]
@@ -110,33 +110,33 @@ func refresh_history() {
     }
 }
 
-func draw_record_line(y: u64, label: u8*, value: u8*, bg: u32) {
+func draw_record_line(y: u64, label: char*, value: char*, bg: u32) {
     fill_rect(10, y, 380, 16, bg)
     draw_text(16, y + 1, label, MUTED, bg)
     draw_text(132, y + 1, value, TEXT, bg)
 }
 
 func draw_record(buf: u8*, y: u64, bg: u32) {
-    let kind: u8* = rec_kind(buf)
-    let task: u8* = rec_task(buf)
-    let file: u8* = rec_file(buf)
-    let symbol: u8* = rec_symbol(buf)
-    let line_buf: u8[24]
-    let pid_buf: u8[24]
-    let rip_buf: u8[24]
-    uint_to_dec(line_buf as u8*, rec_line(buf))
-    uint_to_dec(pid_buf as u8*, rec_pid(buf))
-    uint_to_dec(rip_buf as u8*, rec_rip(buf))
+    let kind: char* = rec_kind(buf)
+    let task: char* = rec_task(buf)
+    let file: char* = rec_file(buf)
+    let symbol: char* = rec_symbol(buf)
+    let line_buf: char[24]
+    let pid_buf: char[24]
+    let rip_buf: char[24]
+    uint_to_dec(line_buf as char*, rec_line(buf))
+    uint_to_dec(pid_buf as char*, rec_pid(buf))
+    uint_to_dec(rip_buf as char*, rec_rip(buf))
 
     fill_rect(10, y, 380, 76, bg)
     draw_text(16, y + 3, kind, ACCENT, bg)
     draw_text(120, y + 3, task, TEXT, bg)
     draw_text(270, y + 3, file, MUTED, bg)
-    draw_text(332, y + 3, line_buf as u8*, WARN, bg)
-    draw_text(16, y + 20, "pid" as u8*, MUTED, bg)
-    draw_text(48, y + 20, pid_buf as u8*, TEXT, bg)
-    draw_text(16, y + 35, "rip" as u8*, MUTED, bg)
-    draw_text(48, y + 35, rip_buf as u8*, TEXT, bg)
+    draw_text(332, y + 3, line_buf as char*, WARN, bg)
+    draw_text(16, y + 20, "pid" as char*, MUTED, bg)
+    draw_text(48, y + 20, pid_buf as char*, TEXT, bg)
+    draw_text(16, y + 35, "rip" as char*, MUTED, bg)
+    draw_text(48, y + 35, rip_buf as char*, TEXT, bg)
     draw_text(16, y + 50, symbol, OK, bg)
     draw_text(190, y + 50, rec_detail(buf), TEXT, bg)
 }
@@ -152,19 +152,19 @@ func draw_history_row(i: i64, y: u64) {
         bg = ROW_ALT
     }
     fill_rect(8, y, 384, 18, bg)
-    let idx_buf: u8[8]
-    uint_to_dec(idx_buf as u8*, i as u64)
+    let idx_buf: char[8]
+    uint_to_dec(idx_buf as char*, i as u64)
     if rec_valid(buf) {
-        draw_text(14, y + 1, idx_buf as u8*, ACCENT, bg)
+        draw_text(14, y + 1, idx_buf as char*, ACCENT, bg)
         draw_text(36, y + 1, rec_kind(buf), TEXT, bg)
         draw_text(118, y + 1, rec_task(buf), TEXT, bg)
         draw_text(224, y + 1, rec_file(buf), MUTED, bg)
-        let line_buf: u8[16]
-        uint_to_dec(line_buf as u8*, rec_line(buf))
-        draw_text(332, y + 1, line_buf as u8*, WARN, bg)
+        let line_buf: char[16]
+        uint_to_dec(line_buf as char*, rec_line(buf))
+        draw_text(332, y + 1, line_buf as char*, WARN, bg)
     } else {
-        draw_text(14, y + 1, idx_buf as u8*, MUTED, bg)
-        draw_text(36, y + 1, "empty" as u8*, MUTED, bg)
+        draw_text(14, y + 1, idx_buf as char*, MUTED, bg)
+        draw_text(36, y + 1, "empty" as char*, MUTED, bg)
     }
 }
 
@@ -172,23 +172,23 @@ func render() {
     refresh_history()
     fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, BG)
     fill_rect(0, 0, Wm.WIN_W as u64, 24, HEAD)
-    draw_text(8, 4, "CRASH VIEWER" as u8*, ACCENT, HEAD)
+    draw_text(8, 4, "CRASH VIEWER" as char*, ACCENT, HEAD)
     if current_ready {
-        draw_text(260, 4, "current crash" as u8*, WARN, HEAD)
+        draw_text(260, 4, "current crash" as char*, WARN, HEAD)
     } else {
-        draw_text(260, 4, "no crash" as u8*, MUTED, HEAD)
+        draw_text(260, 4, "no crash" as char*, MUTED, HEAD)
     }
 
     fill_rect(8, 32, 384, 126, PANEL)
-    draw_text(14, 36, "Current" as u8*, ACCENT, PANEL)
+    draw_text(14, 36, "Current" as char*, ACCENT, PANEL)
     if current_ready {
         draw_record(current_buf as u8*, 54, ROW)
     } else {
-        draw_text(16, 62, "No crash recorded." as u8*, MUTED, PANEL)
+        draw_text(16, 62, "No crash recorded." as char*, MUTED, PANEL)
     }
 
     fill_rect(8, 166, 384, 80, PANEL)
-    draw_text(14, 170, "History" as u8*, ACCENT, PANEL)
+    draw_text(14, 170, "History" as char*, ACCENT, PANEL)
     let i: i64 = 0
     while i < HISTORY_MAX {
         draw_history_row(i, 188 + i * 18)
@@ -196,7 +196,7 @@ func render() {
     }
 
     fill_rect(8, 248, 384, 8, BG)
-    draw_text(8, 246, "up/down select  c clear  esc close" as u8*, MUTED, BG)
+    draw_text(8, 246, "up/down select  c clear  esc close" as char*, MUTED, BG)
     wm_present()
 }
 

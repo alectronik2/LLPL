@@ -9,10 +9,10 @@ namespace Pty {
     packed struct Session {
         let used: bool
         let owner_pid: i64
-        let input: u8[4096]
+        let input: char[4096]
         let input_head: u64
         let input_tail: u64
-        let output: u8[4096]
+        let output: char[4096]
         let output_head: u64
         let output_tail: u64
     }
@@ -68,7 +68,7 @@ namespace Pty {
         }
     }
 
-    func push_input(id: i64, c: u8) -> bool {
+    func push_input(id: i64, c: char) -> bool {
         if !valid(id) {
             return false
         }
@@ -82,7 +82,7 @@ namespace Pty {
         return true
     }
 
-    func pop_input(id: i64, out: u8*) -> bool {
+    func pop_input(id: i64, out: char*) -> bool {
         if !valid(id) {
             return false
         }
@@ -95,7 +95,7 @@ namespace Pty {
         return true
     }
 
-    func write_output(id: i64, buf: u8*, len: u64) -> u64 {
+    func write_output(id: i64, buf: char*, len: u64) -> u64 {
         if !valid(id) {
             return 0
         }
@@ -113,7 +113,7 @@ namespace Pty {
         return i
     }
 
-    func write_cstring(id: i64, s: u8*) -> u64 {
+    func write_cstring(id: i64, s: char*) -> u64 {
         let n: u64 = 0
         while s[n] != 0 {
             n = n + 1
@@ -121,7 +121,7 @@ namespace Pty {
         return write_output(id, s, n)
     }
 
-    func read_output(id: i64, out: u8*, max_len: u64) -> u64 {
+    func read_output(id: i64, out: char*, max_len: u64) -> u64 {
         if !valid(id) {
             return 0xFFFFFFFFFFFFFFFF
         }
@@ -135,8 +135,8 @@ namespace Pty {
         return n
     }
 
-    func read_char_blocking(id: i64) -> u8 {
-        let c: u8 = 0
+    func read_char_blocking(id: i64) -> char {
+        let c: char = 0
         while !pop_input(id, &c) {
             if !valid(id) || sessions[id].owner_pid < 0 {
                 return 4

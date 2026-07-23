@@ -28,9 +28,9 @@ const BOARD_OX: u64 = 8
 const BOARD_OY: u64 = 8
 const PANEL_X: u64 = 96
 
-const BG_COLOR: uint32 = 0x101010
-const EMPTY_CELL_COLOR: uint32 = 0x282828
-const BORDER_COLOR: uint32 = 0x606060
+const BG_COLOR: u32 = 0x101010
+const EMPTY_CELL_COLOR: u32 = 0x282828
+const BORDER_COLOR: u32 = 0x606060
 
 // 7 pieces (I, O, T, S, Z, J, L) x 4 rotations x 4x4 cell grid, row-major,
 // 0/1 per cell - see shape_cell() below for the indexing. S and Z only
@@ -221,7 +221,7 @@ func score_for_clear(cleared: i64) -> u64 {
     return 0
 }
 
-func piece_color(p: i64) -> uint32 {
+func piece_color(p: i64) -> u32 {
     if p == 0 {
         return 0x00FFFF // I: cyan
     }
@@ -271,7 +271,7 @@ func format_uint(buf: u8*, n: u64) -> i64 {
     return len
 }
 
-func fill_cell(ox: u64, oy: u64, row: i64, col: i64, color: uint32) {
+func fill_cell(ox: u64, oy: u64, row: i64, col: i64, color: u32) {
     let base_x: u64 = ox + (col as u64) * CELL
     let base_y: u64 = oy + (row as u64) * CELL
     let dy: u64 = 0
@@ -368,7 +368,7 @@ func render() {
         let col: i64 = 0
         while col < BOARD_W {
             let v: u8 = board_at(row, col)
-            let color: uint32 = EMPTY_CELL_COLOR
+            let color: u32 = EMPTY_CELL_COLOR
             if v != 0 {
                 color = piece_color((v as i64) - 1)
             }

@@ -221,14 +221,14 @@ namespace HAL {
             return inb(PORT + 5) & 32
         }
 
-        func write_char(c: u8) {
+        func write_char(c: char) {
             while transmit_ready() == 0 {
                 // Wait for the transmit buffer to empty
             }
             outb(PORT, c)
         }
 
-        func write(str: u8*) {
+        func write(str: char*) {
             let i: i64 = 0
             while str[i] != 0 {
                 write_char(str[i])
@@ -236,7 +236,7 @@ namespace HAL {
             }
         }
 
-        func write_colored(str: u8*, ansi_code: u8*) {
+        func write_colored(str: char*, ansi_code: char*) {
             write(ansi_code)
             write(str)
             write(Ansi.RESET)
@@ -339,15 +339,15 @@ namespace HAL {
     // forward through - so callers format into the shared scratch buffer
     // (with however many arguments this call needs) and then flush it:
     //
-    //   HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128, "tick %d\n", n)
+    //   HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128, "tick %d\n", n)
     //   HAL.Log.flush()
     namespace Log {
-        let buffer: u8[128]
+        let buffer: char[128]
 
-        extern func ksnprintf(buf: u8*, size: u64, fmt: u8*, ...) -> i64
+        extern func ksnprintf(buf: char*, size: u64, fmt: char*, ...) -> i64
 
         func flush() {
-            Serial.write(buffer as u8*)
+            Serial.write(buffer as char*)
         }
     }
 }

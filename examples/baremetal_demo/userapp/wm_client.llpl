@@ -144,7 +144,7 @@ struct WmInput {
     let win_w: u64
     let win_h: u64
     let drop_valid: bool
-    let drop_path: u8[112]
+    let drop_path: char[112]
 }
 
 // Set as a side effect of every wm_poll_input() call below - read it
@@ -196,7 +196,7 @@ func wm_poll_input() -> WmInput {
         let src: u8* = (req as u8*) + 72
         let i: i64 = 0
         while i < 111 && src[i] != 0 {
-            wm_last_input.drop_path[i] = src[i]
+            wm_last_input.drop_path[i] = src[i] as char
             i = i + 1
         }
         wm_last_input.drop_path[i] = 0
@@ -236,7 +236,7 @@ func wm_close() {
     sys_msg_send(wm_handle, req as u8*, 16)
 }
 
-func wm_open_file_dialog(out_path: u8*) -> bool {
+func wm_open_file_dialog(out_path: char*) -> bool {
     let req: u8[128]
     let r: u64* = (req as u8*) as u64*
     r[0] = Wm.OP_FILE_DIALOG as u64
@@ -248,14 +248,14 @@ func wm_open_file_dialog(out_path: u8*) -> bool {
     let src: u8* = (req as u8*) + 8
     let i: i64 = 0
     while i < 95 && src[i] != 0 {
-        out_path[i] = src[i]
+        out_path[i] = src[i] as char
         i = i + 1
     }
     out_path[i] = 0
     return true
 }
 
-func wm_copy_field(dst: u8*, src: u8*, max_len: u64) {
+func wm_copy_field(dst: u8*, src: char*, max_len: u64) {
     let i: u64 = 0
     while i + 1 < max_len && src[i] != 0 {
         dst[i] = src[i]
@@ -269,7 +269,7 @@ func wm_copy_field(dst: u8*, src: u8*, max_len: u64) {
     }
 }
 
-func wm_notify(title: u8*, body: u8*, kind: u64) -> bool {
+func wm_notify(title: char*, body: char*, kind: u64) -> bool {
     if wm_handle == RT_SYS_ERR {
         return false
     }
@@ -306,7 +306,7 @@ func wm_stats(out_buf: u64*) -> bool {
     return true
 }
 
-func wm_begin_file_drag(path: u8*) -> bool {
+func wm_begin_file_drag(path: char*) -> bool {
     if wm_handle == RT_SYS_ERR {
         return false
     }

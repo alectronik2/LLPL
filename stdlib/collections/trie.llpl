@@ -42,7 +42,7 @@ class TrieNode {
                     delete self.children[i]
                 }
             }
-            llpl_free(self.children as u8*)
+            llpl_free(self.children as char*)
         }
     }
 }
@@ -72,7 +72,7 @@ class Trie {
     }
 
     // Insert a word into the trie
-    func insert(word: u8*) {
+    func insert(word: char*) {
         let current: TrieNode* = self.root
         let len: i64 = 0
 
@@ -98,7 +98,7 @@ class Trie {
     }
 
     // Insert word with associated value
-    func insert_with_value(word: u8*, value: i64) {
+    func insert_with_value(word: char*, value: i64) {
         let current: TrieNode* = self.root
         let len: i64 = 0
 
@@ -125,7 +125,7 @@ class Trie {
     }
 
     // Search for a word
-    func search(word: u8*) -> bool {
+    func search(word: char*) -> bool {
         let current: TrieNode* = self.root
         let len: i64 = 0
 
@@ -147,8 +147,8 @@ class Trie {
     }
 
     // Search and get associated value
-    func search_value(word: u8*) -> Result<i64, u8*> {
-        let result: Result<i64, u8*> = new Result<i64, u8*>()
+    func search_value(word: char*) -> Result<i64, char*> {
+        let result: Result<i64, char*> = new Result<i64, char*>()
         let current: TrieNode* = self.root
         let len: i64 = 0
 
@@ -177,7 +177,7 @@ class Trie {
     }
 
     // Check if any word starts with the given prefix
-    func starts_with(prefix: u8*) -> bool {
+    func starts_with(prefix: char*) -> bool {
         let current: TrieNode* = self.root
         let len: i64 = 0
 
@@ -199,7 +199,7 @@ class Trie {
     }
 
     // Remove a word from the trie
-    func remove(word: u8*) -> bool {
+    func remove(word: char*) -> bool {
         let len: i64 = 0
         while word[len] != '\0' {
             len = len + 1
@@ -208,7 +208,7 @@ class Trie {
         return self.remove_helper(self.root, word, 0, len)
     }
 
-    func remove_helper(node: TrieNode*, word: u8*, index: i64, len: i64) -> bool {
+    func remove_helper(node: TrieNode*, word: char*, index: i64, len: i64) -> bool {
         if node == null {
             return false
         }
@@ -260,7 +260,7 @@ class Trie {
     }
 
     // Get all words with given prefix
-    func get_words_with_prefix(prefix: u8*) -> Vector<String> {
+    func get_words_with_prefix(prefix: char*) -> Vector<String> {
         let result: Vector<String> = new Vector<String>()
         let current: TrieNode* = self.root
         let len: i64 = 0
@@ -281,7 +281,7 @@ class Trie {
         }
 
         // Collect all words with this prefix
-        let current_word: u8[256]
+        let current_word: char[256]
         for let i: i64 = 0, i < len, i = i + 1 {
             current_word[i] = prefix[i]
         }
@@ -292,7 +292,7 @@ class Trie {
         return result
     }
 
-    func collect_words(node: TrieNode*, current_word: u8*, len: i64, result: Vector<String>) {
+    func collect_words(node: TrieNode*, current_word: char*, len: i64, result: Vector<String>) {
         if node == null {
             return
         }
@@ -304,7 +304,7 @@ class Trie {
 
         for let i: i64 = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
             if (*node).children[i] != null {
-                current_word[len] = i as u8
+                current_word[len] = i as char
                 self.collect_words((*node).children[i], current_word, len + 1, result)
             }
         }
@@ -313,7 +313,7 @@ class Trie {
     // Get all words in the trie
     func get_all_words() -> Vector<String> {
         let result: Vector<String> = new Vector<String>()
-        let current_word: u8[256]
+        let current_word: char[256]
         current_word[0] = '\0'
 
         self.collect_words(self.root, current_word, 0, result)
@@ -322,14 +322,14 @@ class Trie {
     }
 
     // Count words with given prefix
-    func count_prefix(prefix: u8*) -> i64 {
+    func count_prefix(prefix: char*) -> i64 {
         let words: Vector<String> = self.get_words_with_prefix(prefix)
         return words.len()
     }
 
     // Find longest common prefix of all words
     func longest_common_prefix() -> String {
-        let result: u8[256]
+        let result: char[256]
         let len: i64 = 0
 
         let current: TrieNode* = self.root
@@ -351,7 +351,7 @@ class Trie {
                 break
             }
 
-            result[len] = next_char as u8
+            result[len] = next_char as char
             len = len + 1
             current = (*current).children[next_char]
         }

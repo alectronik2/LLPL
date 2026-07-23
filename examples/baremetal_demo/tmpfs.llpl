@@ -35,7 +35,7 @@ namespace TmpFS {
     const MAX_NAME = 32
 
     packed struct ModuleEntry {
-        let name: u8[32]
+        let name: char[32]
         let start: u64  // physical address - already identity-mapped, usable as u8* directly
         let length: u64
     }
@@ -74,7 +74,7 @@ namespace TmpFS {
         return (n + 7) & ~7
     }
 
-    func name_matches(i: i64, name: u8*) -> bool {
+    func name_matches(i: i64, name: char*) -> bool {
         let k: i64 = 0
         while name[k] != 0 {
             if modules[i].name[k] != name[k] {
@@ -105,7 +105,7 @@ namespace TmpFS {
                 modules[idx].start = mt.mod_start as u64
                 modules[idx].length = (mt.mod_end - mt.mod_start) as u64
 
-                let str_ptr = (ptr + 16) as u8*
+                let str_ptr = (ptr + 16) as char*
                 let i  = 0
                 while str_ptr[i] != 0 && i < MAX_NAME - 1 {
                     modules[idx].name[i] = str_ptr[i]
@@ -123,7 +123,7 @@ namespace TmpFS {
         return module_count
     }
 
-    func find(name: u8*) -> i64 {
+    func find(name: char*) -> i64 {
         let i: i64 = 0
         while i < module_count {
             if name_matches(i, name) {
@@ -134,7 +134,7 @@ namespace TmpFS {
         return -1
     }
 
-    func name_at(i: i64, out_buf: u8*) {
+    func name_at(i: i64, out_buf: char*) {
         let k: i64 = 0
         while modules[i].name[k] != 0 {
             out_buf[k] = modules[i].name[k]

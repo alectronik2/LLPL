@@ -97,9 +97,9 @@ const SDL_SCANCODE_DOWN: i32 = 81
 const SDL_SCANCODE_UP: i32 = 82
 
 // Mouse buttons
-const SDL_BUTTON_LEFT: u8 = 1
-const SDL_BUTTON_MIDDLE: u8 = 2
-const SDL_BUTTON_RIGHT: u8 = 3
+const SDL_BUTTON_LEFT: char = 1
+const SDL_BUTTON_MIDDLE: char = 2
+const SDL_BUTTON_RIGHT: char = 3
 
 // Opaque type aliases - SDL_Window, SDL_Renderer, etc are defined in SDL3 headers
 // We only declare the ones we use directly as opaque pointers
@@ -115,19 +115,19 @@ const SDL_BUTTON_RIGHT: u8 = 3
 // }`. Every SDL3 "plain data" type in this file (Color/Rect/FRect/Point/
 // the event structs) has the same requirement, for the same reason.
 struct SDL_Color {
-    let r: u8
-    let g: u8
-    let b: u8
-    let a: u8
+    let r: char
+    let g: char
+    let b: char
+    let a: char
 
-    constructor(red: u8, green: u8, blue: u8, alpha: u8) {
+    constructor(red: char, green: char, blue: char, alpha: char) {
         self.r = red
         self.g = green
         self.b = blue
         self.a = alpha
     }
 
-    constructor(red: u8, green: u8, blue: u8) {
+    constructor(red: char, green: char, blue: char) {
         self.r = red
         self.g = green
         self.b = blue
@@ -224,10 +224,10 @@ struct SDL_MouseButtonEvent {
     let timestamp: u64
     let windowID: u32     // SDL_WindowID
     let which: u32        // SDL_MouseID
-    let button: u8
+    let button: char
     let down: bool
-    let clicks: u8
-    let padding: u8
+    let clicks: char
+    let padding: char
     let x: float
     let y: float
 }
@@ -249,7 +249,7 @@ struct SDL_MouseButtonEvent {
 // bothered declaring one for every real member.
 union SDL_Event {
     let type: u32
-    let padding: u8[128]
+    let padding: char[128]
 
     // Zero-init is automatic (see generateUnionConstructor - `self` here
     // starts as `SDL_Event self = {0};`, zeroing every byte of the union,
@@ -268,23 +268,23 @@ union SDL_Event {
 // not just a style mismatch.
 extern func SDL_Init(flags: u32) -> bool
 extern func SDL_Quit()
-extern func SDL_GetError() -> u8*
+extern func SDL_GetError() -> char*
 
 // Window Management
-extern func SDL_CreateWindow(title: u8*, w: i32, h: i32, flags: u64) -> SDL_Window*
+extern func SDL_CreateWindow(title: char*, w: i32, h: i32, flags: u64) -> SDL_Window*
 extern func SDL_DestroyWindow(window: SDL_Window*)
-extern func SDL_SetWindowTitle(window: SDL_Window*, title: u8*) -> bool
+extern func SDL_SetWindowTitle(window: SDL_Window*, title: char*) -> bool
 extern func SDL_GetWindowSize(window: SDL_Window*, w: i32*, h: i32*) -> bool
 extern func SDL_SetWindowSize(window: SDL_Window*, w: i32, h: i32) -> bool
 extern func SDL_ShowWindow(window: SDL_Window*) -> bool
 extern func SDL_HideWindow(window: SDL_Window*) -> bool
 
 // Renderer Management
-extern func SDL_CreateRenderer(window: SDL_Window*, name: u8*) -> SDL_Renderer*
+extern func SDL_CreateRenderer(window: SDL_Window*, name: char*) -> SDL_Renderer*
 extern func SDL_DestroyRenderer(renderer: SDL_Renderer*)
 extern func SDL_RenderClear(renderer: SDL_Renderer*) -> bool
 extern func SDL_RenderPresent(renderer: SDL_Renderer*) -> bool
-extern func SDL_SetRenderDrawColor(renderer: SDL_Renderer*, r: u8, g: u8, b: u8, a: u8) -> bool
+extern func SDL_SetRenderDrawColor(renderer: SDL_Renderer*, r: char, g: char, b: char, a: char) -> bool
 extern func SDL_SetRenderDrawBlendMode(renderer: SDL_Renderer*, blendMode: u32) -> bool
 
 // Drawing primitives - SDL3 only has a *float*-rect render path (no
@@ -305,11 +305,11 @@ extern func SDL_CreateTextureFromSurface(renderer: SDL_Renderer*, surface: SDL_S
 extern func SDL_DestroyTexture(texture: SDL_Texture*)
 extern func SDL_RenderTexture(renderer: SDL_Renderer*, texture: SDL_Texture*, srcrect: SDL_FRect*, dstrect: SDL_FRect*) -> bool
 extern func SDL_SetTextureBlendMode(texture: SDL_Texture*, blendMode: u32) -> bool
-extern func SDL_SetTextureAlphaMod(texture: SDL_Texture*, alpha: u8) -> bool
-extern func SDL_SetTextureColorMod(texture: SDL_Texture*, r: u8, g: u8, b: u8) -> bool
+extern func SDL_SetTextureAlphaMod(texture: SDL_Texture*, alpha: char) -> bool
+extern func SDL_SetTextureColorMod(texture: SDL_Texture*, r: char, g: char, b: char) -> bool
 
 // Surface Management
-extern func SDL_LoadBMP(file: u8*) -> SDL_Surface*
+extern func SDL_LoadBMP(file: char*) -> SDL_Surface*
 extern func SDL_DestroySurface(surface: SDL_Surface*)
 
 // Event Handling
@@ -328,8 +328,8 @@ extern func SDL_Delay(ms: u32)
 
 // High-level wrapper class
 namespace SDL {
-    func init(flags: u32) -> Result<bool, u8*> {
-        let result: Result<bool, u8*> = new Result<bool, u8*>()
+    func init(flags: u32) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
 
         if SDL_Init(flags) {
             result.set_ok(true)

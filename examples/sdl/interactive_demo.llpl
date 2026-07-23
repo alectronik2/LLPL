@@ -69,7 +69,7 @@ class Ball {
 
 func main() -> i64 {
     // Initialize SDL3
-    let init_result: Result<bool, u8*> = SDL.init(
+    let init_result: Result<bool, char*> = SDL.init(
         SDL_INIT_VIDEO | SDL_INIT_EVENTS
     )
 

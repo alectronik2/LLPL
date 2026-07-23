@@ -17,8 +17,8 @@ func _start(argc: u64, argv: u64*) {
     // sys_spawn only ever handed out the one handle above - any other
     // small index names a slot this task's handle table never filled in.
     let bogus: u64 = handle + 5
-    let probe: u8[8]
-    sys_strcpy(probe as u8*, "x")
+    let probe: char[8]
+    sys_strcpy(probe as char*, "x")
     let bad: u64 = sys_msg_send(bogus, probe as u8*, 2)
     if bad == RT_SYS_ERR {
         sys_putln("bogus-send=rejected")
@@ -26,14 +26,14 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("bogus-send=ALLOWED (bug!)")
     }
 
-    let msg: u8[64]
-    sys_strcpy(msg as u8*, "ping")
+    let msg: char[64]
+    sys_strcpy(msg as char*, "ping")
     let n: u64 = sys_msg_send(handle, msg as u8*, 5)
     if n == RT_SYS_ERR {
         sys_putln("ipcdemo send=fail")
         rt_exit(1)
     }
-    sys_putln(msg as u8*)
+    sys_putln(msg as char*)
 
     let status: u64 = sys_wait(handle)
     rt_put_uint_line("wait=", status)

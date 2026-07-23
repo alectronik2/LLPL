@@ -37,7 +37,7 @@ namespace Console {
     // Maps a Color index to its RGB value, so switching from VGA text mode
     // to a framebuffer doesn't change how anything *looks* - same palette,
     // just drawn as pixels instead of selected via an attribute byte.
-    func color_to_rgb(index: u8) -> uint32 {
+    func color_to_rgb(index: u8) -> u32 {
         match index {
             case 0 => { return 0x000000 }
             case 1 => { return 0x0000AA }
@@ -79,7 +79,7 @@ namespace Console {
             self.col = 0
         }
 
-        func putchar(c: u8) {
+        func putchar(c: char) {
             if c == 10 {
                 self.newline()
                 return
@@ -95,8 +95,8 @@ namespace Console {
                 self.newline()
             }
 
-            let x: uint32 = (self.col * Framebuffer.GLYPH_WIDTH) as uint32
-            let y: uint32 = (self.row * Framebuffer.GLYPH_HEIGHT) as uint32
+            let x: u32 = (self.col * Framebuffer.GLYPH_WIDTH) as u32
+            let y: u32 = (self.row * Framebuffer.GLYPH_HEIGHT) as u32
             Framebuffer.draw_u8(x, y, c, color_to_rgb(self.color), 0x000000)
 
             self.col = self.col + 1
@@ -110,8 +110,8 @@ namespace Console {
         func backspace() {
             if self.col > 0 {
                 self.col = self.col - 1
-                let x: uint32 = (self.col * Framebuffer.GLYPH_WIDTH) as uint32
-                let y: uint32 = (self.row * Framebuffer.GLYPH_HEIGHT) as uint32
+                let x: u32 = (self.col * Framebuffer.GLYPH_WIDTH) as u32
+                let y: u32 = (self.row * Framebuffer.GLYPH_HEIGHT) as u32
                 Framebuffer.draw_u8(x, y, 32, color_to_rgb(self.color), 0x000000)
             }
         }
@@ -138,7 +138,7 @@ namespace Console {
             }
         }
 
-        func write(str: u8*) {
+        func write(str: char*) {
             let i: i64 = 0
             while str[i] != 0 {
                 self.putchar(str[i])
@@ -148,7 +148,7 @@ namespace Console {
 
         // Writes in `color` without disturbing the screen's default color
         // for whatever gets written after it.
-        func write_colored(str: u8*, color: u8) {
+        func write_colored(str: char*, color: u8) {
             let saved: u8 = self.color
             self.color = color
             self.write(str)

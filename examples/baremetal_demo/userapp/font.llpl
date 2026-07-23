@@ -3,7 +3,7 @@
 // glyph data fb.llpl's Framebuffer.draw_char already uses for the kernel
 // boot console, just copied here rather than shared, since fb.llpl's
 // copy writes straight to the kernel's own framebuffer/pitch state and
-// this needs to write into an arbitrary caller-supplied uint32* buffer
+// this needs to write into an arbitrary caller-supplied u32* buffer
 // (a client's own arena slice, addressed by its own width) instead.
 
 namespace Font {
@@ -111,13 +111,13 @@ namespace Font {
         0, 0, 0, 0, 0, 0, 0, 50, 126, 76, 0, 0, 0, 0, 0, 0 // 126 '~'
     ]
 
-    // Draws one glyph into `buf` (a buf_w x buf_h uint32 pixel buffer, row-
+    // Draws one glyph into `buf` (a buf_w x buf_h u32 pixel buffer, row-
     // major - exactly the shape wm_client.llpl's wm_buffer() returns) at
     // pixel position (x, y), bounds-checked per-pixel against buf_w/buf_h
     // so a glyph straddling the buffer's right/bottom edge just clips
     // instead of writing out of bounds. Anything outside the printable
     // ASCII range (32-126) draws as a blank cell rather than garbage.
-    func draw_char(buf: uint32*, buf_w: u64, buf_h: u64, x: u64, y: u64, c: u8, fg: uint32, bg: uint32) {
+    func draw_char(buf: u32*, buf_w: u64, buf_h: u64, x: u64, y: u64, c: char, fg: u32, bg: u32) {
         let code: i64 = c as i64
         if code < 32 || code > 126 {
             code = 32
@@ -137,7 +137,7 @@ namespace Font {
                     let px: i64 = (x as i64) + col
                     if px >= 0 && px < (buf_w as i64) {
                         let mask: i64 = 128 >> col
-                        let color: uint32 = bg
+                        let color: u32 = bg
                         if (bits & mask) != 0 {
                             color = fg
                         }
@@ -150,7 +150,7 @@ namespace Font {
         }
     }
 
-    func draw_string(buf: uint32*, buf_w: u64, buf_h: u64, x: u64, y: u64, str: u8*, fg: uint32, bg: uint32) {
+    func draw_string(buf: u32*, buf_w: u64, buf_h: u64, x: u64, y: u64, str: char*, fg: u32, bg: u32) {
         let i: i64 = 0
         let cur_x: u64 = x
         while str[i] != 0 {

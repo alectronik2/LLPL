@@ -538,7 +538,7 @@ func create_glyph_S() -> VectorGlyph {
 }
 
 // Enhanced bitmap font rendering with anti-aliasing simulation
-func render_smooth_char(c: u8, size: i16, buffer: u8*, buf_w: i16, buf_h: i16) {
+func render_smooth_char(c: char, size: i16, buffer: u8*, buf_w: i16, buf_h: i16) {
     // Clear buffer
     let i: i16 = 0
     while i < buf_w * buf_h {
@@ -613,7 +613,7 @@ func render_smooth_char(c: u8, size: i16, buffer: u8*, buf_w: i16, buf_h: i16) {
 }
 
 // Check if a character is supported by vector font
-func is_vector_char(c: u8) -> bool {
+func is_vector_char(c: char) -> bool {
     if c == 65 || c == 97 { return true }  // A
     if c == 68 || c == 100 { return true }  // D
     if c == 69 || c == 101 { return true }  // E
@@ -630,7 +630,7 @@ func is_vector_char(c: u8) -> bool {
 }
 
 // Get approximate advance width for a character
-func get_char_advance(c: u8, size: i16) -> i16 {
+func get_char_advance(c: char, size: i16) -> i16 {
     if c == 73 || c == 105 {  // I is narrower
         return size / 2
     } else if c == 77 || c == 109 {  // M is wider
@@ -642,7 +642,7 @@ func get_char_advance(c: u8, size: i16) -> i16 {
 }
 
 // Render smooth text to buffer with better quality than bitmap font
-func render_smooth_text(text: u8*, size: i16, buffer: u32*, buf_w: i16, buf_h: i16,
+func render_smooth_text(text: char*, size: i16, buffer: u32*, buf_w: i16, buf_h: i16,
                         x: i16, y: i16, color: u32, bg_color: u32) {
     let char_buf: u8[1024]  // 32x32 character buffer (reduced to save stack)
     let char_w: i16 = 32
@@ -652,7 +652,7 @@ func render_smooth_text(text: u8*, size: i16, buffer: u32*, buf_w: i16, buf_h: i
     let i: i64 = 0
 
     while text[i] != 0 {
-        let c: u8 = text[i]
+        let c: char = text[i]
 
         // Only render if supported, otherwise skip with spacing
         if is_vector_char(c) {

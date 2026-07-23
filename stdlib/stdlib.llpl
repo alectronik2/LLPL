@@ -71,7 +71,7 @@ namespace std {
 // File I/O example
 func example_file_io() {
     // Read entire file
-    let content: Result<String, u8*> = std.io.read_file("test.txt")
+    let content: Result<String, char*> = std.io.read_file("test.txt")
     if content.is_ok() {
         let text: String = content.unwrap()
         // Use text...
@@ -87,7 +87,7 @@ func example_file_io() {
         f.write_string(new String("Line 2\n"))
 
         f.seek(0, std.io.SEEK_SET)
-        let read_result: Result<String, u8*> = f.read_string(100)
+        let read_result: Result<String, char*> = f.read_string(100)
         // File automatically closed when f goes out of scope
     }
 }
@@ -95,14 +95,14 @@ func example_file_io() {
 // Network I/O example - TCP Server
 func example_tcp_server() {
     let server: std.TcpServer = new std.TcpServer(8080)
-    let start_result: Result<bool, u8*> = server.start(10)
+    let start_result: Result<bool, char*> = server.start(10)
 
     if start_result.is_ok() {
         for true {  // infinite loop
-            let client_result: Result<std.Socket, u8*> = server.accept()
+            let client_result: Result<std.Socket, char*> = server.accept()
             if client_result.is_ok() {
                 let client: std.Socket = client_result.unwrap()
-                let recv_result: Result<String, u8*> = client.recv_string(1024)
+                let recv_result: Result<String, char*> = client.recv_string(1024)
 
                 if recv_result.is_ok() {
                     let message: String = recv_result.unwrap()
@@ -116,11 +116,11 @@ func example_tcp_server() {
 // Network I/O example - TCP Client
 func example_tcp_client() {
     let client: std.TcpClient = new std.TcpClient()
-    let connect_result: Result<bool, u8*> = client.connect(127, 0, 0, 1, 8080)
+    let connect_result: Result<bool, char*> = client.connect(127, 0, 0, 1, 8080)
 
     if connect_result.is_ok() {
         client.send(new String("Hello, Server!"))
-        let response: Result<String, u8*> = client.recv(1024)
+        let response: Result<String, char*> = client.recv(1024)
 
         if response.is_ok() {
             let msg: String = response.unwrap()

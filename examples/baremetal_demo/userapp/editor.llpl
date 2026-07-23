@@ -34,8 +34,8 @@ const CARET_COLOR: u32 = 0xFFD000
 const CONFIRM_COLOR: u32 = 0xFF6060
 const SELECTION_BG: u32 = 0x304C78
 
-let path: u8[96]
-let text: u8[8192] // TEXT_CAP
+let path: char[96]
+let text: char[8192] // TEXT_CAP
 let text_len: u64 = 0
 let cursor: u64 = 0
 let top_line: u64 = 0
@@ -199,7 +199,7 @@ func draw_selection_for_line(bufp: u32*, row_y: u64, line_start: u64, line_end: 
     fill_rect(bufp, 4 + sx * 8, row_y, (ex - sx) * 8, ROW_H as u64, SELECTION_BG)
 }
 
-func draw_text_line(bufp: u32*, win_w: u64, win_h: u64, x: u64, y: u64, linebuf: u8*, line_start: u64) {
+func draw_text_line(bufp: u32*, win_w: u64, win_h: u64, x: u64, y: u64, linebuf: char*, line_start: u64) {
     if !has_selection() {
         Font.draw_string(bufp, win_w, win_h, x, y, linebuf, TEXT_COLOR, BG_COLOR)
         return
@@ -247,18 +247,18 @@ func copy_selection_to_clipboard() {
     if n > 4096 {
         n = 4096
     }
-    let clip: u8[4096]
+    let clip: char[4096]
     let i: u64 = 0
     while i < n {
         clip[i] = text[a + i]
         i = i + 1
     }
-    sys_clipboard_set(clip as u8*, n)
+    sys_clipboard_set(clip as char*, n)
 }
 
 func paste_clipboard() {
-    let clip: u8[4096]
-    let n: u64 = sys_clipboard_get(clip as u8*, 4096)
+    let clip: char[4096]
+    let n: u64 = sys_clipboard_get(clip as char*, 4096)
     if n == 0 || n == RT_SYS_ERR {
         return
     }
@@ -267,7 +267,7 @@ func paste_clipboard() {
     }
     let i: u64 = 0
     while i < n {
-        insert_u8(clip[i])
+        insert_char(clip[i])
         i = i + 1
     }
     clear_selection()
@@ -307,7 +307,7 @@ func move_down() {
     cursor = next_line_start + new_col
 }
 
-func insert_u8(c: u8) {
+func insert_char(c: char) {
     if text_len >= (TEXT_CAP as u64) - 1 {
         return
     }
@@ -337,25 +337,25 @@ func delete_before_cursor() {
 }
 
 func save_file() {
-    let n: u64 = sys_write_all(path as string, text as string, text_len)
+    let n: u64 = sys_write_all(path as string, text as u8*, text_len)
     if n != RT_SYS_ERR {
         modified = false
-        wm_notify("Editor" as u8*, "Saved file" as u8*, 1)
+        wm_notify("Editor" as char*, "Saved file" as char*, 1)
     } else {
-        wm_notify("Editor" as u8*, "Save failed" as u8*, 2)
+        wm_notify("Editor" as char*, "Save failed" as char*, 2)
     }
 }
 
-func load_file_from_path(new_path: u8*) {
+func load_file_from_path(new_path: char*) {
     let i: u64 = 0
     while new_path[i] != 0 && i < 95 {
         path[i] = new_path[i]
         i = i + 1
     }
     path[i] = 0
-    let n: u64 = sys_read_all(path as string, text as string, (TEXT_CAP as u64) - 1)
+    let n: u64 = sys_read_all(path as string, text as u8*, (TEXT_CAP as u64) - 1)
     if n == RT_SYS_ERR {
-        wm_notify("Editor" as u8*, "Open failed" as u8*, 2)
+        wm_notify("Editor" as char*, "Open failed" as char*, 2)
         return
     }
     text_len = n
@@ -363,7 +363,7 @@ func load_file_from_path(new_path: u8*) {
     top_line = 0
     modified = false
     clear_selection()
-    wm_notify("Editor" as u8*, "Opened file" as u8*, 1)
+    wm_notify("Editor" as char*, "Opened file" as char*, 1)
 }
 
 func draw_caret(buf: u32*, win_w: u64, x: u64, y: u64) {
@@ -473,7 +473,7 @@ func render_cursor_line_fast() -> bool {
 
     let line_start: u64 = line_start_at_or_before(cursor)
     let line_end: u64 = line_end_at_or_after(cursor)
-    let linebuf: u8[64]
+    let linebuf: char[64]
     let col: u64 = 0
     let p: u64 = line_start
     while p < line_end && col < cols_visible {
@@ -507,7 +507,7 @@ func render() {
         return
     }
 
-    let header: u8[48]
+    let header: char[48]
     let i: u64 = 0
     while path[i] != 0 && i < 46 {
         header[i] = path[i]
@@ -537,7 +537,7 @@ func render() {
         if offset <= text_len {
             let line_end: u64 = line_end_at_or_after(offset)
             let y: u64 = (TEXT_TOP as u64) + row * ROW_H
-            let linebuf: u8[64]
+            let linebuf: char[64]
             let col: u64 = 0
             let p: u64 = offset
             while p < line_end && col < cols_visible {
@@ -546,7 +546,7 @@ func render() {
                 p = p + 1
             }
             linebuf[col] = 0
-            draw_text_line(buf, win_w, win_h, 4, y, linebuf as u8*, offset)
+            draw_text_line(buf, win_w, win_h, 4, y, linebuf as char*, offset)
             if line_end < text_len {
                 offset = line_end + 1
             } else {
@@ -635,7 +635,7 @@ func _start(argc: u64, argv: u64*) {
         }
         prev_mouse_left = input.mouse_left
         if input.drop_valid {
-            load_file_from_path(input.drop_path as u8*)
+            load_file_from_path(input.drop_path as char*)
             dirty_full = true
         }
         if confirm_quit {
@@ -681,9 +681,9 @@ func _start(argc: u64, argv: u64*) {
             save_file()
             dirty_full = true
         } else if key == 15 {
-            let chosen: u8[96]
-            if wm_open_file_dialog(chosen as u8*) {
-                load_file_from_path(chosen as u8*)
+            let chosen: char[96]
+            if wm_open_file_dialog(chosen as char*) {
+                load_file_from_path(chosen as char*)
             }
             dirty_full = true
         } else if key == 3 {
@@ -706,7 +706,7 @@ func _start(argc: u64, argv: u64*) {
             clear_selection()
             let old_line: u64 = line_number_of(cursor)
             let was_modified: bool = modified
-            insert_u8(key as u8)
+            insert_char(key as char)
             if was_modified && key != 10 && old_line == line_number_of(cursor) {
                 dirty_line = true
             } else {

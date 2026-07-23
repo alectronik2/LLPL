@@ -72,7 +72,7 @@ func handle_get(path: String) -> String {
     }
 
     // Try to read the file
-    let content_result: Result<String, u8*> = std.io.read_file(file_path.c_str())
+    let content_result: Result<String, char*> = std.io.read_file(file_path.c_str())
 
     if content_result.is_ok() {
         let content: String = content_result.unwrap()
@@ -99,7 +99,7 @@ func handle_get(path: String) -> String {
 // Handle client connection
 func handle_client(client: Socket) {
     // Receive HTTP request
-    let request_result: Result<String, u8*> = client.recv_string(4096)
+    let request_result: Result<String, char*> = client.recv_string(4096)
 
     if !request_result.is_ok() {
         return

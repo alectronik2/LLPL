@@ -91,7 +91,7 @@ namespace Syscall {
         let used: bool
         let owner: i64
         let offset: u64
-        let path: u8[96]
+        let path: char[96]
     }
 
     let fds: FileDesc[16]
@@ -101,7 +101,7 @@ namespace Syscall {
     let msg_try_recv_count: u64 = 0
     let msg_reply_count: u64 = 0
     let clipboard_len: u64 = 0
-    let clipboard_data: u8[4096]
+    let clipboard_data: char[4096]
     let clipboard_image_len: u64 = 0
     let clipboard_image_width: u64 = 0
     let clipboard_image_height: u64 = 0
@@ -327,7 +327,7 @@ namespace Syscall {
         return true
     }
 
-    func copy_user_string(user_addr: u64, out: u8*, max_len: i64) -> bool {
+    func copy_user_string(user_addr: u64, out: char*, max_len: i64) -> bool {
         let pml4: u64 = Task.get_current_pml4()
         let i: i64 = 0
         let ch: u8 = 0
@@ -336,7 +336,7 @@ namespace Syscall {
                 out[0] = 0
                 return false
             }
-            out[i] = ch
+            out[i] = ch as char
             if ch == 0 {
                 return true
             }
@@ -347,15 +347,15 @@ namespace Syscall {
     }
 
     func sys_crash_report(msg_addr: u64, rip: u64, rbp: u64) -> u64 {
-        let msg: u8[96]
-        if !copy_user_string(msg_addr, msg as u8*, 96) {
+        let msg: char[96]
+        if !copy_user_string(msg_addr, msg as char*, 96) {
             msg[0] = 0
         }
-        CrashLog.record_with_message("panic", msg as u8*, true, 0, 0, rip, rbp, 0)
+        CrashLog.record_with_message("panic", msg as char*, true, 0, 0, rip, rbp, 0)
         EventLog.add2("fault", "user panic", Task.current_id() as u64, rip)
-        HAL.Log.ksnprintf(HAL.Log.buffer as u8*, 128,
+        HAL.Log.ksnprintf(HAL.Log.buffer as char*, 128,
                           "USER PANIC: task %d: %s\n",
-                          Task.current_id(), msg as u8*)
+                          Task.current_id(), msg as char*)
         HAL.Log.flush()
         terminate_current(0x90)
         return 0
@@ -398,7 +398,7 @@ namespace Syscall {
         return b
     }
 
-    func path_copy(dst: u8*, src: u8*) {
+    func path_copy(dst: char*, src: char*) {
         let i: i64 = 0
         while src[i] != 0 && i < FD_PATH_MAX - 1 {
             dst[i] = src[i]
@@ -436,7 +436,7 @@ namespace Syscall {
             }
             let ptr: u8* = page as u8*
             let offset: u64 = (buf + i) & 0xFFF
-            HAL.Serial.write_char(ptr[offset])
+            HAL.Serial.write_char(ptr[offset] as char)
             i = i + 1
         }
         return i
@@ -465,12 +465,12 @@ namespace Syscall {
     }
 
     func sys_open(path_addr: u64, mode: u64) -> u64 {
-        let path: u8[96]
-        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+        let path: char[96]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return -1
         }
 
-        match VFS.resolve(path as u8*) {
+        match VFS.resolve(path as char*) {
             case VFS.Node.NotFound() => {
                 if mode == 0 {
                     return -1
@@ -495,7 +495,7 @@ namespace Syscall {
                 fds[i].used = true
                 fds[i].owner = Task.current_id()
                 fds[i].offset = 0
-                path_copy(fds[i].path as u8*, path as u8*)
+                path_copy(fds[i].path as char*, path as char*)
                 EventLog.add1("syscall", "open fd", i as u64)
                 return i as u64
             }
@@ -530,12 +530,12 @@ namespace Syscall {
     // and 40 - copied out with copy_to_user exactly like sys_read does
     // for its own buffer, rather than needing a new IPC-style shape.
     func sys_readdir(path_addr: u64, index: u64, out_buf: u64) -> u64 {
-        let path: u8[96]
-        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+        let path: char[96]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return 0xFFFFFFFFFFFFFFFF
         }
 
-        match VFS.resolve(path as u8*) {
+        match VFS.resolve(path as char*) {
             case VFS.Node.Disk(idx) => {
                 if VFS.inode_kind(idx) != VFS.KIND_DIR {
                     return 0xFFFFFFFFFFFFFFFF
@@ -556,7 +556,7 @@ namespace Syscall {
                     entry[zi] = 0
                     zi = zi + 1
                 }
-                VFS.inode_name(child, entry as u8*)
+                VFS.inode_name(child, entry as char*)
                 let fields: u64* = ((entry as u8*) + 32) as u64*
                 fields[0] = VFS.inode_kind(child)
                 fields[1] = VFS.inode_size(child)
@@ -570,11 +570,11 @@ namespace Syscall {
     }
 
     func sys_mkdir(path_addr: u64) -> u64 {
-        let path: u8[96]
-        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+        let path: char[96]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return 0xFFFFFFFFFFFFFFFF
         }
-        if VFS.mkdir(path as u8*) {
+        if VFS.mkdir(path as char*) {
             EventLog.add1("vfs", "mkdir", Task.current_id() as u64)
             return 0
         }
@@ -582,11 +582,11 @@ namespace Syscall {
     }
 
     func sys_rm(path_addr: u64) -> u64 {
-        let path: u8[96]
-        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+        let path: char[96]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return 0xFFFFFFFFFFFFFFFF
         }
-        if VFS.rm(path as u8*) {
+        if VFS.rm(path as char*) {
             EventLog.add1("vfs", "rm", Task.current_id() as u64)
             return 0
         }
@@ -637,7 +637,7 @@ namespace Syscall {
             clipboard_len = 0
             return 0
         }
-        if copy_from_user(buf, clipboard_data as u8*, n) != n {
+        if copy_from_user(buf, clipboard_data as char*, n) != n {
             return 0xFFFFFFFFFFFFFFFF
         }
         clipboard_len = n
@@ -652,7 +652,7 @@ namespace Syscall {
         if n == 0 {
             return 0
         }
-        if copy_to_user(out_buf, clipboard_data as u8*, n) != n {
+        if copy_to_user(out_buf, clipboard_data as char*, n) != n {
             return 0xFFFFFFFFFFFFFFFF
         }
         return n
@@ -812,10 +812,10 @@ namespace Syscall {
             i = i + 1
         }
 
-        let name: u8* = Task.name_at(index as i64)
+        let name: char* = Task.name_at(index as i64)
         i = 0
         while name[i] != 0 && i < 15 {
-            rec[i] = name[i]
+            rec[i] = name[i] as u8
             i = i + 1
         }
 
@@ -895,7 +895,7 @@ namespace Syscall {
         }
         let i: u64 = 0
         while i < max {
-            Pty.push_input(pty_id, tmp[i])
+            Pty.push_input(pty_id, tmp[i] as char)
             i = i + 1
         }
         return max
@@ -911,7 +911,7 @@ namespace Syscall {
             max = IO_MAX
         }
         let tmp: u8[4096]
-        let n: u64 = Pty.read_output(pty_id, tmp as u8*, max)
+        let n: u64 = Pty.read_output(pty_id, tmp as char*, max)
         if n == 0xFFFFFFFFFFFFFFFF {
             return n
         }
@@ -941,13 +941,13 @@ namespace Syscall {
         }
         let tmp: u8[4096]
         let n: i64 = -1
-        match VFS.resolve(fds[fd].path as u8*) {
+        match VFS.resolve(fds[fd].path as char*) {
             case VFS.Node.TmpfsFile(idx) => {
                 n = TmpFS.read(idx, tmp as u8*, max)
             }
             case VFS.Node.Disk(idx) => {
                 if VFS.inode_kind(idx) == VFS.KIND_FILE {
-                    n = VFS.read(fds[fd].path as u8*, tmp as u8*, max)
+                    n = VFS.read(fds[fd].path as char*, tmp as u8*, max)
                 }
             }
             default => {
@@ -974,7 +974,7 @@ namespace Syscall {
         if copied != max {
             return copied
         }
-        match VFS.resolve(fds[fd].path as u8*) {
+        match VFS.resolve(fds[fd].path as char*) {
             case VFS.Node.TmpfsFile(idx) => {
                 return -1
             }
@@ -982,7 +982,7 @@ namespace Syscall {
                 return -1
             }
             default => {
-                if VFS.write(fds[fd].path as u8*, tmp as u8*, copied) {
+                if VFS.write(fds[fd].path as char*, tmp as u8*, copied) {
                     return copied
                 }
             }
@@ -1112,17 +1112,17 @@ namespace Syscall {
     }
 
     func sys_spawn(path_addr: u64, args_addr: u64) -> u64 {
-        let path: u8[96]
-        let args: u8[128]
-        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+        let path: char[96]
+        let args: char[128]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return -1
         }
         if args_addr == 0 {
             args[0] = 0
-        } else if !copy_user_string(args_addr, args as u8*, 128) {
+        } else if !copy_user_string(args_addr, args as char*, 128) {
             return -1
         }
-        if !run_user_executable_with_args_parent(path as u8*, args as u8*, Task.current_id()) {
+        if !run_user_executable_with_args_parent(path as char*, args as char*, Task.current_id()) {
             return -1
         }
 
@@ -1138,17 +1138,17 @@ namespace Syscall {
     }
 
     func sys_exec(path_addr: u64, args_addr: u64) -> u64 {
-        let path: u8[96]
-        let args: u8[128]
-        if !copy_user_string(path_addr, path as u8*, FD_PATH_MAX) {
+        let path: char[96]
+        let args: char[128]
+        if !copy_user_string(path_addr, path as char*, FD_PATH_MAX) {
             return -1
         }
         if args_addr == 0 {
             args[0] = 0
-        } else if !copy_user_string(args_addr, args as u8*, 128) {
+        } else if !copy_user_string(args_addr, args as char*, 128) {
             return -1
         }
-        if !exec_user_executable_with_args(path as u8*, args as u8*) {
+        if !exec_user_executable_with_args(path as char*, args as char*) {
             return -1
         }
         return 0
@@ -1192,11 +1192,11 @@ namespace Syscall {
     }
 
     func sys_register(name_addr: u64) -> u64 {
-        let name: u8[16]
-        if !copy_user_string(name_addr, name as u8*, Task.SERVICE_NAME_MAX) {
+        let name: char[16]
+        if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
             return -1
         }
-        if Task.register_service(Task.current_id(), name as u8*) {
+        if Task.register_service(Task.current_id(), name as char*) {
             return 0
         }
         return -1
@@ -1206,11 +1206,11 @@ namespace Syscall {
     // never KILL/WAIT: looking a service up makes the caller its client,
     // not its owner.
     func sys_lookup(name_addr: u64) -> u64 {
-        let name: u8[16]
-        if !copy_user_string(name_addr, name as u8*, Task.SERVICE_NAME_MAX) {
+        let name: char[16]
+        if !copy_user_string(name_addr, name as char*, Task.SERVICE_NAME_MAX) {
             return -1
         }
-        let pid: i64 = Task.lookup_service(name as u8*)
+        let pid: i64 = Task.lookup_service(name as char*)
         if pid < 0 {
             return -1
         }

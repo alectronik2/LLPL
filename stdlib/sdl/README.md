@@ -277,7 +277,7 @@ if keys[std::sdl::SDLK_UP as int] != 0 {
 let (x, y) = std::sdl::Input.get_mouse_position()
 
 // Get mouse button state
-let state: uint32 = std::sdl::Input.get_mouse_state()
+let state: u32 = std::sdl::Input.get_mouse_state()
 
 // Check specific buttons
 if state & (1 << (std::sdl::SDL_BUTTON_LEFT - 1)) != 0 {

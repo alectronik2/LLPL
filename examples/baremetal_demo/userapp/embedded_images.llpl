@@ -87,7 +87,11 @@ func load_media_start_png() -> EmbeddedFile {
     return embed("../media/start.png")
 }
 
-func load_default_apps_manifest() -> u8* {
+func load_media_skin_png() -> EmbeddedFile {
+    return embed("../media/skin.png")
+}
+
+func load_default_apps_manifest() -> char* {
     let asset = embed("default_apps.txt")
-    return asset.data as u8*
+    return asset.data as char*
 }

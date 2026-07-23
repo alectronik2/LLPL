@@ -30,10 +30,10 @@ namespace Backtrace {
             if rip == 0 {
                 done = true
             } else {
-                let sym: u8* = llpl_resolve_symbol(rip)
+                let sym: char* = llpl_resolve_symbol(rip)
                 if sym != null {
                     HAL.Log.ksnprintf(
-                        HAL.Log.buffer as u8*,
+                        HAL.Log.buffer as char*,
                         128,
                         "  #%02d rbp=0x%016x rip=0x%016x %s (%s:%d)\n",
                         depth,
@@ -45,7 +45,7 @@ namespace Backtrace {
                     )
                 } else {
                     HAL.Log.ksnprintf(
-                        HAL.Log.buffer as u8*,
+                        HAL.Log.buffer as char*,
                         128,
                         "  #%02d rbp=0x%016x rip=0x%016x <unknown>\n",
                         depth,

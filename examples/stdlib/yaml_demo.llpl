@@ -15,7 +15,7 @@ func demo_config_roundtrip() {
     let config: String = new String("name: demo-app\nversion: 3\ndebug: false\n\nserver:\n  host: 0.0.0.0\n  port: 8080\n\ntags: [web, api, backend]\nlimits: {max_connections: 100, timeout: 30}\n\nroutes:\n  - path: /health\n    method: GET\n  - path: /users\n    method: POST\n    auth_required: true\n")
     std.io.write_file("config.yaml", config)
 
-    let read_result: Result<String, u8*> = std.io.read_file("config.yaml")
+    let read_result: Result<String, char*> = std.io.read_file("config.yaml")
     if !read_result.is_ok() {
         return
     }

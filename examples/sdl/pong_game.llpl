@@ -152,7 +152,7 @@ func draw_dotted_line(renderer: Renderer, x: i64) {
 
 func main() -> i64 {
     // Initialize SDL3
-    let init_result: Result<bool, u8*> = SDL.init(SDL_INIT_VIDEO)
+    let init_result: Result<bool, char*> = SDL.init(SDL_INIT_VIDEO)
 
     if !init_result.is_ok() {
         return 1

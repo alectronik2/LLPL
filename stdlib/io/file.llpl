@@ -23,13 +23,13 @@ const ERR_PERMISSION_DENIED: i64 = -2
 const ERR_IO_ERROR: i64 = -3
 
 // Forward declarations for C runtime
-extern func open(path: u8*, flags: i64, mode: i64) -> i64
+extern func open(path: char*, flags: i64, mode: i64) -> i64
 extern func close(fd: i64) -> i64
-extern func read(fd: i64, buf: u8*, count: u64) -> i64
-extern func write(fd: i64, buf: u8*, count: u64) -> i64
+extern func read(fd: i64, buf: char*, count: u64) -> i64
+extern func write(fd: i64, buf: char*, count: u64) -> i64
 extern func lseek(fd: i64, offset: i64, whence: i64) -> i64
-extern func unlink(path: u8*) -> i64
-extern func rename(oldpath: u8*, newpath: u8*) -> i64
+extern func unlink(path: char*) -> i64
+extern func rename(oldpath: char*, newpath: char*) -> i64
 
 // File class with RAII semantics
 class File {
@@ -37,13 +37,13 @@ class File {
     let path: String
     let is_open: bool
 
-    constructor(filepath: u8*, flags: i64) {
+    constructor(filepath: char*, flags: i64) {
         self.path = new String(filepath)
         self.fd = open(filepath, flags, 0o644)
         self.is_open = self.fd >= 0
     }
 
-    constructor(filepath: u8*, flags: i64, mode: i64) {
+    constructor(filepath: char*, flags: i64, mode: i64) {
         self.path = new String(filepath)
         self.fd = open(filepath, flags, mode)
         self.is_open = self.fd >= 0
@@ -59,8 +59,8 @@ class File {
         return self.is_open
     }
 
-    func read_bytes(buffer: u8*, size: u64) -> Result<i64, u8*> {
-        let result: Result<i64, u8*> = new Result<i64, u8*>()
+    func read_bytes(buffer: char*, size: u64) -> Result<i64, char*> {
+        let result: Result<i64, char*> = new Result<i64, char*>()
 
         if !self.is_open {
             result.set_err("File not open")
@@ -77,8 +77,8 @@ class File {
         return result
     }
 
-    func write_bytes(buffer: u8*, size: u64) -> Result<i64, u8*> {
-        let result: Result<i64, u8*> = new Result<i64, u8*>()
+    func write_bytes(buffer: char*, size: u64) -> Result<i64, char*> {
+        let result: Result<i64, char*> = new Result<i64, char*>()
 
         if !self.is_open {
             result.set_err("File not open")
@@ -95,15 +95,15 @@ class File {
         return result
     }
 
-    func read_string(max_size: u64) -> Result<String, u8*> {
-        let result: Result<String, u8*> = new Result<String, u8*>()
+    func read_string(max_size: u64) -> Result<String, char*> {
+        let result: Result<String, char*> = new Result<String, char*>()
 
         if !self.is_open {
             result.set_err("File not open")
             return result
         }
 
-        let buffer: u8* = llpl_alloc(max_size + 1)
+        let buffer: char* = llpl_alloc(max_size + 1)
         let bytes_read: i64 = read(self.fd, buffer, max_size)
 
         if bytes_read < 0 {
@@ -120,12 +120,12 @@ class File {
         return result
     }
 
-    func write_string(s: String) -> Result<i64, u8*> {
+    func write_string(s: String) -> Result<i64, char*> {
         return self.write_bytes(s.c_str(), s.len() as u64)
     }
 
-    func seek(offset: i64, whence: i64) -> Result<i64, u8*> {
-        let result: Result<i64, u8*> = new Result<i64, u8*>()
+    func seek(offset: i64, whence: i64) -> Result<i64, char*> {
+        let result: Result<i64, char*> = new Result<i64, char*>()
 
         if !self.is_open {
             result.set_err("File not open")
@@ -142,18 +142,18 @@ class File {
         return result
     }
 
-    func tell() -> Result<i64, u8*> {
+    func tell() -> Result<i64, char*> {
         return self.seek(0, SEEK_CUR)
     }
 
-    func size() -> Result<i64, u8*> {
-        let current_pos_result: Result<i64, u8*> = self.tell()
+    func size() -> Result<i64, char*> {
+        let current_pos_result: Result<i64, char*> = self.tell()
         if !current_pos_result.is_ok() {
             return current_pos_result
         }
         let current_pos: i64 = current_pos_result.unwrap()
 
-        let end_pos_result: Result<i64, u8*> = self.seek(0, SEEK_END)
+        let end_pos_result: Result<i64, char*> = self.seek(0, SEEK_END)
         if !end_pos_result.is_ok() {
             return end_pos_result
         }
@@ -162,15 +162,15 @@ class File {
         // Restore position
         self.seek(current_pos, SEEK_SET)
 
-        let result: Result<i64, u8*> = new Result<i64, u8*>()
+        let result: Result<i64, char*> = new Result<i64, char*>()
         result.set_ok(file_size)
         return result
     }
 
-    func read_all() -> Result<String, u8*> {
-        let size_result: Result<i64, u8*> = self.size()
+    func read_all() -> Result<String, char*> {
+        let size_result: Result<i64, char*> = self.size()
         if !size_result.is_ok() {
-            let result: Result<String, u8*> = new Result<String, u8*>()
+            let result: Result<String, char*> = new Result<String, char*>()
             result.set_err("Cannot get file size")
             return result
         }
@@ -188,9 +188,9 @@ class File {
 }
 
 // Utility functions
-func read_file(path: u8*) -> Result<String, u8*> {
+func read_file(path: char*) -> Result<String, char*> {
     let f: File = new File(path, O_RDONLY)
-    let result: Result<String, u8*> = new Result<String, u8*>()
+    let result: Result<String, char*> = new Result<String, char*>()
 
     if !f.is_valid() {
         result.set_err("Cannot open file")
@@ -200,9 +200,9 @@ func read_file(path: u8*) -> Result<String, u8*> {
     return f.read_all()
 }
 
-func write_file(path: u8*, content: String) -> Result<i64, u8*> {
+func write_file(path: char*, content: String) -> Result<i64, char*> {
     let f: File = new File(path, O_WRONLY | O_CREAT | O_TRUNC)
-    let result: Result<i64, u8*> = new Result<i64, u8*>()
+    let result: Result<i64, char*> = new Result<i64, char*>()
 
     if !f.is_valid() {
         result.set_err("Cannot open file")
@@ -212,9 +212,9 @@ func write_file(path: u8*, content: String) -> Result<i64, u8*> {
     return f.write_string(content)
 }
 
-func append_file(path: u8*, content: String) -> Result<i64, u8*> {
+func append_file(path: char*, content: String) -> Result<i64, char*> {
     let f: File = new File(path, O_WRONLY | O_CREAT | O_APPEND)
-    let result: Result<i64, u8*> = new Result<i64, u8*>()
+    let result: Result<i64, char*> = new Result<i64, char*>()
 
     if !f.is_valid() {
         result.set_err("Cannot open file")
@@ -224,16 +224,16 @@ func append_file(path: u8*, content: String) -> Result<i64, u8*> {
     return f.write_string(content)
 }
 
-func file_exists(path: u8*) -> bool {
+func file_exists(path: char*) -> bool {
     let f: File = new File(path, O_RDONLY)
     return f.is_valid()
 }
 
-func delete_file(path: u8*) -> bool {
+func delete_file(path: char*) -> bool {
     return unlink(path) == 0
 }
 
-func rename_file(oldpath: u8*, newpath: u8*) -> bool {
+func rename_file(oldpath: char*, newpath: char*) -> bool {
     return rename(oldpath, newpath) == 0
 }
 

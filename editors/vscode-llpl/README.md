@@ -21,7 +21,7 @@ find-references) for LLPL (`.llpl`) files.
   `char`, `bool`, `void`, `float`, `string`).
 - Type-annotation aware highlighting, including pointers/pointers-to-pointers
   (`char*`, `int**`), fixed arrays (`char[17]`), and bit-fields
-  (`let flags: uint32 : 3`).
+  (`let flags: u32 : 3`).
 - Numeric literals with `_` digit-group separators (`0x100_0000_0000`,
   `1_000_000`), float literals (`1.5`, `1.5e-5`, `1.0f`), and char literals
   (`'x'`, `'\n'`, `'\x1b'`).

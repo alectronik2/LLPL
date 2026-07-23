@@ -463,7 +463,7 @@ namespace Framebuffer {
     // Draws one character at pixel position (x, y). Anything outside the
     // printable ASCII range (32-126) draws as a blank cell rather than
     // garbage - there's no glyph data for it.
-    func draw_u8(x: u32, y: u32, c: u8, fg: u32, bg: u32) {
+    func draw_u8(x: u32, y: u32, c: char, fg: u32, bg: u32) {
         let code: i64 = c as i64
         if code < 32 || code > 126 {
             code = 32
@@ -490,7 +490,7 @@ namespace Framebuffer {
         }
     }
 
-    func draw_string(x: u32, y: u32, str: u8*, fg: u32, bg: u32) {
+    func draw_string(x: u32, y: u32, str: char*, fg: u32, bg: u32) {
         let cur_x: u32 = x
         let i: i64 = 0
         while str[i] != 0 {

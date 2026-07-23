@@ -126,17 +126,17 @@ namespace PageAlloc {
     // TagHeader for the outer tag-list walk, the same one fb.llpl's own
     // init() already does over the same multiboot2 structure.
     packed struct MemMapTag {
-        let tag_type: uint32
-        let size: uint32
-        let entry_size: uint32
-        let entry_version: uint32
+        let tag_type: u32
+        let size: u32
+        let entry_size: u32
+        let entry_version: u32
     }
 
     packed struct MemMapEntry {
         let base_addr: u64
         let length: u64
-        let region_type: uint32
-        let reserved: uint32
+        let region_type: u32
+        let reserved: u32
     }
 
     func init(multiboot_ptr: u64) {

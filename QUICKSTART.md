@@ -33,7 +33,7 @@ Create a file `hello.llpl`:
 ```swift
 extern func putchar(c: i64) -> i64
 
-func print(msg: u8*) {
+func print(msg: char*) {
     let i: i64 = 0
     while msg[i] != 0 {
         putchar(msg[i] as i64)
@@ -82,7 +82,7 @@ like `examples/baremetal_demo` still needs its own `tools/llplbuild` build
 ```swift
 let x: i64 = 42              // Mutable variable
 const MAX: i64 = 100         // Constant
-let name: u8* = "Bob"        // String literals are already u8*, no cast needed
+let name: char* = "Bob"        // String literals are already char*, no cast needed
 ```
 
 ### Functions
@@ -287,7 +287,7 @@ for what's actually running underneath that boot log.
 ### Error Handling (Return Codes)
 
 ```swift
-func open_file(path: u8*) -> i64 {
+func open_file(path: char*) -> i64 {
     if path == null {
         return -1  // Error
     }
@@ -306,12 +306,12 @@ func caller() {
 
 ```swift
 class Buffer {
-    let data: u8*
+    let data: char*
     let size: i64
 
     constructor(size: i64) {
         self.size = size
-        self.data = malloc(size) as u8*
+        self.data = malloc(size) as char*
     }
 
     destructor() {
@@ -332,8 +332,8 @@ func use_buffer() {
 
 ### Error Handling with Result<T, E>
 ```swift
-func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
-    let r: Result<i64, u8*> = new Result<i64, u8*>()
+func safe_div(a: i64, b: i64) -> Result<i64, char*> {
+    let r: Result<i64, char*> = new Result<i64, char*>()
     if b == 0 {
         r.set_err("division by zero")
         return r
@@ -342,10 +342,10 @@ func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
     return r
 }
 
-func sum(a: i64, b: i64, c: i64, d: i64) -> Result<i64, u8*> {
+func sum(a: i64, b: i64, c: i64, d: i64) -> Result<i64, char*> {
     let x: i64 = safe_div(a, b)?
     let y: i64 = safe_div(c, d)?
-    let r: Result<i64, u8*> = new Result<i64, u8*>()
+    let r: Result<i64, char*> = new Result<i64, char*>()
     r.set_ok(x + y)
     return r
 }
@@ -353,7 +353,7 @@ func sum(a: i64, b: i64, c: i64, d: i64) -> Result<i64, u8*> {
 
 ### Panics
 ```swift
-extern func llpl_panic(msg: u8*)
+extern func llpl_panic(msg: char*)
 
 func must_be_positive(n: i64) {
     if n <= 0 {
@@ -447,19 +447,21 @@ gdb kernel.bin
 
 ## Type Reference
 
-> **Breaking change:** the bare, unsized `int`, `uint`, and `char` spellings
-> have been removed entirely - using any of them is now a hard compile
-> error (`'int' is no longer a type; use 'i64' instead`, and similarly for
-> `uint`/`u64` and `char`/`u8`). Always write the explicitly-sized name.
+> **History:** the bare, unsized `int`/`uint` spellings were removed for a
+> while (a hard compile error telling you to spell out `i64`/`u64`
+> instead), then brought back with new, different semantics. `char` went
+> through the same removed-then-restored arc, also with new semantics.
 
 | LLPL Type | C Type | Size | Description |
 |-----------|--------|------|-------------|
 | `i8`/`i16`/`i32`/`i64` | `int8_t`...`int64_t` | 1-8 bytes | Signed integers |
-| `u8`/`u16`/`u32`/`u64` | `uint8_t`...`uint64_t` | 1-8 bytes | Unsigned integers |
+| `u8`/`u16`/`u32`/`u64` | `uint8_t`...`uint64_t` | 1-8 bytes | Unsigned integers - genuinely numeric, `u8` is `uint8_t` not `char` |
+| `char` | `char` | 1 byte | One byte of *text* - distinct from `u8` even though both are 8 bits |
+| `int`/`uint` | `intptr_t`/`uintptr_t` | 4 or 8 bytes | Native machine word (4 on i386, 8 on x86_64) - **not** aliases of `i64`/`u64`; no implicit widening to/from a fixed-width type |
 | `bool` | real C99 `bool` | 1 byte | Boolean (`<stdbool.h>`) |
 | `void` | `void` | - | No value |
 | `float`/`double` | `float`/`double` | 4/8 bytes | Floating point |
-| `string` | `u8*` | 8 bytes | Alias (`prelude.llpl`: `alias string = u8*`) |
+| `string` | `char*` | 8 bytes | Alias (`prelude.llpl`: `alias string = char*`) |
 | `TypeName*` | `TypeName*` | 8 bytes | Pointer |
 | `TypeName[N]` | `TypeName[N]` | N×size | Fixed array |
 
@@ -470,11 +472,11 @@ storage - useful for hardware registers and on-disk/on-wire structures:
 
 ```
 class PageEntry {
-    let present: uint32 : 1
-    let writable: uint32 : 1
-    let user: uint32 : 1
-    let reserved: uint32 : 5
-    let frame: uint32 : 20
+    let present: u32 : 1
+    let writable: u32 : 1
+    let user: u32 : 1
+    let reserved: u32 : 5
+    let frame: u32 : 20
 }
 ```
 

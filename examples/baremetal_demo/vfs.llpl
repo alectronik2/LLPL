@@ -78,7 +78,7 @@ namespace VFS {
     const MAX_DIRECT_BLOCKS = 64
     const ROOT_INODE = 0
 
-    // A block pointer is a uint32 (block numbers comfortably fit in 32
+    // A block pointer is a u32 (block numbers comfortably fit in 32
     // bits even for a much bigger disk than this demo's), so one
     // 512-byte indirect block holds this many of them.
     const PTRS_PER_INDIRECT = 128
@@ -113,17 +113,17 @@ namespace VFS {
     }
 
     packed struct Inode {
-        let name: u8[32]
+        let name: char[32]
         let kind: u64          // KIND_FREE/KIND_FILE/KIND_DIR
         let size: u64          // file: bytes in use
         let parent: i64         // inode-table index, -1 for root
         let first_child: i64    // dir: first child's index, -1 if empty
         let next_sibling: i64   // next sibling's index, -1 if last
-        let blocks: uint32[64]  // file: direct data-block numbers (0 = hole)
-        let single_indirect: uint32 // block # of a PTRS_PER_INDIRECT-entry
+        let blocks: u32[64]  // file: direct data-block numbers (0 = hole)
+        let single_indirect: u32 // block # of a PTRS_PER_INDIRECT-entry
                                      // array of direct data-block numbers
                                      // (0 = none allocated yet)
-        let double_indirect: uint32 // block # of a PTRS_PER_INDIRECT-entry
+        let double_indirect: u32 // block # of a PTRS_PER_INDIRECT-entry
                                      // array of *other* indirect blocks,
                                      // each shaped exactly like
                                      // single_indirect's own target
@@ -169,7 +169,7 @@ namespace VFS {
         return p as Inode*
     }
 
-    func cstrlen(s: u8*) -> u64 {
+    func cstrlen(s: char*) -> u64 {
         let i: u64 = 0
         while s[i] != 0 {
             i = i + 1
@@ -177,7 +177,7 @@ namespace VFS {
         return i
     }
 
-    func str_eq(a: u8*, b: u8*) -> bool {
+    func str_eq(a: char*, b: char*) -> bool {
         let i: i64 = 0
         while a[i] != 0 && b[i] != 0 {
             if a[i] != b[i] {
@@ -188,7 +188,7 @@ namespace VFS {
         return a[i] == b[i]
     }
 
-    func inode_name_eq(node: Inode*, name: u8*) -> bool {
+    func inode_name_eq(node: Inode*, name: char*) -> bool {
         let i: i64 = 0
         while name[i] != 0 {
             if node.name[i] != name[i] {
@@ -199,7 +199,7 @@ namespace VFS {
         return node.name[i] == 0
     }
 
-    func set_inode_name(node: Inode*, name: u8*) {
+    func set_inode_name(node: Inode*, name: char*) {
         let i: i64 = 0
         while name[i] != 0 && i < MAX_NAME - 1 {
             node.name[i] = name[i]
@@ -378,7 +378,7 @@ namespace VFS {
 
     // Reads `block_num` (already a real, allocated block) through the
     // appropriate cache slot above (`is_leaf` selects which - see its
-    // own comment) as an array of PTRS_PER_INDIRECT uint32 block
+    // own comment) as an array of PTRS_PER_INDIRECT u32 block
     // numbers, and gets/creates the pointer at `slot` - used identically
     // for a single-indirect block's own direct data-block numbers, a
     // double-indirect block's own second-level indirect-block numbers,
@@ -396,7 +396,7 @@ namespace VFS {
         } else {
             buf = ensure_top_cache(block_num)
         }
-        let ptrs: uint32* = buf as uint32*
+        let ptrs: u32* = buf as u32*
         let existing: u64 = ptrs[slot] as u64
         if existing != 0 || !create {
             return existing
@@ -406,7 +406,7 @@ namespace VFS {
             return 0
         }
         zero_block(b)
-        ptrs[slot] = b as uint32
+        ptrs[slot] = b as u32
         if is_leaf {
             leaf_cache_dirty = true
         } else {
@@ -435,7 +435,7 @@ namespace VFS {
             }
             let b: u64 = alloc_block()
             if b != 0 {
-                node.blocks[li] = b as uint32
+                node.blocks[li] = b as u32
             }
             return b
         }
@@ -451,7 +451,7 @@ namespace VFS {
                     return 0
                 }
                 zero_block(b)
-                node.single_indirect = b as uint32
+                node.single_indirect = b as u32
             }
             return indirect_slot(node.single_indirect as u64, li, create, false)
         }
@@ -472,7 +472,7 @@ namespace VFS {
                 return 0
             }
             zero_block(b)
-            node.double_indirect = b as uint32
+            node.double_indirect = b as u32
         }
 
         let second_level: u64 = indirect_slot(node.double_indirect as u64, outer, create, false)
@@ -490,7 +490,7 @@ namespace VFS {
     func free_indirect_block(block_num: u64, two_level: bool) {
         let buf: u8[512]
         ATA.read_sector(block_num, buf as u8*)
-        let ptrs: uint32* = buf as uint32*
+        let ptrs: u32* = buf as u32*
         let i: i64 = 0
         while i < PTRS_PER_INDIRECT {
             let p: u64 = ptrs[i] as u64
@@ -645,7 +645,7 @@ namespace VFS {
 
     // ---- Path resolution ----
 
-    func find_slash_or_end(path: u8*, start: i64) -> i64 {
+    func find_slash_or_end(path: char*, start: i64) -> i64 {
         let i: i64 = start
         while path[i] != 0 && path[i] != 47 { // 47 = '/'
             i = i + 1
@@ -653,7 +653,7 @@ namespace VFS {
         return i
     }
 
-    func find_child(parent: i64, name: u8*) -> i64 {
+    func find_child(parent: i64, name: char*) -> i64 {
         let child: i64 = inode_at(parent).first_child
         while child != -1 {
             if inode_name_eq(inode_at(child), name) {
@@ -670,7 +670,7 @@ namespace VFS {
     // is looked up among the current directory's children. Returns -1 if
     // any component isn't found, or if a non-final component isn't a
     // directory.
-    func resolve_from(start: i64, path: u8*) -> i64 {
+    func resolve_from(start: i64, path: char*) -> i64 {
         let cur: i64 = start
         let i: i64 = 0
         if path[0] == 47 {
@@ -678,7 +678,7 @@ namespace VFS {
             i = 1
         }
 
-        let comp: u8[32]
+        let comp: char[32]
         while path[i] != 0 {
             let end: i64 = find_slash_or_end(path, i)
             let len: i64 = end - i
@@ -693,9 +693,9 @@ namespace VFS {
                 }
                 comp[len] = 0
 
-                if str_eq(comp as u8*, ".") {
+                if str_eq(comp as char*, ".") {
                     // no-op
-                } else if str_eq(comp as u8*, "..") {
+                } else if str_eq(comp as char*, "..") {
                     if cur != ROOT_INODE {
                         cur = inode_at(cur).parent
                     }
@@ -703,7 +703,7 @@ namespace VFS {
                     if inode_at(cur).kind != KIND_DIR {
                         return -1
                     }
-                    let found: i64 = find_child(cur, comp as u8*)
+                    let found: i64 = find_child(cur, comp as char*)
                     if found == -1 {
                         return -1
                     }
@@ -723,7 +723,7 @@ namespace VFS {
     // least MAX_NAME bytes) - what mkdir/touch/write need: the parent
     // must already exist (and be a directory), and the leaf is the new
     // name being created there.
-    func resolve_parent(start: i64, path: u8*, leaf_out: u8*) -> i64 {
+    func resolve_parent(start: i64, path: char*, leaf_out: char*) -> i64 {
         let total_len: i64 = 0
         let last_slash: i64 = -1
         let i: i64 = 0
@@ -757,20 +757,20 @@ namespace VFS {
             return ROOT_INODE
         }
 
-        let parent_path: u8[128]
+        let parent_path: char[128]
         let k2: i64 = 0
         while k2 < last_slash {
             parent_path[k2] = path[k2]
             k2 = k2 + 1
         }
         parent_path[last_slash] = 0
-        return resolve_from(start, parent_path as u8*)
+        return resolve_from(start, parent_path as char*)
     }
 
     // Disk-only (see resolve() for the mount-aware entry point shell.llpl
     // actually calls now) - still used internally by selftest() below,
     // which only ever deals with on-disk paths.
-    func resolve_dir(path: u8*) -> i64 {
+    func resolve_dir(path: char*) -> i64 {
         let idx: i64 = resolve_from(cwd_disk_index(), path)
         if idx == -1 || inode_at(idx).kind != KIND_DIR {
             return -1
@@ -787,16 +787,16 @@ namespace VFS {
 
     // ---- Directory/file operations ----
 
-    func mkdir(path: u8*) -> bool {
+    func mkdir(path: char*) -> bool {
         if !ready {
             return false
         }
-        let leaf: u8[32]
-        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as u8*)
+        let leaf: char[32]
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
-        if find_child(parent, leaf as u8*) != -1 {
+        if find_child(parent, leaf as char*) != -1 {
             return false // already exists
         }
         let idx: i64 = alloc_inode()
@@ -808,22 +808,22 @@ namespace VFS {
         node.size = 0
         node.parent = parent
         node.first_child = -1
-        set_inode_name(node, leaf as u8*)
+        set_inode_name(node, leaf as char*)
         link_child(parent, idx)
         flush_inode_table()
         return true
     }
 
-    func touch(path: u8*) -> bool {
+    func touch(path: char*) -> bool {
         if !ready {
             return false
         }
-        let leaf: u8[32]
-        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as u8*)
+        let leaf: char[32]
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
-        if find_child(parent, leaf as u8*) != -1 {
+        if find_child(parent, leaf as char*) != -1 {
             return false // already exists
         }
         let idx: i64 = alloc_inode()
@@ -836,7 +836,7 @@ namespace VFS {
         node.parent = parent
         node.first_child = -1
         init_empty_blocks(node)
-        set_inode_name(node, leaf as u8*)
+        set_inode_name(node, leaf as char*)
         link_child(parent, idx)
         flush_inode_table()
         return true
@@ -846,17 +846,17 @@ namespace VFS {
     // currently owns, then allocates exactly enough fresh ones) - creates
     // the file first if it doesn't exist yet. Fails if `len` needs more
     // than MAX_FILE_BLOCKS blocks (~8.1MB - see resolve_block).
-    func write(path: u8*, text: u8*, len: u64) -> bool {
+    func write(path: char*, text: u8*, len: u64) -> bool {
         if !ready {
             return false
         }
-        let leaf: u8[32]
-        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as u8*)
+        let leaf: char[32]
+        let parent: i64 = resolve_parent(cwd_disk_index(), path, leaf as char*)
         if parent == -1 || leaf[0] == 0 || inode_at(parent).kind != KIND_DIR {
             return false
         }
 
-        let idx: i64 = find_child(parent, leaf as u8*)
+        let idx: i64 = find_child(parent, leaf as char*)
         if idx == -1 {
             idx = alloc_inode()
             if idx == -1 {
@@ -868,7 +868,7 @@ namespace VFS {
             node.parent = parent
             node.first_child = -1
             init_empty_blocks(node)
-            set_inode_name(node, leaf as u8*)
+            set_inode_name(node, leaf as char*)
             link_child(parent, idx)
         }
 
@@ -965,7 +965,7 @@ namespace VFS {
     // many bytes were copied, or -1 if `path` doesn't resolve to a file.
     // Silently truncates if `max_len` is smaller than the file (the
     // caller can compare the return value against what it expected).
-    func read(path: u8*, out_buf: u8*, max_len: u64) -> i64 {
+    func read(path: char*, out_buf: u8*, max_len: u64) -> i64 {
         if !ready {
             return -1
         }
@@ -1030,7 +1030,7 @@ namespace VFS {
         return copied as i64
     }
 
-    func rm(path: u8*) -> bool {
+    func rm(path: char*) -> bool {
         if !ready {
             return false
         }
@@ -1066,7 +1066,7 @@ namespace VFS {
         return true
     }
 
-    func str_prefix(s: u8*, prefix: u8*) -> bool {
+    func str_prefix(s: char*, prefix: char*) -> bool {
         let i: i64 = 0
         while prefix[i] != 0 {
             if s[i] != prefix[i] {
@@ -1079,7 +1079,7 @@ namespace VFS {
 
     // "/boot" exactly, or "/boot/..." - not e.g. "/bootleg", which would
     // otherwise false-positive on a plain str_prefix check.
-    func is_boot_path(path: u8*) -> bool {
+    func is_boot_path(path: char*) -> bool {
         if !str_prefix(path, MOUNT_PREFIX) {
             return false
         }
@@ -1092,8 +1092,8 @@ namespace VFS {
     // resolved from the disk *root* (see resolve()'s Disk(cur) branch
     // below - a "boot" found deeper in the on-disk tree is just an
     // ordinary name, not the mount).
-    func is_boot_path_relative(path: u8*) -> bool {
-        let name: u8* = MOUNT_PREFIX + 1 // "boot", without the leading '/'
+    func is_boot_path_relative(path: char*) -> bool {
+        let name: char* = MOUNT_PREFIX + 1 // "boot", without the leading '/'
         if !str_prefix(path, name) {
             return false
         }
@@ -1104,8 +1104,8 @@ namespace VFS {
     // The mount's bare display name ("boot", no leading slash) - what a
     // directory listing of the disk root shows for the one virtual mount,
     // alongside its real on-disk entries (see shell.llpl's cmd_ls).
-    func mount_name(out_buf: u8*) {
-        let name: u8* = MOUNT_PREFIX + 1
+    func mount_name(out_buf: char*) {
+        let name: char* = MOUNT_PREFIX + 1
         let i: i64 = 0
         while name[i] != 0 {
             out_buf[i] = name[i]
@@ -1117,7 +1117,7 @@ namespace VFS {
     // `rest` is everything after "/boot" itself - "" for exactly "/boot",
     // or "/NAME" (leading '/' guaranteed by is_boot_path's own check) for
     // "/boot/NAME".
-    func resolve_in_tmpfs(rest: u8*) -> Node {
+    func resolve_in_tmpfs(rest: char*) -> Node {
         if rest[0] == 0 {
             return Node.TmpfsRoot()
         }
@@ -1132,7 +1132,7 @@ namespace VFS {
     // flat, so the only meaningful components are "."/".." and a bare
     // module name; ".." returns to the disk root (where /boot "lives"
     // from the on-disk tree's perspective).
-    func resolve_in_tmpfs_relative(path: u8*) -> Node {
+    func resolve_in_tmpfs_relative(path: char*) -> Node {
         while path[0] == 46 && path[1] == 47 { // "./"
             path = path + 2
         }
@@ -1158,7 +1158,7 @@ namespace VFS {
     // resolved against whichever filesystem `cwd` is currently inside, so
     // `cd /boot` really does move into tmpfs for subsequent relative
     // commands, and `cd ..` from inside it correctly returns to disk.
-    func resolve(path: u8*) -> Node {
+    func resolve(path: char*) -> Node {
         if path[0] == 47 {
             if is_boot_path(path) {
                 return resolve_in_tmpfs(path + (cstrlen(MOUNT_PREFIX) as i64))
@@ -1193,7 +1193,7 @@ namespace VFS {
         }
     }
 
-    func cd(path: u8*) -> bool {
+    func cd(path: char*) -> bool {
         if !ready {
             return false
         }
@@ -1218,7 +1218,7 @@ namespace VFS {
     // Reconstructs the full "/a/b/c" path of `idx` into `out_buf` (at
     // least `max_len` bytes) by walking the `parent` chain back to root,
     // then printing root-to-leaf.
-    func path_of(idx: i64, out_buf: u8*, max_len: u64) {
+    func path_of(idx: i64, out_buf: char*, max_len: u64) {
         if idx == ROOT_INODE {
             out_buf[0] = 47
             out_buf[1] = 0
@@ -1254,7 +1254,7 @@ namespace VFS {
     // pwd's underlying helper - path_of() only handles the on-disk tree
     // (it walks real inode `parent` pointers), so this adds the one other
     // state `cwd` can be in.
-    func current_path(out_buf: u8*, max_len: u64) {
+    func current_path(out_buf: char*, max_len: u64) {
         match cwd {
             case Node.Disk(idx) => {
                 path_of(idx, out_buf, max_len)
@@ -1290,7 +1290,7 @@ namespace VFS {
         return inode_at(idx).size
     }
 
-    func inode_name(idx: i64, out_buf: u8*) {
+    func inode_name(idx: i64, out_buf: char*) {
         let node: Inode* = inode_at(idx)
         let i: i64 = 0
         while node.name[i] != 0 {
@@ -1318,7 +1318,7 @@ namespace VFS {
         if prev_len > 0 {
             prev_buf[prev_len] = 0
             log("<CYAN>VFS: /selftest/proof.txt survived from a previous boot: </>")
-            log(prev_buf as u8*)
+            log(prev_buf as char*)
             log("\n")
             log("<LIGHT_GREEN>PERSISTENCE: PASS\n</>")
         } else {
@@ -1332,18 +1332,18 @@ namespace VFS {
         pass = pass && (resolve_dir("/selftest") != -1)
 
         pass = pass && touch("/selftest/hello.txt")
-        pass = pass && write("/selftest/hello.txt", "hi", cstrlen("hi"))
+        pass = pass && write("/selftest/hello.txt", "hi" as u8*, cstrlen("hi"))
 
         let readbuf: u8[16]
         let n: i64 = read("/selftest/hello.txt", readbuf as u8*, 15)
-        pass = pass && (n == 2) && (readbuf[0] == "hi"[0]) && (readbuf[1] == "hi"[1])
+        pass = pass && (n == 2) && (readbuf[0] == ("hi"[0] as u8)) && (readbuf[1] == ("hi"[1] as u8))
 
         pass = pass && (first_child(resolve_dir("/selftest")) != -1)
 
         pass = pass && cd("/selftest")
-        let pb: u8[64]
-        current_path(pb as u8*, 64)
-        pass = pass && str_eq(pb as u8*, "/selftest")
+        let pb: char[64]
+        current_path(pb as char*, 64)
+        pass = pass && str_eq(pb as char*, "/selftest")
         pass = pass && cd("..")
         pass = pass && (cwd_disk_index() == ROOT_INODE)
 
@@ -1389,7 +1389,7 @@ namespace VFS {
             KHeap.kfree(read_buf as u64)
         }
 
-        pass = pass && write("/selftest/proof.txt", "vfs persistence proof", cstrlen("vfs persistence proof"))
+        pass = pass && write("/selftest/proof.txt", "vfs persistence proof" as u8*, cstrlen("vfs persistence proof"))
 
         // Mount-point dispatch (see resolve()) - proves /boot really is
         // reachable through the same resolver as everything else, not
@@ -1403,9 +1403,9 @@ namespace VFS {
             }
         }
         if TmpFS.count() > 0 {
-            let namebuf: u8[32]
-            TmpFS.name_at(0, namebuf as u8*)
-            let full: u8[64]
+            let namebuf: char[32]
+            TmpFS.name_at(0, namebuf as char*)
+            let full: char[64]
             full[0] = 47
             full[1] = 98
             full[2] = 111
@@ -1418,7 +1418,7 @@ namespace VFS {
                 k = k + 1
             }
             full[6 + k] = 0
-            match resolve(full as u8*) {
+            match resolve(full as char*) {
                 case Node.TmpfsFile(idx) => {
                     pass = pass && (idx == 0)
                 }
@@ -1428,9 +1428,9 @@ namespace VFS {
             }
         }
         pass = pass && cd("/boot")
-        let mp: u8[64]
-        current_path(mp as u8*, 64)
-        pass = pass && str_eq(mp as u8*, "/boot")
+        let mp: char[64]
+        current_path(mp as char*, 64)
+        pass = pass && str_eq(mp as char*, "/boot")
         pass = pass && cd("..")
         pass = pass && (cwd_disk_index() == ROOT_INODE)
 

@@ -31,9 +31,9 @@ struct DecodedPng {
 }
 
 extern func png_decode_bytes(data: u8*, len: u64, out: DecodedPng*) -> bool
-extern func png_decode_file(path: u8*, out: DecodedPng*) -> bool
-extern func png_encode_file(path: u8*, width: u64, height: u64, pitch: u64, rgba: u8*) -> bool
-extern func png_decode_last_error() -> u8*
+extern func png_decode_file(path: char*, out: DecodedPng*) -> bool
+extern func png_encode_file(path: char*, width: u64, height: u64, pitch: u64, rgba: u8*) -> bool
+extern func png_decode_last_error() -> char*
 
 // Simple embedded image format for baremetal
 // Header: width (4 bytes), height (4 bytes), then RGBA data
@@ -100,7 +100,7 @@ func png_image_to_embedded(img: DecodedPng) -> EmbeddedImage {
     return out
 }
 
-func load_png_or_embedded(path: u8*, fallback: u8*) -> EmbeddedImage {
+func load_png_or_embedded(path: char*, fallback: u8*) -> EmbeddedImage {
     let decoded: DecodedPng
     if png_decode_file(path, &decoded) {
         return png_image_to_embedded(decoded)

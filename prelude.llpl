@@ -11,16 +11,16 @@
 // belongs in a program's own modules, e.g. examples/baremetal_demo/hal.llpl).
 
 // A byte string. LLPL's type system has no way to write "pointer to const
-// data" (only whole-variable `const`), so this is just `u8*` - a
+// data" (only whole-variable `const`), so this is just `char*` - a
 // readability alias, not a distinct type.
-alias string = u8*
+alias string = char*
 
 // Minimal printf-style formatter, always available without an `extern
 // func` declaration of your own. Backed by runtime/runtime.c; see that
 // file's header comment (runtime.h) for the exact contract - supported
 // specifiers, width/zero-pad, and why the parameter types are what they
 // are (they're chosen to exactly match what this declaration generates).
-extern func ksnprintf(buf: u8*, size: u64, fmt: u8*, ...) -> i64
+extern func ksnprintf(buf: char*, size: u64, fmt: char*, ...) -> i64
 // Used by grammar-generated parser classes (see codegen.d's grammar
 // desugaring) to report a malformed-input syntax error - a `grammar { }`
 // block's generated parser is backtrack-free (predictive, not PEG-style),
@@ -29,53 +29,53 @@ extern func ksnprintf(buf: u8*, size: u64, fmt: u8*, ...) -> i64
 // this way rather than via Result<T,E> threading through every generated
 // call site, matching how many of this codebase's other "this should be
 // unreachable in valid input" cases already fail loudly instead.
-extern func llpl_panic(msg: u8*)
+extern func llpl_panic(msg: char*)
 
 // Heap-allocation and raw-buffer primitives String is built on - see
 // runtime.h's comment on why these are separate wrappers rather than
 // `extern func` redeclarations of libc-shaped strlen/strcmp/rc_alloc
 // themselves (same "conflicting types" trap as ksnprintf above).
-extern func llpl_strlen(s: u8*) -> u64
-extern func llpl_strcmp(a: u8*, b: u8*) -> i64
-extern func llpl_utf8_valid(s: u8*) -> bool
-extern func llpl_utf8_len(s: u8*) -> u64
-extern func llpl_utf8_byte_offset(s: u8*, char_index: u64) -> u64
-extern func llpl_utf8_char_index(s: u8*, byte_offset: u64) -> u64
-extern func llpl_utf8_codepoint_at(s: u8*, char_index: u64) -> u64
-extern func llpl_regex_match(pattern: u8*, text: u8*) -> bool
-extern func llpl_regex_group_count(pattern: u8*) -> u64
-extern func llpl_regex_capture_bounds(pattern: u8*, text: u8*, group: u64, start: i64*, end: i64*) -> bool
-extern func llpl_regex_capture(pattern: u8*, text: u8*, group: u64) -> u8*
-extern func llpl_reflect_type(name: u8*) -> u8*
-extern func llpl_reflect_type_name(type: u8*) -> u8*
-extern func llpl_reflect_type_kind(type: u8*) -> u8*
-extern func llpl_reflect_type_size(type: u8*) -> u64
-extern func llpl_reflect_field_count(type: u8*) -> u64
-extern func llpl_reflect_field(type: u8*, index: u64) -> u8*
-extern func llpl_reflect_field_name(field: u8*) -> u8*
-extern func llpl_reflect_field_type_name(field: u8*) -> u8*
-extern func llpl_reflect_field_offset(field: u8*) -> u64
-extern func llpl_reflect_field_size(field: u8*) -> u64
-extern func llpl_alloc(size: u64) -> u8*
-extern func llpl_free(ptr: u8*)
-extern func llpl_memcpy(dest: u8*, src: u8*, count: u64)
+extern func llpl_strlen(s: char*) -> u64
+extern func llpl_strcmp(a: char*, b: char*) -> i64
+extern func llpl_utf8_valid(s: char*) -> bool
+extern func llpl_utf8_len(s: char*) -> u64
+extern func llpl_utf8_byte_offset(s: char*, char_index: u64) -> u64
+extern func llpl_utf8_char_index(s: char*, byte_offset: u64) -> u64
+extern func llpl_utf8_codepoint_at(s: char*, char_index: u64) -> u64
+extern func llpl_regex_match(pattern: char*, text: char*) -> bool
+extern func llpl_regex_group_count(pattern: char*) -> u64
+extern func llpl_regex_capture_bounds(pattern: char*, text: char*, group: u64, start: i64*, end: i64*) -> bool
+extern func llpl_regex_capture(pattern: char*, text: char*, group: u64) -> char*
+extern func llpl_reflect_type(name: char*) -> char*
+extern func llpl_reflect_type_name(type: char*) -> char*
+extern func llpl_reflect_type_kind(type: char*) -> char*
+extern func llpl_reflect_type_size(type: char*) -> u64
+extern func llpl_reflect_field_count(type: char*) -> u64
+extern func llpl_reflect_field(type: char*, index: u64) -> char*
+extern func llpl_reflect_field_name(field: char*) -> char*
+extern func llpl_reflect_field_type_name(field: char*) -> char*
+extern func llpl_reflect_field_offset(field: char*) -> u64
+extern func llpl_reflect_field_size(field: char*) -> u64
+extern func llpl_alloc(size: u64) -> char*
+extern func llpl_free(ptr: char*)
+extern func llpl_memcpy(dest: char*, src: char*, count: u64)
 // Weak<T>'s own building blocks - see runtime.h/runtime.c's own comments
 // on RefCount.weak_count. `ptr` is always a class instance's own address
-// (its RefCount header is its first field), cast to u8* the same way
+// (its RefCount header is its first field), cast to char* the same way
 // every other raw-pointer runtime call in this file already does.
-extern func rc_retain(ptr: u8*)
-extern func rc_weak_retain(ptr: u8*)
-extern func rc_weak_release(ptr: u8*)
-extern func rc_is_alive(ptr: u8*) -> bool
+extern func rc_retain(ptr: char*)
+extern func rc_weak_retain(ptr: char*)
+extern func rc_weak_release(ptr: char*)
+extern func rc_is_alive(ptr: char*) -> bool
 // Symbolized panic backtraces - see runtime.h's own comment. `addr` is a
 // raw instruction-pointer value (as already used throughout
 // examples/baremetal_demo/backtrace.llpl), not necessarily a function's
 // exact start - llpl_resolve_symbol finds whichever compiled
 // function/method/constructor contains it.
-extern func llpl_resolve_symbol(addr: u64) -> u8*
-extern func llpl_symbol_name(symbol: u8*) -> u8*
-extern func llpl_symbol_file(symbol: u8*) -> u8*
-extern func llpl_symbol_line(symbol: u8*) -> i64
+extern func llpl_resolve_symbol(addr: u64) -> char*
+extern func llpl_symbol_name(symbol: char*) -> char*
+extern func llpl_symbol_file(symbol: char*) -> char*
+extern func llpl_symbol_line(symbol: char*) -> i64
 extern func llpl_panic_backtrace()
 
 // Prints "PANIC: <msg>\n" and halts - stderr+abort() on a hosted target,
@@ -84,18 +84,18 @@ extern func llpl_panic_backtrace()
 // (see runtime.c's own comment on all three - examples/baremetal_demo's
 // kernel.llpl overrides the weak hooks so a panic is never silent there).
 // Used below by Slice<T>/Vector<T>'s bounds checks.
-extern func llpl_panic(msg: u8*)
+extern func llpl_panic(msg: char*)
 extern func __llpl_check_index(arr: void*, idx: i64, size: i64, elem_size: u64) -> void*
 
 struct EmbeddedFile {
-    let data: u8*
+    let data: char*
     let len: u64
 }
 
 class ReflectField {
-    let raw: u8*
+    let raw: char*
 
-    constructor(raw: u8*) {
+    constructor(raw: char*) {
         self.raw = raw
     }
 
@@ -123,9 +123,9 @@ class ReflectField {
 }
 
 class ReflectType {
-    let raw: u8*
+    let raw: char*
 
-    constructor(raw: u8*) {
+    constructor(raw: char*) {
         self.raw = raw
     }
 
@@ -165,8 +165,8 @@ func reflect_type(name: string) -> ReflectType {
 
 class RegexMatch {
     let matched: bool
-    let pattern: u8*
-    let text: u8*
+    let pattern: char*
+    let text: char*
     // Added to group_start/group_end's reported offsets - 0 for an
     // ordinary top-level match, non-zero when `text` is itself a suffix
     // of some larger original string (see RegexMatchIterator, which
@@ -238,7 +238,7 @@ class RegexMatch {
         if index < 0 {
             return new String("")
         }
-        let raw: u8* = llpl_regex_capture(self.pattern, self.text, index as u64)
+        let raw: char* = llpl_regex_capture(self.pattern, self.text, index as u64)
         let out: String = new String(raw)
         llpl_free(raw)
         return out
@@ -260,7 +260,7 @@ class RegexMatch {
                 if i > lit_start {
                     result = result + ts.byte_substring(lit_start, i - lit_start).c_str()
                 }
-                let next: u8 = ts.byte_at(i + 1)
+                let next: char = ts.byte_at(i + 1)
                 if next == 36 {
                     result = result + "$"
                     i = i + 2
@@ -303,8 +303,8 @@ class RegexMatch {
 // still advances by at least one byte each step, so this always
 // terminates.
 class RegexMatchIterator {
-    let pattern: u8*
-    let text: u8*
+    let pattern: char*
+    let text: char*
     let text_len: i64
     let pos: i64
     let current: RegexMatch
@@ -369,7 +369,7 @@ class RegexMatchIterator {
 }
 
 class Regex {
-    let pattern: u8*
+    let pattern: char*
 
     constructor(pattern: string) {
         let len: i64 = llpl_strlen(pattern) as i64
@@ -440,7 +440,7 @@ class Regex {
 }
 
 // An owned, heap-allocated, NUL-terminated byte string - unlike `string`
-// (a bare `u8*` alias with no ownership of its own), a String copies its
+// (a bare `char*` alias with no ownership of its own), a String copies its
 // data in on construction and frees it on destruction, so it's safe to
 // build, pass around, and let go out of scope independent of whatever
 // buffer it was constructed from.
@@ -455,12 +455,12 @@ class Regex {
 // codegen.d's ITER_HAS_NEXT et al.), so `foreach let c in s { ... }` walks
 // Unicode codepoints.
 //
-// Every method that takes another string takes it as `string` (`u8*`),
+// Every method that takes another string takes it as `string` (`char*`),
 // not `String` - LLPL has no function/method overloading, so a single
 // parameter type has to serve both a raw literal (`s + "!"`) and another
 // String (`s + other.c_str()`).
 class String {
-    let buf: u8*
+    let buf: char*
     let length: i64
     let iter_pos: i64 // foreach cursor - see iter_has_next/iter_next/iter_reset
 
@@ -508,14 +508,14 @@ class String {
         return llpl_utf8_codepoint_at(self.buf, char_index as u64)
     }
 
-    // The owned buffer as a plain `u8*` - for passing a String to
+    // The owned buffer as a plain `char*` - for passing a String to
     // anything (print(), another String's methods, ...) that expects
     // `string` rather than a String instance.
     func c_str() -> string {
         return self.buf
     }
 
-    func byte_at(index: i64) -> u8 {
+    func byte_at(index: i64) -> char {
         return self.buf[index]
     }
 
@@ -541,7 +541,7 @@ class String {
         return c
     }
 
-    func byte_set(index: i64, value: u8) {
+    func byte_set(index: i64, value: char) {
         self.buf[index] = value
     }
 
@@ -566,7 +566,7 @@ class String {
     // exact-matching `operator==` overload to reject it against), but
     // silently compares the two heap pointers instead of their content,
     // since a bare `==` with no matching operator overload falls back to
-    // that. Delegating to the `string` (u8*) overloads just above via
+    // that. Delegating to the `string` (char*) overloads just above via
     // c_str() gives the same content comparison those already do.
     func operator==(other: String) -> bool {
         return self == other.c_str()
@@ -593,7 +593,7 @@ class String {
     func operator+(other: string) -> String {
         let other_len: i64 = llpl_strlen(other) as i64
         let total: i64 = self.length + other_len
-        let joined: u8* = llpl_alloc((total + 1) as u64)
+        let joined: char* = llpl_alloc((total + 1) as u64)
         llpl_memcpy(joined, self.buf, self.length as u64)
         llpl_memcpy(joined + self.length, other, (other_len + 1) as u64)
         return new String(joined)
@@ -616,7 +616,7 @@ class String {
             count = 0
         }
 
-        let piece: u8* = llpl_alloc((count + 1) as u64)
+        let piece: char* = llpl_alloc((count + 1) as u64)
         llpl_memcpy(piece, self.buf + start, count as u64)
         piece[count] = 0
         return new String(piece)
@@ -717,12 +717,12 @@ class String {
     }
 
     func to_upper() -> String {
-        let out: u8* = llpl_alloc((self.length + 1) as u64)
+        let out: char* = llpl_alloc((self.length + 1) as u64)
         let i: i64 = 0
         while i < self.length {
-            let c: u8 = self.buf[i]
+            let c: char = self.buf[i]
             if c >= 97 && c <= 122 {
-                out[i] = ((c as i64) - 32) as u8
+                out[i] = ((c as i64) - 32) as char
             } else {
                 out[i] = c
             }
@@ -733,12 +733,12 @@ class String {
     }
 
     func to_lower() -> String {
-        let out: u8* = llpl_alloc((self.length + 1) as u64)
+        let out: char* = llpl_alloc((self.length + 1) as u64)
         let i: i64 = 0
         while i < self.length {
-            let c: u8 = self.buf[i]
+            let c: char = self.buf[i]
             if c >= 65 && c <= 90 {
-                out[i] = ((c as i64) + 32) as u8
+                out[i] = ((c as i64) + 32) as char
             } else {
                 out[i] = c
             }
@@ -807,7 +807,7 @@ func slice_set<T>(s: Slice<T>, index: u64, value: T) {
 // `free()` is idempotent, so explicit early release and deferred cleanup are
 // safe together. `take()` transfers the raw pointer out and disables cleanup.
 class OwnedBuffer {
-    let ptr: u8*
+    let ptr: char*
     let length: u64
 
     constructor(size: u64) {
@@ -827,7 +827,7 @@ class OwnedBuffer {
         }
     }
 
-    func data() -> u8* {
+    func data() -> char* {
         return self.ptr
     }
 
@@ -839,29 +839,29 @@ class OwnedBuffer {
         return self.ptr == null
     }
 
-    func byte_at(index: u64) -> u8 {
+    func byte_at(index: u64) -> char {
         if index >= self.length {
             llpl_panic("OwnedBuffer.byte_at: index out of bounds")
         }
         return self.ptr[index as i64]
     }
 
-    func set(index: u64, value: u8) {
+    func set(index: u64, value: char) {
         if index >= self.length {
             llpl_panic("OwnedBuffer.set: index out of bounds")
         }
         self.ptr[index as i64] = value
     }
 
-    func as_slice() -> Slice<u8> {
-        let s: Slice<u8>
+    func as_slice() -> Slice<char> {
+        let s: Slice<char>
         s.ptr = self.ptr
         s.len = self.length
         return s
     }
 
-    func take() -> u8* {
-        let out: u8* = self.ptr
+    func take() -> char* {
+        let out: char* = self.ptr
         self.ptr = null
         self.length = 0
         return out
@@ -870,7 +870,7 @@ class OwnedBuffer {
 
 // Defer-friendly owner for one heap-allocated T value. This avoids the
 // common pattern of manually pairing `llpl_alloc(sizeof(T)) as T*` with a
-// later `llpl_free(ptr as u8*)`.
+// later `llpl_free(ptr as char*)`.
 class Owned<T> {
     let ptr: T*
 
@@ -884,7 +884,7 @@ class Owned<T> {
 
     func free() {
         if self.ptr != null {
-            llpl_free(self.ptr as u8*)
+            llpl_free(self.ptr as char*)
             self.ptr = null
         }
     }
@@ -941,13 +941,13 @@ class Weak<T> {
     constructor(t: T) {
         self.target = t
         if self.target != null {
-            rc_weak_retain(self.target as u8*)
+            rc_weak_retain(self.target as char*)
         }
     }
 
     destructor() {
         if self.target != null {
-            rc_weak_release(self.target as u8*)
+            rc_weak_release(self.target as char*)
         }
     }
 
@@ -955,15 +955,15 @@ class Weak<T> {
     // caller now owns, exactly like any other `new`-obtained one - or
     // `null` if it's already been destroyed.
     func upgrade() -> T {
-        if self.target != null && rc_is_alive(self.target as u8*) {
-            rc_retain(self.target as u8*)
+        if self.target != null && rc_is_alive(self.target as char*) {
+            rc_retain(self.target as char*)
             return self.target
         }
         return null
     }
 
     func is_alive() -> bool {
-        return self.target != null && rc_is_alive(self.target as u8*)
+        return self.target != null && rc_is_alive(self.target as char*)
     }
 }
 
@@ -975,10 +975,10 @@ class Weak<T> {
 // instantiateGenericTypeArgs), `sizeof(T)` is a real compile-time constant
 // in every instantiation, exactly as if this had been hand-written per type.
 //
-// T may be a primitive (i64, u8, ...) or a class (Vector<SomeClass> just
+// T may be a primitive (i64, char, ...) or a class (Vector<SomeClass> just
 // stores references, like any other class field) - but NOT itself an
-// explicit pointer type (Vector<u8*>, Vector<i64*>, and so `Vector<string>`
-// since `string` is `u8*`): this class's own `data: T*` field would need
+// explicit pointer type (Vector<char*>, Vector<i64*>, and so `Vector<string>`
+// since `string` is `char*`): this class's own `data: T*` field would need
 // a genuine pointer-to-pointer C type in that case, which ast.Type's
 // single `isPointer` flag has no way to represent (the same limitation
 // documented on resolveType's alias-merge logic). Wrap a pointer element
@@ -1010,7 +1010,7 @@ class Vector<T> {
         // release its elements, the same "raw storage, no cascading
         // ownership" behavior a plain T* array already has everywhere
         // else in the language.
-        llpl_free(self.data as u8*)
+        llpl_free(self.data as char*)
     }
 
     func push(item: T) {
@@ -1024,8 +1024,8 @@ class Vector<T> {
     func grow() {
         let new_capacity: i64 = self.capacity * 2
         let new_data: T[] = llpl_alloc((new_capacity as u64) * sizeof(T)) as T[]
-        llpl_memcpy(new_data as u8*, self.data as u8*, (self.length as u64) * sizeof(T))
-        llpl_free(self.data as u8*)
+        llpl_memcpy(new_data as char*, self.data as char*, (self.length as u64) * sizeof(T))
+        llpl_free(self.data as char*)
         self.data = new_data
         self.capacity = new_capacity
     }
@@ -1124,7 +1124,7 @@ class Result<T, E> {
     let ok: bool
     let value: T
     let error: E
-    let trace: u8*
+    let trace: char*
 
     constructor() {
         self.ok = false
@@ -1168,7 +1168,7 @@ class Result<T, E> {
         return self.error
     }
 
-    func get_trace() -> u8* {
+    func get_trace() -> char* {
         return self.trace
     }
 
@@ -1248,7 +1248,7 @@ class LinkedList<T> {
         let current: LinkedListNode<T>* = self.head
         while current != null {
             let next_node: LinkedListNode<T>* = current.next
-            llpl_free(current as u8*)
+            llpl_free(current as char*)
             current = next_node
         }
     }
@@ -1351,9 +1351,9 @@ impl Hashable for u8 {
 
 // Real content hash/equality for string keys (FNV-1a over the string's
 // bytes, via llpl_strlen) - unlike the raw byte-wise hashing HashMap used
-// before traits existed, two different `u8*` pointers holding the same
+// before traits existed, two different `char*` pointers holding the same
 // text now hash/compare equal, exactly like a normal string-keyed map.
-impl Hashable for u8* {
+impl Hashable for char* {
     func hash() -> u64 {
         let len: u64 = llpl_strlen(self)
         let h: u64 = 2166136261
@@ -1365,7 +1365,7 @@ impl Hashable for u8* {
         }
         return h
     }
-    func equals(other: u8*) -> bool {
+    func equals(other: char*) -> bool {
         return llpl_strcmp(self, other) == 0
     }
 }
@@ -1421,8 +1421,8 @@ impl Comparable for u8 {
     }
 }
 
-// Content-aware comparison operators for lowercase `string`/`u8*`. The
-// compiler treats `string` as sugar for `u8*`, so these overloads make
+// Content-aware comparison operators for lowercase `string`/`char*`. The
+// compiler treats `string` as sugar for `char*`, so these overloads make
 // ordinary comparisons do string comparison rather than pointer comparison.
 trait StringOperators {
     func operator==(other: Self) -> bool
@@ -1433,8 +1433,8 @@ trait StringOperators {
     func operator>=(other: Self) -> bool
 }
 
-impl StringOperators for u8* {
-    func operator==(other: u8*) -> bool {
+impl StringOperators for char* {
+    func operator==(other: char*) -> bool {
         let self_null: bool = (self as u64) == 0
         let other_null: bool = (other as u64) == 0
         if self_null || other_null {
@@ -1443,11 +1443,11 @@ impl StringOperators for u8* {
         return llpl_strcmp(self, other) == 0
     }
 
-    func operator!=(other: u8*) -> bool {
+    func operator!=(other: char*) -> bool {
         return !(self == other)
     }
 
-    func operator<(other: u8*) -> bool {
+    func operator<(other: char*) -> bool {
         let self_null: bool = (self as u64) == 0
         let other_null: bool = (other as u64) == 0
         if self_null || other_null {
@@ -1456,7 +1456,7 @@ impl StringOperators for u8* {
         return llpl_strcmp(self, other) < 0
     }
 
-    func operator>(other: u8*) -> bool {
+    func operator>(other: char*) -> bool {
         let self_null: bool = (self as u64) == 0
         let other_null: bool = (other as u64) == 0
         if self_null || other_null {
@@ -1465,11 +1465,11 @@ impl StringOperators for u8* {
         return llpl_strcmp(self, other) > 0
     }
 
-    func operator<=(other: u8*) -> bool {
+    func operator<=(other: char*) -> bool {
         return !(self > other)
     }
 
-    func operator>=(other: u8*) -> bool {
+    func operator>=(other: char*) -> bool {
         return !(self < other)
     }
 }
@@ -1483,7 +1483,7 @@ impl StringOperators for u8* {
 // identically at a use site like `a + b`).
 //
 // Deliberately *not* implemented here for the primitive types (i64/u64/
-// u8) - the plain `+`/`-`/`*` C operator already works unconditionally
+// char) - the plain `+`/`-`/`*` C operator already works unconditionally
 // for those with no trait bound needed at all, and a hypothetical
 // `impl Add for i64` would recurse (its own `self + other` body would
 // dispatch straight back into that same impl, since operator lookup can't
@@ -1512,8 +1512,8 @@ trait Mul {
 // so `foreach let entry in map { ... }` yields HashMapEntry<K, V> values.
 //
 // Keys hash/compare via K's own Hashable impl (key.hash()/key.equals(other))
-// rather than raw bytes, so a `u8*` key now hashes/compares by string
-// *content*, not pointer identity - see `impl Hashable for u8*` above.
+// rather than raw bytes, so a `char*` key now hashes/compares by string
+// *content*, not pointer identity - see `impl Hashable for char*` above.
 class HashMap<K: Hashable, V> {
     let buckets: HashBucket<K, V>*
     let bucket_count: i64
@@ -1540,12 +1540,12 @@ class HashMap<K: Hashable, V> {
             let entry: HashEntry<K, V>* = self.buckets[i].head
             while entry != null {
                 let next_entry: HashEntry<K, V>* = entry.next
-                llpl_free(entry as u8*)
+                llpl_free(entry as char*)
                 entry = next_entry
             }
             i = i + 1
         }
-        llpl_free(self.buckets as u8*)
+        llpl_free(self.buckets as char*)
     }
 
     func init_buckets(buckets: HashBucket<K, V>*, bucket_count: i64) {
@@ -1580,7 +1580,7 @@ class HashMap<K: Hashable, V> {
         self.buckets = new_buckets
         self.bucket_count = new_bucket_count
         self.iter_reset()
-        llpl_free(old_buckets as u8*)
+        llpl_free(old_buckets as char*)
     }
 
     func ensure_capacity_for_insert() {
@@ -1634,7 +1634,7 @@ class HashMap<K: Hashable, V> {
                 } else {
                     prev.next = entry.next
                 }
-                llpl_free(entry as u8*)
+                llpl_free(entry as char*)
                 self.count = self.count - 1
                 return true
             }

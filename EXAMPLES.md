@@ -35,7 +35,7 @@ nm, a DWARF parser) is needed to make a bare-metal backtrace readable;
 chain and resolves each return address through it:
 
 ```swift
-extern func puts(s: u8*) -> i64
+extern func puts(s: char*) -> i64
 
 func helper(n: i64) -> i64 {
     return n * 2
@@ -43,7 +43,7 @@ func helper(n: i64) -> i64 {
 
 func main() -> i64 {
     let addr: u64 = helper as u64
-    let sym: u8* = llpl_resolve_symbol(addr)
+    let sym: char* = llpl_resolve_symbol(addr)
     if sym != null {
         puts(llpl_symbol_name(sym))  // "helper"
         puts(llpl_symbol_file(sym))  // "example.llpl"
@@ -74,7 +74,7 @@ one is meant - a clear compile error, not a wrong pick.
 ### Hello World (with C FFI)
 
 ```swift
-extern func puts(s: u8*) -> i64
+extern func puts(s: char*) -> i64
 
 func main() -> i64 {
     puts("Hello from LLPL!")
@@ -165,7 +165,7 @@ constructors, generic functions, and closures. See
 from:
 
 ```swift
-func greet(name: u8*, greeting: u8* = "Hello") {
+func greet(name: char*, greeting: char* = "Hello") {
     puts(greeting)
     puts(name)
 }
@@ -380,9 +380,9 @@ runnable version this is taken from:
 
 ```swift
 class Child {
-    let name: u8*
+    let name: char*
     let parent: Weak<Parent>
-    constructor(name: u8*) {
+    constructor(name: char*) {
         self.name = name
     }
     destructor() { puts("Child destroyed") }
@@ -394,7 +394,7 @@ class Child {
 
 class Parent {
     let child: Child
-    constructor(name: u8*) {
+    constructor(name: char*) {
         self.child = new Child(name)
         self.child.link_parent(self)
     }
@@ -425,17 +425,21 @@ every class instance already has.
 
 Methods, constructors, and free functions can share a name as long as
 their parameter types differ - the right one is picked at each call site
-by argument type (an exact match; no implicit numeric coercion). A name
-declared only once keeps its usual behavior completely unchanged; only an
-actually-overloaded name needs disambiguating. See
+by argument type. An exact match always wins; failing that, a candidate
+reachable only through implicit numeric coercion (int-to-float, signed-
+to-unsigned, or a narrower-to-wider integer of the same signedness) is
+still eligible, and the lowest-total-coercion-cost candidate wins - two
+equally-costed candidates is an "Ambiguous call" error, same as no match
+at all. A name declared only once keeps its usual behavior completely
+unchanged; only an actually-overloaded name needs disambiguating. See
 `test/overloading_demo.llpl` for the full runnable version this is taken
 from:
 
 ```swift
-func describe(n: i64) -> u8* {
+func describe(n: i64) -> char* {
     return "an i64"
 }
-func describe(s: u8*) -> u8* {
+func describe(s: char*) -> char* {
     return "a string"
 }
 
@@ -498,7 +502,7 @@ three places:
   method is a real type mismatch, same as before this existed.
 
 If `as_string()` returns this codebase's own `String` class rather than a
-bare `u8*`/`string` directly, it's bridged through `String`'s own
+bare `char*`/`string` directly, it's bridged through `String`'s own
 `c_str()` automatically - a class can return either.
 
 See `test/as_string_demo.llpl` for the full runnable version this is
@@ -720,7 +724,7 @@ value. See `test/if_expr_demo.llpl` for the full runnable version this is
 taken from:
 
 ```swift
-func classify(n: i64) -> u8* {
+func classify(n: i64) -> char* {
     return if n < 0 {
         "negative"
     } else if n == 0 {
@@ -864,7 +868,7 @@ type where the error case carries its own message:
 ```swift
 enum Result {
     Ok(value: i64),
-    Err(message: u8*)
+    Err(message: char*)
 }
 
 func safe_divide(a: i64, b: i64) -> Result {
@@ -890,7 +894,7 @@ struct Point {
     let y: i64
 }
 
-func describe(t: (i64, i64)) -> u8* {
+func describe(t: (i64, i64)) -> char* {
     match t {
         case (x, y) => {
             if x == 0 && y == 0 { return "origin" }
@@ -902,7 +906,7 @@ func describe(t: (i64, i64)) -> u8* {
     return ""
 }
 
-func classify(p: Point) -> u8* {
+func classify(p: Point) -> char* {
     match p {
         case Point { x, y } => {
             if x == 0 && y == 0 { return "origin" }
@@ -1137,7 +1141,7 @@ let framebuffer_request: LimineFramebufferRequest = LimineFramebufferRequest {
 
 A bare `alias NAME = value` (no brackets right after `=`) is unaffected -
 that's still the existing symbol/type alias grammar (`alias string =
-u8*`).
+char*`).
 
 ## Generics
 
@@ -1212,10 +1216,10 @@ func main() -> i64 {
 
 `HashMap<K: Hashable, V>` hashes/compares keys via `key.hash()`/
 `key.equals(other)` (see [Traits/Interfaces](#traitsinterfaces) below) -
-`prelude.llpl` provides `Hashable` impls for `i64`/`u64`/`u8`/`u8*`,
-the `u8*` one hashing/comparing by actual string content, not pointer
+`prelude.llpl` provides `Hashable` impls for `i64`/`u64`/`u8`/`char*`,
+the `char*` one hashing/comparing by actual string content, not pointer
 identity. `Vector<T>` can't hold an explicitly-pointer element type
-(`Vector<u8*>`) either, since that would need a real pointer-to-pointer C
+(`Vector<char*>`) either, since that would need a real pointer-to-pointer C
 type this language's type system can't express - use a one-field wrapper
 struct around the pointer instead if you need that.
 
@@ -1264,7 +1268,7 @@ method bodies, and an `impl` target must be concrete - `impl X for
 Vector<i64>` (a generic type) is rejected.
 
 `prelude.llpl` ships `Hashable` (`hash() -> u64`, `equals(other: Self) ->
-bool`, with impls for `i64`/`u64`/`u8`/`u8*` and `String` - the `u8*`
+bool`, with impls for `i64`/`u64`/`u8`/`char*` and `String` - the `char*`
 and `String` impls hash/compare by actual string content, not pointer
 identity), `Comparable` (`compare(other: Self) -> i64`, with impls for
 `i64`/`u64`/`u8`), and the operator-overloading traits below. See
@@ -1321,7 +1325,7 @@ func main() -> i64 {
 
 `prelude.llpl` ships `Add`, `Sub`, `Neg` (unary `-`), and `Mul` as traits,
 deliberately *without* impls for the primitive types - plain `+`/`-`/`*`
-already works unconditionally on `i64`/`u64`/`u8` with no bound needed,
+already works unconditionally on `i64`/`u64`/`u8`/`char` with no bound needed,
 and `impl Add for i64` would recurse (its own `self + other` body would
 dispatch straight back into that same impl, since there's no way to spell
 "the native operator, not this overload" once one exists for a type). These
@@ -1383,7 +1387,7 @@ Pipe and nullable types compose naturally - a function returning `T?` can
 sit at the end of a pipeline:
 
 ```swift
-func parse_positive(s: u8*) -> i64? {
+func parse_positive(s: char*) -> i64? {
     if s[0] == 0 {
         return null
     }
@@ -1505,8 +1509,8 @@ must itself return a compatible Optional/Result. See
 is taken from:
 
 ```swift
-func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
-    let r: Result<i64, u8*> = new Result<i64, u8*>()
+func safe_div(a: i64, b: i64) -> Result<i64, char*> {
+    let r: Result<i64, char*> = new Result<i64, char*>()
     if b == 0 {
         r.set_err("division by zero")
         return r
@@ -1517,10 +1521,10 @@ func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
 
 // If either division fails, this returns early with that same failure,
 // never reaching the addition.
-func sum_of_divisions(a: i64, b: i64, c: i64, d: i64) -> Result<i64, u8*> {
+func sum_of_divisions(a: i64, b: i64, c: i64, d: i64) -> Result<i64, char*> {
     let first: i64 = safe_div(a, b)?
     let second: i64 = safe_div(c, d)?
-    let result: Result<i64, u8*> = new Result<i64, u8*>()
+    let result: Result<i64, char*> = new Result<i64, char*>()
     result.set_ok(first + second)
     return result
 }
@@ -1532,9 +1536,9 @@ trace is chained (`a.llpl:5 -> b.llpl:12`). Use `get_trace()` to read it:
 
 ```swift
 func main() -> i64 {
-    let r: Result<i64, u8*> = sum_of_divisions(10, 0, 20, 4)
+    let r: Result<i64, char*> = sum_of_divisions(10, 0, 20, 4)
     if r.is_err() {
-        let trace: u8* = r.get_trace()
+        let trace: char* = r.get_trace()
         if trace != null {
             // trace might be "examples.llpl:14 -> examples.llpl:21"
         }
@@ -1611,10 +1615,10 @@ prints to stderr and calls `abort()`. A custom handler can be installed for
 logging or last-ditch cleanup:
 
 ```swift
-extern func llpl_panic(msg: u8*)
-extern func llpl_set_panic_handler(handler: (u8*) -> void)
+extern func llpl_panic(msg: char*)
+extern func llpl_set_panic_handler(handler: (char*) -> void)
 
-func log_panic(msg: u8*) {
+func log_panic(msg: char*) {
     // write msg to a serial log, free global resources, etc.
 }
 
@@ -1744,16 +1748,57 @@ func reverse_bits(n: u64) -> u64 {
 }
 ```
 
+## Native Machine-Word Integers (`int` / `uint`)
+
+`int`/`uint` are a third, separate integer family - **not** aliases of
+`i64`/`u64`. They generate C `intptr_t`/`uintptr_t`: 4 bytes on i386, 8
+bytes on x86_64, whatever's actually pointer/word-sized on the target the
+generated C ends up compiled for. Reach for them when a value's natural
+size *is* "a machine word" (an array index, a pointer-difference, a loop
+counter matching `sizeof`) rather than a specific bit width:
+
+```swift
+func main() -> i64 {
+    let count: uint = 3
+    let index: int = -1
+
+    let word_bytes: uint = sizeof(int)   // 4 on i386, 8 on x86_64
+    return 0
+}
+```
+
+Because the actual width isn't known until the generated C is compiled
+for its target, `int`/`uint` never implicitly widen to or from a
+fixed-width type (`i8`/`i16`/`i32`/`i64`/`u8`/`u16`/`u32`/`u64`) in either
+direction - an explicit `as` cast is always required, the same "don't
+guess across a platform-dependent boundary" stance this compiler already
+takes for float-narrowing and `uint`-to-`int`:
+
+```swift
+func takes_i64(n: i64) -> i64 { return n }
+
+func main() -> i64 {
+    let w: int = 100
+    let n: i64 = w as i64      // explicit cast required - width isn't known at compile time
+    return takes_i64(n)
+}
+```
+
+`int`/`uint` still participate in the coercions that don't depend on
+width: an `int` flows to `float`/`double` like any other integer, and a
+signed `int` flows to any unsigned target (`uint` included) the same way
+`i64` does.
+
 ## Defer Statement
 
 ### Resource Management
 
 ```swift
-extern func open_file(path: u8*) -> i64
+extern func open_file(path: char*) -> i64
 extern func close_file(fd: i64)
-extern func read_file(fd: i64, buf: u8*, size: i64) -> i64
+extern func read_file(fd: i64, buf: char*, size: i64) -> i64
 
-func process_file(path: u8*) -> i64 {
+func process_file(path: char*) -> i64 {
     let fd: i64 = open_file(path)
 
     if fd < 0 {
@@ -1762,8 +1807,8 @@ func process_file(path: u8*) -> i64 {
 
     defer close_file(fd)
 
-    let buffer: u8[1024]
-    let bytes: i64 = read_file(fd, buffer as u8*, 1024)
+    let buffer: char[1024]
+    let bytes: i64 = read_file(fd, buffer as char*, 1024)
 
     // File automatically closed when function returns
     return bytes
@@ -1821,7 +1866,7 @@ func serial_write(c: u8) {
 ```swift
 let VGA_BUFFER: u64 = 753664  // 0xB8000
 
-func vga_put_char(x: i64, y: i64, c: u8, color: u8) {
+func vga_put_char(x: i64, y: i64, c: char, color: u8) {
     let buffer: u8* = VGA_BUFFER as u8*
     let index: i64 = ((y * 80) + x) * 2
     buffer[index] = c
@@ -2068,7 +2113,7 @@ full runnable version this is taken from:
 ```swift
 func main() -> i64 {
     let digits = /[0-9]+/
-    let text: u8* = "abc 123 def 4567 ghi"
+    let text: char* = "abc 123 def 4567 ghi"
 
     foreach let m in digits.find_all(text) {
         puts(m.group(0).c_str())  // "123", then "4567"
@@ -2087,7 +2132,7 @@ match; `$$` is a literal `$`):
 ```swift
 func main() -> i64 {
     let digits = /[0-9]+/
-    let text: u8* = "abc 123 def 4567 ghi"
+    let text: char* = "abc 123 def 4567 ghi"
     digits.replace(text, "#")      // "abc # def 4567 ghi"
     digits.replace_all(text, "#")  // "abc # def # ghi"
 
@@ -2119,7 +2164,7 @@ class Stack {
     }
 
     destructor() {
-        llpl_free(self.backing as u8*)
+        llpl_free(self.backing as char*)
     }
 
     func push(value: i64) -> bool {
@@ -2164,7 +2209,7 @@ class RingBuffer {
     }
 
     destructor() {
-        llpl_free(self.backing as u8*)
+        llpl_free(self.backing as char*)
     }
 
     func write(value: u8) -> bool {

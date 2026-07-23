@@ -37,15 +37,15 @@ struct SDL_AudioSpec {
 
 // Audio extern functions
 extern func SDL_GetNumAudioDrivers() -> i32
-extern func SDL_GetAudioDriver(index: i32) -> u8*
-extern func SDL_GetCurrentAudioDriver() -> u8*
+extern func SDL_GetAudioDriver(index: i32) -> char*
+extern func SDL_GetCurrentAudioDriver() -> char*
 
 // Real SDL3 names these Get*Devices, not GetNum*Devices - they return a
 // pointer to the array of device IDs (count written through the out
 // param), matching what's declared below.
 extern func SDL_GetAudioPlaybackDevices(count: i32*) -> SDL_AudioDeviceID*
 extern func SDL_GetAudioRecordingDevices(count: i32*) -> SDL_AudioDeviceID*
-extern func SDL_GetAudioDeviceName(devid: SDL_AudioDeviceID) -> u8*
+extern func SDL_GetAudioDeviceName(devid: SDL_AudioDeviceID) -> char*
 
 // SDL_LoadWAV's buffer (and other SDL-allocated memory) has to be released
 // with SDL's own allocator, not the C library's free() - SDL3 can be built
@@ -70,7 +70,7 @@ extern func SDL_BindAudioStream(dev: SDL_AudioDeviceID, stream: SDL_AudioStream*
 extern func SDL_UnbindAudioStream(stream: SDL_AudioStream*)
 
 // Load WAV file
-extern func SDL_LoadWAV(file: u8*, spec: SDL_AudioSpec*, audio_buf: u8**, audio_len: u32*) -> bool
+extern func SDL_LoadWAV(file: char*, spec: SDL_AudioSpec*, audio_buf: char**, audio_len: u32*) -> bool
 
 // High-level audio device wrapper
 class AudioDevice {
@@ -162,10 +162,10 @@ class AudioStream {
 // WAV file loader
 class WavFile {
     let spec: SDL_AudioSpec
-    let buffer: u8*
+    let buffer: char*
     let length: u32
 
-    constructor(filepath: u8*) {
+    constructor(filepath: char*) {
         self.spec = new SDL_AudioSpec(44100, 2, SDL_AUDIO_S16LSB)
         self.buffer = null
         self.length = 0
@@ -183,7 +183,7 @@ class WavFile {
         return self.buffer != null
     }
 
-    func get_buffer() -> u8* {
+    func get_buffer() -> char* {
         return self.buffer
     }
 
@@ -211,7 +211,7 @@ namespace Audio {
     }
 
      func get_device_name(device_id: SDL_AudioDeviceID) -> String {
-        let name: u8* = SDL_GetAudioDeviceName(device_id)
+        let name: char* = SDL_GetAudioDeviceName(device_id)
         if name != null {
             return new String(name)
         }
@@ -219,7 +219,7 @@ namespace Audio {
     }
 
      func get_current_driver() -> String {
-        let driver: u8* = SDL_GetCurrentAudioDriver()
+        let driver: char* = SDL_GetCurrentAudioDriver()
         if driver != null {
             return new String(driver)
         }
@@ -227,8 +227,8 @@ namespace Audio {
     }
 
     // Play a simple WAV file
-     func play_wav(filepath: u8*) -> Result<bool, u8*> {
-        let result: Result<bool, u8*> = new Result<bool, u8*>()
+     func play_wav(filepath: char*) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
 
         let wav: WavFile = new WavFile(filepath)
         if !wav.is_valid() {

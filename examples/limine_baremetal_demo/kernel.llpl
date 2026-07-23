@@ -87,11 +87,11 @@ func memmap_type_color(t: u64) -> u32 {
 }
 
 func put_pixel(fb: LimineFramebuffer*, x: u64, y: u64, rgb: u32) {
-    if fb.bpp != 32 as uint16 {
+    if fb.bpp != 32 as u16 {
         return
     }
     let row = (fb.address + y * fb.pitch) as string
-    let p = (row + x * 4) as uint32*
+    let p = (row + x * 4) as u32*
     p[0] = rgb
 }
 
@@ -171,7 +171,7 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
         plot_w = plot_w - 32
     }
 
-    fb |> fill_rect(plot_x, plot_y - 2, plot_w, 16, 0x202020 as uint32)
+    fb |> fill_rect(plot_x, plot_y - 2, plot_w, 16, 0x202020 as u32)
 
     i = 0
     while i < memmap.entry_count {

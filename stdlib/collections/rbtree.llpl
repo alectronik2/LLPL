@@ -212,7 +212,7 @@ class RBTree<K, V> {
             } else {
                 // Key already exists, update value
                 (*current).value = value
-                llpl_free(new_node as u8*)
+                llpl_free(new_node as char*)
                 return
             }
         }
@@ -223,8 +223,8 @@ class RBTree<K, V> {
     }
 
     // Find value by key
-    func find(key: K) -> Result<V, u8*> {
-        let result: Result<V, u8*> = new Result<V, u8*>()
+    func find(key: K) -> Result<V, char*> {
+        let result: Result<V, char*> = new Result<V, char*>()
         let current: RBNode<K, V>* = self.root
 
         while current != null {
@@ -276,8 +276,8 @@ class RBTree<K, V> {
     }
 
     // Get minimum key
-    func min_key() -> Result<K, u8*> {
-        let result: Result<K, u8*> = new Result<K, u8*>()
+    func min_key() -> Result<K, char*> {
+        let result: Result<K, char*> = new Result<K, char*>()
 
         if self.root == null {
             result.set_err("Tree is empty")
@@ -290,8 +290,8 @@ class RBTree<K, V> {
     }
 
     // Get maximum key
-    func max_key() -> Result<K, u8*> {
-        let result: Result<K, u8*> = new Result<K, u8*>()
+    func max_key() -> Result<K, char*> {
+        let result: Result<K, char*> = new Result<K, char*>()
 
         if self.root == null {
             result.set_err("Tree is empty")
@@ -345,7 +345,7 @@ class RBTree<K, V> {
 
         self.clear_helper((*node).left)
         self.clear_helper((*node).right)
-        llpl_free(node as u8*)
+        llpl_free(node as char*)
     }
 
     func clear() {

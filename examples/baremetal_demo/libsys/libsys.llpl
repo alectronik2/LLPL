@@ -65,7 +65,7 @@ const SYS_CRASH_CLEAR = 56
 const SYS_CLIPBOARD_SET_IMAGE = 57
 const SYS_CRASH_HISTORY_INFO = 58
 
-const SYS_ERR = 0xFFFFFFFFFFFFFFFF
+const SYS_ERR = -1
 const O_RDONLY = 0
 const O_CREATE = 1
 
@@ -97,7 +97,7 @@ func sys_exit(code: u64) -> u64 {
     return syscall1(SYS_EXIT, code)
 }
 
-func sys_pri64(buf: u8*, len: u64) -> u64 {
+func sys_pri64(buf: char*, len: u64) -> u64 {
     return syscall2(SYS_PRi64, buf as u64, len)
 }
 
@@ -121,7 +121,7 @@ func sys_sleep(ticks: u64) -> u64 {
     return syscall1(SYS_SLEEP, ticks)
 }
 
-func sys_open(path: u8*, mode: u64) -> u64 {
+func sys_open(path: char*, mode: u64) -> u64 {
     return syscall2(SYS_OPEN, path as u64, mode)
 }
 
@@ -162,7 +162,7 @@ func sys_msg_try_recv(buf: u8*, len: u64) -> u64 {
 // entry (or `path` isn't a directory). Callers loop index = 0, 1, 2, ...
 // until RT_SYS_ERR, exactly like Shell.cmd_ls's kernel-side
 // first_child/next_sibling walk (see syscall.llpl's own doc comment).
-func sys_readdir(path: u8*, index: u64, out_buf: u8*) -> u64 {
+func sys_readdir(path: char*, index: u64, out_buf: u8*) -> u64 {
     return syscall3(SYS_READDIR, path as u64, index, out_buf as u64)
 }
 
@@ -180,11 +180,11 @@ func sys_msg_reply(peer: u64, buf: u8*, len: u64) -> u64 {
 // Returns a handle over the new child (usable with sys_wait/sys_kill below),
 // not a raw pid - the kernel only lets a task act on another task through a
 // handle it was actually granted.
-func sys_spawn(path: u8*, args: u8*) -> u64 {
+func sys_spawn(path: char*, args: char*) -> u64 {
     return syscall2(SYS_SPAWN, path as u64, args as u64)
 }
 
-func sys_exec(path: u8*, args: u8*) -> u64 {
+func sys_exec(path: char*, args: char*) -> u64 {
     return syscall2(SYS_EXEC, path as u64, args as u64)
 }
 
@@ -201,7 +201,7 @@ func sys_kill(handle: u64) -> u64 {
 // Only a task the kernel spawned directly at boot may do this - anything
 // sys_spawn()ed by an ordinary user program is rejected, so a user program
 // can't hijack a system service's name.
-func sys_register(name: u8*) -> u64 {
+func sys_register(name: char*) -> u64 {
     return syscall1(SYS_REGISTER, name as u64)
 }
 
@@ -209,7 +209,7 @@ func sys_register(name: u8*) -> u64 {
 // whichever task is currently registered under it, or SYS_ERR if nobody is.
 // This is the only way two tasks with no spawn (parent/child) relationship
 // can establish a capability to talk to each other.
-func sys_lookup(name: u8*) -> u64 {
+func sys_lookup(name: char*) -> u64 {
     return syscall1(SYS_LOOKUP, name as u64)
 }
 
@@ -297,11 +297,11 @@ func sys_pty_spawn_shell(pty_id: u64) -> u64 {
     return syscall1(SYS_PTY_SPAWN_SHELL, pty_id)
 }
 
-func sys_pty_write(pty_id: u64, buf: u8*, len: u64) -> u64 {
+func sys_pty_write(pty_id: u64, buf: char*, len: u64) -> u64 {
     return syscall3(SYS_PTY_WRITE, pty_id, buf as u64, len)
 }
 
-func sys_pty_read(pty_id: u64, out_buf: u8*, len: u64) -> u64 {
+func sys_pty_read(pty_id: u64, out_buf: char*, len: u64) -> u64 {
     return syscall3(SYS_PTY_READ, pty_id, out_buf as u64, len)
 }
 
@@ -309,11 +309,11 @@ func sys_pty_close(pty_id: u64) -> u64 {
     return syscall1(SYS_PTY_CLOSE, pty_id)
 }
 
-func sys_mkdir(path: u8*) -> u64 {
+func sys_mkdir(path: char*) -> u64 {
     return syscall1(SYS_MKDIR, path as u64)
 }
 
-func sys_rm(path: u8*) -> u64 {
+func sys_rm(path: char*) -> u64 {
     return syscall1(SYS_RM, path as u64)
 }
 
@@ -325,11 +325,11 @@ func sys_cpu_info(out_buf: u64*) -> u64 {
     return syscall1(SYS_CPU_INFO, out_buf as u64)
 }
 
-func sys_clipboard_set(buf: u8*, len: u64) -> u64 {
+func sys_clipboard_set(buf: char*, len: u64) -> u64 {
     return syscall2(SYS_CLIPBOARD_SET, buf as u64, len)
 }
 
-func sys_clipboard_get(out_buf: u8*, max_len: u64) -> u64 {
+func sys_clipboard_get(out_buf: char*, max_len: u64) -> u64 {
     return syscall2(SYS_CLIPBOARD_GET, out_buf as u64, max_len)
 }
 
@@ -396,7 +396,7 @@ func sys_mouse_poll() -> u64 {
     return syscall0(SYS_MOUSE_POLL)
 }
 
-func sys_strlen(s: u8*) -> u64 {
+func sys_strlen(s: char*) -> u64 {
     let n: u64 = 0
     while s[n] != 0 {
         n = n + 1
@@ -404,11 +404,11 @@ func sys_strlen(s: u8*) -> u64 {
     return n
 }
 
-func sys_puts(s: u8*) -> u64 {
+func sys_puts(s: char*) -> u64 {
     return sys_pri64(s, sys_strlen(s))
 }
 
-func sys_putln(s: u8*) -> u64 {
+func sys_putln(s: char*) -> u64 {
     let n: u64 = sys_puts(s)
     sys_pri64("\n", 1)
     return n
@@ -432,7 +432,7 @@ func sys_memcpy(dst: u8*, src: u8*, len: u64) -> u8* {
     return dst
 }
 
-func sys_strcmp(a: u8*, b: u8*) -> i64 {
+func sys_strcmp(a: char*, b: char*) -> i64 {
     let i: u64 = 0
     while a[i] != 0 && b[i] != 0 {
         let av: i64 = (a[i] as i64) & 255
@@ -445,11 +445,11 @@ func sys_strcmp(a: u8*, b: u8*) -> i64 {
     return ((a[i] as i64) & 255) - ((b[i] as i64) & 255)
 }
 
-func sys_streq(a: u8*, b: u8*) -> bool {
+func sys_streq(a: char*, b: char*) -> bool {
     return sys_strcmp(a, b) == 0
 }
 
-func sys_strcpy(dst: u8*, src: u8*) -> u8* {
+func sys_strcpy(dst: char*, src: char*) -> char* {
     let i: u64 = 0
     while src[i] != 0 {
         dst[i] = src[i]
@@ -459,7 +459,7 @@ func sys_strcpy(dst: u8*, src: u8*) -> u8* {
     return dst
 }
 
-func sys_read_all(path: u8*, buf: u8*, len: u64) -> u64 {
+func sys_read_all(path: char*, buf: u8*, len: u64) -> u64 {
     let fd: u64 = sys_open(path, O_RDONLY)
     if fd == SYS_ERR {
         return SYS_ERR
@@ -469,7 +469,7 @@ func sys_read_all(path: u8*, buf: u8*, len: u64) -> u64 {
     return n
 }
 
-func sys_write_all(path: u8*, buf: u8*, len: u64) -> u64 {
+func sys_write_all(path: char*, buf: u8*, len: u64) -> u64 {
     let fd: u64 = sys_open(path, O_CREATE)
     if fd == SYS_ERR {
         return SYS_ERR

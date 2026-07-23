@@ -108,7 +108,7 @@ class Renderer {
         SDL_RenderPresent(self.handle)
     }
 
-    func set_draw_color(r: u8, g: u8, b: u8, a: u8) -> bool {
+    func set_draw_color(r: char, g: char, b: char, a: char) -> bool {
         return SDL_SetRenderDrawColor(self.handle, r, g, b, a)
     }
 
@@ -163,8 +163,8 @@ class Renderer {
     }
 
     // Load texture from file
-    func load_texture(filepath: u8*) -> Result<Texture, u8*> {
-        let result: Result<Texture, u8*> = new Result<Texture, u8*>()
+    func load_texture(filepath: char*) -> Result<Texture, char*> {
+        let result: Result<Texture, char*> = new Result<Texture, char*>()
 
         let surface: SDL_Surface* = SDL_LoadBMP(filepath)
         if surface == null {
@@ -231,11 +231,11 @@ class Texture {
         return SDL_SetTextureBlendMode(self.handle, mode)
     }
 
-    func set_alpha(alpha: u8) -> bool {
+    func set_alpha(alpha: char) -> bool {
         return SDL_SetTextureAlphaMod(self.handle, alpha)
     }
 
-    func set_color_mod(r: u8, g: u8, b: u8) -> bool {
+    func set_color_mod(r: char, g: char, b: char) -> bool {
         return SDL_SetTextureColorMod(self.handle, r, g, b)
     }
 }
@@ -338,43 +338,43 @@ class Input {
 // Color presets
 namespace Colors {
      func black() -> SDL_Color {
-        return new SDL_Color(0 as u8, 0 as u8, 0 as u8, 255 as u8)
+        return new SDL_Color(0 as char, 0 as char, 0 as char, 255 as char)
     }
 
      func white() -> SDL_Color {
-        return new SDL_Color(255 as u8, 255 as u8, 255 as u8, 255 as u8)
+        return new SDL_Color(255 as char, 255 as char, 255 as char, 255 as char)
     }
 
      func red() -> SDL_Color {
-        return new SDL_Color(255 as u8, 0 as u8, 0 as u8, 255 as u8)
+        return new SDL_Color(255 as char, 0 as char, 0 as char, 255 as char)
     }
 
      func green() -> SDL_Color {
-        return new SDL_Color(0 as u8, 255 as u8, 0 as u8, 255 as u8)
+        return new SDL_Color(0 as char, 255 as char, 0 as char, 255 as char)
     }
 
      func blue() -> SDL_Color {
-        return new SDL_Color(0 as u8, 0 as u8, 255 as u8, 255 as u8)
+        return new SDL_Color(0 as char, 0 as char, 255 as char, 255 as char)
     }
 
      func yellow() -> SDL_Color {
-        return new SDL_Color(255 as u8, 255 as u8, 0 as u8, 255 as u8)
+        return new SDL_Color(255 as char, 255 as char, 0 as char, 255 as char)
     }
 
      func cyan() -> SDL_Color {
-        return new SDL_Color(0 as u8, 255 as u8, 255 as u8, 255 as u8)
+        return new SDL_Color(0 as char, 255 as char, 255 as char, 255 as char)
     }
 
      func magenta() -> SDL_Color {
-        return new SDL_Color(255 as u8, 0 as u8, 255 as u8, 255 as u8)
+        return new SDL_Color(255 as char, 0 as char, 255 as char, 255 as char)
     }
 
      func gray() -> SDL_Color {
-        return new SDL_Color(128 as u8, 128 as u8, 128 as u8, 255 as u8)
+        return new SDL_Color(128 as char, 128 as char, 128 as char, 255 as char)
     }
 
      func transparent() -> SDL_Color {
-        return new SDL_Color(0 as u8, 0 as u8, 0 as u8, 0 as u8)
+        return new SDL_Color(0 as char, 0 as char, 0 as char, 0 as char)
     }
 }
 

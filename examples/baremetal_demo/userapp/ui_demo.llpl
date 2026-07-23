@@ -20,8 +20,8 @@ let widgets: Vector<Widget>
 let progress_bar: ProgressBar
 let slider: Slider
 
-let textbox_buf: u8[64]
-let slider_val_buf: u8[16]
+let textbox_buf: char[64]
+let slider_val_buf: char[16]
 
 let mouse_x: i64 = 0
 let mouse_y: i64 = 0
@@ -35,7 +35,7 @@ func render() {
     let buf_w: i64 = Wm.WIN_W
     let buf_h: i64 = Wm.WIN_H
 
-    format_int(slider_val_buf as u8*, slider.value)
+    format_int(slider_val_buf as char*, slider.value)
 
     let i: i64 = 0
     while i < widgets.len() {
@@ -116,7 +116,7 @@ func handle_input() {
 }
 
 func _start(argc: u64, argv: u64*) {
-    let placeholder: u8* = "Type here..." as u8*
+    let placeholder: char* = "Type here..." as char*
     let i: i64 = 0
     while placeholder[i] != 0 && i < 63 {
         textbox_buf[i] = placeholder[i]
@@ -126,51 +126,51 @@ func _start(argc: u64, argv: u64*) {
 
     widgets = new Vector<Widget>()
 
-    widgets.push(new Label(10, 10, "UI Widgets Demo" as u8*, 0x000000))
+    widgets.push(new Label(10, 10, "UI Widgets Demo" as char*, 0x000000))
 
     // Buttons
-    widgets.push(new Label(10, 35, "Buttons:" as u8*, 0x333333))
+    widgets.push(new Label(10, 35, "Buttons:" as char*, 0x333333))
     progress_bar = new ProgressBar(10, 310, 200, 20, 30)
-    widgets.push(new ActionButton(10, 50, 100, 30, "Click Me" as u8*, progress_bar))
-    widgets.push(new Button(120, 50, 80, 30, "Submit" as u8*))
-    let disabled_btn: Button = new Button(210, 50, 90, 30, "Disabled" as u8*)
+    widgets.push(new ActionButton(10, 50, 100, 30, "Click Me" as char*, progress_bar))
+    widgets.push(new Button(120, 50, 80, 30, "Submit" as char*))
+    let disabled_btn: Button = new Button(210, 50, 90, 30, "Disabled" as char*)
     disabled_btn.disabled = true
     widgets.push(disabled_btn)
 
     // Checkboxes
-    widgets.push(new Label(10, 95, "Checkboxes:" as u8*, 0x333333))
-    widgets.push(new Checkbox(10, 110, 16, "Option 1" as u8*, false))
-    widgets.push(new Checkbox(10, 132, 16, "Option 2" as u8*, true))
-    let disabled_cb: Checkbox = new Checkbox(10, 154, 16, "Disabled" as u8*, false)
+    widgets.push(new Label(10, 95, "Checkboxes:" as char*, 0x333333))
+    widgets.push(new Checkbox(10, 110, 16, "Option 1" as char*, false))
+    widgets.push(new Checkbox(10, 132, 16, "Option 2" as char*, true))
+    let disabled_cb: Checkbox = new Checkbox(10, 154, 16, "Disabled" as char*, false)
     disabled_cb.disabled = true
     widgets.push(disabled_cb)
 
     // Radio buttons
-    widgets.push(new Label(150, 95, "Radio Buttons:" as u8*, 0x333333))
+    widgets.push(new Label(150, 95, "Radio Buttons:" as char*, 0x333333))
     let radio_group: RadioGroup = new RadioGroup(0)
-    widgets.push(new RadioButton(150, 110, 16, "Choice A" as u8*, 0, radio_group))
-    widgets.push(new RadioButton(150, 132, 16, "Choice B" as u8*, 1, radio_group))
-    widgets.push(new RadioButton(150, 154, 16, "Choice C" as u8*, 2, radio_group))
+    widgets.push(new RadioButton(150, 110, 16, "Choice A" as char*, 0, radio_group))
+    widgets.push(new RadioButton(150, 132, 16, "Choice B" as char*, 1, radio_group))
+    widgets.push(new RadioButton(150, 154, 16, "Choice C" as char*, 2, radio_group))
 
     // Text input
-    widgets.push(new Label(10, 185, "Text Input:" as u8*, 0x333333))
-    widgets.push(new TextBox(10, 200, 200, 28, textbox_buf as u8*, i))
+    widgets.push(new Label(10, 185, "Text Input:" as char*, 0x333333))
+    widgets.push(new TextBox(10, 200, 200, 28, textbox_buf as char*, i))
 
     // Slider
-    widgets.push(new Label(10, 245, "Slider:" as u8*, 0x333333))
+    widgets.push(new Label(10, 245, "Slider:" as char*, 0x333333))
     slider = new Slider(10, 260, 200, 50)
     widgets.push(slider)
-    widgets.push(new Label(220, 265, slider_val_buf as u8*, 0x000000))
+    widgets.push(new Label(220, 265, slider_val_buf as char*, 0x000000))
 
     // Progress bar
-    widgets.push(new Label(10, 295, "Progress Bar:" as u8*, 0x333333))
+    widgets.push(new Label(10, 295, "Progress Bar:" as char*, 0x333333))
     widgets.push(progress_bar)
 
     // Panel
-    widgets.push(new Label(10, 345, "Panel/Card:" as u8*, 0x333333))
+    widgets.push(new Label(10, 345, "Panel/Card:" as char*, 0x333333))
     widgets.push(new Panel(10, 360, 280, 60))
-    widgets.push(new Label(20, 375, "This is a panel with shadow" as u8*, 0x666666))
-    widgets.push(new Label(20, 390, "It can contain other widgets" as u8*, 0x666666))
+    widgets.push(new Label(20, 375, "This is a panel with shadow" as char*, 0x666666))
+    widgets.push(new Label(20, 390, "It can contain other widgets" as char*, 0x666666))
 
     wm_init()
 

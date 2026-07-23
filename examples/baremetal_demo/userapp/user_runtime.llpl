@@ -3,10 +3,10 @@
 const RT_SYS_ERR = 0xFFFFFFFFFFFFFFFF
 
 func rt_print_digit(n: u64) {
-    let buf: u8[2]
-    buf[0] = (48 + n) as u8
+    let buf: char[2]
+    buf[0] = (48 + n) as char
     buf[1] = 0
-    sys_puts(buf as u8*)
+    sys_puts(buf as char*)
 }
 
 func rt_print_uint(n: u64) {
@@ -16,7 +16,7 @@ func rt_print_uint(n: u64) {
     rt_print_digit(n % 10)
 }
 
-func rt_put_uint_line(label: u8*, n: u64) {
+func rt_put_uint_line(label: char*, n: u64) {
     sys_puts(label)
     rt_print_uint(n)
     sys_puts("\n")
@@ -28,16 +28,16 @@ const RT_HEX_DIGITS = "0123456789abcdef"
 // used for MAC-address octets (netd.llpl et al) where a byte can be
 // e.g. 0x0A and must print as "0a", not "a".
 func rt_print_hex_byte(n: u64) {
-    let buf: u8[3]
+    let buf: char[3]
     buf[0] = RT_HEX_DIGITS[(n >> 4) & 0xF]
     buf[1] = RT_HEX_DIGITS[n & 0xF]
     buf[2] = 0
-    sys_puts(buf as u8*)
+    sys_puts(buf as char*)
 }
 
-func rt_arg(argc: u64, argv: u64*, index: u64, fallback: u8*) -> u8* {
+func rt_arg(argc: u64, argv: u64*, index: u64, fallback: char*) -> char* {
     if index < argc {
-        return argv[index] as u8*
+        return argv[index] as char*
     }
     return fallback
 }
@@ -49,14 +49,14 @@ func rt_arg(argc: u64, argv: u64*, index: u64, fallback: u8*) -> u8* {
 // meaning and shouldn't be confused with "couldn't parse this".
 const RT_IP_INVALID = 0xFFFFFFFF
 
-func rt_parse_ip(s: u8*) -> u64 {
+func rt_parse_ip(s: char*) -> u64 {
     let octets: u64[4]
     let oct: i64 = 0
     let val: u64 = 0
     let have_digit: bool = false
     let i: i64 = 0
     while true {
-        let ch: u8 = s[i]
+        let ch: char = s[i]
         if ch >= 48 && ch <= 57 {
             val = val * 10 + ((ch as u64) - 48)
             have_digit = true

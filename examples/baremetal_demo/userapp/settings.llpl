@@ -26,7 +26,7 @@ let crash_prev: u8[384]
 let crash_ready: bool = false
 let last_mouse_left: bool = false
 let settings_tab: i64 = 0
-let settings_cfg: u8[64]
+let settings_cfg: char[64]
 
 func bg_color() -> u32 {
     if dark_alt {
@@ -47,21 +47,21 @@ func fill_rect(x: u64, y: u64, w: u64, h: u64, color: u32) {
     }
 }
 
-func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
+func draw_text(x: u64, y: u64, s: char*, fg: u32, bg: u32) {
     Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
 }
 
-func uint_to_dec(buf: u8*, n: u64) {
+func uint_to_dec(buf: char*, n: u64) {
     if n == 0 {
         buf[0] = 48
         buf[1] = 0
         return
     }
-    let tmp: u8[20]
+    let tmp: char[20]
     let len: i64 = 0
     let v: u64 = n
     while v > 0 {
-        tmp[len] = (48 + (v % 10)) as u8
+        tmp[len] = (48 + (v % 10)) as char
         len = len + 1
         v = v / 10
     }
@@ -74,20 +74,20 @@ func uint_to_dec(buf: u8*, n: u64) {
 }
 
 func draw_num(x: u64, y: u64, n: u64, fg: u32, bg: u32) {
-    let buf: u8[24]
-    uint_to_dec(buf as u8*, n)
-    draw_text(x, y, buf as u8*, fg, bg)
+    let buf: char[24]
+    uint_to_dec(buf as char*, n)
+    draw_text(x, y, buf as char*, fg, bg)
 }
 
 func draw_bool(x: u64, y: u64, yes: bool, bg: u32) {
     if yes {
-        draw_text(x, y, "on" as u8*, OK, bg)
+        draw_text(x, y, "on" as char*, OK, bg)
     } else {
-        draw_text(x, y, "off" as u8*, WARN, bg)
+        draw_text(x, y, "off" as char*, WARN, bg)
     }
 }
 
-func copy_cstr(dst: u8*, src: u8*, max: i64) {
+func copy_cstr(dst: char*, src: char*, max: i64) {
     let i: i64 = 0
     while i < max - 1 && src[i] != 0 {
         dst[i] = src[i]
@@ -97,7 +97,7 @@ func copy_cstr(dst: u8*, src: u8*, max: i64) {
 }
 
 func save_settings() {
-    let out: u8[16]
+    let out: char[16]
     out[0] = 100
     out[1] = 61
     if dark_alt {
@@ -108,13 +108,13 @@ func save_settings() {
     out[3] = 10
     out[4] = 116
     out[5] = 61
-    out[6] = (settings_tab + 48) as u8
+    out[6] = (settings_tab + 48) as char
     out[7] = 10
-    sys_write_all("/etc/settings.cfg" as u8*, out as u8*, 8)
+    sys_write_all("/etc/settings.cfg" as char*, out as u8*, 8)
 }
 
 func load_settings() {
-    let n: u64 = sys_read_all("/etc/settings.cfg" as u8*, settings_cfg as u8*, 63)
+    let n: u64 = sys_read_all("/etc/settings.cfg" as char*, settings_cfg as u8*, 63)
     if n == RT_SYS_ERR || n == 0 {
         return
     }
@@ -138,7 +138,7 @@ func load_settings() {
     }
 }
 
-func cstr_len(src: u8*, max: u64) -> u64 {
+func cstr_len(src: char*, max: u64) -> u64 {
     let n: u64 = 0
     while n < max && src[n] != 0 {
         n = n + 1
@@ -151,10 +151,10 @@ func refresh_crash() {
     sys_crash_history_info(1, crash_prev as u8*)
 }
 
-func draw_crash_summary(y: u64, buf: u8*, bg: u32) {
-    let kind: u8* = buf + 80
-    let task: u8* = buf + 208
-    let file: u8* = buf + 288
+func draw_crash_summary(y: u64, buf: char*, bg: u32) {
+    let kind: char* = (buf + 80) as char*
+    let task: char* = (buf + 208) as char*
+    let file: char* = (buf + 288) as char*
     let line: u64* = (buf + 64) as u64*
     fill_rect(8, y, 304, 16, bg)
     draw_text(14, y + 1, kind, ACCENT, bg)
@@ -163,24 +163,24 @@ func draw_crash_summary(y: u64, buf: u8*, bg: u32) {
     draw_num(264, y + 1, line[0], TEXT, bg)
 }
 
-func draw_section(x: u64, y: u64, w: u64, title: u8*) {
+func draw_section(x: u64, y: u64, w: u64, title: char*) {
     fill_rect(x, y, w, 18, HEADER)
     draw_text(x + 6, y + 2, title, ACCENT, HEADER)
 }
 
-func draw_row(x: u64, y: u64, w: u64, label: u8*, value: u8*) {
+func draw_row(x: u64, y: u64, w: u64, label: char*, value: char*) {
     fill_rect(x, y, w, 16, ROW)
     draw_text(x + 6, y + 1, label, MUTED, ROW)
     draw_text(x + 86, y + 1, value, TEXT, ROW)
 }
 
-func draw_row_num(x: u64, y: u64, w: u64, label: u8*, value: u64) {
+func draw_row_num(x: u64, y: u64, w: u64, label: char*, value: u64) {
     fill_rect(x, y, w, 16, ROW)
     draw_text(x + 6, y + 1, label, MUTED, ROW)
     draw_num(x + 86, y + 1, value, TEXT, ROW)
 }
 
-func draw_tab(x: u64, label: u8*, tab: i64) {
+func draw_tab(x: u64, label: char*, tab: i64) {
     let bg: u32 = HEADER
     let fg: u32 = MUTED
     if settings_tab == tab {
@@ -202,47 +202,47 @@ func hit_tab(mx: i64, my: i64) -> i64 {
     return -1
 }
 
-func draw_asset_row(x: u64, y: u64, w: u64, label: u8*, asset: EmbeddedFile) {
+func draw_asset_row(x: u64, y: u64, w: u64, label: char*, asset: EmbeddedFile) {
     let decoded: DecodedPng
     fill_rect(x, y, w, 16, ROW)
     draw_text(x + 6, y + 1, label, MUTED, ROW)
     if png_decode_bytes(asset.data, asset.len, &decoded) {
-        draw_text(x + 82, y + 1, "ok" as u8*, OK, ROW)
+        draw_text(x + 82, y + 1, "ok" as char*, OK, ROW)
         draw_num(x + 118, y + 1, decoded.width, TEXT, ROW)
-        draw_text(x + 142, y + 1, "x" as u8*, MUTED, ROW)
+        draw_text(x + 142, y + 1, "x" as char*, MUTED, ROW)
         draw_num(x + 154, y + 1, decoded.height, TEXT, ROW)
     } else {
-        draw_text(x + 82, y + 1, "fail" as u8*, WARN, ROW)
+        draw_text(x + 82, y + 1, "fail" as char*, WARN, ROW)
         draw_text(x + 126, y + 1, png_decode_last_error(), TEXT, ROW)
     }
 }
 
-func asset_path_at(idx: i64) -> u8* {
+func asset_path_at(idx: i64) -> char* {
     if idx == 0 {
-        return "/boot/terminal.png" as u8*
+        return "/boot/terminal.png" as char*
     }
     if idx == 1 {
-        return "/boot/files.png" as u8*
+        return "/boot/files.png" as char*
     }
     if idx == 2 {
-        return "/boot/app.png" as u8*
+        return "/boot/app.png" as char*
     }
     if idx == 3 {
-        return "/boot/editor.png" as u8*
+        return "/boot/editor.png" as char*
     }
     if idx == 4 {
-        return "/boot/images.png" as u8*
+        return "/boot/images.png" as char*
     }
     if idx == 5 {
-        return "/boot/ping.png" as u8*
+        return "/boot/ping.png" as char*
     }
     if idx == 6 {
-        return "/boot/tetris.png" as u8*
+        return "/boot/tetris.png" as char*
     }
     if idx == 7 {
-        return "/boot/settings.png" as u8*
+        return "/boot/settings.png" as char*
     }
-    return "/boot/crashviewer.png" as u8*
+    return "/boot/crashviewer.png" as char*
 }
 
 func asset_at(idx: i64) -> EmbeddedFile {
@@ -303,9 +303,9 @@ func activate_asset(idx: i64) {
     let decoded: DecodedPng
     let asset: EmbeddedFile = asset_at(idx)
     if png_decode_bytes(asset.data, asset.len, &decoded) {
-        sys_spawn("/bin/pngviewer.elf" as u8*, asset_path_at(idx))
+        sys_spawn("/bin/pngviewer.elf" as char*, asset_path_at(idx))
     } else {
-        let err: u8* = png_decode_last_error()
+        let err: char* = png_decode_last_error()
         sys_clipboard_set(err, cstr_len(err, 48))
     }
 }
@@ -320,78 +320,78 @@ func render() {
     let bg: u32 = bg_color()
     fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, bg)
     fill_rect(0, 0, Wm.WIN_W as u64, 24, HEADER)
-    draw_text(8, 4, "SETTINGS" as u8*, ACCENT, HEADER)
-    draw_tab(78, "Sys" as u8*, 0)
-    draw_tab(138, "Assets" as u8*, 1)
-    draw_tab(198, "Clip" as u8*, 2)
-    draw_tab(258, "Crash" as u8*, 3)
+    draw_text(8, 4, "SETTINGS" as char*, ACCENT, HEADER)
+    draw_tab(78, "Sys" as char*, 0)
+    draw_tab(138, "Assets" as char*, 1)
+    draw_tab(198, "Clip" as char*, 2)
+    draw_tab(258, "Crash" as char*, 3)
 
     if settings_tab == 0 {
-        draw_section(8, 32, 148, "Display" as u8*)
-        draw_row_num(8, 54, 148, "width" as u8*, sys[0])
-        draw_row_num(8, 72, 148, "height" as u8*, sys[1])
-        draw_row_num(8, 90, 148, "pitch" as u8*, sys[2])
+        draw_section(8, 32, 148, "Display" as char*)
+        draw_row_num(8, 54, 148, "width" as char*, sys[0])
+        draw_row_num(8, 72, 148, "height" as char*, sys[1])
+        draw_row_num(8, 90, 148, "pitch" as char*, sys[2])
         fill_rect(8, 108, 148, 16, ROW)
-        draw_text(14, 109, "WC" as u8*, MUTED, ROW)
+        draw_text(14, 109, "WC" as char*, MUTED, ROW)
         draw_bool(94, 109, sys[3] == 1, ROW)
 
-        draw_section(164, 32, 148, "Kernel" as u8*)
-        draw_row_num(164, 54, 148, "sched" as u8*, sys[4])
-        draw_row_num(164, 72, 148, "switch" as u8*, sys[5])
-        draw_row_num(164, 90, 148, "syscall" as u8*, sys[6])
-        draw_row_num(164, 108, 148, "ipc" as u8*, sys[7] + sys[8] + sys[9])
+        draw_section(164, 32, 148, "Kernel" as char*)
+        draw_row_num(164, 54, 148, "sched" as char*, sys[4])
+        draw_row_num(164, 72, 148, "switch" as char*, sys[5])
+        draw_row_num(164, 90, 148, "syscall" as char*, sys[6])
+        draw_row_num(164, 108, 148, "ipc" as char*, sys[7] + sys[8] + sys[9])
 
-        draw_section(8, 134, 148, "Compositor" as u8*)
-        draw_row_num(8, 156, 148, "frames" as u8*, wm[0])
-        draw_row_num(8, 174, 148, "full" as u8*, wm[1])
+        draw_section(8, 134, 148, "Compositor" as char*)
+        draw_row_num(8, 156, 148, "frames" as char*, wm[0])
+        draw_row_num(8, 174, 148, "full" as char*, wm[1])
 
-        draw_section(164, 134, 148, "Options" as u8*)
-        draw_row(164, 156, 148, "boot" as u8*, "gui" as u8*)
+        draw_section(164, 134, 148, "Options" as char*)
+        draw_row(164, 156, 148, "boot" as char*, "gui" as char*)
         fill_rect(164, 174, 148, 16, ROW)
-        draw_text(170, 175, "color" as u8*, MUTED, ROW)
+        draw_text(170, 175, "color" as char*, MUTED, ROW)
         draw_bool(250, 175, dark_alt, ROW)
     } else if settings_tab == 1 {
-        draw_section(8, 32, 304, "Assets" as u8*)
-        draw_asset_row(8, 54, 148, "term" as u8*, load_media_terminal_png())
-        draw_asset_row(164, 54, 148, "files" as u8*, load_media_files_png())
-        draw_asset_row(8, 72, 148, "tasks" as u8*, load_media_tasks_png())
-        draw_asset_row(164, 72, 148, "edit" as u8*, load_media_editor_png())
-        draw_asset_row(8, 90, 148, "images" as u8*, load_media_images_png())
-        draw_asset_row(164, 90, 148, "ping" as u8*, load_media_ping_png())
-        draw_asset_row(8, 108, 148, "tetris" as u8*, load_media_tetris_png())
-        draw_asset_row(164, 108, 148, "settings" as u8*, load_media_settings_png())
-        draw_asset_row(8, 126, 148, "crash" as u8*, load_media_crashviewer_png())
+        draw_section(8, 32, 304, "Assets" as char*)
+        draw_asset_row(8, 54, 148, "term" as char*, load_media_terminal_png())
+        draw_asset_row(164, 54, 148, "files" as char*, load_media_files_png())
+        draw_asset_row(8, 72, 148, "tasks" as char*, load_media_tasks_png())
+        draw_asset_row(164, 72, 148, "edit" as char*, load_media_editor_png())
+        draw_asset_row(8, 90, 148, "images" as char*, load_media_images_png())
+        draw_asset_row(164, 90, 148, "ping" as char*, load_media_ping_png())
+        draw_asset_row(8, 108, 148, "tetris" as char*, load_media_tetris_png())
+        draw_asset_row(164, 108, 148, "settings" as char*, load_media_settings_png())
+        draw_asset_row(8, 126, 148, "crash" as char*, load_media_crashviewer_png())
     } else if settings_tab == 2 {
-        let clip: u8[96]
+        let clip: char[96]
         let info: u64[3]
-        let n: u64 = sys_clipboard_get(clip as u8*, 95)
-        draw_section(8, 32, 304, "Clipboard" as u8*)
+        let n: u64 = sys_clipboard_get(clip as char*, 95)
+        draw_section(8, 32, 304, "Clipboard" as char*)
         if n != RT_SYS_ERR && n > 0 {
             clip[n] = 0
-            draw_row(8, 54, 304, "text" as u8*, clip as u8*)
+            draw_row(8, 54, 304, "text" as char*, clip as char*)
         } else {
-            draw_row(8, 54, 304, "text" as u8*, "empty" as u8*)
+            draw_row(8, 54, 304, "text" as char*, "empty" as char*)
         }
         if sys_clipboard_image_info(info as u64*) != 0 {
-            draw_row_num(8, 72, 148, "width" as u8*, info[0])
-            draw_row_num(164, 72, 148, "height" as u8*, info[1])
-            draw_row_num(8, 90, 148, "bytes" as u8*, info[2])
+            draw_row_num(8, 72, 148, "width" as char*, info[0])
+            draw_row_num(164, 72, 148, "height" as char*, info[1])
+            draw_row_num(8, 90, 148, "bytes" as char*, info[2])
         } else {
-            draw_row(8, 72, 304, "image" as u8*, "empty" as u8*)
+            draw_row(8, 72, 304, "image" as char*, "empty" as char*)
         }
     } else {
-        draw_section(8, 32, 304, "Crash" as u8*)
+        draw_section(8, 32, 304, "Crash" as char*)
         if crash_ready {
             draw_crash_summary(54, crash_buf as u8*, ROW)
             if crash_prev[0] != 0 {
                 draw_crash_summary(72, crash_prev as u8*, 0x182028)
             } else {
                 fill_rect(8, 72, 304, 16, ROW)
-                draw_text(14, 73, "no prior crash" as u8*, MUTED, ROW)
+                draw_text(14, 73, "no prior crash" as char*, MUTED, ROW)
             }
         } else {
             fill_rect(8, 54, 304, 16, ROW)
-            draw_text(14, 55, "no crash recorded" as u8*, MUTED, ROW)
+            draw_text(14, 55, "no crash recorded" as char*, MUTED, ROW)
         }
     }
 

@@ -461,7 +461,7 @@ class Game {
 func main() -> i64 {
     srand(SDL.get_ticks() as u32)
 
-    let init_result: Result<bool, u8*> = SDL.init(SDL_INIT_VIDEO)
+    let init_result: Result<bool, char*> = SDL.init(SDL_INIT_VIDEO)
     if !init_result.is_ok() {
         return 1
     }
@@ -515,15 +515,15 @@ func main() -> i64 {
         game.update(dt, keys)
 
         if game.game_over && !shown_game_over {
-            let buf: u8[128]
-            ksnprintf(buf as u8*, 128, "LLPL Tetris - GAME OVER - Score: %d", game.score)
-            window.set_title(new String(buf as u8*))
+            let buf: char[128]
+            ksnprintf(buf as char*, 128, "LLPL Tetris - GAME OVER - Score: %d", game.score)
+            window.set_title(new String(buf as char*))
             shown_game_over = true
         } else if !game.game_over && (game.score != last_shown_score || game.level != last_shown_level) {
-            let buf: u8[128]
-            ksnprintf(buf as u8*, 128, "LLPL Tetris - Score: %d  Level: %d  Lines: %d",
+            let buf: char[128]
+            ksnprintf(buf as char*, 128, "LLPL Tetris - Score: %d  Level: %d  Lines: %d",
                 game.score, game.level, game.lines_cleared_total)
-            window.set_title(new String(buf as u8*))
+            window.set_title(new String(buf as char*))
             last_shown_score = game.score
             last_shown_level = game.level
         }

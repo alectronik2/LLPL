@@ -5,11 +5,11 @@
 //
 //   - `func main(args: string[]) -> i64` - real main-specific codegen (see
 //     codegen.d's isMainArgsFunction/generateMainWrapper) generates the
-//     actual C `i64 main(i64 argc, u8** argv)` entry point separately
+//     actual C `i64 main(i64 argc, char** argv)` entry point separately
 //     and hands this function `argv + 1` (still null-terminated, program's
 //     own path already excluded) - the nicer of the two forms, and the
 //     one every new caller should reach for. Pair it with parse_args().
-//   - `func main(argc: i32, argv: u8**) -> i64` - this compiler doesn't
+//   - `func main(argc: i32, argv: char**) -> i64` - this compiler doesn't
 //     special-case an *ordinary*-shaped `main` at all (see source/main.d),
 //     so declaring it with the real C signature (int32_t argc, matching
 //     what the C runtime actually calls main with - the language's own
@@ -40,7 +40,7 @@
 //       return 0
 //   }
 
-extern func puts(s: u8*) -> i64
+extern func puts(s: char*) -> i64
 
 namespace std {
 namespace args {
@@ -155,13 +155,13 @@ class ArgParser {
         return result
     }
 
-    // Parses argc/argv exactly as `func main(argc: i32, argv: u8**)`
+    // Parses argc/argv exactly as `func main(argc: i32, argv: char**)`
     // receives them - argv[0] (the program's own path) is skipped. Returns
     // true if every recognized option that takes a value got one, no
     // unrecognized `--`/`-` option was seen, and every add_required()
     // option was supplied; false otherwise, with the specific problems
     // recorded in get_errors() (see print_errors()).
-    func parse(argc: i32, argv: u8**) -> bool {
+    func parse(argc: i32, argv: char**) -> bool {
         return self.parse_from(argv, 1, argc as i64)
     }
 
@@ -181,7 +181,7 @@ class ArgParser {
     // Shared core of parse()/parse_args() - `argv[start .. count)` are the
     // actual arguments to parse (the program's own path, if any, already
     // excluded by the caller).
-    func parse_from(argv: u8**, start: i64, count: i64) -> bool {
+    func parse_from(argv: char**, start: i64, count: i64) -> bool {
         let only_positional: bool = false
         let i: i64 = start
 
@@ -199,9 +199,9 @@ class ArgParser {
 
                 let found: Optional<ArgOption> = self.find_by_long(opt_name)
                 if found.is_none() {
-                    let buf: u8[256]
-                    ksnprintf(buf as u8*, 256, "Unknown option: --%s", opt_name.c_str())
-                    self.errors.push(new String(buf as u8*))
+                    let buf: char[256]
+                    ksnprintf(buf as char*, 256, "Unknown option: --%s", opt_name.c_str())
+                    self.errors.push(new String(buf as char*))
                     i = i + 1
                 } else {
                     let opt: ArgOption = found.get()
@@ -213,16 +213,16 @@ class ArgParser {
                             self.values.insert(opt.name, new String(argv[i + 1]))
                             i = i + 2
                         } else {
-                            let buf: u8[256]
-                            ksnprintf(buf as u8*, 256, "Option --%s requires a value", opt.name.c_str())
-                            self.errors.push(new String(buf as u8*))
+                            let buf: char[256]
+                            ksnprintf(buf as char*, 256, "Option --%s requires a value", opt.name.c_str())
+                            self.errors.push(new String(buf as char*))
                             i = i + 1
                         }
                     } else {
                         if has_inline_value {
-                            let buf: u8[256]
-                            ksnprintf(buf as u8*, 256, "Option --%s does not take a value", opt.name.c_str())
-                            self.errors.push(new String(buf as u8*))
+                            let buf: char[256]
+                            ksnprintf(buf as char*, 256, "Option --%s does not take a value", opt.name.c_str())
+                            self.errors.push(new String(buf as char*))
                         }
                         self.flags.insert(opt.name, true)
                         i = i + 1
@@ -232,9 +232,9 @@ class ArgParser {
                 let short_name: String = raw.substring(1, raw.len())
                 let found: Optional<ArgOption> = self.find_by_short(short_name)
                 if found.is_none() {
-                    let buf: u8[256]
-                    ksnprintf(buf as u8*, 256, "Unknown option: -%s", short_name.c_str())
-                    self.errors.push(new String(buf as u8*))
+                    let buf: char[256]
+                    ksnprintf(buf as char*, 256, "Unknown option: -%s", short_name.c_str())
+                    self.errors.push(new String(buf as char*))
                     i = i + 1
                 } else {
                     let opt: ArgOption = found.get()
@@ -243,9 +243,9 @@ class ArgParser {
                             self.values.insert(opt.name, new String(argv[i + 1]))
                             i = i + 2
                         } else {
-                            let buf: u8[256]
-                            ksnprintf(buf as u8*, 256, "Option -%s requires a value", short_name.c_str())
-                            self.errors.push(new String(buf as u8*))
+                            let buf: char[256]
+                            ksnprintf(buf as char*, 256, "Option -%s requires a value", short_name.c_str())
+                            self.errors.push(new String(buf as char*))
                             i = i + 1
                         }
                     } else {
@@ -265,9 +265,9 @@ class ArgParser {
             if opt.required {
                 let has_val: Optional<String> = self.values.get(opt.name)
                 if has_val.is_none() {
-                    let buf: u8[256]
-                    ksnprintf(buf as u8*, 256, "Missing required option: --%s", opt.name.c_str())
-                    self.errors.push(new String(buf as u8*))
+                    let buf: char[256]
+                    ksnprintf(buf as char*, 256, "Missing required option: --%s", opt.name.c_str())
+                    self.errors.push(new String(buf as char*))
                 }
             }
             j = j + 1
@@ -328,24 +328,24 @@ class ArgParser {
     }
 
     func print_help() {
-        let header: u8[256]
-        ksnprintf(header as u8*, 256, "Usage: %s [options]", self.program_name.c_str())
-        puts(header as u8*)
+        let header: char[256]
+        ksnprintf(header as char*, 256, "Usage: %s [options]", self.program_name.c_str())
+        puts(header as char*)
 
         let i: i64 = 0
         while i < self.options.len() {
             let opt: ArgOption = self.options.get(i)
-            let line: u8[512]
+            let line: char[512]
             if opt.short_name.len() > 0 {
-                ksnprintf(line as u8*, 512, "  --%s, -%s%s  %s",
+                ksnprintf(line as char*, 512, "  --%s, -%s%s  %s",
                     opt.name.c_str(), opt.short_name.c_str(),
                     if opt.takes_value { " <value>" } else { "" }, opt.description.c_str())
             } else {
-                ksnprintf(line as u8*, 512, "  --%s%s  %s",
+                ksnprintf(line as char*, 512, "  --%s%s  %s",
                     opt.name.c_str(),
                     if opt.takes_value { " <value>" } else { "" }, opt.description.c_str())
             }
-            puts(line as u8*)
+            puts(line as char*)
             i = i + 1
         }
     }

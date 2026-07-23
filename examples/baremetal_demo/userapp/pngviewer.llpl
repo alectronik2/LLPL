@@ -39,10 +39,10 @@ let clipboard_pixels: u8[16777216]
 let images: EmbeddedImage[5]
 let runtime_mode: bool = false
 let runtime_image: DecodedPng
-let runtime_path: u8[96]
-let export_path: u8[96]
+let runtime_path: char[96]
+let export_path: char[96]
 let export_ready: bool = false
-let status: u8[96]
+let status: char[96]
 let selected: i64 = 0
 let zoom: i64 = 1
 
@@ -76,17 +76,17 @@ func draw_border(x: u64, y: u64, w: u64, h: u64, color: u32) {
     }
 }
 
-func uint_to_dec(buf: u8*, n: u64) -> i64 {
+func uint_to_dec(buf: char*, n: u64) -> i64 {
     if n == 0 {
         buf[0] = 48
         buf[1] = 0
         return 1
     }
-    let tmp: u8[20]
+    let tmp: char[20]
     let len: i64 = 0
     let v: u64 = n
     while v > 0 {
-        tmp[len] = (48 + (v % 10)) as u8
+        tmp[len] = (48 + (v % 10)) as char
         len = len + 1
         v = v / 10
     }
@@ -99,7 +99,7 @@ func uint_to_dec(buf: u8*, n: u64) -> i64 {
     return len
 }
 
-func draw_text(x: u64, y: u64, s: u8*, fg: u32, bg: u32) {
+func draw_text(x: u64, y: u64, s: char*, fg: u32, bg: u32) {
     Font.draw_string(wm_buffer(), Wm.WIN_W as u64, Wm.WIN_H as u64, x, y, s, fg, bg)
 }
 
@@ -151,27 +151,27 @@ func paste_clipboard_image() {
     runtime_mode = false
     selected = 0
     if clipboard_image_ready {
-        copy_cstr(status as u8*, "pasted image clipboard" as u8*)
+        copy_cstr(status as char*, "pasted image clipboard" as char*)
     } else {
-        copy_cstr(status as u8*, "image clipboard empty" as u8*)
+        copy_cstr(status as char*, "image clipboard empty" as char*)
     }
 }
 
-func image_name_at(index: i64) -> u8* {
+func image_name_at(index: i64) -> char* {
     if runtime_mode {
-        return runtime_path as u8*
+        return runtime_path as char*
     }
     if index == 0 {
         if clipboard_image_ready {
-            return "clipboard screenshot" as u8*
+            return "clipboard screenshot" as char*
         }
-        return "clipboard empty" as u8*
+        return "clipboard empty" as char*
     }
-    if index == 1 { return "wallpaper" as u8* }
-    if index == 2 { return "cursor" as u8* }
-    if index == 3 { return "terminal icon" as u8* }
-    if index == 4 { return "file icon" as u8* }
-    return "app icon" as u8*
+    if index == 1 { return "wallpaper" as char* }
+    if index == 2 { return "cursor" as char* }
+    if index == 3 { return "terminal icon" as char* }
+    if index == 4 { return "file icon" as char* }
+    return "app icon" as char*
 }
 
 func image_at(index: i64) -> ImageView {
@@ -294,7 +294,7 @@ func draw_frame() {
     refresh_clipboard_image()
     fill_rect(0, 0, Wm.WIN_W as u64, Wm.WIN_H as u64, BG)
     fill_rect(0, 0, Wm.WIN_W as u64, 28, PANEL)
-    draw_text(8, 6, "PNG VIEWER" as u8*, ACCENT, PANEL)
+    draw_text(8, 6, "PNG VIEWER" as char*, ACCENT, PANEL)
     draw_text(120, 6, image_name_at(selected), TEXT, PANEL)
 
     fill_rect(VIEW_X as u64, VIEW_Y as u64, VIEW_W as u64, VIEW_H as u64, 0x161B24)
@@ -309,31 +309,31 @@ func draw_frame() {
     if runtime_mode || selected != 0 || clipboard_image_ready {
         draw_image_scaled(img, draw_x, draw_y, scale)
     } else {
-        draw_text(VIEW_X as u64 + 98, VIEW_Y as u64 + 84, "clipboard empty" as u8*, MUTED, 0x161B24)
+        draw_text(VIEW_X as u64 + 98, VIEW_Y as u64 + 84, "clipboard empty" as char*, MUTED, 0x161B24)
     }
 
     fill_rect(0, 232, Wm.WIN_W as u64, 24, PANEL)
-    let info: u8[32]
-    let wbuf: u8[12]
-    let hbuf: u8[12]
-    uint_to_dec(wbuf as u8*, img.width as u64)
-    uint_to_dec(hbuf as u8*, img.height as u64)
-    draw_text(8, 236, "left/right image  up/down zoom  c copy  p paste" as u8*, MUTED, PANEL)
-    draw_text(8, 248, "size " as u8*, MUTED, PANEL)
-    draw_text(48, 248, wbuf as u8*, TEXT, PANEL)
-    draw_text(72, 248, "x" as u8*, MUTED, PANEL)
-    draw_text(80, 248, hbuf as u8*, TEXT, PANEL)
-    draw_text(132, 248, "zoom" as u8*, MUTED, PANEL)
-    uint_to_dec(info as u8*, zoom as u64)
-    draw_text(168, 248, info as u8*, TEXT, PANEL)
+    let info: char[32]
+    let wbuf: char[12]
+    let hbuf: char[12]
+    uint_to_dec(wbuf as char*, img.width as u64)
+    uint_to_dec(hbuf as char*, img.height as u64)
+    draw_text(8, 236, "left/right image  up/down zoom  c copy  p paste" as char*, MUTED, PANEL)
+    draw_text(8, 248, "size " as char*, MUTED, PANEL)
+    draw_text(48, 248, wbuf as char*, TEXT, PANEL)
+    draw_text(72, 248, "x" as char*, MUTED, PANEL)
+    draw_text(80, 248, hbuf as char*, TEXT, PANEL)
+    draw_text(132, 248, "zoom" as char*, MUTED, PANEL)
+    uint_to_dec(info as char*, zoom as u64)
+    draw_text(168, 248, info as char*, TEXT, PANEL)
     if export_ready {
-        draw_text(220, 248, status as u8*, ACCENT, PANEL)
+        draw_text(220, 248, status as char*, ACCENT, PANEL)
     } else {
-        draw_text(220, 248, "no export path" as u8*, MUTED, PANEL)
+        draw_text(220, 248, "no export path" as char*, MUTED, PANEL)
     }
 }
 
-func copy_cstr(dst: u8*, src: u8*) {
+func copy_cstr(dst: char*, src: char*) {
     let i: i64 = 0
     while i < 95 && src[i] != 0 {
         dst[i] = src[i]
@@ -344,31 +344,31 @@ func copy_cstr(dst: u8*, src: u8*) {
 
 func save_current_image() {
     if !export_ready {
-        copy_cstr(status as u8*, "set argv[2] for export" as u8*)
+        copy_cstr(status as char*, "set argv[2] for export" as char*)
         return
     }
     let img: ImageView = image_at(selected)
     if img.width == 0 || img.height == 0 {
-        copy_cstr(status as u8*, "nothing to save" as u8*)
+        copy_cstr(status as char*, "nothing to save" as char*)
         return
     }
-    if png_encode_file(export_path as u8*, img.width, img.height, img.pitch, img.data) {
-        copy_cstr(status as u8*, "saved PNG" as u8*)
+    if png_encode_file(export_path as char*, img.width, img.height, img.pitch, img.data) {
+        copy_cstr(status as char*, "saved PNG" as char*)
     } else {
-        copy_cstr(status as u8*, "save failed" as u8*)
+        copy_cstr(status as char*, "save failed" as char*)
     }
 }
 
 func copy_current_image() {
     let img: ImageView = image_at(selected)
     if img.width == 0 || img.height == 0 {
-        copy_cstr(status as u8*, "nothing to copy" as u8*)
+        copy_cstr(status as char*, "nothing to copy" as char*)
         return
     }
     if sys_clipboard_set_image(img.data, img.width, img.height) == 0 {
-        copy_cstr(status as u8*, "copy failed" as u8*)
+        copy_cstr(status as char*, "copy failed" as char*)
     } else {
-        copy_cstr(status as u8*, "copied to image clipboard" as u8*)
+        copy_cstr(status as char*, "copied to image clipboard" as char*)
     }
 }
 
@@ -383,31 +383,31 @@ func _start(argc: u64, argv: u64*) {
     if argc > 1 && argv[1] != 0 {
         runtime_path[0] = 0
         let i: i64 = 0
-        while i < 95 && (argv[1] as u8*)[i] != 0 {
-            runtime_path[i] = (argv[1] as u8*)[i]
+        while i < 95 && (argv[1] as char*)[i] != 0 {
+            runtime_path[i] = (argv[1] as char*)[i]
             i = i + 1
         }
         runtime_path[i] = 0
-        if !png_decode_file(argv[1] as u8*, &runtime_image) {
+        if !png_decode_file(argv[1] as char*, &runtime_image) {
             sys_putln("pngviewer: png decode failed")
             rt_exit(1)
         }
         runtime_mode = true
     } else {
-        images[0] = load_png_or_embedded("/boot/wallpaper.png" as u8*, load_wallpaper_photo())
-        images[1] = load_png_or_embedded("/boot/cursor.png" as u8*, load_cursor_photo())
-        images[2] = load_png_or_embedded("/boot/terminal.png" as u8*, load_start_icon_terminal())
-        images[3] = load_png_or_embedded("/boot/files.png" as u8*, load_start_icon_file())
-        images[4] = load_png_or_embedded("/boot/app.png" as u8*, load_start_icon_app())
+        images[0] = load_png_or_embedded("/boot/wallpaper.png" as char*, load_wallpaper_photo())
+        images[1] = load_png_or_embedded("/boot/cursor.png" as char*, load_cursor_photo())
+        images[2] = load_png_or_embedded("/boot/terminal.png" as char*, load_start_icon_terminal())
+        images[3] = load_png_or_embedded("/boot/files.png" as char*, load_start_icon_file())
+        images[4] = load_png_or_embedded("/boot/app.png" as char*, load_start_icon_app())
     }
 
     export_ready = false
     export_path[0] = 0
     status[0] = 0
     if argc > 2 && argv[2] != 0 {
-        copy_cstr(export_path as u8*, argv[2] as u8*)
+        copy_cstr(export_path as char*, argv[2] as char*)
         export_ready = true
-        copy_cstr(status as u8*, "export ready" as u8*)
+        copy_cstr(status as char*, "export ready" as char*)
     }
 
     draw_frame()

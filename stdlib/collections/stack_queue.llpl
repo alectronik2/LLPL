@@ -16,8 +16,8 @@ class Stack<T> {
         self.data.push(value)
     }
 
-    func pop() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func pop() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.data.len() == 0 {
             result.set_err("Stack is empty")
@@ -31,8 +31,8 @@ class Stack<T> {
         return result
     }
 
-    func peek() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func peek() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.data.len() == 0 {
             result.set_err("Stack is empty")
@@ -68,15 +68,15 @@ class Queue<T> {
         self.list.push_back(value)
     }
 
-    func dequeue() -> Result<T, u8*> {
+    func dequeue() -> Result<T, char*> {
         return self.list.pop_front()
     }
 
-    func front() -> Result<T, u8*> {
+    func front() -> Result<T, char*> {
         return self.list.front()
     }
 
-    func back() -> Result<T, u8*> {
+    func back() -> Result<T, char*> {
         return self.list.back()
     }
 
@@ -109,19 +109,19 @@ class Deque<T> {
         self.list.push_back(value)
     }
 
-    func pop_front() -> Result<T, u8*> {
+    func pop_front() -> Result<T, char*> {
         return self.list.pop_front()
     }
 
-    func pop_back() -> Result<T, u8*> {
+    func pop_back() -> Result<T, char*> {
         return self.list.pop_back()
     }
 
-    func front() -> Result<T, u8*> {
+    func front() -> Result<T, char*> {
         return self.list.front()
     }
 
-    func back() -> Result<T, u8*> {
+    func back() -> Result<T, char*> {
         return self.list.back()
     }
 
@@ -162,7 +162,7 @@ class CircularBuffer<T> {
 
     destructor() {
         if self.buffer != null {
-            llpl_free(self.buffer as u8*)
+            llpl_free(self.buffer as char*)
         }
     }
 
@@ -178,8 +178,8 @@ class CircularBuffer<T> {
         return self.count
     }
 
-    func push(value: T) -> Result<bool, u8*> {
-        let result: Result<bool, u8*> = new Result<bool, u8*>()
+    func push(value: T) -> Result<bool, char*> {
+        let result: Result<bool, char*> = new Result<bool, char*>()
 
         if self.is_full() {
             result.set_err("Buffer is full")
@@ -194,8 +194,8 @@ class CircularBuffer<T> {
         return result
     }
 
-    func pop() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func pop() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.is_empty() {
             result.set_err("Buffer is empty")
@@ -210,8 +210,8 @@ class CircularBuffer<T> {
         return result
     }
 
-    func peek() -> Result<T, u8*> {
-        let result: Result<T, u8*> = new Result<T, u8*>()
+    func peek() -> Result<T, char*> {
+        let result: Result<T, char*> = new Result<T, char*>()
 
         if self.is_empty() {
             result.set_err("Buffer is empty")

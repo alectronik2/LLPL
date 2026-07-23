@@ -6,9 +6,9 @@ import task
 namespace CrashLog {
     const HISTORY_MAX = 4
     let valid: bool = false
-    let kind: u8[32]
-    let detail: u8[96]
-    let task_name: u8[16]
+    let kind: char[32]
+    let detail: char[96]
+    let task_name: char[16]
     let pid: i64 = -1
     let user_mode: bool = false
     let rip: u64 = 0
@@ -16,14 +16,14 @@ namespace CrashLog {
     let rsp: u64 = 0
     let fault_addr: u64 = 0
     let error_code: u64 = 0
-    let symbol: u8[64]
-    let file: u8[32]
+    let symbol: char[64]
+    let file: char[32]
     let line: i64 = 0
 
     let history_valid: bool[4]
-    let history_kind: u8[128]
-    let history_detail: u8[384]
-    let history_task_name: u8[64]
+    let history_kind: char[128]
+    let history_detail: char[384]
+    let history_task_name: char[64]
     let history_pid: i64[4]
     let history_user_mode: bool[4]
     let history_rip: u64[4]
@@ -31,12 +31,12 @@ namespace CrashLog {
     let history_rsp: u64[4]
     let history_fault_addr: u64[4]
     let history_error_code: u64[4]
-    let history_symbol: u8[256]
-    let history_file: u8[128]
+    let history_symbol: char[256]
+    let history_file: char[128]
     let history_line: i64[4]
     let history_count: i64 = 0
 
-    func copy(dst: u8*, src: u8*, max: i64) {
+    func copy(dst: char*, src: char*, max: i64) {
         let i: i64 = 0
         while src[i] != 0 && i < max - 1 {
             dst[i] = src[i]
@@ -45,24 +45,24 @@ namespace CrashLog {
         dst[i] = 0
     }
 
-    func kind_at(i: i64) -> u8* {
-        return (history_kind as u8*) + i * 32
+    func kind_at(i: i64) -> char* {
+        return (history_kind as char*) + i * 32
     }
 
-    func detail_at(i: i64) -> u8* {
-        return (history_detail as u8*) + i * 96
+    func detail_at(i: i64) -> char* {
+        return (history_detail as char*) + i * 96
     }
 
-    func task_at(i: i64) -> u8* {
-        return (history_task_name as u8*) + i * 16
+    func task_at(i: i64) -> char* {
+        return (history_task_name as char*) + i * 16
     }
 
-    func symbol_at(i: i64) -> u8* {
-        return (history_symbol as u8*) + i * 64
+    func symbol_at(i: i64) -> char* {
+        return (history_symbol as char*) + i * 64
     }
 
-    func file_at(i: i64) -> u8* {
-        return (history_file as u8*) + i * 32
+    func file_at(i: i64) -> char* {
+        return (history_file as char*) + i * 32
     }
 
     func push_history() {
@@ -99,11 +99,11 @@ namespace CrashLog {
         history_fault_addr[0] = CrashLog.fault_addr
         history_error_code[0] = CrashLog.error_code
         history_line[0] = CrashLog.line
-        copy(kind_at(0), CrashLog.kind as u8*, 32)
-        copy(detail_at(0), CrashLog.detail as u8*, 96)
-        copy(task_at(0), CrashLog.task_name as u8*, 16)
-        copy(symbol_at(0), CrashLog.symbol as u8*, 64)
-        copy(file_at(0), CrashLog.file as u8*, 32)
+        copy(kind_at(0), CrashLog.kind as char*, 32)
+        copy(detail_at(0), CrashLog.detail as char*, 96)
+        copy(task_at(0), CrashLog.task_name as char*, 16)
+        copy(symbol_at(0), CrashLog.symbol as char*, 64)
+        copy(file_at(0), CrashLog.file as char*, 32)
     }
 
     func write_record(out_buf: u64, index: i64) -> u64 {
@@ -127,36 +127,36 @@ namespace CrashLog {
         out[8] = history_line[index] as u64
         let i: i64 = 0
         while i < 32 {
-            bytes[80 + i] = kind_at(index)[i]
+            bytes[80 + i] = kind_at(index)[i] as u8
             i = i + 1
         }
         i = 0
         while i < 96 {
-            bytes[112 + i] = detail_at(index)[i]
+            bytes[112 + i] = detail_at(index)[i] as u8
             i = i + 1
         }
         i = 0
         while i < 16 {
-            bytes[208 + i] = task_at(index)[i]
+            bytes[208 + i] = task_at(index)[i] as u8
             i = i + 1
         }
         i = 0
         while i < 64 {
-            bytes[224 + i] = symbol_at(index)[i]
+            bytes[224 + i] = symbol_at(index)[i] as u8
             i = i + 1
         }
         i = 0
         while i < 32 {
-            bytes[288 + i] = file_at(index)[i]
+            bytes[288 + i] = file_at(index)[i] as u8
             i = i + 1
         }
         return 1
     }
 
-    func record_with_message(k: u8*, msg: u8*, is_user: bool, fault: u64, err: u64, frame_rip: u64, frame_rbp: u64, frame_rsp: u64) {
+    func record_with_message(k: char*, msg: char*, is_user: bool, fault: u64, err: u64, frame_rip: u64, frame_rbp: u64, frame_rsp: u64) {
         CrashLog.valid = true
-        copy(CrashLog.kind as u8*, k, 32)
-        copy(CrashLog.detail as u8*, msg, 96)
+        copy(CrashLog.kind as char*, k, 32)
+        copy(CrashLog.detail as char*, msg, 96)
         CrashLog.user_mode = is_user
         CrashLog.fault_addr = fault
         CrashLog.error_code = err
@@ -164,30 +164,30 @@ namespace CrashLog {
         let cur: Task.TCB* = Task.current_tcb()
         if cur != null {
             CrashLog.pid = cur.id
-            copy(CrashLog.task_name as u8*, cur.name as u8*, 16)
+            copy(CrashLog.task_name as char*, cur.name as char*, 16)
         } else {
             CrashLog.pid = -1
-            copy(CrashLog.task_name as u8*, "<none>", 16)
+            copy(CrashLog.task_name as char*, "<none>", 16)
         }
 
         CrashLog.rip = frame_rip
         CrashLog.rbp = frame_rbp
         CrashLog.rsp = frame_rsp
 
-        let sym: u8* = llpl_resolve_symbol(CrashLog.rip)
+        let sym: char* = llpl_resolve_symbol(CrashLog.rip)
         if sym != null {
-            copy(CrashLog.symbol as u8*, llpl_symbol_name(sym), 64)
-            copy(CrashLog.file as u8*, llpl_symbol_file(sym), 32)
+            copy(CrashLog.symbol as char*, llpl_symbol_name(sym), 64)
+            copy(CrashLog.file as char*, llpl_symbol_file(sym), 32)
             CrashLog.line = llpl_symbol_line(sym)
         } else {
-            copy(CrashLog.symbol as u8*, "<unknown>", 64)
-            copy(CrashLog.file as u8*, "?", 32)
+            copy(CrashLog.symbol as char*, "<unknown>", 64)
+            copy(CrashLog.file as char*, "?", 32)
             CrashLog.line = 0
         }
         push_history()
     }
 
-    func record(k: u8*, is_user: bool, fault: u64, err: u64, frame_rip: u64, frame_rbp: u64, frame_rsp: u64) {
+    func record(k: char*, is_user: bool, fault: u64, err: u64, frame_rip: u64, frame_rbp: u64, frame_rsp: u64) {
         record_with_message(k, "", is_user, fault, err, frame_rip, frame_rbp, frame_rsp)
     }
 
