@@ -277,6 +277,7 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("pingview: create_window failed")
         rt_exit(1)
     }
+    wm_set_title("Ping" as char*)
     wm_notify("Ping" as char*, "Started network monitor" as char*, 1)
 
     let target_ip_str: char[20]

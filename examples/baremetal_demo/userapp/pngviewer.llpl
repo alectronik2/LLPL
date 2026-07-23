@@ -35,7 +35,7 @@ let clipboard_image_height: u64 = 0
 let clipboard_image_pitch: u64 = 0
 let clipboard_image_len: u64 = 0
 let clipboard_image_ready: bool = false
-let clipboard_pixels: u8[16777216]
+let clipboard_pixels: u8* = null
 let images: EmbeddedImage[5]
 let runtime_mode: bool = false
 let runtime_image: DecodedPng
@@ -108,7 +108,7 @@ func clipboard_view() -> ImageView {
     view.width = clipboard_image_width
     view.height = clipboard_image_height
     view.pitch = clipboard_image_pitch
-    view.data = clipboard_pixels as u8*
+    view.data = clipboard_pixels
     return view
 }
 
@@ -124,6 +124,10 @@ func runtime_view() -> ImageView {
 func refresh_clipboard_image() {
     let info: u64[4]
     if sys_clipboard_image_info(info as u64*) == 0 {
+        if clipboard_pixels != null {
+            sys_free(clipboard_pixels)
+            clipboard_pixels = null
+        }
         clipboard_image_ready = false
         clipboard_image_width = 0
         clipboard_image_height = 0
@@ -136,10 +140,25 @@ func refresh_clipboard_image() {
     clipboard_image_pitch = info[2]
     clipboard_image_len = info[3]
     if clipboard_image_len == 0 || clipboard_image_len > CLIPBOARD_PIXELS_MAX {
+        if clipboard_pixels != null {
+            sys_free(clipboard_pixels)
+            clipboard_pixels = null
+        }
         clipboard_image_ready = false
         return
     }
-    if sys_clipboard_get_image(clipboard_pixels as u8*, clipboard_image_len) != clipboard_image_len {
+    if clipboard_pixels != null {
+        sys_free(clipboard_pixels)
+        clipboard_pixels = null
+    }
+    clipboard_pixels = sys_malloc(clipboard_image_len)
+    if clipboard_pixels == null {
+        clipboard_image_ready = false
+        return
+    }
+    if sys_clipboard_get_image(clipboard_pixels, clipboard_image_len) != clipboard_image_len {
+        sys_free(clipboard_pixels)
+        clipboard_pixels = null
         clipboard_image_ready = false
         return
     }
@@ -375,10 +394,7 @@ func copy_current_image() {
 func _start(argc: u64, argv: u64*) {
     sys_putln("pngviewer: starting")
     wm_init()
-    if !wm_create_window() {
-        sys_putln("pngviewer: create_window failed")
-        rt_exit(1)
-    }
+    wm_set_title("Images" as char*)
 
     if argc > 1 && argv[1] != 0 {
         runtime_path[0] = 0

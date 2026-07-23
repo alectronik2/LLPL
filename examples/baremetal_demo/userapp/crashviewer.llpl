@@ -203,10 +203,7 @@ func render() {
 func _start(argc: u64, argv: u64*) {
     sys_putln("crashviewer: starting")
     wm_init()
-    if !wm_create_window() {
-        sys_putln("crashviewer: create_window failed")
-        rt_exit(1)
-    }
+    wm_set_title("Crash" as char*)
 
     render()
     while true {

@@ -53,6 +53,20 @@ const ENABLE_FB_MTRR_WC = true
 
 let screen: Console.Screen = null
 let last_spawned_user_id: i64 = -1
+let last_spawn_error: char[96]
+
+func clear_spawn_error() {
+    last_spawn_error[0] = 0
+}
+
+func set_spawn_error(msg: char*) {
+    let i: i64 = 0
+    while i < 95 && msg[i] != 0 {
+        last_spawn_error[i] = msg[i]
+        i = i + 1
+    }
+    last_spawn_error[i] = 0
+}
 
 // Set once wm.elf (the window compositor) has been spawned - see its own
 // spawn site below. screen.write*/Framebuffer.put_pixel write straight to
@@ -669,6 +683,7 @@ func load_user_image_with_args(file: u8*, size: u64, label: char*, args: char*) 
     let aspace: VMM.AddressSpace* = VMM.create_address_space()
     if aspace == null {
         log("<RED>failed to create user address space\n</>")
+        set_spawn_error("could not create user address space" as char*)
         return image
     }
 
@@ -684,6 +699,7 @@ func load_user_image_with_args(file: u8*, size: u64, label: char*, args: char*) 
         log("<RED>failed to load ELF executable: </>")
         emit(label, false, 0, null)
         emit("\n", false, 0, null)
+        set_spawn_error("failed to load ELF executable" as char*)
         VMM.free_address_space(aspace)
         return image
     }
@@ -737,34 +753,43 @@ func spawn_user_elf(file: u8*, size: u64, label: char*) -> bool {
 }
 
 func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i64) -> bool {
+    clear_spawn_error()
     match VFS.resolve(path) {
         case VFS.Node.TmpfsFile(idx) => {
             let size: u64 = TmpFS.size_at(idx)
             if size == 0 {
+                set_spawn_error("empty executable" as char*)
                 return false
             }
             let tmp: u8* = KHeap.kmalloc(size) as u8*
             if tmp == null {
                 log("<RED>failed to allocate executable buffer\n</>")
+                set_spawn_error("out of kernel heap loading executable" as char*)
                 return false
             }
             TmpFS.read(idx, tmp, size)
             let ok: bool = spawn_user_elf_with_args_parent(tmp, size, path, args, parent_id)
+            if !ok && last_spawn_error[0] == 0 {
+                set_spawn_error("ELF loader rejected executable" as char*)
+            }
             KHeap.kfree(tmp as u64)
             return ok
         }
         case VFS.Node.Disk(idx) => {
             if VFS.inode_kind(idx) != VFS.KIND_FILE {
                 log("<LIGHT_RED>not a file\n</>")
+                set_spawn_error("path is not a file" as char*)
                 return false
             }
             let size: u64 = VFS.inode_size(idx)
             if size == 0 {
+                set_spawn_error("empty executable" as char*)
                 return false
             }
             let tmp: u8* = KHeap.kmalloc(size) as u8*
             if tmp == null {
                 log("<RED>failed to allocate executable buffer\n</>")
+                set_spawn_error("out of kernel heap loading executable" as char*)
                 return false
             }
             let n: i64 = VFS.read(path, tmp, size)
@@ -772,15 +797,20 @@ func run_user_executable_with_args_parent(path: char*, args: char*, parent_id: i
                 log("<LIGHT_RED>failed to read executable from VFS: </>")
                 emit(path, false, 0, null)
                 log("<LIGHT_RED> expected=\(size) got=\(n)\n</>")
+                set_spawn_error("could not read executable from VFS" as char*)
                 KHeap.kfree(tmp as u64)
                 return false
             }
             let ok: bool = spawn_user_elf_with_args_parent(tmp, size, path, args, parent_id)
+            if !ok && last_spawn_error[0] == 0 {
+                set_spawn_error("ELF loader rejected executable" as char*)
+            }
             KHeap.kfree(tmp as u64)
             return ok
         }
         default => {
             log("<LIGHT_RED>no such executable\n</>")
+            set_spawn_error("no such executable" as char*)
         }
     }
     return false

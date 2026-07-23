@@ -64,6 +64,7 @@ const SYS_CRASH_INFO = 55
 const SYS_CRASH_CLEAR = 56
 const SYS_CLIPBOARD_SET_IMAGE = 57
 const SYS_CRASH_HISTORY_INFO = 58
+const SYS_SPAWN_ERROR = 59
 
 const SYS_ERR = -1
 const O_RDONLY = 0
@@ -182,6 +183,10 @@ func sys_msg_reply(peer: u64, buf: u8*, len: u64) -> u64 {
 // handle it was actually granted.
 func sys_spawn(path: char*, args: char*) -> u64 {
     return syscall2(SYS_SPAWN, path as u64, args as u64)
+}
+
+func sys_spawn_error(out_buf: char*, max_len: u64) -> u64 {
+    return syscall2(SYS_SPAWN_ERROR, out_buf as u64, max_len)
 }
 
 func sys_exec(path: char*, args: char*) -> u64 {

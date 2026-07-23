@@ -62,7 +62,6 @@ let clipboard_path: char[160]
 let clipboard_name: char[32]
 let clipboard_valid: bool = false
 let copy_buf: u8[4096]
-let image_clip_buf: u8[16777216]
 let prev_mouse_left: bool = false
 let dialog_mode: i64 = 0
 let dialog_text: char[32]
@@ -190,11 +189,11 @@ func open_file(path: u8*, name: u8*) {
     if has_elf_suffix(name) {
         sys_spawn(path, "" as u8*)
     } else if has_png_suffix(name) {
-        sys_spawn("/bin/pngviewer.elf" as u8*, path)
+        sys_spawn("/boot/pngviewer.elf" as u8*, path)
     } else if has_any_suffix(name, ".txt" as u8*) || has_any_suffix(name, ".md" as u8*) || has_any_suffix(name, ".log" as u8*) || has_any_suffix(name, ".json" as u8*) || has_any_suffix(name, ".cfg" as u8*) || has_any_suffix(name, ".ini" as u8*) || has_any_suffix(name, ".llpl" as u8*) || has_any_suffix(name, ".c" as u8*) || has_any_suffix(name, ".h" as u8*) {
-        sys_spawn("/bin/editor.elf" as u8*, path)
+        sys_spawn("/boot/editor.elf" as u8*, path)
     } else {
-        sys_spawn("/bin/editor.elf", path)
+        sys_spawn("/boot/editor.elf", path)
     }
 }
 
@@ -575,10 +574,12 @@ func render() {
                     Font.draw_string(buf, win_w, win_h, 58, box_y + 68, wbuf as u8*, FILE_COLOR, 0x202030)
                     Font.draw_string(buf, win_w, win_h, 90, box_y + 68, "x" as u8*, HEADER_COLOR, 0x202030)
                     Font.draw_string(buf, win_w, win_h, 106, box_y + 68, hbuf as u8*, FILE_COLOR, 0x202030)
+                    sys_free(png.data)
                 } else {
                     Font.draw_string(buf, win_w, win_h, 12, box_y + 68, png_decode_last_error(), CONFIRM_COLOR, 0x202030)
                 }
             }
+            Font.draw_string(buf, win_w, win_h, 12, box_y + 84, "Enter copies path" as u8*, HEADER_COLOR, 0x202030)
         }
         if dialog_mode != DIALOG_DELETE && dialog_mode != DIALOG_PROPERTIES {
             Font.draw_string(buf, win_w, win_h, 12, box_y + 22, dialog_text as u8*, FILE_COLOR, 0x202030)
@@ -669,11 +670,11 @@ func open_with_selected(choice: i64) {
     let full: u8[160]
     join_path(full as u8*, cur_path as u8*, entry_at(open_with_menu_entry))
     if choice == OPEN_WITH_EDITOR {
-        sys_spawn("/bin/editor.elf" as u8*, full as u8*)
+        sys_spawn("/boot/editor.elf" as u8*, full as u8*)
     } else if choice == OPEN_WITH_PNG {
-        sys_spawn("/bin/pngviewer.elf" as u8*, full as u8*)
+        sys_spawn("/boot/pngviewer.elf" as u8*, full as u8*)
     } else if choice == OPEN_WITH_TERMINAL {
-        sys_spawn("/bin/terminal.elf" as u8*, full as u8*)
+        sys_spawn("/boot/terminal.elf" as u8*, full as u8*)
     }
     close_context_menu()
 }
@@ -939,6 +940,8 @@ func accept_dialog() {
         return
     }
     if dialog_mode == DIALOG_PROPERTIES {
+        sys_clipboard_set(dialog_old_path as char*, path_len(dialog_old_path as u8*))
+        set_status("path copied" as u8*)
         close_dialog()
         return
     }
@@ -1016,6 +1019,7 @@ func copy_selected() {
         let decoded: DecodedPng
         if png_decode_file(clipboard_path as u8*, &decoded) {
             sys_clipboard_set_image(decoded.data, decoded.width, decoded.height)
+            sys_free(decoded.data)
             set_status("copied image" as u8*)
             return
         }
@@ -1071,7 +1075,13 @@ func paste_image_file() -> bool {
         set_status("image too large" as u8*)
         return true
     }
-    if sys_clipboard_get_image(image_clip_buf as u8*, needed) != needed {
+    let image_clip_buf: u8* = sys_malloc(needed)
+    if image_clip_buf == null {
+        set_status("image alloc failed" as u8*)
+        return true
+    }
+    if sys_clipboard_get_image(image_clip_buf, needed) != needed {
+        sys_free(image_clip_buf)
         set_status("image paste failed" as u8*)
         return true
     }
@@ -1079,12 +1089,13 @@ func paste_image_file() -> bool {
     let full: u8[160]
     make_generated_name(name as u8*, "image" as u8*, ".png" as u8*)
     join_path(full as u8*, cur_path as u8*, name as u8*)
-    if png_encode_file(full as u8*, info[0], info[1], info[0] * 4, image_clip_buf as u8*) {
+    if png_encode_file(full as u8*, info[0], info[1], info[0] * 4, image_clip_buf) {
         set_status("pasted image" as u8*)
         refresh_listing()
     } else {
         set_status("png save failed" as u8*)
     }
+    sys_free(image_clip_buf)
     return true
 }
 
@@ -1109,7 +1120,7 @@ func open_selected_with_terminal() {
     }
     let full: u8[160]
     selected_path(full as u8*)
-    sys_spawn("/bin/terminal.elf" as u8*, full as u8*)
+    sys_spawn("/boot/terminal.elf" as u8*, full as u8*)
 }
 
 func entry_index_from_mouse(mx: i64, my: i64) -> i64 {
@@ -1141,6 +1152,7 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("filebrowser: create_window failed")
         rt_exit(1)
     }
+    wm_set_title("Files" as char*)
 
     icon_terminal = load_png_from_embedded(load_media_terminal_png(), load_start_icon_terminal())
     icon_file = load_png_from_embedded(load_media_files_png(), load_start_icon_file())
@@ -1272,7 +1284,7 @@ func _start(argc: u64, argv: u64*) {
             if entry_count > 0 {
                 let full: u8[160]
                 selected_path(full as u8*)
-                sys_spawn("/bin/editor.elf" as u8*, full as u8*)
+                sys_spawn("/boot/editor.elf" as u8*, full as u8*)
             }
     } else if key == 120 || key == 88 {
         open_selected_with_terminal()

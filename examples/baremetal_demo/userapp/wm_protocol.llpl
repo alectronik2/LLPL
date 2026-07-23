@@ -20,6 +20,7 @@ namespace Wm {
     const OP_STATS = 7
     const OP_FILE_DIALOG = 8
     const OP_BEGIN_FILE_DRAG = 9
+    const OP_SET_TITLE = 10
 
     const STATUS_OK = 0
     const STATUS_FAIL = 1

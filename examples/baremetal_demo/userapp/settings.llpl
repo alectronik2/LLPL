@@ -211,6 +211,7 @@ func draw_asset_row(x: u64, y: u64, w: u64, label: char*, asset: EmbeddedFile) {
         draw_num(x + 118, y + 1, decoded.width, TEXT, ROW)
         draw_text(x + 142, y + 1, "x" as char*, MUTED, ROW)
         draw_num(x + 154, y + 1, decoded.height, TEXT, ROW)
+        sys_free(decoded.data)
     } else {
         draw_text(x + 82, y + 1, "fail" as char*, WARN, ROW)
         draw_text(x + 126, y + 1, png_decode_last_error(), TEXT, ROW)
@@ -303,7 +304,8 @@ func activate_asset(idx: i64) {
     let decoded: DecodedPng
     let asset: EmbeddedFile = asset_at(idx)
     if png_decode_bytes(asset.data, asset.len, &decoded) {
-        sys_spawn("/bin/pngviewer.elf" as char*, asset_path_at(idx))
+        sys_free(decoded.data)
+        sys_spawn("/boot/pngviewer.elf" as char*, asset_path_at(idx))
     } else {
         let err: char* = png_decode_last_error()
         sys_clipboard_set(err, cstr_len(err, 48))
@@ -408,6 +410,7 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("settings: create_window failed")
         rt_exit(1)
     }
+    wm_set_title("Settings" as char*)
 
     load_settings()
     render()

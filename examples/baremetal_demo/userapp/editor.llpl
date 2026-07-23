@@ -603,6 +603,7 @@ func _start(argc: u64, argv: u64*) {
         sys_putln("editor: create_window failed")
         rt_exit(1)
     }
+    wm_set_title("Editor" as char*)
     render()
     let last_win_w: u64 = Wm.WIN_W as u64
     let last_win_h: u64 = Wm.WIN_H as u64

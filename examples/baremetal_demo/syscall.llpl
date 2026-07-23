@@ -81,6 +81,7 @@ namespace Syscall {
     const SYS_CRASH_CLEAR = 56
     const SYS_CLIPBOARD_SET_IMAGE = 57
     const SYS_CRASH_HISTORY_INFO = 58
+    const SYS_SPAWN_ERROR = 59
 
     const MAX_FDS = 16
     const FD_PATH_MAX = 96
@@ -295,6 +296,9 @@ namespace Syscall {
         }
         if number == SYS_CRASH_HISTORY_INFO {
             return sys_crash_history_info(a, b)
+        }
+        if number == SYS_SPAWN_ERROR {
+            return sys_spawn_error(a, b)
         }
         EventLog.add1("syscall", "unknown", number)
         return 0
@@ -1135,6 +1139,24 @@ namespace Syscall {
             return -1
         }
         return handle as u64
+    }
+
+    func sys_spawn_error(out_buf: u64, max_len: u64) -> u64 {
+        if out_buf == 0 || max_len == 0 {
+            return 0
+        }
+        let n: u64 = 0
+        while n + 1 < max_len && last_spawn_error[n] != 0 {
+            let ch: u8 = last_spawn_error[n] as u8
+            if !user_write_byte(Task.get_current_pml4(), out_buf + n, ch) {
+                return 0xFFFFFFFFFFFFFFFF
+            }
+            n = n + 1
+        }
+        if !user_write_byte(Task.get_current_pml4(), out_buf + n, 0) {
+            return 0xFFFFFFFFFFFFFFFF
+        }
+        return n
     }
 
     func sys_exec(path_addr: u64, args_addr: u64) -> u64 {

@@ -545,11 +545,11 @@ const SKIN_BOTTOM_START: u64 = SKIN_SRC_H - SKIN_BOTTOM
 const SKIN_CONTROLS_X: u64 = 91
 const SKIN_CONTROLS_W: u64 = 47
 const SKIN_TITLE_FILL_W: u64 = SKIN_CONTROLS_X - SKIN_LEFT
-const SKIN_LEFT_BUTTON_X: i64 = 96
-const SKIN_CLOSE_BUTTON_X: i64 = 119
-const SKIN_BUTTON_Y: i64 = 3
-const SKIN_BUTTON_W: i64 = 14
-const SKIN_BUTTON_H: i64 = 14
+const SKIN_LEFT_BUTTON_X: i64 = 97
+const SKIN_CLOSE_BUTTON_X: i64 = 120
+const SKIN_BUTTON_Y: i64 = 5
+const SKIN_BUTTON_W: i64 = 13
+const SKIN_BUTTON_H: i64 = 13
 
 func mix_channel(a: u32, b: u32, t_num: u64, t_den: u64) -> u32 {
     return (((a as u64) * (t_den - t_num) + (b as u64) * t_num) / t_den) as u32
@@ -1292,7 +1292,7 @@ const DESKTOP_ICON_LEFT: i64 = 18
 const DESKTOP_ICON_TOP: i64 = 18
 const DESKTOP_ICON_GAP_Y: i64 = 14
 const DESKTOP_ICON_GAP_X: i64 = 12
-const MAX_DESKTOP_ICONS: i64 = 8
+const MAX_DESKTOP_ICONS: i64 = 20
 const MAX_DESKTOP_FILES: i64 = 8
 const DESKTOP_FILE_NAME_LEN: i64 = 32
 const ICON_TERMINAL: u8 = 0
@@ -1317,7 +1317,7 @@ let taskbar_names: char[640] // MAX_TASKBAR_ENTRIES(20) * TASKBAR_NAME_LEN(32)
 let taskbar_labels: char[640] // MAX_TASKBAR_ENTRIES(20) * TASKBAR_LABEL_LEN(32)
 let taskbar_icons: u8[20]
 let taskbar_desktop: bool[20]
-let desktop_apps: i64[8]
+let desktop_apps: i64[20]
 let desktop_count: i64 = 0
 let desktop_file_names: char[256] // MAX_DESKTOP_FILES(8) * DESKTOP_FILE_NAME_LEN(32)
 let desktop_file_count: i64 = 0
@@ -1375,6 +1375,8 @@ const TASKBAR_DRAG_THRESHOLD: i64 = 10
 let drag_file_active: bool = false
 let drag_file_source: i64 = -1
 let drag_file_path: char[128]
+let launch_error_primary: char[64]
+let launch_error_secondary: char[64]
 let taskbar_drag_active: bool = false
 let taskbar_drag_slot: i64 = -1
 let taskbar_drag_start_x: i64 = 0
@@ -1453,6 +1455,21 @@ func copy_fixed(dst: char*, src: char*, max_len: i64) {
     }
 }
 
+func append_elf_suffix(dst: char*, max_len: i64) {
+    let len: i64 = 0
+    while len < max_len - 1 && dst[len] != 0 {
+        len = len + 1
+    }
+    if len + 4 >= max_len {
+        return
+    }
+    dst[len] = 46
+    dst[len + 1] = 101
+    dst[len + 2] = 108
+    dst[len + 3] = 102
+    dst[len + 4] = 0
+}
+
 func active_notification_count() -> i64 {
     let count: i64 = 0
     let i: i64 = 0
@@ -1503,6 +1520,30 @@ func add_notification(title: char*, body: char*, kind: u8) {
     copy_fixed(notify_title_at(slot), title, NOTIFY_TITLE_LEN)
     copy_fixed(notify_body_at(slot), body, NOTIFY_BODY_LEN)
     notify_unread = notify_unread + 1
+}
+
+func read_spawn_error(dst: char*) {
+    let n: u64 = sys_spawn_error(dst, 64)
+    if n == RT_SYS_ERR || n == 0 {
+        copy_fixed(dst, "spawn failed" as char*, 64)
+    }
+}
+
+func preferred_spawn_error(first: char*, second: char*) -> char* {
+    if first[0] != 0 && !sys_streq(first, "no such executable" as char*) {
+        return first
+    }
+    if second[0] != 0 {
+        return second
+    }
+    if first[0] != 0 {
+        return first
+    }
+    return "spawn failed" as char*
+}
+
+func add_launch_failed_notification(first_error: char*, second_error: char*) {
+    add_notification("Launch failed" as char*, preferred_spawn_error(first_error, second_error), 2)
 }
 
 func app_icon_from_name(name: char*) -> u8 {
@@ -1708,6 +1749,9 @@ func parse_app_manifest(buf: char*) -> bool {
             } else {
                 desktop_field[0] = 48
                 desktop_field[1] = 0
+            }
+            if !has_elf_suffix(exec_name as char*) {
+                append_elf_suffix(exec_name as char*, 32)
             }
             if has_elf_suffix(exec_name as char*) {
                 append_app(exec_name as char*, label as char*, icon_kind_from_field(icon_field as char*, exec_name as char*), desktop_field[0] == 49)
@@ -2902,6 +2946,9 @@ func draw_start_menu(y0: i64) {
                 let label: char[19]
                 copy_short_label(label as char*, taskbar_label_at(i), 18)
                 wm_draw_string(40, iy + 4, label as char*, TASKBAR_TEXT, 0x30303A)
+                if running_window_for_label(taskbar_label_at(i)) >= 0 {
+                    draw_rect(18, iy + (MENU_ITEM_H as i64) - 5, 16, 2, 0x6FD58A)
+                }
             }
             shown = shown + 1
         }
@@ -3053,12 +3100,35 @@ func hit_test_taskbar(mx: i64, my: i64) -> i64 {
     return -1
 }
 
+func running_window_for_label(label: char*) -> i64 {
+    let slot: i64 = 0
+    while slot < Wm.MAX_WINDOWS {
+        if windows[slot].used && sys_streq(windows[slot].title as char*, label) {
+            return slot
+        }
+        slot = slot + 1
+    }
+    return -1
+}
+
+func focus_running_window(slot: i64) {
+    if slot < 0 || slot >= Wm.MAX_WINDOWS || !windows[slot].used {
+        return
+    }
+    windows[slot].minimized = false
+    focused = slot
+    z_bring_to_front(slot)
+    wm_dirty = true
+}
+
 func launch_fresh_terminal() {
     let handle: u64 = sys_spawn("/boot/terminal.elf" as char*, "--gui-new" as char*)
     if handle == RT_SYS_ERR {
+        read_spawn_error(launch_error_primary as char*)
         let fallback: u64 = sys_spawn("/bin/terminal.elf" as char*, "--gui-new" as char*)
         if fallback == RT_SYS_ERR {
-            add_notification("Launch failed" as char*, "Terminal executable was not found" as char*, 2)
+            read_spawn_error(launch_error_secondary as char*)
+            add_launch_failed_notification(launch_error_primary as char*, launch_error_secondary as char*)
         } else {
             add_notification("Terminal launched" as char*, "Started a fresh shell window" as char*, 1)
         }
@@ -3088,13 +3158,15 @@ func launch_app_name(name: char*) {
         return
     }
     let path: char[48]
-    build_launch_path(path as char*, "/bin/" as char*, name)
+    build_launch_path(path as char*, "/boot/" as char*, name)
     let handle: u64 = sys_spawn(path as char*, "")
     if handle == RT_SYS_ERR {
-        build_launch_path(path as char*, "/boot/" as char*, name)
-        let boot_handle: u64 = sys_spawn(path as char*, "")
-        if boot_handle == RT_SYS_ERR {
-            add_notification("Launch failed" as char*, name, 2)
+        read_spawn_error(launch_error_primary as char*)
+        build_launch_path(path as char*, "/bin/" as char*, name)
+        let bin_handle: u64 = sys_spawn(path as char*, "")
+        if bin_handle == RT_SYS_ERR {
+            read_spawn_error(launch_error_secondary as char*)
+            add_launch_failed_notification(launch_error_primary as char*, launch_error_secondary as char*)
         } else {
             add_notification("App launched" as char*, name, 1)
         }
@@ -3107,23 +3179,29 @@ func launch_app_name_with_path(name: char*, path: char*) {
     if is_terminal_name(name) {
         let handle: u64 = sys_spawn("/boot/terminal.elf" as char*, path)
         if handle == RT_SYS_ERR {
+            read_spawn_error(launch_error_primary as char*)
             handle = sys_spawn("/bin/terminal.elf" as char*, path)
+        } else {
+            launch_error_primary[0] = 0
         }
         if handle == RT_SYS_ERR {
-            add_notification("Launch failed" as char*, "Could not open file in terminal" as char*, 2)
+            read_spawn_error(launch_error_secondary as char*)
+            add_launch_failed_notification(launch_error_primary as char*, launch_error_secondary as char*)
         } else {
             add_notification("App launched" as char*, name, 1)
         }
         return
     }
     let app_path: char[48]
-    build_launch_path(app_path as char*, "/bin/" as char*, name)
+    build_launch_path(app_path as char*, "/boot/" as char*, name)
     let handle: u64 = sys_spawn(app_path as char*, path)
     if handle == RT_SYS_ERR {
-        build_launch_path(app_path as char*, "/boot/" as char*, name)
+        read_spawn_error(launch_error_primary as char*)
+        build_launch_path(app_path as char*, "/bin/" as char*, name)
         handle = sys_spawn(app_path as char*, path)
         if handle == RT_SYS_ERR {
-            add_notification("Launch failed" as char*, name, 2)
+            read_spawn_error(launch_error_secondary as char*)
+            add_launch_failed_notification(launch_error_primary as char*, launch_error_secondary as char*)
         } else {
             add_notification("App launched" as char*, name, 1)
         }
@@ -3135,10 +3213,14 @@ func launch_app_name_with_path(name: char*, path: char*) {
 func launch_crash_viewer() {
     let handle: u64 = sys_spawn("/bin/crashviewer.elf" as char*, "")
     if handle == RT_SYS_ERR {
+        read_spawn_error(launch_error_primary as char*)
         handle = sys_spawn("/boot/crashviewer.elf" as char*, "")
+    } else {
+        launch_error_primary[0] = 0
     }
     if handle == RT_SYS_ERR {
-        add_notification("Launch failed" as char*, "Crash viewer was not found" as char*, 2)
+        read_spawn_error(launch_error_secondary as char*)
+        add_launch_failed_notification(launch_error_primary as char*, launch_error_secondary as char*)
     } else {
         add_notification("Crash viewer" as char*, "Opened crash summary" as char*, 1)
     }
@@ -3168,15 +3250,32 @@ func has_suffix(name: char*, suffix: char*) -> bool {
 
 func launch_file_by_path(path: char*) {
     if has_suffix(path, ".elf" as char*) {
-        sys_spawn(path, "" as char*)
+        let handle: u64 = sys_spawn(path, "" as char*)
+        if handle == RT_SYS_ERR {
+            read_spawn_error(launch_error_primary as char*)
+            add_launch_failed_notification(launch_error_primary as char*, "" as char*)
+        }
     } else if has_suffix(path, ".png" as char*) {
-        sys_spawn("/bin/pngviewer.elf" as char*, path)
+        let handle: u64 = sys_spawn("/boot/pngviewer.elf" as char*, path)
+        if handle == RT_SYS_ERR {
+            read_spawn_error(launch_error_primary as char*)
+            add_launch_failed_notification(launch_error_primary as char*, "" as char*)
+        }
     } else {
-        sys_spawn("/bin/editor.elf" as char*, path)
+        let handle: u64 = sys_spawn("/boot/editor.elf" as char*, path)
+        if handle == RT_SYS_ERR {
+            read_spawn_error(launch_error_primary as char*)
+            add_launch_failed_notification(launch_error_primary as char*, "" as char*)
+        }
     }
 }
 
 func taskbar_launch(i: i64) {
+    let running: i64 = running_window_for_label(taskbar_label_at(i))
+    if running >= 0 {
+        focus_running_window(running)
+        return
+    }
     launch_app_name(taskbar_name_at(i))
 }
 
@@ -3614,6 +3713,15 @@ func handle_request(sender: u64, msg: u8*) {
             let rh: i64 = req[5] as i64
             wm_rect_presents = wm_rect_presents + 1
             present_window_rect(slot_arg, rx, ry, rw, rh)
+            rep[0] = Wm.STATUS_OK as u64
+        } else {
+            rep[0] = Wm.STATUS_FAIL as u64
+        }
+        sys_msg_reply(sender, reply as u8*, 8)
+    } else if op == (Wm.OP_SET_TITLE as u64) {
+        if slot_arg >= 0 && slot_arg < Wm.MAX_WINDOWS && windows[slot_arg].used && windows[slot_arg].owner_pid == (sender as i64) {
+            copy_fixed(windows[slot_arg].title as char*, (msg as char*) + 16, 32)
+            wm_dirty = true
             rep[0] = Wm.STATUS_OK as u64
         } else {
             rep[0] = Wm.STATUS_FAIL as u64

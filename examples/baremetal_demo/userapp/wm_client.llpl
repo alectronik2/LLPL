@@ -61,6 +61,22 @@ func wm_create_window() -> bool {
     return true
 }
 
+func wm_set_title(title: char*) -> bool {
+    if wm_handle == RT_SYS_ERR || wm_slot < 0 {
+        return false
+    }
+    let req: u8[64]
+    let r: u64* = (req as u8*) as u64*
+    r[0] = Wm.OP_SET_TITLE as u64
+    r[1] = wm_slot as u64
+    wm_copy_field((req as u8*) + 16, title, 32)
+    let n: u64 = sys_msg_send(wm_handle, req as u8*, 64)
+    if n == RT_SYS_ERR {
+        return false
+    }
+    return r[0] == (Wm.STATUS_OK as u64)
+}
+
 // A pointer to this window's own slice of the shared arena - draw into
 // it with wm_put_pixel/wm_fill below, then call wm_present() to make it
 // visible.

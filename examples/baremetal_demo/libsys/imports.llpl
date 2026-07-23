@@ -23,6 +23,7 @@ extern func sys_readdir(path: char*, index: u64, out_buf: u8*) -> u64
 extern func sys_focus_state() -> u64
 extern func sys_msg_reply(peer: u64, buf: u8*, len: u64) -> u64
 extern func sys_spawn(path: char*, args: char*) -> u64
+extern func sys_spawn_error(out_buf: char*, max_len: u64) -> u64
 extern func sys_exec(path: char*, args: char*) -> u64
 extern func sys_wait(handle: u64) -> u64
 extern func sys_kill(handle: u64) -> u64

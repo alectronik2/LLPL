@@ -554,10 +554,7 @@ func render() {
 func _start(argc: u64, argv: u64*) {
     sys_putln("taskmgr: starting")
     wm_init()
-    if !wm_create_window() {
-        sys_putln("taskmgr: create_window failed")
-        rt_exit(1)
-    }
+    wm_set_title("Tasks" as char*)
 
     refresh_snapshot()
     render()

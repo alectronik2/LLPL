@@ -579,6 +579,7 @@ namespace LdSo {
             let rela_buf: u8[24]
             if !user_read_bytes(lib.aspace, rela + off, rela_buf as u8*, sizeof(LdElf64Rela)) {
                 log("<LIGHT_RED>ld.so: failed to read relocation\n</>")
+                set_spawn_error("ld.so: bad relocation table" as char*)
                 return false
             }
             let r_offset: u64 = read_le_u64(rela_buf as u8*, 0)
@@ -625,6 +626,7 @@ namespace LdSo {
                         }
                     } else {
                         log("<LIGHT_RED>ld.so: failed to read symbol, index \(sym_index)\n</>")
+                        set_spawn_error("ld.so: bad symbol table" as char*)
                     }
                 }
                 // This used to silently tolerate an unresolved JUMP_SLOT
@@ -642,14 +644,17 @@ namespace LdSo {
                 if !resolved_ok {
                     log("<LIGHT_RED>ld.so: unresolved symbol, index \(sym_index)\n</>")
                     EventLog.add1("ldso", "unresolved plt symbol", sym_index)
+                    set_spawn_error("ld.so: unresolved symbol" as char*)
                     return false
                 }
                 if !user_write_u64(lib.aspace, where, target) {
                     log("<LIGHT_RED>ld.so: failed to write relocation target\n</>")
+                    set_spawn_error("ld.so: relocation write failed" as char*)
                     return false
                 }
             } else if kind != R_X86_64_NONE {
                 log("<LIGHT_RED>ld.so: unsupported relocation kind \(kind)\n</>")
+                set_spawn_error("ld.so: unsupported relocation" as char*)
                 return false
             }
             off = off + relaent
@@ -821,6 +826,7 @@ namespace LdSo {
             let dep_name: char* = user_ptr(aspace, libs[idx].strtab + needed[dep_i]) as char*
             if dep_name == null || !load_dependency(aspace, dep_name) {
                 log("<LIGHT_RED>ld.so: failed dependency </>")
+                set_spawn_error("ld.so: missing dependency" as char*)
                 if dep_name != null {
                     emit(dep_name, false, 0, null)
                 }
@@ -833,6 +839,7 @@ namespace LdSo {
 
         if !verify_version_needs(idx, file) {
             log("<LIGHT_RED>ld.so: version check failed for </>")
+            set_spawn_error("ld.so: version check failed" as char*)
             emit(name, false, 0, null)
             emit("\n", false, 0, null)
             libs[idx].used = false

@@ -173,6 +173,7 @@ func _start(argc: u64, argv: u64*) {
     widgets.push(new Label(20, 390, "It can contain other widgets" as char*, 0x666666))
 
     wm_init()
+    wm_set_title("Widgets" as char*)
 
     while true {
         handle_input()

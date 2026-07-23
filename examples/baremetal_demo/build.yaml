@@ -368,11 +368,16 @@ extra_links:
         output: build/filebrowser.o
         include_dirs: [., ../../runtime]
         cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
+    c_sources:
+      - path: userapp/png_decode.c
+        output: build/png_decode.o
+        include_dirs: [., ../../runtime]
+        cflags: [-fPIC, -fvisibility=hidden, -mcmodel=large, -ffunction-sections, -fdata-sections]
     link:
       output: build/filebrowser.elf
       script: userapp/dyn_linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -shared, -e, _start, --hash-style=sysv, --gc-sections]
-      objects: [build/filebrowser.o, build/libsys.so]
+      objects: [build/filebrowser.o, build/png_decode.o, build/libsys.so]
   - name: editor
     llpl_sources:
       - src: userapp/editor.llpl
