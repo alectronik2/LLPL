@@ -1,0 +1,18 @@
+extern func puts(s: char*) -> i64
+
+struct Pair {
+    let a: i64
+    let b: u8
+}
+
+#assert_size Pair 16
+#assert_align Pair 8
+#assert_offset Pair.b 8
+
+@align(64) @used
+let aligned_byte: u8 = 7
+
+func main() -> i64 {
+    puts("abi ok")
+    return 0
+}

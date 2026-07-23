@@ -1,0 +1,47 @@
+// `if` as an expression: `if cond { expr } else { expr }` yields a value,
+// unlike a statement `if` (both `else` and a trailing expression in each
+// branch are mandatory - see codegen.d's ifExprBranchValue/generateIfExpr).
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func classify(n: i64) -> char* {
+    return if n < 0 {
+        "negative"
+    } else if n == 0 {
+        "zero"
+    } else {
+        "positive"
+    }
+}
+
+func main() -> i64 {
+    let x: i64 = if true { 128 } else { 256 }
+    print_int("x", x)
+
+    // type inferred from the branches, no explicit annotation needed
+    let y = if false { 1 } else { 2 }
+    print_int("y", y)
+
+    // earlier statements in a branch run for their side effects/bindings;
+    // only the last (an expression) supplies the branch's value
+    let z: i64 = if true {
+        let a: i64 = 10
+        let b: i64 = 20
+        a + b
+    } else {
+        0
+    }
+    print_int("z", z)
+
+    puts(classify(-5))
+    puts(classify(0))
+    puts(classify(5))
+
+    return 0
+}

@@ -1,0 +1,69 @@
+extern func puts(s: string) -> i64
+
+func print_int(label: string, value: i64) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func print_str(label: string, value: string) {
+    let buf: char[128]
+    ksnprintf(buf as string, 128, "%s = %s", label, value)
+    puts(buf as string)
+}
+
+func print_bool(label: string, value: bool) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+@reflect
+struct Point {
+    let x: i64
+    let y: i64
+}
+
+@reflect
+class Person {
+    let id: i64
+    let name: string
+
+    constructor(id: i64, name: string) {
+        self.id = id
+        self.name = name
+    }
+
+    destructor() {}
+}
+
+struct Hidden {
+    let value: i64
+}
+
+func describe_type(name: string) {
+    let t: ReflectType = reflect_type(name)
+    print_bool("exists", t.exists())
+    print_str("name", t.name())
+    print_str("kind", t.kind())
+    print_int("fields", t.field_count())
+
+    let i: i64 = 0
+    while i < t.field_count() {
+        let f: ReflectField = t.field(i)
+        print_str("field", f.name())
+        print_str("field type", f.type_name())
+        print_bool("field exists", f.exists())
+        i = i + 1
+    }
+}
+
+func main() -> i64 {
+    describe_type("Point")
+    describe_type("Person")
+
+    let missing: ReflectType = reflect_type("Hidden")
+    print_bool("hidden exists", missing.exists())
+
+    return 0
+}

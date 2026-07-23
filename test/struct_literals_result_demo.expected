@@ -1,0 +1,4 @@
+area = 12
+coords.first + coords.second = 30
+sum_of_divisions(10,2,20,4) = 10
+sum_of_divisions(10,0,20,4) failed, as expected

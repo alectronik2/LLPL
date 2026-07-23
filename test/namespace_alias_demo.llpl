@@ -1,0 +1,40 @@
+// `alias NAME = a.b` names a *namespace path*, not a single symbol -
+// distinct from an ordinary symbol/type alias (see EXAMPLES.md's
+// "Namespaces" section). "HAL_Foo" is never a real symbol on its own
+// (namespaces don't register anything themselves), only a prefix of ones
+// like "HAL_Foo_Bar" - the compiler detects this and treats it as a
+// namespace alias instead of trying to resolve an exact symbol match.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+namespace HAL {
+    namespace Foo {
+        class Bar {
+            let n: i64
+            constructor(n: i64) { self.n = n }
+            destructor() {}
+            func value() -> i64 { return self.n }
+        }
+
+        func greet() {
+            puts("hello from HAL.Foo")
+        }
+    }
+}
+
+alias hf = HAL.Foo
+
+func main() -> i64 {
+    hf.greet()
+
+    let b: hf.Bar = new hf.Bar(7)
+    print_int("b.value()", b.value())
+    delete b
+
+    return 0
+}

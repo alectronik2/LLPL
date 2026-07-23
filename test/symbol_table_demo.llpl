@@ -1,0 +1,44 @@
+// Symbolized panic backtraces: the compiler bakes a static symbol table
+// (function/method/constructor name, declaring .llpl file, declaration
+// line) directly into the compiled binary - see codegen.d's
+// generateBacktraceSymbolTable and runtime.h's llpl_resolve_symbol. This
+// exercises the same extern functions examples/baremetal_demo/backtrace.llpl
+// uses to symbolize a real frame-pointer backtrace.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func helper(n: i64) -> i64 {
+    return n * 2
+}
+
+class Foo {
+    let n: i64
+    constructor(n: i64) { self.n = n }
+    destructor() {}
+    func bar() -> i64 { return self.n }
+}
+
+func main() -> i64 {
+    let sym: char* = llpl_resolve_symbol(helper as u64)
+    puts(llpl_symbol_name(sym))
+    puts(llpl_symbol_file(sym))
+    print_int("line", llpl_symbol_line(sym) as i64)
+
+    // resolving an address that isn't exactly a function's start (a few
+    // bytes in, like a real return address in a backtrace) still lands on
+    // the containing function
+    let mid_addr: u64 = (helper as u64) + 2
+    let sym2: char* = llpl_resolve_symbol(mid_addr)
+    puts(llpl_symbol_name(sym2))
+
+    let f: Foo = new Foo(5)
+    print_int("f.bar()", f.bar())
+
+    return 0
+}

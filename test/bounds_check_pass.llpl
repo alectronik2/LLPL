@@ -1,0 +1,26 @@
+// bounds_check_pass: fixed-size array access within bounds, compiled with --safe.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    let arr: i64[5]
+    arr[0] = 10
+    arr[1] = 20
+    arr[2] = 30
+    arr[3] = 40
+    arr[4] = 50
+
+    print_int("arr[2]", arr[2])
+
+    let i: i64 = 4
+    arr[i] = 99
+    print_int("arr[4]", arr[4])
+
+    return 0
+}

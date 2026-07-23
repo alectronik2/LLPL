@@ -1,0 +1,6 @@
+// assert fail: a false assertion should panic with the custom message.
+
+func main() -> i64 {
+    assert(1 == 2, "one is not two")
+    return 0
+}

@@ -1,0 +1,64 @@
+// Named arguments and default parameter values: `p2: string = "none"`
+// makes a parameter optional, and any argument can be passed by name
+// (`foo(p2: "x")`, in any order) - resolved entirely at the call site, at
+// compile time (see codegen.d's resolveCallArguments), so it works
+// uniformly for free functions, methods, constructors, generic functions,
+// and closures alike.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func greet(name: char*, greeting: char* = "Hello") {
+    let buf: char[128]
+    ksnprintf(buf as char*, 128, "%s, %s!", greeting, name)
+    puts(buf as char*)
+}
+
+func add_generic<T>(a: T, b: T = 10) -> T {
+    return a + b
+}
+
+class Box {
+    let value: i64
+
+    constructor(value: i64, label: char* = "box") {
+        self.value = value
+        puts(label)
+    }
+
+    destructor() {}
+
+    func add(n: i64, times: i64 = 1) -> i64 {
+        return self.value + n * times
+    }
+}
+
+func main() -> i64 {
+    greet("Alice", "Hi")          // all-positional
+    greet("Bob")                  // trailing default omitted
+    greet(name: "Cara", greeting: "Yo")  // named, in order
+    greet(greeting: "Hey", name: "Dave") // named, any order
+    greet(name: "Eve")            // named, default still fills in
+
+    print_int("add_generic(5)", add_generic(5))
+    print_int("add_generic(5, 20)", add_generic(5, 20))
+    print_int("add_generic(b: 1, a: 2)", add_generic(b: 1, a: 2))
+
+    let b: Box = new Box(10)
+    print_int("b.add(5)", b.add(5))
+    print_int("b.add(times: 3, n: 5)", b.add(times: 3, n: 5))
+
+    let b2: Box = new Box(value: 20, label: "box2")
+    print_int("b2.add(0)", b2.add(0))
+
+    let adder = func[](a: i64 = 100) -> i64 { a }
+    print_int("adder()", adder())
+    print_int("adder(a: 7)", adder(a: 7))
+
+    return 0
+}

@@ -1,0 +1,6 @@
+square(6) = 36
+sum_of_squares(3, 4) = 25
+abs_value(-5) = 5
+abs_value(5) = 5
+c.doubled() = 42
+triple(7) = 21

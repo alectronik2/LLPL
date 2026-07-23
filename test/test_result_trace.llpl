@@ -1,0 +1,39 @@
+extern func puts(s: char*) -> i64
+
+func fail_if_negative(n: i64) -> Result<i64, i64> {
+    let r: Result<i64, i64> = new Result<i64, i64>()
+    if n < 0 {
+        r.set_err(n)
+        return r
+    }
+    r.set_ok(n)
+    return r
+}
+
+func double_positive(n: i64) -> Result<i64, i64> {
+    let x: i64 = fail_if_negative(n)?
+    let r: Result<i64, i64> = new Result<i64, i64>()
+    r.set_ok(x * 2)
+    return r
+}
+
+func quadruple_positive(n: i64) -> Result<i64, i64> {
+    let x: i64 = double_positive(n)?
+    let r: Result<i64, i64> = new Result<i64, i64>()
+    r.set_ok(x * 2)
+    return r
+}
+
+func main() -> i64 {
+    let r: Result<i64, i64> = quadruple_positive(-3)
+    if r.is_err() {
+        puts("got error")
+        let t: char* = r.get_trace()
+        if t != null {
+            puts(t)
+        } else {
+            puts("no trace")
+        }
+    }
+    return 0
+}

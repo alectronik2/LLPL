@@ -1,0 +1,59 @@
+// Slice<T> demo: a bounds-checked *view* into memory someone else owns -
+// {ptr, len}, plain value type, no allocation of its own (see its doc
+// comment in prelude.llpl). Replaces a raw `T*` + a separately-tracked
+// count - passed around together purely by convention, with nothing
+// stopping an index from running off the end - with one value slice_get/
+// slice_set can actually validate before ever touching memory.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func sum(s: Slice<i64>) -> i64 {
+    let total: i64 = 0
+    let i: u64 = 0
+    while i < s.len {
+        total = total + slice_get(s, i)
+        i = i + 1
+    }
+    return total
+}
+
+func main() -> i64 {
+    // A slice over a plain fixed-size array.
+    let arr: i64[5]
+    arr[0] = 10
+    arr[1] = 20
+    arr[2] = 30
+    arr[3] = 40
+    arr[4] = 50
+    let view: Slice<i64> = Slice { ptr: arr as i64*, len: 5 }
+
+    print_int("sum(view)", sum(view))
+
+    slice_set(view, 2, 99)
+    print_int("view[2] after slice_set", slice_get(view, 2))
+
+    // A slice over a Vector<T>'s live elements - Vector<T>.as_slice()
+    // (prelude.llpl) is what turns an owning, growable container into a
+    // borrowed view another function (like sum() above) can read without
+    // needing to know anything about Vector itself.
+    let v: Vector<i64> = new Vector<i64>()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    v.push(4)
+    print_int("sum(v.as_slice())", sum(v.as_slice()))
+
+    // Vector<T>'s own get()/set() are bounds-checked the same way now -
+    // out-of-bounds access panics instead of silently reading/corrupting
+    // adjacent memory (see test/test_slice_panic.llpl for the panic path
+    // itself; not exercised here since a panic halts the whole program).
+    print_int("v.get(1)", v.get(1))
+
+    return 0
+}

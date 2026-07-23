@@ -1,0 +1,78 @@
+// Method, constructor, and free-function overloading: several
+// declarations can share one name as long as their parameter types
+// differ - the right one is picked at each call site by argument type
+// (an exact match; no implicit numeric coercion). A name with only one
+// declaration keeps its plain mangled C name unchanged; only an actually
+// overloaded name gets a type-derived suffix - see codegen.d's
+// resolveOverload/mangleMethodName/mangleConstructorName/mangleFreeFunctionName.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+// free functions - differ by arity
+func add(a: i64) -> i64 {
+    return a
+}
+func add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+// free functions - same arity, differ by type
+func describe(n: i64) -> char* {
+    return "an i64"
+}
+func describe(s: char*) -> char* {
+    return "a string"
+}
+
+class Box {
+    let n: i64
+
+    // overloaded constructors
+    constructor() {
+        self.n = 0
+    }
+    constructor(n: i64) {
+        self.n = n
+    }
+    constructor(a: i64, b: i64) {
+        self.n = a + b
+    }
+
+    destructor() {}
+
+    // overloaded methods
+    func combine(x: i64) -> i64 {
+        return self.n + x
+    }
+    func combine(x: i64, y: i64) -> i64 {
+        return self.n + x + y
+    }
+}
+
+func main() -> i64 {
+    print_int("add(5)", add(5))
+    print_int("add(5, 6)", add(5, 6))
+
+    puts(describe(5))
+    puts(describe("hi"))
+
+    let b0: Box = new Box()
+    print_int("b0.n", b0.n)
+
+    let b1: Box = new Box(10)
+    print_int("b1.n", b1.n)
+
+    let b2: Box = new Box(3, 4)
+    print_int("b2.n", b2.n)
+
+    print_int("b1.combine(5)", b1.combine(5))
+    print_int("b1.combine(5, 6)", b1.combine(5, 6))
+
+    return 0
+}

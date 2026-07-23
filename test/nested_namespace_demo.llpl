@@ -1,0 +1,34 @@
+// `namespace Foo.Bar { ... }` is sugar for `namespace Foo { namespace Bar
+// { ... } }` - both spellings, and mixing them, resolve identically.
+
+extern func puts(s: char*) -> i64
+
+namespace Graphics.Utils {
+    const VERSION = 2
+
+    func describe() {
+        puts("Graphics.Utils")
+    }
+
+    namespace Deep {
+        func hello() {
+            puts("Graphics.Utils.Deep")
+        }
+    }
+}
+
+namespace Audio {
+    namespace Mixer {
+        func hello() {
+            puts("Audio.Mixer")
+        }
+    }
+}
+
+func main() -> i64 {
+    Graphics.Utils.describe()
+    Graphics.Utils.Deep.hello()
+    Audio.Mixer.hello()
+    puts("\(Graphics.Utils.VERSION)")
+    return 0
+}

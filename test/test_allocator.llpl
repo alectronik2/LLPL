@@ -1,0 +1,24 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Foo {
+    let id: i64
+    constructor(id: i64) { self.id = id }
+    destructor() {}
+}
+
+func main() -> i64 {
+    let i: i64 = 0
+    while i < 1000 {
+        let f: Foo = new Foo(i)
+        // f is released at the end of each loop iteration
+        i = i + 1
+    }
+    print_int("alloc loop ok", i)
+    return 0
+}

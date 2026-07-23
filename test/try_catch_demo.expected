@@ -1,0 +1,8 @@
+x = 5
+caught = -1
+finally always runs
+z = 5
+finally runs on success too
+inner caught = -1
+outer try continues normally
+outer finally runs

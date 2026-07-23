@@ -1,0 +1,55 @@
+// `break` exits the innermost enclosing loop early, same as C. `match`
+// compiles to an if/else-if chain (not a C `switch`), so a `break` inside a
+// match arm nested in a loop correctly breaks the loop rather than merely
+// falling out of the match.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    let i: i64 = 0
+    while true {
+        if i == 3 {
+            break
+        }
+        print_int("while i", i)
+        i = i + 1
+    }
+
+    for let j: i64 = 0, j < 10, j++ {
+        if j == 2 {
+            break
+        }
+        print_int("for j", j)
+    }
+
+    // break only affects the innermost loop.
+    let outerCount: i64 = 0
+    for let a: i64 = 0, a < 3, a++ {
+        for let b: i64 = 0, b < 3, b++ {
+            if b == 1 {
+                break
+            }
+            print_int("inner b", b)
+        }
+        outerCount = outerCount + 1
+    }
+    print_int("outerCount", outerCount)
+
+    let k: i64 = 0
+    while true {
+        match k {
+            case 2 => { break }
+            default => {}
+        }
+        if k >= 5 { break }
+        print_int("match k", k)
+        k = k + 1
+    }
+
+    return 0
+}

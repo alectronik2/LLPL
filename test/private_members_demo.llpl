@@ -1,0 +1,68 @@
+// `private` on a class field/method restricts it to the declaring
+// class's own body - any of its methods/constructors, or an `impl Trait
+// for ThisClass { ... }` block (desugared into a plain function, but
+// still treated as "inside" the class it targets - see codegen.d's
+// generateFunction/checkMemberAccess), not just accesses via `self`
+// specifically. Private is class-scoped, not instance-scoped: one
+// Counter's own method can read *another* Counter's private field.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+trait Doubled { func doubled() -> i64 }
+
+class Counter {
+    private let count: i64
+
+    constructor() { self.count = 0 }
+    destructor() {}
+
+    private func bump() -> i64 {
+        self.count = self.count + 1
+        return self.count
+    }
+
+    func increment() -> i64 {
+        return self.bump()
+    }
+
+    func value() -> i64 {
+        return self.count
+    }
+
+    // Class-scoped, not instance-scoped - reading another Counter's own
+    // private field from within Counter's own method is allowed.
+    func matches(other: Counter) -> bool {
+        return self.count == other.count
+    }
+}
+
+// An impl block is desugared into a plain function, but is still
+// "inside" the class it targets - it can reach Counter's private field
+// exactly like an inline method can.
+impl Doubled for Counter {
+    func doubled() -> i64 {
+        return self.count * 2
+    }
+}
+
+func main() -> i64 {
+    let c: Counter = new Counter()
+    print_int("inc1", c.increment())
+    print_int("inc2", c.increment())
+    print_int("value", c.value())
+    print_int("doubled", c.doubled())
+
+    let c2: Counter = new Counter()
+    if c.matches(c2) {
+        puts("matches: yes")
+    } else {
+        puts("matches: no")
+    }
+
+    return 0
+}

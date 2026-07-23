@@ -1,0 +1,50 @@
+// `i++`/`i--` desugar to `i = i + 1`/`i = i - 1`, exactly like the
+// existing `i += 1`/`i -= 1` compound assignments - including evaluating
+// to the *new* value, not a true C postfix's captured old one. Only
+// recognized at assignment's own precedence level (same as `+=`), so
+// they work as their own statement or parenthesized, but not spliced
+// into a larger expression like `i++ + 5`.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Counter {
+    let n: i64
+    constructor() { self.n = 0 }
+    destructor() {}
+}
+
+func main() -> i64 {
+    let i: i64 = 0
+    i++
+    i++
+    i++
+    print_int("i", i)
+
+    let j: i64 = 10
+    j--
+    print_int("j", j)
+
+    // Works through an index/field target too, same as compound
+    // assignment already does.
+    let arr: i64[3]
+    arr[0] = 100
+    arr[0]++
+    print_int("arr[0]", arr[0])
+
+    let c: Counter = new Counter()
+    c.n++
+    c.n++
+    print_int("c.n", c.n)
+
+    // The classic C-style for-loop increment clause.
+    for let k: i64 = 0, k < 3, k++ {
+        print_int("k", k)
+    }
+
+    return 0
+}

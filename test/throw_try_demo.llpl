@@ -1,0 +1,98 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func maybe_positive(n: i64) -> Result<i64, i64> {
+    if n < 0 {
+        throw -n
+    }
+    let r: Result<i64, i64> = new Result<i64, i64>()
+    r.set_ok(n)
+    return r
+}
+
+func fail_cross_function(code: i64) {
+    throw code
+}
+
+func cross_function_with_cleanup(code: i64) {
+    defer puts("defer_uncaught_question")
+    try {
+        fail_cross_function(code)
+    } finally {
+        puts("finally_uncaught_question")
+    }
+}
+
+func branch_defer_normal(enabled: bool) {
+    if enabled {
+        defer puts("branch_defer_enabled")
+    }
+}
+
+func branch_defer_then_throw(code: i64) {
+    if code > 0 {
+        defer puts("branch_defer_before_throw")
+        fail_cross_function(code)
+    }
+}
+
+func main() -> i64 {
+    try {
+        throw 7
+        puts("unreachable local throw")
+    } catch (e: i64) {
+        print_int("caught_throw", e)
+    } finally {
+        puts("finally_throw")
+    }
+
+    try {
+        let x: i64 = maybe_positive(-3)?
+        print_int("unreachable question", x)
+    } catch (e: i64) {
+        print_int("caught_question", e)
+    } finally {
+        puts("finally_question")
+    }
+
+    try {
+        fail_cross_function(11)
+        puts("unreachable cross function")
+    } catch (e: i64) {
+        print_int("cross_function_caught", e)
+    }
+
+    try {
+        cross_function_with_cleanup(5)
+    } catch (e: i64) {
+        print_int("cross_cleanup_caught", e)
+    }
+
+    branch_defer_normal(false)
+    branch_defer_normal(true)
+
+    try {
+        branch_defer_then_throw(17)
+    } catch (e: i64) {
+        print_int("branch_defer_caught", e)
+    }
+
+    try {
+        try {
+            throw 13
+        } finally {
+            puts("inner_finally_before_outer_catch")
+        }
+    } catch (e: i64) {
+        print_int("outer_caught", e)
+    } finally {
+        puts("outer_finally")
+    }
+
+    return 0
+}

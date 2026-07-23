@@ -1,0 +1,5 @@
+helper
+symbol_table_demo.llpl
+line = 16
+helper
+f.bar() = 5

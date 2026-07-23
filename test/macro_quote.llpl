@@ -1,0 +1,16 @@
+macro assignTwice(target, value) {
+    quote {
+        unquote(target) = unquote(value)
+        unquote(target) = unquote(target) + 1
+    }
+}
+
+macro square(value) {
+    quote(unquote(value) * unquote(value))
+}
+
+func compute() -> i64 {
+    let x: i64 = 0
+    assignTwice!(x, 41)
+    return square!(x)
+}

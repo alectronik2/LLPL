@@ -1,0 +1,87 @@
+// Tagged enums + match pattern matching demo.
+//
+// Two independent sum types:
+//   - Shape: geometric shapes, each variant carrying its own field(s).
+//   - Result: a classic "success or failure" type, showing the same
+//     feature applies just as well to error handling as to data modeling.
+//
+// A tagged enum variant is constructed by calling it - `Shape.Circle(3)`,
+// not a bare value - since every variant (even a zero-field one like
+// `Shape.Triangle`, called as `Shape.Triangle()`) is really a function
+// that builds the shared underlying value; see prelude/codegen.d's
+// desugarTaggedEnum for how `enum Name { Variant(field: type, ...), ... }`
+// compiles down to a struct plus one such constructor per variant.
+//
+// `match` destructures a tagged enum with `case EnumName.Variant(binding,
+// ...)`, binding each of that variant's fields to a fresh name for the
+// case body - a plain `match` pattern (string/i64 equality, as in
+// match_test.llpl) and a destructuring one can appear in the same
+// statement; `default` still works as the catch-all either way.
+
+extern func puts(s: char*) -> i64
+
+enum Shape {
+    Circle(radius: i64),
+    Rectangle(width: i64, height: i64),
+    Triangle(base: i64, height: i64)
+}
+
+// Integer-only approximation of area (no floating point in this demo),
+// good enough to tell the branches apart.
+func area(s: Shape) -> i64 {
+    match s {
+        case Shape.Circle(radius) => {
+            return 3 * radius * radius
+        }
+        case Shape.Rectangle(width, height) => {
+            return width * height
+        }
+        case Shape.Triangle(base, height) => {
+            return (base * height) / 2
+        }
+    }
+    return -1 // unreachable - every variant is handled above
+}
+
+func print_area(label: char*, s: Shape) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s area = %d", label, area(s))
+    puts(buf as char*)
+}
+
+enum Result {
+    Ok(value: i64),
+    Err(message: char*)
+}
+
+func safe_divide(a: i64, b: i64) -> Result {
+    if b == 0 {
+        return Result.Err("division by zero")
+    }
+    return Result.Ok(a / b)
+}
+
+func print_division(a: i64, b: i64) {
+    let result: Result = safe_divide(a, b)
+    let buf: char[64]
+    match result {
+        case Result.Ok(value) => {
+            ksnprintf(buf as char*, 64, "%d / %d = %d", a, b, value)
+        }
+        case Result.Err(message) => {
+            ksnprintf(buf as char*, 64, "%d / %d failed: %s", a, b, message)
+        }
+    }
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    print_area("circle", Shape.Circle(4))
+    print_area("rectangle", Shape.Rectangle(5, 6))
+    print_area("triangle", Shape.Triangle(8, 3))
+
+    print_division(10, 2)
+    print_division(7, 0)
+
+    return 0
+}

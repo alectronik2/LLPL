@@ -1,0 +1,67 @@
+extern func puts(s: char*) -> i64
+
+func pick(x: i64) -> char* {
+    return "exact i64"
+}
+
+func pick(x: float) -> char* {
+    return "float overload"
+}
+
+func float_only(x: float) -> char* {
+    return "i64 to float param"
+}
+
+func uint_only(x: u64) -> char* {
+    return "i64 to u64 param"
+}
+
+func returns_uint() -> u64 {
+    return 7
+}
+
+func from_u8(x: i64) -> char* {
+    return "u8 to i64 param"
+}
+
+func main() -> i64 {
+    puts(pick(3))
+    puts(float_only(4))
+    puts(uint_only(5))
+
+    let u: u64 = 1
+    u = 2
+    if returns_uint() == u + 5 {
+        puts("i64 to u64 return/assignment")
+    }
+
+    let f: float = 6
+    let mixed: double = 2 + 0.5
+    if mixed > 2.4 {
+        puts("i64 to float arithmetic")
+    }
+
+    let b: u8 = 200
+    puts(from_u8(b))
+
+    let widened: float = b
+    if widened > 199.0 {
+        puts("u8 to float arithmetic")
+    }
+
+    let small: i32 = 100000
+    let big: i64 = 4000000000
+    let sum: i64 = small + big
+    if sum == 4000100000 {
+        puts("i32 + i64 widens to i64, not truncated")
+    }
+
+    let ub: u8 = 250
+    let uw: u64 = 10000000000
+    let usum: u64 = ub + uw
+    if usum == 10000000250 {
+        puts("u8 + u64 widens to u64, not truncated")
+    }
+
+    return 0
+}

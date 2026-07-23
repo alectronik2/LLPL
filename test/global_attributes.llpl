@@ -1,0 +1,22 @@
+@section(".llpl_test_start")
+@used
+let marker_start: u64[2] = [
+    0x1111111111111111,
+    0x2222222222222222
+]
+
+@section(".llpl_test_payload")
+@used
+@align(0x20)
+let payload: u64 = 0x3333333333333333
+
+@section(".llpl_test_end")
+@used
+let marker_end: u64 = 0x4444444444444444
+
+func main() -> i64 {
+    if payload == 0x3333333333333333 {
+        return 0
+    }
+    return 1
+}

@@ -1,0 +1,8 @@
+import modules.import_alias_lib as L
+
+func main() -> i64 {
+    L.hello()
+    let g: L.Greeting = Greeting { msg: "hi" }
+    puts(g.msg)
+    return 0
+}

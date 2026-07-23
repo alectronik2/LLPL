@@ -1,0 +1,37 @@
+import stdlib.hw.hw
+
+#device "fixtures/e1000.lldev"
+
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let ctrl: hw.DeviceRegister = hw.device_register(E1000.BASE, E1000.Reg.CTRL, E1000.Width.CTRL)
+    let rx: hw.DeviceDmaResource = hw.device_dma(E1000.Dma.RX_RING_ENTRIES, E1000.Dma.RX_RING_BYTES, E1000.Dma.RX_RING_ALIGN)
+    let buf: hw.DmaBuffer = hw.dma_buffer(0x200000, 0x200000, rx.bytes, rx.alignment, hw.CachePolicy.WRITE_BACK)
+    let region: hw.PageRegion = hw.page_region(0x400000, 0x200000, rx.bytes, hw.page_flags_mmio())
+
+    if hw.register_addr(ctrl) != E1000.BASE + E1000.Reg.CTRL {
+        return 1
+    }
+    if ctrl.width_bits != 32 {
+        return 2
+    }
+    if !hw.dma_is_valid(buf) {
+        return 3
+    }
+    if !hw.page_region_is_valid(region) {
+        return 4
+    }
+    if E1000.IRQ != 11 {
+        return 5
+    }
+    let cell: u32 = 0
+    let reg: hw.MmioU32 = hw.mmio_u32(&cell as u64)
+    hw.mmio_write_u32(reg, 0xA5)
+    if hw.mmio_read_u32(reg) != 0xA5 {
+        return 6
+    }
+
+    puts("hw ok")
+    return 0
+}

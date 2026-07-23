@@ -1,0 +1,77 @@
+// Closures and lambdas demo.
+//
+// A closure type is written `(ParamType, ...) -> ReturnType`, and a lambda
+// literal is `func[captures](params) -> ReturnType { ... }` - the capture
+// list is explicit (unlike a hidden/implicit-capture design) so a missing
+// capture is a compile error, not a silently wrong closure. Every closure,
+// regardless of its signature, shares the same underlying two-word
+// {function pointer, environment pointer} representation (see runtime.h's
+// __LLPL_Closure and codegen.d's generateLambdaExpr) - a captured
+// variable's *current value* is copied into a small heap-allocated
+// environment at the moment the lambda expression runs, so later changes
+// to the original variable never affect an already-created closure.
+
+extern func puts(s: char*) -> i64
+
+// A function that builds and returns a closure - the returned lambda
+// captures `n`, the *parameter*, snapshotting whatever value this
+// particular call passed in.
+func make_adder(n: i64) -> (i64) -> i64 {
+    return func[n](x: i64) -> i64 {
+        return x + n
+    }
+}
+
+// A closure taken as a plain parameter, called like any other function.
+func apply_twice(f: (i64) -> i64, x: i64) -> i64 {
+    return f(f(x))
+}
+
+class Counter {
+    let count: i64
+    let step: (i64) -> i64
+
+    constructor(start: i64, step_fn: (i64) -> i64) {
+        self.count = start
+        self.step = step_fn
+    }
+
+    destructor() {}
+
+    func advance() {
+        self.count = self.step(self.count)
+    }
+}
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    let add5: (i64) -> i64 = make_adder(5)
+    print_int("add5(10)", add5(10)) // 15
+
+    // `n` above was captured by make_adder's parameter, not by reference to
+    // some outer variable, so there's nothing here to demonstrate mutating
+    // away from - each call to make_adder(...) gets its own independent
+    // closure, shown next:
+    let add10: (i64) -> i64 = make_adder(10)
+    print_int("add10(10)", add10(10)) // 20
+    print_int("add5(10) again", add5(10)) // still 15 - independent environments
+
+    print_int("apply_twice(add5, 1)", apply_twice(add5, 1)) // 1 + 5 + 5 = 11
+
+    // A closure stored in, and called through, a class field.
+    let doubler: (i64) -> i64 = func(x: i64) -> i64 {
+        return x * 2
+    }
+    let counter: Counter = new Counter(1, doubler)
+    counter.advance() // 1 -> 2
+    counter.advance() // 2 -> 4
+    counter.advance() // 4 -> 8
+    print_int("counter.count", counter.count) // 8
+
+    return 0
+}

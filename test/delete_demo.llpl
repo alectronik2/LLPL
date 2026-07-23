@@ -1,0 +1,29 @@
+// `delete expr`: releases this reference to a class instance - if it was
+// the last one, the destructor runs and the memory is freed (exactly the
+// rc_release(ptr, ClassName_destroy) call generateDestructor already
+// emits to release a reference-counted field, just triggered on demand
+// instead of only as a side effect of some other object's destructor).
+// Only classes are reference-counted/heap-allocated - structs and
+// primitives have no such lifetime to manage, so `delete` on either is a
+// compile error.
+
+extern func puts(s: char*) -> i64
+
+class Foo {
+    let n: i64
+    constructor(n: i64) {
+        self.n = n
+        puts("Foo constructed")
+    }
+    destructor() {
+        puts("Foo destructed")
+    }
+}
+
+func main() -> i64 {
+    let f: Foo = new Foo(5)
+    puts("before delete")
+    delete f
+    puts("after delete")
+    return 0
+}

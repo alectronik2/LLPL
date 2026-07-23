@@ -1,0 +1,12 @@
+t1 = on y-axis
+t2 = on x-axis
+t3 = somewhere
+p1 = origin
+p2 = somewhere
+ok_result = ok
+err_result = bad input
+a = 1
+b = 2
+c = 3
+radius = 7
+small

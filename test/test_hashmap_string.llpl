@@ -1,0 +1,37 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    let a: String = new String("hello")
+    let b: String = new String("hello")
+    let c: String = new String("world")
+
+    let map: HashMap<String, i64> = new HashMap<String, i64>()
+
+    map.insert(a, 1)
+    map.insert(b, 2) // same content as a, should overwrite
+    map.insert(c, 3)
+
+    print_int("len", map.len())
+
+    let got_a: Optional<i64> = map.get(a)
+    let got_c: Optional<i64> = map.get(c)
+
+    if got_a.is_some() {
+        print_int("hello", got_a.get())
+    }
+    if got_c.is_some() {
+        print_int("world", got_c.get())
+    }
+
+    if map.get(b).is_some() {
+        print_int("b lookup", map.get(b).get())
+    }
+
+    return 0
+}

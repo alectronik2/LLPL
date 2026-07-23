@@ -1,0 +1,11 @@
+max_of(3, 7) = 7
+max_of(100, 42) = 100
+pair.first + pair.second = 30
+numbers.len() = 5
+numbers.get(4) = 16
+maybe starts out none
+maybe.get() after set = 99
+list.len() = 3
+list.head.value = 1
+ages.get(1) = 30
+Test 30 done

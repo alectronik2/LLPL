@@ -1,0 +1,13 @@
+grammar Whole {
+    start : "ok" <EOF> ;
+}
+
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let node: ParseNode = Whole(new String("ok"))
+    if node.child_count() == 2 {
+        puts("grammar eof ok")
+    }
+    return 0
+}

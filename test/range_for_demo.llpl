@@ -1,0 +1,36 @@
+// `for i in start..end { ... }` - sugar for `foreach let i in ... { ... }`,
+// spelled without `let` and using `for` instead of `foreach`. `start..end`
+// is exclusive of `end` (like Rust) and is only ever meaningful as this
+// loop's iterable - it isn't a first-class value.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    for i in 0..5 {
+        print_int("i", i)
+    }
+
+    // range bounds can be arbitrary expressions, not just literals
+    let start: i64 = 2
+    let end: i64 = 6
+    let total: i64 = 0
+    for j in start..end {
+        total = total + j
+    }
+    print_int("total", total)
+
+    // nests like any other loop
+    for a in 0..2 {
+        for b in 0..2 {
+            print_int("a*10+b", a * 10 + b)
+        }
+    }
+
+    return 0
+}

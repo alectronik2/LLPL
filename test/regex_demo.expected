@@ -1,0 +1,24 @@
+identifier = 1
+identifier matched = 1
+identifier groups = 1
+identifier group1 exists = 1
+Test_123
+Test_123
+digits ok = 1
+digits no = 0
+choice cat = 1
+choice dog = 1
+choice no = 0
+slash = 1
+id-42
+id
+42
+pair start 2 = 3
+pair end 2 = 5
+abab-name
+abab
+ab
+name
+missing matched = 0
+missing group1 = 0
+division = 4

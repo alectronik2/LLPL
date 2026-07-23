@@ -1,0 +1,9 @@
+is_alive_before = 1
+upgrade_before.n = 42
+Foo destroyed
+is_alive_after = 0
+upgrade_after: null (correct)
+child's parent is still alive
+Parent destroyed
+Child destroyed
+no crash, no leak

@@ -1,0 +1,50 @@
+extern func puts(s: string) -> i64
+
+func print_int(label: string, value: i64) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func main() -> i64 {
+    let map: HashMap<i64, i64> = new HashMap<i64, i64>()
+
+    let i: i64 = 0
+    while i < 40 {
+        map.insert(i, i * 10)
+        i = i + 1
+    }
+
+    map.insert(5, 5000)
+
+    print_int("len", map.len())
+    print_int("capacity", map.capacity())
+    print_int("get 5", map.get(5).get())
+    print_int("get 39", map.get(39).get())
+
+    let key_sum: i64 = 0
+    let value_sum: i64 = 0
+    foreach let entry in map {
+        key_sum = key_sum + entry.key
+        value_sum = value_sum + entry.value
+    }
+
+    print_int("key sum", key_sum)
+    print_int("value sum", value_sum)
+
+    map.remove(0)
+    map.remove(39)
+
+    let after_key_sum: i64 = 0
+    let after_value_sum: i64 = 0
+    foreach let entry in map {
+        after_key_sum = after_key_sum + entry.key
+        after_value_sum = after_value_sum + entry.value
+    }
+
+    print_int("after len", map.len())
+    print_int("after key sum", after_key_sum)
+    print_int("after value sum", after_value_sum)
+
+    return 0
+}

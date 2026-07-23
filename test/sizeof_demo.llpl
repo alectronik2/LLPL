@@ -1,0 +1,45 @@
+// `.sizeof` (no call parens): unlike the existing `sizeof(TypeName)`,
+// which only ever takes a real type reference, `.sizeof` works on any
+// typed *value*, inferring its type the same way `.as_string` does.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Foo {
+    let a: i64
+    let b: i64
+    constructor(a: i64, b: i64) {
+        self.a = a
+        self.b = b
+    }
+    destructor() {}
+}
+
+struct Pair {
+    let x: i64
+    let y: i64
+}
+
+func main() -> i64 {
+    let n: i64 = 5
+    print_int("n.sizeof", n.sizeof as i64)
+    print_int("sizeof(i64)", sizeof(i64) as i64)
+
+    // classes are always heap-allocated and accessed by pointer, so a
+    // class-typed value's size is the pointer's size, not the
+    // underlying object's
+    let f: Foo = new Foo(1, 2)
+    print_int("f.sizeof", f.sizeof as i64)
+
+    // structs are plain value types - .sizeof reflects the full struct
+    let p: Pair = Pair { x: 1, y: 2 }
+    print_int("p.sizeof", p.sizeof as i64)
+    print_int("sizeof(Pair)", sizeof(Pair) as i64)
+
+    return 0
+}

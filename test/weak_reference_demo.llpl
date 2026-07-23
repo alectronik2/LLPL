@@ -1,0 +1,88 @@
+// `Weak<T>` (prelude.llpl) is a non-owning reference: it never keeps its
+// target alive the way an ordinary class-typed field does, and safely
+// reports whether the target is still alive instead of leaving a
+// dangling pointer once it isn't. Its main use is breaking a reference
+// cycle between two classes that hold each other - make one direction
+// `Weak<T>` and only the other an ordinary owning field, so destroying
+// the owner doesn't try to cascade back through an already-destroyed
+// instance.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Foo {
+    let n: i64
+    constructor(n: i64) { self.n = n }
+    destructor() { puts("Foo destroyed") }
+}
+
+class Child {
+    let name: char*
+    let parent: Weak<Parent>
+    constructor(name: char*) {
+        self.name = name
+    }
+    destructor() {
+        puts("Child destroyed")
+    }
+    func link_parent(p: Parent) {
+        self.parent = new Weak<Parent>(p)
+    }
+    func describe() {
+        let p: Parent = self.parent.upgrade()
+        if p != null {
+            puts("child's parent is still alive")
+            delete p
+        } else {
+            puts("child's parent is gone")
+        }
+    }
+}
+
+class Parent {
+    let child: Child
+    constructor(name: char*) {
+        self.child = new Child(name)
+        self.child.link_parent(self)
+    }
+    destructor() {
+        puts("Parent destroyed")
+    }
+}
+
+func main() -> i64 {
+    // Basic upgrade()/is_alive() lifecycle.
+    let f: Foo = new Foo(42)
+    let w: Weak<Foo> = new Weak<Foo>(f)
+
+    print_int("is_alive_before", w.is_alive() as i64)
+    let g: Foo = w.upgrade()
+    if g != null {
+        print_int("upgrade_before.n", g.n)
+        delete g
+    }
+
+    delete f
+
+    print_int("is_alive_after", w.is_alive() as i64)
+    let g2: Foo = w.upgrade()
+    if g2 == null {
+        puts("upgrade_after: null (correct)")
+    }
+    delete w
+
+    // The actual motivating use case: a parent/child cycle that would
+    // otherwise crash (Parent's destructor releases Child, whose own
+    // destructor would try to release Parent again mid-destruction) -
+    // Child's Weak<Parent> avoids that entirely.
+    let p: Parent = new Parent("kid")
+    p.child.describe()
+    delete p
+
+    puts("no crash, no leak")
+    return 0
+}

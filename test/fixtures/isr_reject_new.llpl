@@ -1,0 +1,7 @@
+class Box {
+    let value: i64
+}
+
+interrupt func timer_irq() {
+    let box: Box = new Box()
+}

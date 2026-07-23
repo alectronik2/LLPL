@@ -1,0 +1,39 @@
+// `alias NAME = [ ... ]` names an array literal at compile time only -
+// it never becomes its own addressable C symbol. Each reference expands
+// back into these same element expressions: as a whole array-typed
+// initializer, or spliced into a *larger* array literal it's one element
+// of. Useful for centralizing repeated magic-number sequences (this is
+// exactly how examples/limine_baremetal_demo/limine.llpl organizes the
+// Limine boot protocol's request IDs) without needing them to live at a
+// real, shared memory location.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+alias magic_header = [0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf]
+
+alias common_prefix = [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b]
+
+// Splices common_prefix's 2 elements plus these 2 into a 4-element array.
+alias request_id = [common_prefix, 0x9d5827dcd881dd75, 0xa3148604f6fab11b]
+
+struct Req {
+    let id: u64[4]
+    let revision: u64
+}
+
+let start_marker: u64[2] = magic_header
+let req: Req = Req { id: request_id, revision: 0 }
+
+func main() -> i64 {
+    print_int("start0_low32", (start_marker[0] & 0xFFFFFFFF) as i64)
+    print_int("req_id0_low32", (req.id[0] & 0xFFFFFFFF) as i64)
+    print_int("req_id2_low32", (req.id[2] & 0xFFFFFFFF) as i64)
+    print_int("req_id3_low32", (req.id[3] & 0xFFFFFFFF) as i64)
+    print_int("revision", req.revision)
+    return 0
+}

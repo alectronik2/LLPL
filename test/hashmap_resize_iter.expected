@@ -1,0 +1,9 @@
+len = 40
+capacity = 64
+get 5 = 5000
+get 39 = 390
+key sum = 780
+value sum = 12750
+after len = 38
+after key sum = 741
+after value sum = 12360

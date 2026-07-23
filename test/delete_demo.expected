@@ -1,0 +1,4 @@
+Foo constructed
+before delete
+Foo destructed
+after delete

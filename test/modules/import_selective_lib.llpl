@@ -1,0 +1,17 @@
+extern func puts(s: char*) -> i64
+
+func hello() {
+    puts("hello from selective")
+}
+
+func secret() {
+    puts("secret")
+}
+
+struct Value {
+    let x: i64
+}
+
+struct Hidden {
+    let y: i64
+}

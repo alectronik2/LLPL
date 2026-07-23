@@ -1,0 +1,52 @@
+// `for`/`foreach` were already generic over anything array-shaped or
+// class-with-iterator-protocol-shaped (see range_for_demo.llpl); this
+// exercises the formal `trait Iterator<T>` (prelude.llpl) that documents
+// that protocol - a class can satisfy it either by writing iter_has_next/
+// iter_next directly in its own body (like String/HashMap do), or via an
+// explicit `impl Iterator<T> for ThisClass { ... }` block, and `for`/
+// `foreach` dispatch on either one identically.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Countdown {
+    let n: i64
+    constructor(n: i64) { self.n = n }
+    destructor() {}
+}
+
+impl Iterator<i64> for Countdown {
+    func iter_has_next() -> bool {
+        return self.n > 0
+    }
+    func iter_next() -> i64 {
+        self.n = self.n - 1
+        return self.n + 1
+    }
+}
+
+func main() -> i64 {
+    let c: Countdown = new Countdown(3)
+    for x in c {
+        print_int("x", x)
+    }
+
+    let c2: Countdown = new Countdown(2)
+    for y in c2 {
+        puts("y = \(y)")
+    }
+
+    let arr: i64[3]
+    arr[0] = 7
+    arr[1] = 8
+    arr[2] = 9
+    for z in arr {
+        puts("\(z)")
+    }
+
+    return 0
+}

@@ -1,0 +1,9 @@
+exact i64
+i64 to float param
+i64 to u64 param
+i64 to u64 return/assignment
+i64 to float arithmetic
+u8 to i64 param
+u8 to float arithmetic
+i32 + i64 widens to i64, not truncated
+u8 + u64 widens to u64, not truncated

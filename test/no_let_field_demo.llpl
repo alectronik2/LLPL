@@ -1,0 +1,36 @@
+// A class field can be declared without `let` - `x: i64` means exactly
+// what `let x: i64` does. `const`/`volatile` fields still need their
+// keyword, since dropping it would leave no way to distinguish them from
+// a plain mutable field.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Point {
+    x: i64
+    y: i64
+
+    constructor(x: i64, y: i64) {
+        self.x = x
+        self.y = y
+    }
+    destructor() {}
+
+    func sum() -> i64 {
+        return self.x + self.y
+    }
+}
+
+func main() -> i64 {
+    let p: Point = new Point(3, 4)
+    print_int("sum", p.sum())
+
+    p.x = 100
+    print_int("x", p.x)
+
+    return 0
+}

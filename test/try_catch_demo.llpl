@@ -1,0 +1,63 @@
+// try/catch/finally catches both `throw value` and failed Result<T, E> `?`
+// paths with plain generated C control flow, not runtime stack unwinding.
+// This older demo focuses on `?` interop; see throw_try_demo.llpl for the
+// direct `throw` spelling.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func safe_div(a: i64, b: i64) -> Result<i64, i64> {
+    let r: Result<i64, i64> = new Result<i64, i64>()
+    if b == 0 {
+        r.set_err(-1)
+        return r
+    }
+    r.set_ok(a / b)
+    return r
+}
+
+func main() -> i64 {
+    // `main` returns plain `i64`, not a Result - a bare `?` here wouldn't
+    // compile, but wrapped in `try` it's fine: an error redirects to catch.
+    try {
+        let x: i64 = safe_div(10, 2)?
+        print_int("x", x)
+        let y: i64 = safe_div(10, 0)?
+        print_int("y (unreachable)", y)
+    } catch (e) {
+        print_int("caught", e)
+    } finally {
+        puts("finally always runs")
+    }
+
+    // finally runs on the success path too, no error involved.
+    try {
+        let z: i64 = safe_div(20, 4)?
+        print_int("z", z)
+    } catch (e) {
+        print_int("not reached", e)
+    } finally {
+        puts("finally runs on success too")
+    }
+
+    // nested try - the inner catch handles the inner error; the outer
+    // try (with no `?` of its own) is unaffected and keeps running.
+    try {
+        try {
+            let a: i64 = safe_div(1, 0)?
+            print_int("a (unreachable)", a)
+        } catch (e) {
+            print_int("inner caught", e)
+        }
+        puts("outer try continues normally")
+    } finally {
+        puts("outer finally runs")
+    }
+
+    return 0
+}

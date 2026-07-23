@@ -1,0 +1,7 @@
+// assert pass: a true assertion should be silent.
+
+func main() -> i64 {
+    assert(1 == 1)
+    assert(2 > 1, "two is greater than one")
+    return 0
+}

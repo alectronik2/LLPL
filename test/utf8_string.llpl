@@ -1,0 +1,53 @@
+extern func puts(s: string) -> i64
+
+func print_int(label: string, value: i64) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func print_bool(label: string, value: bool) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func main() -> i64 {
+    let raw: string = "aé日"
+    let s: String = new String(raw)
+
+    print_int("raw bytes", llpl_strlen(raw) as i64)
+    print_int("raw chars", llpl_utf8_len(raw) as i64)
+    print_bool("raw valid", llpl_utf8_valid(raw))
+
+    print_int("bytes", s.byte_len())
+    print_int("chars", s.len())
+    print_int("byte index 2", s.byte_index(2))
+    print_int("char index byte3", s.char_index(3))
+    print_int("index 1", s[1] as i64)
+    print_int("byte at 1", s.byte_at(1) as i64)
+    print_int("cp 1", s.codepoint_at(1) as i64)
+    print_int("cp 2", s.codepoint_at(2) as i64)
+
+    let sum: u64 = 0
+    foreach let cp in s {
+        sum = sum + cp
+    }
+    print_int("foreach sum", sum as i64)
+
+    let piece: String = s.substring(1, 2)
+    puts(piece.c_str())
+    let byte_piece: String = s.byte_substring(1, 2)
+    puts(byte_piece.c_str())
+
+    print_int("find char", s.find("日"))
+    print_int("find byte", s.byte_find("日"))
+
+    let invalid: char[2]
+    invalid[0] = 195 as char
+    invalid[1] = 0 as char
+    print_bool("invalid valid", llpl_utf8_valid(invalid as string))
+    print_int("invalid chars", llpl_utf8_len(invalid as string) as i64)
+
+    return 0
+}

@@ -1,0 +1,32 @@
+// A bare instance method reference (`f.method` with no call parens) now
+// decays to its address, the same way a plain function name does -
+// `f.bar as u64` resolves to the same address llpl_resolve_symbol would
+// find via a real call's return address. Works for a method written
+// directly in the class body and for one provided by an `impl Trait for
+// ThisClass { ... }` block.
+
+extern func puts(s: char*) -> i64
+
+class Foo {
+    let n: i64
+    constructor(n: i64) { self.n = n }
+    destructor() {}
+    func bar() -> i64 { return self.n }
+}
+
+trait Doubled { func doubled() -> u64 }
+impl Doubled for Foo {
+    func doubled() -> u64 { return (self.n * 2) as u64 }
+}
+
+func main() -> i64 {
+    let f: Foo = new Foo(5)
+
+    let sym: char* = llpl_resolve_symbol(f.bar as u64)
+    puts(llpl_symbol_name(sym))
+
+    let sym2: char* = llpl_resolve_symbol(f.doubled as u64)
+    puts(llpl_symbol_name(sym2))
+
+    return 0
+}

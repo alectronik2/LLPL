@@ -1,0 +1,46 @@
+extern func puts(s: string) -> i64
+
+func print_int(label: string, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as string, 64, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func print_char(label: string, value: char) {
+    let buf: char[64]
+    ksnprintf(buf as string, 64, "%s = %c", label, value)
+    puts(buf as string)
+}
+
+func main() -> i64 {
+    let a: string = "same"
+    let b: string = "same"
+    let c: string = "tail"
+
+    if a == b {
+        puts("same content")
+    }
+    if a != c {
+        puts("different content")
+    }
+    if a < c {
+        puts("lexicographic lt")
+    }
+    if c >= b {
+        puts("lexicographic ge")
+    }
+
+    print_int("len", llpl_strlen(a) as i64)
+    print_char("char", a[1])
+
+    let map: HashMap<string, i64> = new HashMap<string, i64>()
+    map.insert(a, 1)
+    map.insert(b, 2)
+    map.insert(c, 3)
+
+    print_int("map len", map.len())
+    print_int("same key", map.get(a).get())
+    print_int("tail key", map.get(c).get())
+
+    return 0
+}

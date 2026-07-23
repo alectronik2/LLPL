@@ -1,0 +1,42 @@
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let x: i64 = 10
+    let inc: () -> void = func[&x]() {
+        x = x + 1
+    }
+    inc()
+    inc()
+
+    // by-value capture should be a snapshot
+    let y: i64 = 5
+    let getY: () -> i64 = func[y]() -> i64 {
+        return y
+    }
+    y = 100
+    let snapshot: i64 = getY()
+
+    // nested lambda re-captures the same reference
+    let inner: () -> i64 = func[&x]() -> i64 {
+        return x + 1
+    }
+    let result: i64 = inner()
+
+    // inner lambda inside an outer lambda body re-captures the outer ref
+    let outer: () -> i64 = func[&x]() -> i64 {
+        let inner2: () -> i64 = func[&x]() -> i64 {
+            x = x + 10
+            return x
+        }
+        return inner2()
+    }
+    let nestedResult: i64 = outer()
+
+    if x == 22 && snapshot == 5 && result == 13 && nestedResult == 22 {
+        puts("ok")
+    } else {
+        puts("fail")
+    }
+
+    return 0
+}

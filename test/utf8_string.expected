@@ -1,0 +1,18 @@
+raw bytes = 6
+raw chars = 3
+raw valid = 1
+bytes = 6
+chars = 3
+byte index 2 = 3
+char index byte3 = 2
+index 1 = 233
+byte at 1 = 195
+cp 1 = 233
+cp 2 = 26085
+foreach sum = 26415
+é日
+é
+find char = 2
+find byte = 3
+invalid valid = 0
+invalid chars = 1

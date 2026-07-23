@@ -1,0 +1,8 @@
+5 |> double_it |> add_one = 11
+5 |> add(10) = 15
+2 + 3 |> double_it = 10
+6 |> square = 36
+maybe.get() = 42
+nothing is none, as expected
+parse_positive("123") = 123
+parse_positive("12x") is none, as expected

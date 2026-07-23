@@ -1,0 +1,9 @@
+extern func puts(s: char*) -> i64
+
+func hello() {
+    puts("hello from alias")
+}
+
+struct Greeting {
+    let msg: char*
+}

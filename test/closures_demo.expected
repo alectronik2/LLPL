@@ -1,0 +1,5 @@
+add5(10) = 15
+add10(10) = 20
+add5(10) again = 15
+apply_twice(add5, 1) = 11
+counter.count = 8

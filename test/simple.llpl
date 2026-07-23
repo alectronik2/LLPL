@@ -1,0 +1,71 @@
+// Simple test program
+
+class Counter {
+    let value: i64
+
+    constructor(initial: i64) {
+        self.value = initial
+    }
+
+    destructor() {
+        // Nothing to clean up
+    }
+
+    func increment() {
+        self.value = self.value + 1
+    }
+
+    func get_value() -> i64 {
+        return self.value
+    }
+}
+
+func factorial(n: i64) -> i64 {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+func test_loops() {
+    let sum: i64 = 0
+
+    // Test while loop
+    let i: i64 = 0
+    while i < 10 {
+        sum = sum + i
+        i = i + 1
+    }
+
+    // Test for loop
+    for let j: i64 = 0, j < 5, j = j + 1 {
+        sum = sum + j
+    }
+}
+
+func test_defer() {
+    let counter: Counter = new Counter(0)
+
+    defer counter = null
+
+    counter.increment()
+    counter.increment()
+
+    let result: i64 = counter.get_value()
+}
+
+func main() -> i64 {
+    let counter: Counter = new Counter(10)
+
+    counter.increment()
+    counter.increment()
+
+    let value: i64 = counter.get_value()
+
+    let fact: i64 = factorial(5)
+
+    test_loops()
+    test_defer()
+
+    return 0
+}

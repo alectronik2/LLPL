@@ -1,0 +1,4 @@
+sum(view) = 150
+view[2] after slice_set = 99
+sum(v.as_slice()) = 10
+v.get(1) = 2

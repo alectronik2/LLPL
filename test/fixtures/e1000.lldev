@@ -1,0 +1,8 @@
+device E1000
+base 0xF0000000
+irq 11
+reg CTRL 0x0000 u32
+reg STATUS 0x0008 u32
+reg RDBAL 0x2800 u32
+reg RDLEN 0x2808 u32
+dma RX_RING 16 4096 16

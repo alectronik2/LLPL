@@ -1,0 +1,60 @@
+// Implicit returns: a function/method/lambda body's trailing bare
+// expression is its return value, unless the return type is `void` - see
+// codegen.d's withImplicitReturn. Only the true last statement counts;
+// an expression anywhere else is still just evaluated and discarded.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func square(n: i64) -> i64 {
+    n * n
+}
+
+// earlier statements still run for their side effects/bindings
+func sum_of_squares(a: i64, b: i64) -> i64 {
+    let sa: i64 = square(a)
+    let sb: i64 = square(b)
+    sa + sb
+}
+
+// explicit `return` still works, including mixed with an implicit one
+func abs_value(n: i64) -> i64 {
+    if n < 0 {
+        return -n
+    }
+    n
+}
+
+class Counter {
+    let count: i64
+
+    constructor(start: i64) {
+        self.count = start
+    }
+
+    destructor() {}
+
+    func doubled() -> i64 {
+        self.count * 2
+    }
+}
+
+func main() -> i64 {
+    print_int("square(6)", square(6))
+    print_int("sum_of_squares(3, 4)", sum_of_squares(3, 4))
+    print_int("abs_value(-5)", abs_value(-5))
+    print_int("abs_value(5)", abs_value(5))
+
+    let c: Counter = new Counter(21)
+    print_int("c.doubled()", c.doubled())
+
+    let triple: (i64) -> i64 = func[](x: i64) -> i64 { x * 3 }
+    print_int("triple(7)", triple(7))
+
+    return 0
+}

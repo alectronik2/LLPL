@@ -1,0 +1,95 @@
+// Struct literals, Result<T, E>, and the `?` propagation operator demo.
+//
+// `Name { field: value, ... }` constructs a struct value directly - every
+// field must be given, by name, though not necessarily in declaration
+// order. Structs only (never a class - use `new` for those). A generic
+// struct's type arguments always come from context (the enclosing
+// `let`/return's declared type), never written in the literal itself,
+// since there's often nothing else to infer them from.
+//
+// `Result<T, E>` (prelude.llpl) is a generic "value or error" box, built
+// the same way as `Optional<T>`: a plain class with `set_ok`/`set_err`/
+// `is_ok`/`is_err`/`get_ok`/`get_err`, since a generic tagged enum can't
+// infer both type parameters from either variant's constructor alone.
+//
+// `expr?` unwraps an Optional<T>/Result<T, E> - it evaluates to the
+// wrapped value on Some/Ok, or returns early out of the *enclosing*
+// function with an equivalent None/Err otherwise. The enclosing function
+// must itself return a compatible Optional/Result for this to type-check.
+
+extern func puts(s: char*) -> i64
+
+struct Point {
+    let x: i64
+    let y: i64
+}
+
+struct Rect {
+    let top_left: Point
+    let bottom_right: Point
+}
+
+struct Pair<A, B> {
+    let first: A
+    let second: B
+}
+
+func area(r: Rect) -> i64 {
+    let width: i64 = r.bottom_right.x - r.top_left.x
+    let height: i64 = r.bottom_right.y - r.top_left.y
+    return width * height
+}
+
+func safe_div(a: i64, b: i64) -> Result<i64, char*> {
+    let r: Result<i64, char*> = new Result<i64, char*>()
+    if b == 0 {
+        r.set_err("division by zero")
+        return r
+    }
+    r.set_ok(a / b)
+    return r
+}
+
+// Uses `?` twice - if either division fails, this returns early with that
+// same failure, never reaching the addition.
+func sum_of_divisions(a: i64, b: i64, c: i64, d: i64) -> Result<i64, char*> {
+    let first: i64 = safe_div(a, b)?
+    let second: i64 = safe_div(c, d)?
+    let result: Result<i64, char*> = new Result<i64, char*>()
+    result.set_ok(first + second)
+    return result
+}
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    // Struct literals - nested (Rect holds two Points by value), and
+    // constructed inline as a call argument.
+    let r: Rect = Rect {
+        top_left: Point { x: 0, y: 0 },
+        bottom_right: Point { x: 4, y: 3 }
+    }
+    print_int("area", area(r)) // 12
+
+    // A generic struct literal - Pair's A/B come entirely from the
+    // declared type on the left.
+    let coords: Pair<i64, i64> = Pair { first: 10, second: 20 }
+    print_int("coords.first + coords.second", coords.first + coords.second)
+
+    // Result<T, E> plus `?` propagation.
+    let ok: Result<i64, char*> = sum_of_divisions(10, 2, 20, 4)
+    if ok.is_ok() {
+        print_int("sum_of_divisions(10,2,20,4)", ok.get_ok()) // 5 + 5 = 10
+    }
+
+    let failed: Result<i64, char*> = sum_of_divisions(10, 0, 20, 4)
+    if failed.is_err() {
+        puts("sum_of_divisions(10,0,20,4) failed, as expected")
+    }
+
+    return 0
+}

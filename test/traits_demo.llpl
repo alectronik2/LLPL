@@ -1,0 +1,171 @@
+// Traits/interfaces demo: static, monomorphization-based dispatch only -
+// no vtables, no trait objects. A `trait` is a pure compile-time contract
+// (method signatures, no bodies); `impl TraitName for TargetType { ... }`
+// is the only way a primitive/struct/class actually gains a method body
+// for it, since none of those have inline method-declaration syntax of
+// their own for an arbitrary trait. `Self` inside a trait/impl refers to
+// whatever concrete type the `impl` targets - it's resolved by name, not
+// a reserved keyword, reusing the same substitution machinery generics
+// already use for `T`.
+//
+// `func f<T: TraitName>(...)` bounds a generic type parameter: T can only
+// ever be instantiated with a type that has a matching `impl`, checked at
+// monomorphization time (see codegen.d's processImplBlock/traitImplemented).
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+// A user-defined trait.
+trait Greeter {
+    func greet() -> i64
+}
+
+// A plain struct (value type, no inline methods of its own)...
+struct Point {
+    let x: i64
+    let y: i64
+}
+
+// ...gains a real method body only through an `impl` block. The method is
+// desugared into an ordinary top-level function (`Point_greet`) taking
+// `self: Point` by value as its first parameter.
+impl Greeter for Point {
+    func greet() -> i64 {
+        return self.x + self.y
+    }
+}
+
+// A class works the same way - `self` is auto-pointered like any other
+// class method, since typeToC already does that for a plain class name.
+class Counter {
+    let n: i64
+    constructor(start: i64) {
+        self.n = start
+    }
+}
+
+impl Greeter for Counter {
+    func greet() -> i64 {
+        return self.n
+    }
+}
+
+// A bounded generic function: T must implement Greeter. Instantiated once
+// per concrete T actually used below (Point, then Counter) - same
+// monomorphization the rest of generics already uses, just gated by a
+// trait-bound check this time.
+func greet_twice<T: Greeter>(v: T) -> i64 {
+    return v.greet() + v.greet()
+}
+
+// Operator overloading via traits: prelude.llpl's Add/Sub/Neg/Mul give a
+// struct or class real `+`/`-`/unary-`-`/`*` operators the same way any
+// other trait does - `func operator+(...)` inside the impl resolves to the
+// same internal "op_add" method name a class's own *inline* `func
+// operator+` method would (see ast.operatorMethodName), so both forms
+// dispatch identically at a use site like `a + b`. This is the only way a
+// struct like Vec2 (no inline method syntax at all) can define one.
+struct Vec2 {
+    let x: i64
+    let y: i64
+}
+
+impl Add for Vec2 {
+    func operator+(other: Vec2) -> Vec2 {
+        let r: Vec2
+        r.x = self.x + other.x
+        r.y = self.y + other.y
+        return r
+    }
+}
+
+impl Neg for Vec2 {
+    func operator-() -> Vec2 {
+        let r: Vec2
+        r.x = 0 - self.x
+        r.y = 0 - self.y
+        return r
+    }
+}
+
+impl Mul for Vec2 {
+    // Nominal validation is name-only (see processImplBlock), so the
+    // parameter type doesn't have to be Self - a scalar works fine here.
+    func operator*(scalar: i64) -> Vec2 {
+        let r: Vec2
+        r.x = self.x * scalar
+        r.y = self.y * scalar
+        return r
+    }
+}
+
+// A bounded generic function using Add - works for *any* type with a
+// matching impl, not just Vec2.
+func sum_pair<T: Add>(a: T, b: T) -> T {
+    return a + b
+}
+
+func main() -> i64 {
+    let p: Point
+    p.x = 3
+    p.y = 4
+    print_int("p.greet()", p.greet())
+    print_int("greet_twice(p)", greet_twice(p))
+
+    let c: Counter = new Counter(10)
+    print_int("c.greet()", c.greet())
+    print_int("greet_twice(c)", greet_twice(c))
+
+    // prelude.llpl's Comparable trait, with impls for i64/u64/char.
+    print_int("(3).compare(5)", (3).compare(5))
+    print_int("(5).compare(3)", (5).compare(3))
+
+    // prelude.llpl's Hashable trait is what HashMap<K: Hashable, V> now
+    // uses for its key hashing/equality (key.hash()/key.equals(other))
+    // instead of raw byte comparison - so a `char*` key hashes/compares by
+    // *string content*, not pointer identity. Proof: two different
+    // pointers holding the same text still collide as the same key.
+    let m: HashMap<char*, i64> = new HashMap<char*, i64>()
+    let key1: char* = "hello"
+    let key2buf: char[16]
+    ksnprintf(key2buf as char*, 16, "hel%s", "lo")
+    let key2: char* = key2buf as char*
+
+    m.insert(key1, 42)
+    let found: Optional<i64> = m.get(key2)
+    if found.is_some() {
+        print_int("m.get(key2) via key1's content", found.get())
+    }
+
+    // Operator overloading via impl (Vec2 has no inline methods at all).
+    let v1: Vec2
+    v1.x = 1
+    v1.y = 2
+    let v2: Vec2
+    v2.x = 10
+    v2.y = 20
+
+    let v3: Vec2 = v1 + v2
+    print_int("(v1 + v2).x", v3.x)
+    print_int("(v1 + v2).y", v3.y)
+
+    let v4: Vec2 = -v1
+    print_int("(-v1).x", v4.x)
+    print_int("(-v1).y", v4.y)
+
+    let v5: Vec2 = v1 * 3
+    print_int("(v1 * 3).x", v5.x)
+    print_int("(v1 * 3).y", v5.y)
+
+    // Same Add trait, used through a bounded generic function.
+    let v6: Vec2 = sum_pair(v1, v2)
+    print_int("sum_pair(v1, v2).x", v6.x)
+    print_int("sum_pair(v1, v2).y", v6.y)
+
+    return 0
+}

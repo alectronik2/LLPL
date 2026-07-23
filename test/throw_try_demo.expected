@@ -1,0 +1,14 @@
+caught_throw = 7
+finally_throw
+caught_question = 3
+finally_question
+cross_function_caught = 11
+finally_uncaught_question
+defer_uncaught_question
+cross_cleanup_caught = 5
+branch_defer_enabled
+branch_defer_before_throw
+branch_defer_caught = 17
+inner_finally_before_outer_catch
+outer_caught = 13
+outer_finally

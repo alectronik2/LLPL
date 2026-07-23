@@ -1,0 +1,71 @@
+// Tuple types, tuple literals, multi-value returns, and destructuring.
+
+extern func puts(s: char*) -> i64
+
+struct Point {
+    let x: i64
+    let y: i64
+}
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func print_str(label: char*, value: char*) {
+    let buf: char[128]
+    ksnprintf(buf as char*, 128, "%s = %s", label, value)
+    puts(buf as char*)
+}
+
+func make_pair() -> (i64, i64) {
+    return (10, 20)
+}
+
+func make_triple() -> (i64, char*, bool) {
+    return (30, "hello", 1)
+}
+
+func main() -> i64 {
+    // Explicit tuple type and positional access
+    let t1: (i64, i64) = (1, 2)
+    print_int("t1._0", t1._0)
+    print_int("t1._1", t1._1)
+
+    // Inferred tuple type
+    let t2 = (3, 4)
+    print_int("t2._0", t2._0)
+    print_int("t2._1", t2._1)
+
+    // Multi-value return
+    let (a, b) = make_pair()
+    print_int("a", a)
+    print_int("b", b)
+
+    // Const destructuring
+    const (c, d) = (5, 6)
+    print_int("c", c)
+    print_int("d", d)
+
+    // Struct destructuring
+    let p = Point { x: 7, y: 8 }
+    let Point { x, y } = p
+    print_int("x", x)
+    print_int("y", y)
+
+    // Nested tuple destructuring
+    let nested = ((100, 200), 300)
+    let ((u, v), w) = nested
+    print_int("u", u)
+    print_int("v", v)
+    print_int("w", w)
+
+    // Mixed tuple types
+    let (n, s, flag) = make_triple()
+    print_int("n", n)
+    print_str("s", s)
+    print_int("flag", flag as i64)
+
+    return 0
+}

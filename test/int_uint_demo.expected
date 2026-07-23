@@ -1,0 +1,4 @@
+int/uint arithmetic works
+int is a native machine word (4 or 8 bytes)
+int to float coercion works
+signed int to uint via explicit cast works

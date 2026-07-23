@@ -1,0 +1,61 @@
+// `.as_string` (no call parens) and casting a class/struct value `as
+// string`: a class defining a no-argument `as_string()` method has it
+// called; everything else (a struct, which can't have methods at all, or
+// a class that doesn't define one) falls back to a compile-time string
+// literal of the type's own name. `x.as_string()` (with parens) already
+// works as an ordinary method call - no special support needed for that.
+// String interpolation (`"\(x)"`) resolves a class/struct value the same
+// way, implicitly - no need to spell out `"\(x.as_string)"`.
+
+extern func puts(s: char*) -> i64
+
+class Point3D {
+    let x: i64
+    let y: i64
+    let z: i64
+
+    constructor(x: i64, y: i64, z: i64) {
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+
+    destructor() {}
+
+    func as_string() -> string {
+        if self.x == 0 && self.y == 0 && self.z == 0 {
+            return "Point3D(origin)"
+        }
+        return "Point3D(non-origin)"
+    }
+}
+
+class Plain {
+    let n: i64
+    constructor(n: i64) { self.n = n }
+    destructor() {}
+}
+
+struct Pair {
+    let a: i64
+    let b: i64
+}
+
+func main() -> i64 {
+    let p: Point3D = new Point3D(1, 2, 3)
+    puts(p.as_string)     // custom method: "Point3D(non-origin)"
+    puts(p as string)      // same, via a cast
+
+    let q: Plain = new Plain(5)
+    puts(q.as_string)      // no as_string() defined -> falls back to "Plain"
+
+    let pair: Pair = Pair { a: 1, b: 2 }
+    puts(pair.as_string)   // structs can't have methods -> falls back to "Pair"
+
+    let n: i64 = 42
+    puts(n.as_string)      // primitives fall back to their type name too
+
+    puts("interpolated: \(p)")  // implicit as_string inside "\(...)"
+
+    return 0
+}

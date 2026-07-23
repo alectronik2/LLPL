@@ -1,0 +1,95 @@
+// Pipe operator and nullable-type ("T?") sugar demo.
+//
+// `x |> f` desugars to `f(x)`; `x |> f(a, b)` desugars to `f(x, a, b)` - x
+// is always inserted as the function's first argument. Chains left to
+// right: `x |> f |> g` is `g(f(x))`. It binds looser than every other
+// operator, so `a + b |> f` means `f(a + b)`.
+//
+// `T?` is sugar for `Optional<T>` (the generic class from prelude.llpl):
+// `let x: i64? = 5` builds a real Optional<i64> and sets it to 5 in one
+// step, `let x: i64? = null` builds an empty one, and a bare
+// `let x: i64?` (no initializer) defaults to empty too - see
+// ast.Type.isNullableSugar and codegen.d's generateNullableWrap.
+
+extern func puts(s: char*) -> i64
+
+func double_it(x: i64) -> i64 {
+    return x * 2
+}
+
+func add_one(x: i64) -> i64 {
+    return x + 1
+}
+
+func add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+// A generic function composes with the pipe operator too - T is inferred
+// from the piped-in value, same as any other call.
+func square<T>(x: T) -> T {
+    return x * x
+}
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+// A small "pipeline" of nullable-returning steps: parse a number-ish
+// string into an Optional<i64> (empty on anything not a plain digit
+// string), showing pipe and nullable types working together.
+func parse_positive(s: char*) -> i64? {
+    if s[0] == 0 {
+        return null
+    }
+    let i: i64 = 0
+    let value: i64 = 0
+    while s[i] != 0 {
+        if s[i] < 48 || s[i] > 57 { // not '0'..'9'
+            return null
+        }
+        value = value * 10 + ((s[i] as i64) - 48)
+        i = i + 1
+    }
+    return value
+}
+
+func main() -> i64 {
+    // Pipe operator: a small transformation pipeline.
+    let piped: i64 = 5 |> double_it |> add_one
+    print_int("5 |> double_it |> add_one", piped) // (5*2)+1 = 11
+
+    let with_args: i64 = 5 |> add(10)
+    print_int("5 |> add(10)", with_args) // add(5, 10) = 15
+
+    let precedence: i64 = 2 + 3 |> double_it
+    print_int("2 + 3 |> double_it", precedence) // (2+3) |> double_it = 10
+
+    let generic_piped: i64 = 6 |> square
+    print_int("6 |> square", generic_piped) // 36
+
+    // Nullable types.
+    let maybe: i64? = 42
+    if maybe.is_some() {
+        print_int("maybe.get()", maybe.get())
+    }
+
+    let nothing: i64? = null
+    if nothing.is_none() {
+        puts("nothing is none, as expected")
+    }
+
+    // Pipe + nullable together, and the parse_positive pipeline above.
+    let good: i64? = "123" |> parse_positive
+    let bad: i64? = "12x" |> parse_positive
+    if good.is_some() {
+        print_int("parse_positive(\"123\")", good.get())
+    }
+    if bad.is_none() {
+        puts("parse_positive(\"12x\") is none, as expected")
+    }
+
+    return 0
+}

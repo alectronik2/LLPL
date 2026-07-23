@@ -1,0 +1,6 @@
+extern func llpl_panic(msg: char*)
+
+func main() -> i64 {
+    llpl_panic("something went wrong")
+    return 0
+}

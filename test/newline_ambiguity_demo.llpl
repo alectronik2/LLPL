@@ -1,0 +1,50 @@
+// `*`, `-`, and `&` each double as a unary prefix operator (deref,
+// negate, address-of) and a binary infix one (multiply, subtract,
+// bitwise-and) - a statement starting with one of these right after a
+// previous, complete statement is only read as continuing that
+// statement's expression if it stays on the same source line; on a new
+// line it's parsed as a fresh unary expression/statement instead. This
+// used to be misparsed as one continued expression (e.g. `foo() * p =
+// 1`) regardless of the line break.
+
+extern func puts(s: char*) -> i64
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func helper() -> i64 {
+    return 5
+}
+
+func main() -> i64 {
+    let x: i64 = 10
+    let p: i64* = &x
+
+    helper()
+    *p = 42
+    print_int("x", x)
+
+    let y: i64 = 3
+    helper()
+    -y
+    print_int("y", y)
+
+    // same-line binary ops are unaffected
+    let a: i64 = 10
+    let b: i64 = 3
+    print_int("mul", a * b)
+    print_int("sub", a - b)
+    print_int("and", a & b)
+    print_int("deref", *p)
+
+    // double-dereference right after another statement, no helper-
+    // function workaround needed anymore
+    let pp: i64** = &p
+    helper()
+    **pp = 99
+    print_int("x2", x)
+
+    return 0
+}

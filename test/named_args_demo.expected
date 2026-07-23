@@ -1,0 +1,15 @@
+Hi, Alice!
+Hello, Bob!
+Yo, Cara!
+Hey, Dave!
+Hello, Eve!
+add_generic(5) = 15
+add_generic(5, 20) = 25
+add_generic(b: 1, a: 2) = 3
+box
+b.add(5) = 15
+b.add(times: 3, n: 5) = 25
+box2
+b2.add(0) = 20
+adder() = 100
+adder(a: 7) = 7

@@ -1,0 +1,115 @@
+// match + destructuring tests
+
+extern func puts(s: char*) -> i64
+
+enum Shape {
+    Circle(radius: i64),
+    Square(side: i64),
+    Point
+}
+
+struct Point {
+    let x: i64
+    let y: i64
+}
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func print_str(label: char*, value: char*) {
+    let buf: char[128]
+    ksnprintf(buf as char*, 128, "%s = %s", label, value)
+    puts(buf as char*)
+}
+
+func describe_tuple(t: (i64, i64)) -> char* {
+    match t {
+        case (x, y) => {
+            if x == 0 && y == 0 { return "origin" }
+            if x == 0 { return "on y-axis" }
+            if y == 0 { return "on x-axis" }
+            return "somewhere"
+        }
+    }
+    return "unreachable"
+}
+
+func classify_point(p: Point) -> char* {
+    match p {
+        case Point { x, y } => {
+            if x == 0 && y == 0 { return "origin" }
+            return "somewhere"
+        }
+    }
+    return "unreachable"
+}
+
+func classify_result(r: Result<i64, char*>) -> char* {
+    match r {
+        case Result { ok, value, error } => {
+            if ok {
+                return "ok"
+            }
+            return error
+        }
+    }
+    return "unreachable"
+}
+
+func main() -> i64 {
+    // Tuple patterns + wildcard
+    let t1: (i64, i64) = (0, 5)
+    print_str("t1", describe_tuple(t1))
+
+    let t2: (i64, i64) = (3, 0)
+    print_str("t2", describe_tuple(t2))
+
+    let t3: (i64, i64) = (3, 4)
+    print_str("t3", describe_tuple(t3))
+
+    // Struct pattern
+    let p1 = Point { x: 0, y: 0 }
+    print_str("p1", classify_point(p1))
+
+    let p2 = Point { x: 10, y: 20 }
+    print_str("p2", classify_point(p2))
+
+    // Generic class struct pattern
+    let ok_result: Result<i64, char*> = new Result<i64, char*>()
+    ok_result.set_ok(42)
+    print_str("ok_result", classify_result(ok_result))
+
+    let err_result: Result<i64, char*> = new Result<i64, char*>()
+    err_result.set_err("bad input")
+    print_str("err_result", classify_result(err_result))
+
+    // Nested tuple pattern
+    let nested = ((1, 2), 3)
+    match nested {
+        case ((a, b), c) => {
+            print_int("a", a)
+            print_int("b", b)
+            print_int("c", c)
+        }
+    }
+
+    // Existing tagged-enum variant pattern still works
+    let s = Shape.Circle(7)
+    match s {
+        case Shape.Circle(r) => { print_int("radius", r) }
+        case Shape.Square(side) => { print_int("side", side) }
+        case Shape.Point() => { puts("point") }
+    }
+
+    // Literal alternatives still work
+    let n: i64 = 2
+    match n {
+        case 1, 2, 3 => { puts("small") }
+        default => { puts("big") }
+    }
+
+    return 0
+}

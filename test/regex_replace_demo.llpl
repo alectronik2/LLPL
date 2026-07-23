@@ -1,0 +1,42 @@
+// Regex capture iteration and replacement, built entirely in prelude.llpl
+// on top of the existing Regex/RegexMatch primitives - no new runtime C
+// functions needed, since finding "the next match after the last one"
+// just means re-searching a suffix (pointer arithmetic on char*) of the
+// original text with the existing "search from the start of this string"
+// primitive.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    let digits = /[0-9]+/
+    let text: char* = "abc 123 def 4567 ghi"
+
+    // RegexMatchIterator implements the foreach iterator protocol -
+    // `find_all` walks every non-overlapping match, left to right.
+    // group_start/group_end read as positions into the *original* text,
+    // even though each match is found by searching a suffix of it.
+    let count: i64 = 0
+    foreach let m in digits.find_all(text) {
+        puts(m.group(0).c_str())
+        print_int("start", m.group_start(0))
+        count = count + 1
+    }
+    print_int("total matches", count)
+
+    // replace() touches only the first match; replace_all() touches every one.
+    puts(digits.replace(text, "#").c_str())
+    puts(digits.replace_all(text, "#").c_str())
+
+    // $0/$1/... expand to captured groups in the replacement ($$ for a
+    // literal $).
+    let pair = /([a-z]+)-([0-9]+)/
+    puts(pair.replace("id-42!", "$2:$1").c_str())
+
+    return 0
+}

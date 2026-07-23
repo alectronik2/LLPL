@@ -1,0 +1,7 @@
+*p = 5
+**pp = 5
+x after set_via_pp(pp, 42) = 42
+y after increment_via_pp = 101
+**made = 101
+**alias_pp = 42
+**generic_pp = 42

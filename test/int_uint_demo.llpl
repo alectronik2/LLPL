@@ -1,0 +1,28 @@
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let x: int = 42
+    let y: uint = 7
+    let sum: int = x + (y as int)
+    if sum == 49 {
+        puts("int/uint arithmetic works")
+    }
+
+    let word_size: uint = sizeof(int)
+    if word_size == 4 || word_size == 8 {
+        puts("int is a native machine word (4 or 8 bytes)")
+    }
+
+    let f: double = x
+    if f > 41.5 {
+        puts("int to float coercion works")
+    }
+
+    let neg: int = -5
+    let widened: uint = neg as uint
+    if widened != 5 {
+        puts("signed int to uint via explicit cast works")
+    }
+
+    return 0
+}

@@ -1,0 +1,11 @@
+// bounds_check_fail: fixed-size array access out of bounds, compiled with --safe.
+
+func main() -> i64 {
+    let arr: i64[3]
+    arr[0] = 1
+    arr[1] = 2
+    arr[2] = 3
+
+    let i: i64 = 5
+    return arr[i]
+}

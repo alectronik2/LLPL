@@ -1,0 +1,6 @@
+func main() -> i64 {
+    let arr: i64[3]
+    let s: Slice<i64> = Slice { ptr: arr as i64*, len: 3 }
+    let x: i64 = slice_get(s, 5)
+    return x
+}

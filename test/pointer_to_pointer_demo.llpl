@@ -1,0 +1,62 @@
+// Pointer-to-pointer: `Type.pointerDepth` (an i64, not a single bool)
+// tracks arbitrary levels of indirection - `i64*`, `i64**`, `i64***`, ...
+// The generated C is completely ordinary; only this compiler's own type
+// tracking (address-of/dereference inference, aliases, generics) needed
+// to stop collapsing every level down to a single `*`.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+alias IntPtrPtr = i64**
+
+func set_via_pp(pp: i64**, v: i64) {
+    **pp = v
+}
+
+func increment_via_pp(pp: i64**) {
+    **pp = **pp + 1
+}
+
+func make_ptr_to_ptr(p: i64*) -> i64** {
+    return &p
+}
+
+// T bound to a pointer type, used as T* inside - stacks depth (i64* ->
+// i64**) instead of collapsing back to a single star.
+func make_double_ptr<T>(v: T) -> T* {
+    let local: T = v
+    return &local
+}
+
+func main() -> i64 {
+    let x: i64 = 5
+    let p: i64* = &x
+    let pp: i64** = &p
+    print_int("*p", *p)
+    print_int("**pp", **pp)
+
+    set_via_pp(pp, 42)
+    print_int("x after set_via_pp(pp, 42)", x)
+
+    let y: i64 = 100
+    let py: i64* = &y
+    let ppy: i64** = &py
+    increment_via_pp(ppy)
+    print_int("y after increment_via_pp", y)
+
+    let made: i64** = make_ptr_to_ptr(py)
+    print_int("**made", **made)
+
+    let alias_pp: IntPtrPtr = &p
+    print_int("**alias_pp", **alias_pp)
+
+    let generic_pp: i64** = make_double_ptr(p)
+    print_int("**generic_pp", **generic_pp)
+
+    return 0
+}

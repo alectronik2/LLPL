@@ -1,0 +1,61 @@
+extern func puts(s: string) -> i64
+
+func print_bool(label: string, value: bool) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func print_int(label: string, value: i64) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func main() -> i64 {
+    let r = /([a-zA-Z0-9_]*)/
+    let result = r.match("Test_123")
+    print_bool("identifier", result)
+    let ident_match = r.captures("Test_123")
+    print_bool("identifier matched", ident_match.is_match())
+    print_int("identifier groups", ident_match.group_count())
+    print_bool("identifier group1 exists", ident_match.has_group(1))
+    puts(ident_match.group(0).c_str())
+    puts(ident_match.group(1).c_str())
+
+    let digits = /^[0-9]+$/
+    print_bool("digits ok", digits.match("12345"))
+    print_bool("digits no", digits.match("12a45"))
+
+    let choice = /(cat|dog)s?/
+    print_bool("choice cat", choice.match("cats"))
+    print_bool("choice dog", choice.match("dog"))
+    print_bool("choice no", choice.match("bird"))
+
+    let slash = /a\/b/
+    print_bool("slash", slash.match("xxa/bxx"))
+
+    let pair = /([a-z]+)-([0-9]+)/
+    let pair_match = pair.captures("id-42!")
+    puts(pair_match.group(0).c_str())
+    puts(pair_match.group(1).c_str())
+    puts(pair_match.group(2).c_str())
+    print_int("pair start 2", pair_match.group_start(2))
+    print_int("pair end 2", pair_match.group_end(2))
+
+    let nested = /((ab)+)-(\w+)/
+    let nested_match = nested.captures("zzabab-name")
+    puts(nested_match.group(0).c_str())
+    puts(nested_match.group(1).c_str())
+    puts(nested_match.group(2).c_str())
+    puts(nested_match.group(3).c_str())
+
+    let missing = pair.captures("no digits")
+    print_bool("missing matched", missing.is_match())
+    print_bool("missing group1", missing.has_group(1))
+
+    let n: i64 = 20 / 5
+    print_int("division", n)
+
+    return 0
+}

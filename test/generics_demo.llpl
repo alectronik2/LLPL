@@ -1,0 +1,90 @@
+// Generics demo: type-parameterized functions/classes/structs, plus the
+// generic standard-library containers built on them (prelude.llpl).
+//
+// `class Vector<T> { ... }` (or `struct`/`func`) declares a template - it's
+// never compiled directly. Each concrete type it's actually used with (a
+// var-decl type, a `new Vector<i64>(...)`, ...) gets a real, fully-typed C
+// copy generated the first time that combination is seen (see codegen.d's
+// instantiateGenericTypeArgs) - the same idea as C++ templates, just
+// triggered lazily during codegen instead of in a separate template pass.
+//
+// A generic *function*'s type parameters are always inferred from its
+// arguments (never written explicitly - `identity(5)`, not
+// `identity<i64>(5)`), since explicit `<...>` syntax only exists in type
+// positions to avoid ever colliding with `<`/`>` as comparison operators.
+
+extern func puts(s: char*) -> i64
+
+// A generic function - T is inferred from whatever's passed to it.
+func max_of<T>(a: T, b: T) -> T {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+// A generic struct - a plain value type, no constructor/destructor.
+struct Pair<A, B> {
+    let first: A
+    let second: B
+}
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    print_int("max_of(3, 7)", max_of(3, 7))
+    print_int("max_of(100, 42)", max_of(100, 42))
+
+    let p: Pair<i64, i64>
+    p.first = 10
+    p.second = 20
+    print_int("pair.first + pair.second", p.first + p.second)
+
+    // Vector<T>: a growable array, same template instantiated for two
+    // different element types in the same program.
+    let numbers: Vector<i64> = new Vector<i64>()
+    let i: i64 = 0
+    while i < 5 {
+        numbers.push(i * i)
+        i = i + 1
+    }
+    print_int("numbers.len()", numbers.len())
+    print_int("numbers.get(4)", numbers.get(4))
+
+    // Optional<T>: built as a plain generic class (see its doc comment in
+    // prelude.llpl for why it isn't a generic tagged enum) - T is already
+    // concrete by the time any method runs, since it's fixed at
+    // `new Optional<i64>()`.
+    let maybe: Optional<i64> = new Optional<i64>()
+    if maybe.is_none() {
+        puts("maybe starts out none")
+    }
+    maybe.set(99)
+    print_int("maybe.get() after set", maybe.get())
+
+    // LinkedList<T>: push to the front, walk the chain.
+    let list: LinkedList<i64> = new LinkedList<i64>()
+    list.push_front(3)
+    list.push_front(2)
+    list.push_front(1)
+    print_int("list.len()", list.len())
+    print_int("list.head.value", list.head.value)
+
+    // HashMap<K, V>: insert/get/remove, returning Optional<V> from get() -
+    // a small proof that two generic containers compose naturally.
+    let ages: HashMap<i64, i64> = new HashMap<i64, i64>()
+    ages.insert(1, 30)
+    ages.insert(2, 25)
+    let found: Optional<i64> = ages.get(1)
+    if found.is_some() {
+        print_int("ages.get(1)", found.get())
+    }
+
+    puts("Test \(found.get()) done")
+
+    return 0
+}

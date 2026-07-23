@@ -1,0 +1,14 @@
+import { hello, Value as Val } from modules.import_selective_lib
+
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    hello()
+    let v: Val = Val { x: 42 }
+    if v.x == 42 {
+        puts("ok")
+    } else {
+        puts("fail")
+    }
+    return 0
+}

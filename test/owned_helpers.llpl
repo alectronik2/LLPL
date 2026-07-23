@@ -1,0 +1,63 @@
+extern func puts(s: string) -> i64
+
+func print_int(label: string, value: i64) {
+    let buf: char[96]
+    ksnprintf(buf as string, 96, "%s = %d", label, value)
+    puts(buf as string)
+}
+
+func buffer_score() -> i64 {
+    let buf: OwnedBuffer = new OwnedBuffer(4)
+    defer buf.free()
+
+    buf.set(0, 10 as char)
+    buf.set(1, 20 as char)
+    buf.set(2, 30 as char)
+    buf.set(3, 40 as char)
+
+    return (buf.byte_at(0) as i64) + (buf.byte_at(3) as i64)
+}
+
+func transferred_score() -> i64 {
+    let owner: OwnedBuffer = new OwnedBuffer(2)
+    defer owner.free()
+
+    owner.set(0, 7 as char)
+    owner.set(1, 9 as char)
+
+    let raw: char* = owner.take()
+    defer llpl_free(raw)
+
+    return (raw[0] as i64) + (raw[1] as i64)
+}
+
+func typed_score() -> i64 {
+    let cell: Owned<i64> = new Owned<i64>()
+    defer cell.free()
+
+    cell.set(123)
+    let ptr: i64* = cell.as_ptr()
+    ptr[0] = ptr[0] + 7
+
+    return cell.get()
+}
+
+func early_return_score(enabled: bool) -> i64 {
+    let buf: OwnedBuffer = new OwnedBuffer(8)
+    defer buf.free()
+
+    buf.set(0, 55 as char)
+    if enabled {
+        return buf.byte_at(0) as i64
+    }
+    return 0
+}
+
+func main() -> i64 {
+    print_int("buffer score", buffer_score())
+    print_int("transferred score", transferred_score())
+    print_int("typed score", typed_score())
+    print_int("early return", early_return_score(true))
+
+    return 0
+}

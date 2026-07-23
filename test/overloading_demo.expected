@@ -1,0 +1,9 @@
+add(5) = 5
+add(5, 6) = 11
+an i64
+a string
+b0.n = 0
+b1.n = 10
+b2.n = 7
+b1.combine(5) = 15
+b1.combine(5, 6) = 21
