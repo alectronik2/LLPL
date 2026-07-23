@@ -519,6 +519,7 @@ package:
     - copy: {from: media/tetris.png, to: isodir/boot/tetris.png}
     - copy: {from: media/settings.png, to: isodir/boot/settings.png}
     - copy: {from: media/crashviewer.png, to: isodir/boot/crashviewer.png}
+    - copy: {from: media/start.png, to: isodir/boot/start.png}
     - write:
         to: isodir/boot/hello.txt
         content: "Hello from a GRUB module!"
@@ -593,6 +594,7 @@ package:
               module2 /boot/tetris.png tetris.png
               module2 /boot/settings.png settings.png
               module2 /boot/crashviewer.png crashviewer.png
+              module2 /boot/start.png start.png
           }
     - run: "grub-mkrescue -o kernel.iso isodir"
       allow_failure: true

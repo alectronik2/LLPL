@@ -47,8 +47,8 @@ struct Window {
     // draws i64o its own fixed-size WIN_W x WIN_H slice of the arena in
     // local coordinates (wm_client.llpl's wm_put_pixel/wm_fill) - this
     // service alone decides where that content lands on the real screen.
-    let win_x: u64
-    let win_y: u64
+    let win_x: i64
+    let win_y: i64
     // How much of the client's fixed WIN_W x WIN_H arena slice is
     // actually visible/blitted on screen - a viewport crop, not true
     // per-window resizing: the client's own drawing canvas never changes
@@ -60,8 +60,8 @@ struct Window {
     // reveal up to the original WIN_W x WIN_H, never more.
     let vis_w: u64
     let vis_h: u64
-    let restore_x: u64
-    let restore_y: u64
+    let restore_x: i64
+    let restore_y: i64
     let restore_w: u64
     let restore_h: u64
     let minimized: bool
@@ -83,6 +83,7 @@ const MIN_VIS_W: u64 = 80
 const MIN_VIS_H: u64 = 60
 const DEFAULT_VIS_W: u64 = 320
 const DEFAULT_VIS_H: u64 = 200
+const DRAG_VISIBLE_W: i64 = 96
 const RESIZE_GRIP: u64 = 10
 const CLOSE_BTN: u64 = 10
 
@@ -157,6 +158,7 @@ let cursor_img: EmbeddedImage
 let start_icon_terminal: EmbeddedImage
 let start_icon_file: EmbeddedImage
 let start_icon_app: EmbeddedImage
+let start_icon_start: EmbeddedImage
 let desktop_icon_terminal: EmbeddedImage
 let desktop_icon_filebrowser: EmbeddedImage
 let desktop_icon_editor: EmbeddedImage
@@ -271,8 +273,8 @@ func toggle_maximize_window(slot: i64) {
     windows[slot].restore_h = windows[slot].vis_h
     windows[slot].win_x = 0
     windows[slot].win_y = 0
-    windows[slot].vis_w = max_visible_w_for(slot) as u64
-    windows[slot].vis_h = max_visible_h_for(slot) as u64
+    windows[slot].vis_w = screen_fit_w_for(slot) as u64
+    windows[slot].vis_h = screen_fit_h_for(slot) as u64
     windows[slot].maximized = true
 }
 
@@ -284,8 +286,8 @@ func snap_window_rect(slot: i64, x: i64, y: i64, w: i64, h: i64) {
     windows[slot].restore_y = windows[slot].win_y
     windows[slot].restore_w = windows[slot].vis_w
     windows[slot].restore_h = windows[slot].vis_h
-    windows[slot].win_x = x as u64
-    windows[slot].win_y = y as u64
+    windows[slot].win_x = x
+    windows[slot].win_y = y
     windows[slot].vis_w = w as u64
     windows[slot].vis_h = h as u64
     windows[slot].minimized = false
@@ -335,22 +337,44 @@ func next_focus_after(cur: i64) -> i64 {
 // them side by side would run off the right edge of a typical screen.
 // Just a starting point either way, not permanent: the user can drag it
 // anywhere afterward.
-func initial_window_x(slot: i64) -> u64 {
-    return 40 + (slot as u64) * 40
+func initial_window_x(slot: i64) -> i64 {
+    return 40 + slot * 40
 }
 
-func initial_window_y(slot: i64) -> u64 {
-    return 40 + (slot as u64) * 30
+func initial_window_y(slot: i64) -> i64 {
+    return 40 + slot * 30
 }
 
 func max_visible_w_for(slot: i64) -> i64 {
+    return Wm.WIN_W
+}
+
+func max_visible_h_for(slot: i64) -> i64 {
+    return Wm.WIN_H
+}
+
+func screen_fit_w_for(slot: i64) -> i64 {
     let room: i64 = (fb_width as i64) - (windows[slot].win_x as i64)
     return clampi(room, MIN_VIS_W as i64, Wm.WIN_W)
 }
 
-func max_visible_h_for(slot: i64) -> i64 {
-    let room: i64 = (fb_height as i64) - (windows[slot].win_y as i64) - (TITLEBAR_H as i64) - 32
+func screen_fit_h_for(slot: i64) -> i64 {
+    let room: i64 = (fb_height as i64) - (windows[slot].win_y as i64) - (TITLEBAR_H as i64) - (TASKBAR_H as i64)
     return clampi(room, MIN_VIS_H as i64, Wm.WIN_H)
+}
+
+func clamp_window_x_for_drag(slot: i64, x: i64) -> i64 {
+    let w: i64 = windows[slot].vis_w as i64
+    let lo: i64 = DRAG_VISIBLE_W - w
+    let hi: i64 = (fb_width as i64) - DRAG_VISIBLE_W
+    return clampi(x, lo, hi)
+}
+
+func clamp_window_y_for_drag(slot: i64, y: i64) -> i64 {
+    let total_h: i64 = (windows[slot].vis_h as i64) + (TITLEBAR_H as i64)
+    let lo: i64 = (TITLEBAR_H as i64) - total_h
+    let hi: i64 = (fb_height as i64) - (TASKBAR_H as i64) - (TITLEBAR_H as i64)
+    return clampi(y, lo, hi)
 }
 
 func clampi(v: i64, lo: i64, hi: i64) -> i64 {
@@ -816,22 +840,26 @@ func get_wallpaper_color(px: i64, py: i64) -> u32 {
 // tick instead of settling on a stable result.
 func blit_window(slot: i64) {
     let src: u32* = (arena + (slot as u64) * Wm.WIN_BYTES) as u32*
-    let ox: u64 = windows[slot].win_x
-    let oy: u64 = windows[slot].win_y + TITLEBAR_H
-    let vis_w: u64 = windows[slot].vis_w
-    let vis_h: u64 = windows[slot].vis_h
-    let row: u64 = 0
+    let ox: i64 = windows[slot].win_x
+    let oy: i64 = windows[slot].win_y + (TITLEBAR_H as i64)
+    let vis_w: i64 = windows[slot].vis_w as i64
+    let vis_h: i64 = windows[slot].vis_h as i64
+    let row: i64 = 0
     while row < vis_h {
-        let col: u64 = 0
+        let col: i64 = 0
         while col < vis_w {
-            // Indexed by the client's *actual* WIN_W stride regardless of
-            // how much is currently visible - only the loop bounds above
-            // shrink for a cropped window, never this addressing math,
-            // since the client's own arena layout never changes size.
-            let pixel: u32 = src[row * (Wm.WIN_W as u64) + col]
-            let offset: u64 = (oy + row) * fb_pitch + (ox + col) * 4
-            let p: u32* = (backbuf + offset) as u32*
-            p[0] = blend_alpha(pixel, p[0], WINDOW_ALPHA)
+            let dx: i64 = ox + col
+            let dy: i64 = oy + row
+            if dx >= 0 && dy >= 0 && (dx as u64) < fb_width && (dy as u64) < fb_height {
+                // Indexed by the client's *actual* WIN_W stride regardless of
+                // how much is currently visible - only the loop bounds above
+                // shrink for a cropped window, never this addressing math,
+                // since the client's own arena layout never changes size.
+                let pixel: u32 = src[(row as u64) * (Wm.WIN_W as u64) + (col as u64)]
+                let offset: u64 = (dy as u64) * fb_pitch + (dx as u64) * 4
+                let p: u32* = (backbuf + offset) as u32*
+                p[0] = blend_alpha(pixel, p[0], WINDOW_ALPHA)
+            }
             col = col + 1
         }
         row = row + 1
@@ -1140,6 +1168,8 @@ const DESKTOP_ICON_TOP: i64 = 18
 const DESKTOP_ICON_GAP_Y: i64 = 14
 const DESKTOP_ICON_GAP_X: i64 = 12
 const MAX_DESKTOP_ICONS: i64 = 8
+const MAX_DESKTOP_FILES: i64 = 8
+const DESKTOP_FILE_NAME_LEN: i64 = 32
 const ICON_TERMINAL: u8 = 0
 const ICON_FILE: u8 = 1
 const ICON_APP: u8 = 2
@@ -1164,6 +1194,8 @@ let taskbar_icons: u8[20]
 let taskbar_desktop: bool[20]
 let desktop_apps: i64[8]
 let desktop_count: i64 = 0
+let desktop_file_names: u8[256] // MAX_DESKTOP_FILES(8) * DESKTOP_FILE_NAME_LEN(32)
+let desktop_file_count: i64 = 0
 let taskbar_count: i64 = 0
 let taskbar_loaded: bool = false
 let start_menu_open: bool = false
@@ -1239,6 +1271,10 @@ func taskbar_label_at(i: i64) -> u8* {
     return (taskbar_labels as u8*) + i * TASKBAR_LABEL_LEN
 }
 
+func desktop_file_name_at(i: i64) -> u8* {
+    return (desktop_file_names as u8*) + i * DESKTOP_FILE_NAME_LEN
+}
+
 func notify_title_at(i: i64) -> u8* {
     return (notify_titles as u8*) + i * NOTIFY_TITLE_LEN
 }
@@ -1263,6 +1299,7 @@ func load_taskbar() {
         }
     }
     rebuild_desktop_apps()
+    load_desktop_files()
     taskbar_loaded = taskbar_count > 0
 }
 
@@ -1395,6 +1432,39 @@ func rebuild_desktop_apps() {
             desktop_count = desktop_count + 1
         }
         i = i + 1
+    }
+}
+
+func entry_kind_from_record(rec: u8*) -> u64 {
+    let fields: u64* = (rec + 32) as u64*
+    return fields[0]
+}
+
+func desktop_file_candidate(name: u8*) -> bool {
+    if has_suffix(name, ".txt" as u8*) { return true }
+    if has_suffix(name, ".md" as u8*) { return true }
+    if has_suffix(name, ".log" as u8*) { return true }
+    if has_suffix(name, ".cfg" as u8*) { return true }
+    if has_suffix(name, ".png" as u8*) { return true }
+    return false
+}
+
+func load_desktop_files() {
+    desktop_file_count = 0
+    let i: u64 = 0
+    let done: bool = false
+    while (i as i64) < 64 && desktop_file_count < MAX_DESKTOP_FILES && !done {
+        let rec: u8[48]
+        let ok: u64 = sys_readdir("/" as u8*, i, rec as u8*)
+        if ok == RT_SYS_ERR {
+            done = true
+        } else {
+            if entry_kind_from_record(rec as u8*) != 2 && desktop_file_candidate(rec as u8*) {
+                copy_fixed(desktop_file_name_at(desktop_file_count), rec as u8*, DESKTOP_FILE_NAME_LEN)
+                desktop_file_count = desktop_file_count + 1
+            }
+            i = i + 1
+        }
     }
 }
 
@@ -2440,6 +2510,7 @@ func invoke_desktop_context_menu(action: i64) {
         if sys_write_all(path as u8*, body as u8*, 0) == RT_SYS_ERR {
             add_notification("Desktop" as u8*, "Could not create text file" as u8*, 2)
         } else {
+            load_desktop_files()
             add_notification("Desktop" as u8*, path as u8*, 1)
         }
     } else if action == 2 {
@@ -2448,6 +2519,7 @@ func invoke_desktop_context_menu(action: i64) {
         if sys_mkdir(path as u8*) == RT_SYS_ERR {
             add_notification("Desktop" as u8*, "Could not create folder" as u8*, 2)
         } else {
+            load_desktop_files()
             add_notification("Desktop" as u8*, path as u8*, 1)
         }
     } else if action == 3 {
@@ -2465,6 +2537,7 @@ func invoke_desktop_context_menu(action: i64) {
     } else if action == 5 {
         taskbar_loaded = false
         load_taskbar()
+        load_desktop_files()
         add_notification("Desktop" as u8*, "Apps reloaded" as u8*, 1)
     }
 }
@@ -2746,7 +2819,8 @@ func draw_taskbar() {
 
     draw_rect(8, y0 + 4, START_BTN_W as i64, (TASKBAR_H as i64) - 8, TASKBAR_BTN)
     draw_rect_border(8, y0 + 4, START_BTN_W as i64, (TASKBAR_H as i64) - 8, 0x707070)
-    wm_draw_string(18, y0 + 8, "Start" as u8*, TASKBAR_TEXT, TASKBAR_BTN)
+    draw_embedded_icon_scaled(start_icon_start, 14, y0 + 8, 1)
+    wm_draw_string(36, y0 + 8, "Start" as u8*, TASKBAR_TEXT, TASKBAR_BTN)
 
     let task_x: i64 = 8 + (START_BTN_W as i64) + 6
     let task_bg: u32 = 0x283246
@@ -3080,6 +3154,10 @@ func desktop_icons_per_column() -> i64 {
     return n
 }
 
+func desktop_total_count() -> i64 {
+    return desktop_count + desktop_file_count
+}
+
 func desktop_icon_x(i: i64) -> i64 {
     let per_col: i64 = desktop_icons_per_column()
     let col: i64 = i / per_col
@@ -3120,7 +3198,8 @@ func hit_test_desktop_icon(mx: i64, my: i64) -> i64 {
         return -1
     }
     let i: i64 = 0
-    while i < desktop_count {
+    let total: i64 = desktop_total_count()
+    while i < total {
         let x: i64 = desktop_icon_x(i)
         let y: i64 = desktop_icon_y(i)
         if mx >= x && mx < x + DESKTOP_ICON_W && my >= y && my < y + DESKTOP_ICON_H {
@@ -3134,7 +3213,8 @@ func hit_test_desktop_icon(mx: i64, my: i64) -> i64 {
 func draw_desktop_icons(mouse_x: i64, mouse_y: i64) {
     let hover: i64 = hit_test_desktop_icon(mouse_x, mouse_y)
     let i: i64 = 0
-    while i < desktop_count {
+    let total: i64 = desktop_total_count()
+    while i < total {
         let x: i64 = desktop_icon_x(i)
         let y: i64 = desktop_icon_y(i)
         let bg: u32 = 0x181820
@@ -3147,10 +3227,21 @@ func draw_desktop_icons(mouse_x: i64, mouse_y: i64) {
             draw_rect(x, y, DESKTOP_ICON_W, DESKTOP_ICON_H, bg)
             draw_rect_border(x, y, DESKTOP_ICON_W, DESKTOP_ICON_H, 0xFFD060)
         }
-        let icon: EmbeddedImage = desktop_icon_image(i)
+        let icon: EmbeddedImage = desktop_icon_filebrowser
+        if i < desktop_count {
+            icon = desktop_icon_image(i)
+        } else if has_suffix(desktop_file_name_at(i - desktop_count), ".png" as u8*) {
+            icon = desktop_icon_images
+        } else {
+            icon = desktop_icon_filebrowser
+        }
         draw_embedded_icon_scaled(icon, x + 20, y + 5, desktop_icon_scale(icon))
         draw_rect(x + 2, y + 41, DESKTOP_ICON_W - 4, 12, bg)
-        wm_draw_string(x + 4, y + 43, desktop_icon_label(i), TASKBAR_TEXT, bg)
+        if i < desktop_count {
+            wm_draw_string(x + 4, y + 43, desktop_icon_label(i), TASKBAR_TEXT, bg)
+        } else {
+            wm_draw_string(x + 4, y + 43, desktop_file_name_at(i - desktop_count), TASKBAR_TEXT, bg)
+        }
         i = i + 1
     }
 }
@@ -3161,6 +3252,28 @@ func desktop_icon_launch(i: i64) {
 
 func desktop_icon_launch_with_path(i: i64, path: u8*) {
     launch_app_name_with_path(desktop_icon_name(i), path)
+}
+
+func desktop_file_path(index: i64, out: u8*) {
+    out[0] = 47
+    let pos: i64 = 1
+    let name: u8* = desktop_file_name_at(index)
+    let i: i64 = 0
+    while i < DESKTOP_FILE_NAME_LEN - 1 && name[i] != 0 {
+        out[pos] = name[i]
+        pos = pos + 1
+        i = i + 1
+    }
+    out[pos] = 0
+}
+
+func desktop_file_launch(index: i64) {
+    if index < 0 || index >= desktop_file_count {
+        return
+    }
+    let path: u8[64]
+    desktop_file_path(index, path as u8*)
+    launch_file_by_path(path as u8*)
 }
 
 func hit_test_window_under_point(mx: i64, my: i64) -> i64 {
@@ -3355,8 +3468,8 @@ func handle_request(sender: u64, msg: u8*) {
             rep[0] = Wm.STATUS_OK as u64
             rep[1] = slot as u64
             rep[2] = (slot as u64) * Wm.WIN_BYTES
-            rep[3] = windows[slot].win_x
-            rep[4] = windows[slot].win_y
+            rep[3] = windows[slot].win_x as u64
+            rep[4] = windows[slot].win_y as u64
             sys_msg_reply(sender, reply as u8*, 40)
         }
     } else if op == (Wm.OP_PRESENT as u64) {
@@ -3620,6 +3733,7 @@ func _start(argc: u64, argv: u64*) {
     start_icon_terminal = load_png_or_embedded("/boot/terminal.png" as u8*, load_start_icon_terminal())
     start_icon_file = load_png_or_embedded("/boot/files.png" as u8*, load_start_icon_file())
     start_icon_app = load_png_or_embedded("/boot/app.png" as u8*, load_start_icon_app())
+    start_icon_start = load_png_from_embedded(load_media_start_png(), load_start_icon_app())
     desktop_icon_terminal = load_png_from_embedded(load_media_terminal_png(), load_start_icon_terminal())
     desktop_icon_filebrowser = load_png_from_embedded(load_media_files_png(), load_start_icon_file())
     desktop_icon_editor = load_png_from_embedded(load_media_editor_png(), load_start_icon_file())
@@ -3910,8 +4024,10 @@ func _start(argc: u64, argv: u64*) {
                 if dx * dx + dy * dy < TASKBAR_DRAG_THRESHOLD * TASKBAR_DRAG_THRESHOLD {
                     if desktop_drag_index >= 0 && desktop_drag_index < desktop_count {
                         open_context_menu(CONTEXT_APP, desktop_apps[desktop_drag_index], mx, my)
+                    } else if desktop_drag_index >= desktop_count && desktop_drag_index < desktop_total_count() {
+                        desktop_file_launch(desktop_drag_index - desktop_count)
                     }
-                } else if desktop_target >= 0 && desktop_target != desktop_drag_index {
+                } else if desktop_drag_index < desktop_count && desktop_target >= 0 && desktop_target < desktop_count && desktop_target != desktop_drag_index {
                     reorder_desktop_icon(desktop_drag_index, desktop_target)
                     add_notification("Desktop" as u8*, "Icon order saved" as u8*, 1)
                     wm_dirty = true
@@ -3955,7 +4071,11 @@ func _start(argc: u64, argv: u64*) {
             if taskbar_hit >= 0 && taskbar_hit < taskbar_count {
                 open_context_menu(CONTEXT_APP, taskbar_hit, mx, my)
             } else if desktop_hit >= 0 {
-                open_context_menu(CONTEXT_APP, desktop_apps[desktop_hit], mx, my)
+                if desktop_hit < desktop_count {
+                    open_context_menu(CONTEXT_APP, desktop_apps[desktop_hit], mx, my)
+                } else {
+                    desktop_file_launch(desktop_hit - desktop_count)
+                }
             } else if taskbar_hit == TASK_HIT {
                 close_task_switcher()
             } else if my >= y0 {
@@ -3969,10 +4089,8 @@ func _start(argc: u64, argv: u64*) {
         prev_right = mright
 
         if dragging && drag_slot >= 0 {
-            let max_wx: i64 = (fb_width as i64) - (windows[drag_slot].vis_w as i64)
-            let max_wy: i64 = (fb_height as i64) - (windows[drag_slot].vis_h as i64) - (TITLEBAR_H as i64) - 32
-            windows[drag_slot].win_x = clampi(mx - drag_dx, 0, max_wx) as u64
-            windows[drag_slot].win_y = clampi(my - drag_dy, 0, max_wy) as u64
+            windows[drag_slot].win_x = clamp_window_x_for_drag(drag_slot, mx - drag_dx)
+            windows[drag_slot].win_y = clamp_window_y_for_drag(drag_slot, my - drag_dy)
             wm_dirty = true
         }
 

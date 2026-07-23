@@ -42,6 +42,7 @@ editors/vscode-llpl/**/.llpl-lsp-*.llpl
 # OS files
 .DS_Store
 Thumbs.db
+*:Zone.Identifier
 
 .agents/
 .claude/

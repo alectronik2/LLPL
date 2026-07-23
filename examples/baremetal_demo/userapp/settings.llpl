@@ -26,6 +26,7 @@ let crash_prev: u8[384]
 let crash_ready: bool = false
 let last_mouse_left: bool = false
 let settings_tab: i64 = 0
+let settings_cfg: u8[64]
 
 func bg_color() -> u32 {
     if dark_alt {
@@ -93,6 +94,48 @@ func copy_cstr(dst: u8*, src: u8*, max: i64) {
         i = i + 1
     }
     dst[i] = 0
+}
+
+func save_settings() {
+    let out: u8[16]
+    out[0] = 100
+    out[1] = 61
+    if dark_alt {
+        out[2] = 49
+    } else {
+        out[2] = 48
+    }
+    out[3] = 10
+    out[4] = 116
+    out[5] = 61
+    out[6] = (settings_tab + 48) as u8
+    out[7] = 10
+    sys_write_all("/etc/settings.cfg" as u8*, out as u8*, 8)
+}
+
+func load_settings() {
+    let n: u64 = sys_read_all("/etc/settings.cfg" as u8*, settings_cfg as u8*, 63)
+    if n == RT_SYS_ERR || n == 0 {
+        return
+    }
+    settings_cfg[n] = 0
+    let i: i64 = 0
+    while settings_cfg[i] != 0 {
+        if settings_cfg[i] == 100 && settings_cfg[i + 1] == 61 {
+            dark_alt = settings_cfg[i + 2] == 49
+        } else if settings_cfg[i] == 116 && settings_cfg[i + 1] == 61 {
+            let t: i64 = (settings_cfg[i + 2] - 48) as i64
+            if t >= 0 && t <= 3 {
+                settings_tab = t
+            }
+        }
+        while settings_cfg[i] != 0 && settings_cfg[i] != 10 {
+            i = i + 1
+        }
+        if settings_cfg[i] == 10 {
+            i = i + 1
+        }
+    }
 }
 
 func cstr_len(src: u8*, max: u64) -> u64 {
@@ -366,6 +409,7 @@ func _start(argc: u64, argv: u64*) {
         rt_exit(1)
     }
 
+    load_settings()
     render()
     let last_win_w: u64 = Wm.WIN_W as u64
     let last_win_h: u64 = Wm.WIN_H as u64
@@ -379,6 +423,7 @@ func _start(argc: u64, argv: u64*) {
             let tab_hit: i64 = hit_tab(input.mouse_x, input.mouse_y)
             if tab_hit >= 0 {
                 settings_tab = tab_hit
+                save_settings()
                 render()
             }
             let asset_hit: i64 = hit_asset(input.mouse_x, input.mouse_y)
@@ -395,9 +440,11 @@ func _start(argc: u64, argv: u64*) {
         }
         if input.key == 32 || input.key == 10 {
             dark_alt = !dark_alt
+            save_settings()
             render()
         } else if input.key >= 49 && input.key <= 52 {
             settings_tab = (input.key - 49) as i64
+            save_settings()
             render()
         } else if input.key == 99 || input.key == 67 {
             sys_crash_clear()

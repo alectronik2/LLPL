@@ -146,6 +146,17 @@ func refresh_clipboard_image() {
     clipboard_image_ready = true
 }
 
+func paste_clipboard_image() {
+    refresh_clipboard_image()
+    runtime_mode = false
+    selected = 0
+    if clipboard_image_ready {
+        copy_cstr(status as u8*, "pasted image clipboard" as u8*)
+    } else {
+        copy_cstr(status as u8*, "image clipboard empty" as u8*)
+    }
+}
+
 func image_name_at(index: i64) -> u8* {
     if runtime_mode {
         return runtime_path as u8*
@@ -307,7 +318,7 @@ func draw_frame() {
     let hbuf: u8[12]
     uint_to_dec(wbuf as u8*, img.width as u64)
     uint_to_dec(hbuf as u8*, img.height as u64)
-    draw_text(8, 236, "left/right image  up/down zoom  esc close" as u8*, MUTED, PANEL)
+    draw_text(8, 236, "left/right image  up/down zoom  c copy  p paste" as u8*, MUTED, PANEL)
     draw_text(8, 248, "size " as u8*, MUTED, PANEL)
     draw_text(48, 248, wbuf as u8*, TEXT, PANEL)
     draw_text(72, 248, "x" as u8*, MUTED, PANEL)
@@ -410,6 +421,9 @@ func _start(argc: u64, argv: u64*) {
             draw_frame()
         } else if input.key == 99 || input.key == 67 {
             copy_current_image()
+            draw_frame()
+        } else if input.key == 112 || input.key == 80 {
+            paste_clipboard_image()
             draw_frame()
         } else if runtime_mode {
             if input.key == KEY_UP || input.key == 43 {

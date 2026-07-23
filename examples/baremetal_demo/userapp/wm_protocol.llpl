@@ -29,12 +29,12 @@ namespace Wm {
     // fixed-size arena slice.
     // WIN_W * WIN_H * 4 bytes/pixel * MAX_WINDOWS must not exceed
     // Task.SHM_MAX_PAGES * 4096 (the whole-region cap on a single
-    // sys_shm_create call) - 400*256*4*4 = 1638400 bytes, exactly 400 pages,
+    // sys_shm_create call) - 640*384*4*4 = 3932160 bytes, exactly 960 pages,
     // under task.llpl's SHM_MAX_PAGES cap.
     const MAX_WINDOWS = 4
-    const WIN_W = 400
-    const WIN_H = 256
-    const WIN_BYTES = 409600 // WIN_W(400) * WIN_H(256) * 4
+    const WIN_W = 640
+    const WIN_H = 384
+    const WIN_BYTES = 983040 // WIN_W(640) * WIN_H(384) * 4
 
     const DRAG_PATH_LEN = 112
 }

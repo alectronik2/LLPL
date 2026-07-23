@@ -38,15 +38,15 @@ let foo = new Klass()
 ### Functions and function overloading
 
 ```swift
-func add(a: int, b: int) -> int {
+func add(a: i64, b: i64) -> i64 {
     return a + b
 }
 
-func add(a: int, b: int, c: int) -> int {
+func add(a: i64, b: i64, c: i64) -> i64 {
     return a + b + c
 }
 
-func greet(name: char*) {
+func greet(name: u8*) {
     print(name)
 }
 ```
@@ -55,10 +55,10 @@ func greet(name: char*) {
 
 ```swift
 class Point {
-    let x: int
-    let y: int
+    let x: i64
+    let y: i64
 
-    constructor(x: int, y: int) {
+    constructor(x: i64, y: i64) {
         self.x = x
         self.y = y
     }
@@ -67,14 +67,14 @@ class Point {
         // Cleanup code
     }
 
-    func distance() -> int {
+    func distance() -> i64 {
         return self.x * self.x + self.y * self.y
     }
 }
 
 // Usage
 let p: Point = new Point(10, 20)
-let dist: int = p.distance()
+let dist: i64 = p.distance()
 
 delete p
 ```
@@ -88,17 +88,17 @@ objects.
 
 ```swift
 trait Hashable {
-    func hash() -> uint
+    func hash() -> u64
     func equals(other: Self) -> bool
 }
 
-impl Hashable for int {
-    func hash() -> uint { return self as uint }
-    func equals(other: int) -> bool { return self == other }
+impl Hashable for i64 {
+    func hash() -> u64 { return self as u64 }
+    func equals(other: i64) -> bool { return self == other }
 }
 
 // T must have a matching impl, checked when the generic is instantiated.
-func use_hash<T: Hashable>(key: T) -> uint {
+func use_hash<T: Hashable>(key: T) -> u64 {
     return key.hash()
 }
 ```
@@ -112,13 +112,13 @@ content, not pointer identity.
 GCC-style extended inline assembly is available through `asm(...)`:
 
 ```swift
-func read_cr0() -> uint {
-    let value: uint = 0
+func read_cr0() -> u64 {
+    let value: u64 = 0
     asm("mov %%cr0, %0" : "=r"(value))
     return value
 }
 
-func add_asm(a: int, b: int) -> int {
+func add_asm(a: i64, b: i64) -> i64 {
     asm("addq %1, %0" : "=r"(a) : "r"(b) : "cc")
     return a
 }
@@ -144,7 +144,7 @@ while count < 10 {
 }
 
 // For loops (init, condition, update)
-for let i: int = 0, i < 10, i = i + 1 {
+for let i: i64 = 0, i < 10, i = i + 1 {
     print(".")
 }
 ```
@@ -179,8 +179,8 @@ macro square(value) {
     quote(unquote(value) * unquote(value))
 }
 
-func compute() -> int {
-    let x: int = 0
+func compute() -> i64 {
+    let x: i64 = 0
     assignTwice!(x, 41)
     return square!(x)
 }
@@ -193,8 +193,8 @@ operator unwraps a `Result` or returns early with the error; each propagation
 step records the call-site location, building a chained trace.
 
 ```swift
-func safe_div(a: int, b: int) -> Result<int, char*> {
-    let r: Result<int, char*> = new Result<int, char*>()
+func safe_div(a: i64, b: i64) -> Result<i64, u8*> {
+    let r: Result<i64, u8*> = new Result<i64, u8*>()
     if b == 0 {
         r.set_err("division by zero")
         return r
@@ -203,16 +203,16 @@ func safe_div(a: int, b: int) -> Result<int, char*> {
     return r
 }
 
-func sum_of_divisions(a: int, b: int, c: int, d: int) -> Result<int, char*> {
-    let first: int = safe_div(a, b)?   // trace starts here on error
-    let second: int = safe_div(c, d)?  // chained here if this fails
-    let r: Result<int, char*> = new Result<int, char*>()
+func sum_of_divisions(a: i64, b: i64, c: i64, d: i64) -> Result<i64, u8*> {
+    let first: i64 = safe_div(a, b)?   // trace starts here on error
+    let second: i64 = safe_div(c, d)?  // chained here if this fails
+    let r: Result<i64, u8*> = new Result<i64, u8*>()
     r.set_ok(first + second)
     return r
 }
 
-func main() -> int {
-    let r: Result<int, char*> = sum_of_divisions(10, 0, 20, 4)
+func main() -> i64 {
+    let r: Result<i64, u8*> = sum_of_divisions(10, 0, 20, 4)
     if r.is_err() {
         // r.get_trace() might return "file:14 -> file:21"
     }
@@ -227,14 +227,14 @@ panic handler can be installed for logging or cleanup; it runs before the
 default halt/abort.
 
 ```swift
-extern func llpl_panic(msg: char*)
-extern func llpl_set_panic_handler(handler: (char*) -> void)
+extern func llpl_panic(msg: u8*)
+extern func llpl_set_panic_handler(handler: (u8*) -> void)
 
-func my_handler(msg: char*) {
+func my_handler(msg: u8*) {
     // log msg, clean up resources, etc.
 }
 
-func main() -> int {
+func main() -> i64 {
     llpl_set_panic_handler(my_handler)
     llpl_panic("unrecoverable error")
     return 0
@@ -247,7 +247,7 @@ func main() -> int {
 second argument provides a custom panic message.
 
 ```swift
-func main() -> int {
+func main() -> i64 {
     assert(1 == 1)
     assert(2 > 1, "two is greater than one")
     // assert(1 == 2, "this would panic")
@@ -259,8 +259,8 @@ func main() -> int {
 
 ```swift
 // Declare external C functions
-extern func outb(port: uint, value: char)
-extern func inb(port: uint) -> char
+extern func outb(port: u64, value: u8)
+extern func inb(port: u64) -> u8
 
 // Use them directly
 outb(0x3F8, 65)  // Output 'A' to serial port
@@ -269,8 +269,8 @@ outb(0x3F8, 65)  // Output 'A' to serial port
 ### Type Casting
 
 ```swift
-let addr: uint = 0xB8000
-let buffer = addr as char*
+let addr: u64 = 0xB8000
+let buffer = addr as u8*
 ```
 
 ## Building
@@ -307,6 +307,20 @@ export LLPL_HOME=$(pwd)
 ```bash
 ./llpl input.llpl -o output.c
 ```
+
+All CLI flags:
+
+| Flag | What it does |
+|---|---|
+| `-o`, `--output` | Output file path - a `.c` source file, or (with `-b`) a native binary. |
+| `-b`, `--binary` | Compile straight to a native binary instead of emitting C - invokes a system C compiler (see `--cc`). |
+| `--cc` | C compiler to invoke in `--binary` mode. Defaults to `$CC`, falling back to `cc`. |
+| `--keep-c` | Keep the intermediate `.c` file in `--binary` mode even on success. |
+| `-v`, `--verbose` | Verbose output. |
+| `--safe` | Enable runtime safety checks - currently, bounds-checked fixed-size array indexing. Off by default. |
+| `--dce` | Dead-code elimination. On by default. |
+| `--lsp-symbols` | Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling. |
+| `-h`, `--help` | Help text. |
 
 Or compile straight to a native binary with `-b`/`--binary`, which
 generates the C internally and invokes a system C compiler (`cc` by
@@ -476,21 +490,23 @@ LLPL/
 
 ### Primitive Types
 
-- `int` - 64-bit signed integer
-- `uint` - 64-bit unsigned integer
-- `char` - 8-bit character
+> **Breaking change:** the old unsized `int`/`uint`/`char` aliases have
+> been removed entirely - using any of them is now a compile error
+> (`'int' is no longer a type; use 'i64' instead`, and similarly for
+> `uint` -> `u64` and `char` -> `u8`). Always spell out the width.
+
+- `i8/i16/i32/i64` - sized signed integers
+- `u8/u16/u32/u64` - sized unsigned integers
 - `bool` - Boolean (true/false)
 - `void` - No value
-- `u8/u16/u32/u64` - sized unsigned integers
-- `i8/i16/i32/i64` - sized signed integers
-- `string` - C string, null terminated
+- `string` - alias for `u8*`, a C string, null terminated
 - `String` - Sugar class 
 
 ### Pointer Types
 
 ```swift
-let ptr: int* = &value
-let arr: char[80]  // Fixed-size array
+let ptr: i64* = &value
+let arr: u8[80]  // Fixed-size array
 ```
 
 ### Class Types
@@ -590,10 +606,10 @@ MIT License - feel free to use for any purpose.
 ### Hello World
 
 ```swift
-extern func print_char(c: char)
+extern func print_char(c: u8)
 
-func print(msg: char*) {
-    let i: int = 0
+func print(msg: u8*) {
+    let i: i64 = 0
     while msg[i] != 0 {
         print_char(msg[i])
         i = i + 1
@@ -610,10 +626,10 @@ func kernel_main() {
 
 ```swift
 class Node {
-    let value: int
+    let value: i64
     let next: Node
 
-    constructor(value: int) {
+    constructor(value: i64) {
         self.value = value
         self.next = null
     }
@@ -625,7 +641,7 @@ class Node {
     }
 }
 
-func add_node(head: Node, value: int) -> Node {
+func add_node(head: Node, value: i64) -> Node {
     let node: Node = new Node(value)
     node.next = head
     return node

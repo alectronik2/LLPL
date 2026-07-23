@@ -1,0 +1,63 @@
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+typedef struct {
+    uint64_t width;
+    uint64_t height;
+    uint8_t* data;
+} DecodedPng;
+
+extern uint8_t* png_decode_last_error(void);
+extern int png_decode_file(uint8_t* path, DecodedPng* out);
+
+uint64_t sys_open(uint8_t* path, uint64_t mode) {
+    int flags = mode == 0 ? O_RDONLY : (O_CREAT | O_WRONLY | O_TRUNC);
+    int fd = open((const char*)path, flags, 0644);
+    if (fd < 0) return UINT64_MAX;
+    return (uint64_t)fd;
+}
+
+uint64_t sys_read(uint64_t fd, uint8_t* buf, uint64_t len) {
+    ssize_t n = read((int)fd, buf, (size_t)len);
+    if (n < 0) return UINT64_MAX;
+    return (uint64_t)n;
+}
+
+uint64_t sys_write(uint64_t fd, uint8_t* buf, uint64_t len) {
+    ssize_t n = write((int)fd, buf, (size_t)len);
+    if (n < 0) return UINT64_MAX;
+    return (uint64_t)n;
+}
+
+uint64_t sys_close(uint64_t fd) {
+    return close((int)fd) == 0 ? 0 : UINT64_MAX;
+}
+
+uint8_t* sys_malloc(uint64_t size) {
+    return (uint8_t*)malloc((size_t)size);
+}
+
+uint64_t sys_free(uint8_t* ptr) {
+    free(ptr);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    int failed = 0;
+    for (int i = 1; i < argc; i++) {
+        DecodedPng img = {0, 0, 0};
+        if (png_decode_file((uint8_t*)argv[i], &img)) {
+            printf("%s: ok %llu x %llu\n", argv[i],
+                   (unsigned long long)img.width,
+                   (unsigned long long)img.height);
+            sys_free(img.data);
+        } else {
+            printf("%s: %s\n", argv[i], png_decode_last_error());
+            failed = 1;
+        }
+    }
+    return failed;
+}

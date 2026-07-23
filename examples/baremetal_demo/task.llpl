@@ -238,7 +238,7 @@ namespace Task {
     // nowhere near a constraint (PageAlloc reports tens of thousands of free
     // pages at boot); this cap exists only to keep one careless sys_shm_create
     // call from grabbing an unreasonable fraction of it.
-    const SHM_MAX_PAGES = 512
+    const SHM_MAX_PAGES = 1024
 
     packed struct ShmRegion {
         let used: bool
@@ -253,7 +253,7 @@ namespace Task {
         // (phys[16] left over from when SHM_MAX_PAGES was still 16,
         // silently overrun once the window-manager arena grew - see SHM_MAX_PAGES's
         // own comment).
-        let phys: u64[512]
+        let phys: u64[1024]
     }
 
     let shm_regions: ShmRegion[8]

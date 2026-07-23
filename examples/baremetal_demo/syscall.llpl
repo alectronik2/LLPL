@@ -1249,7 +1249,7 @@ namespace Syscall {
         // compiler placed above it on the stack - including, once pages
         // was raised to (and this array wasn't), this function's own
         // saved return address.
-        let phys: u64[512]
+        let phys: u64[1024]
         let i: u64 = 0
         while i < pages {
             phys[i] = VMM.virt_to_phys(aspace.pml4, virt + i * VMM.PAGE_SIZE)
@@ -1284,7 +1284,7 @@ namespace Syscall {
         // just above - must match Task.SHM_MAX_PAGES, not the mapped
         // region's own page count, since `pages` here can be anything up
         // to that cap.
-        let phys: u64[512]
+        let phys: u64[1024]
         let i: u64 = 0
         while i < pages {
             phys[i] = Task.shm_phys_at(region, i as i64)

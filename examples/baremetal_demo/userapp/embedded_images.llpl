@@ -83,6 +83,10 @@ func load_media_crashviewer_png() -> EmbeddedFile {
     return embed("../media/crashviewer.png")
 }
 
+func load_media_start_png() -> EmbeddedFile {
+    return embed("../media/start.png")
+}
+
 func load_default_apps_manifest() -> u8* {
     let asset = embed("default_apps.txt")
     return asset.data as u8*

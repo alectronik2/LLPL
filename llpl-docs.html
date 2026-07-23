@@ -1,0 +1,2449 @@
+<title>LLPL Documentation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ---------- Tokens (matched to the LLPL marketing site's palette) ---------- */
+  :root {
+    --bg: #f3f5f1;
+    --surface: #e8ede6;
+    --surface-2: #dde5da;
+    --ink: #131a16;
+    --muted: #4f6156;
+    --accent: #256b46;
+    --accent-ink: #ffffff;
+    --copper: #9c5f2a;
+    --border: #c9d3c5;
+    --code-bg: #101a15;
+    --code-ink: #d7e4da;
+    --code-muted: #6f8a7a;
+    --danger: #a4432a;
+    --danger-bg: #f6e6de;
+    --shadow: 0 1px 2px rgba(20, 30, 24, 0.06), 0 8px 24px rgba(20, 30, 24, 0.06);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1310; --surface: #121c17; --surface-2: #16211b; --ink: #e8ece5;
+      --muted: #8aa093; --accent: #57bb87; --accent-ink: #06110c; --copper: #dc9a5c;
+      --border: #24322a; --code-bg: #0a120e; --code-ink: #d7e4da; --code-muted: #5d7869;
+      --danger: #e28464; --danger-bg: #251512;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1310; --surface: #121c17; --surface-2: #16211b; --ink: #e8ece5;
+    --muted: #8aa093; --accent: #57bb87; --accent-ink: #06110c; --copper: #dc9a5c;
+    --border: #24322a; --code-bg: #0a120e; --code-ink: #d7e4da; --code-muted: #5d7869;
+    --danger: #e28464; --danger-bg: #251512;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+  :root[data-theme="light"] {
+    --bg: #f3f5f1; --surface: #e8ede6; --surface-2: #dde5da; --ink: #131a16;
+    --muted: #4f6156; --accent: #256b46; --accent-ink: #ffffff; --copper: #9c5f2a;
+    --border: #c9d3c5; --code-bg: #101a15; --code-ink: #d7e4da; --code-muted: #6f8a7a;
+    --danger: #a4432a; --danger-bg: #f6e6de;
+    --shadow: 0 1px 2px rgba(20, 30, 24, 0.06), 0 8px 24px rgba(20, 30, 24, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 16px; line-height: 1.65; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  code, pre, .mono { font-family: var(--mono); }
+  h1, h2, h3, h4 { font-family: var(--mono); font-weight: 700; text-wrap: balance; line-height: 1.25; }
+  p { margin: 0.9em 0; max-width: 74ch; }
+  ul, ol { max-width: 74ch; }
+
+  /* ---------- App shell ---------- */
+  .shell { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
+  @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar {
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    background: var(--surface); border-right: 1px solid var(--border);
+    padding: 1.2rem 1rem 3rem; display: flex; flex-direction: column; gap: 1.1rem;
+  }
+  @media (max-width: 900px) {
+    .sidebar { position: fixed; z-index: 40; width: min(320px, 84vw); left: 0; top: 0;
+      transform: translateX(-100%); transition: transform 0.2s ease; box-shadow: var(--shadow); }
+    .sidebar.open { transform: translateX(0); }
+  }
+  .brand { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem 0.5rem; }
+  .brand a { display: flex; align-items: center; gap: 0.6rem; color: inherit; text-decoration: none; }
+  .brand .logo { width: 1.8em; height: 1.8em; object-fit: contain; flex: none; }
+  .brand strong { font-family: var(--mono); font-size: 1.05rem; letter-spacing: -0.01em; }
+  .brand span { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); display: block; }
+  .backlink {
+    font-family: var(--mono); font-size: 0.78rem; color: var(--muted); text-decoration: none;
+    padding: 0.3rem 0.5rem; display: flex; align-items: center; gap: 0.4em; transition: color 0.15s ease;
+  }
+  .backlink:hover, .backlink:focus-visible { color: var(--accent); }
+
+  .searchbox { position: relative; }
+  .searchbox input {
+    width: 100%; font-family: var(--mono); font-size: 0.85rem; padding: 0.55rem 0.7rem 0.55rem 2rem;
+    border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--ink);
+  }
+  .searchbox input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 1px; }
+  .searchbox::before {
+    content: "⌕"; position: absolute; left: 0.65rem; top: 50%; transform: translateY(-50%);
+    color: var(--muted); font-size: 0.95rem; pointer-events: none;
+  }
+
+  .navgroup { display: flex; flex-direction: column; gap: 0.1rem; }
+  .navgroup .label {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--copper); padding: 0.9rem 0.5rem 0.35rem;
+  }
+  .navgroup a {
+    text-decoration: none; color: var(--muted); font-size: 0.88rem; padding: 0.32rem 0.5rem;
+    border-radius: 5px; border-left: 2px solid transparent; transition: background 0.12s ease, color 0.12s ease;
+    white-space: normal;
+  }
+  .navgroup a.sub { padding-left: 1.2rem; font-size: 0.83rem; }
+  .navgroup a:hover { background: var(--surface-2); color: var(--ink); }
+  .navgroup a.active { color: var(--accent); border-left-color: var(--accent); background: var(--surface-2); font-weight: 600; }
+  .navgroup a.hidden { display: none; }
+
+  .menu-toggle {
+    display: none; position: fixed; z-index: 50; top: 0.9rem; left: 0.9rem;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    width: 2.4rem; height: 2.4rem; font-family: var(--mono); font-size: 1.1rem; color: var(--ink);
+    align-items: center; justify-content: center; box-shadow: var(--shadow);
+  }
+  @media (max-width: 900px) { .menu-toggle { display: flex; } }
+  .scrim { display: none; }
+  @media (max-width: 900px) {
+    .scrim.open { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(0,0,0,0.35); }
+  }
+
+  /* ---------- Main content ---------- */
+  main { padding: 2.6rem clamp(1.2rem, 4vw, 4rem) 8rem; max-width: 920px; }
+  @media (max-width: 900px) { main { padding-top: 4.6rem; } }
+
+  .doctop { margin-bottom: 3rem; }
+  .doctop .eyebrow {
+    font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--copper); display: inline-flex; align-items: center; gap: 0.6em;
+  }
+  .doctop .eyebrow::before { content: ""; width: 1.1em; height: 1px; background: var(--copper); display: inline-block; }
+  .doctop h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); margin: 0.6rem 0 0.7rem; letter-spacing: -0.01em; }
+  .doctop .lede { color: var(--muted); font-size: 1.05rem; max-width: 62ch; }
+
+  section.doc-section { padding-top: 2.2rem; margin-top: 1.4rem; border-top: 1px solid var(--border); }
+  section.doc-section:first-of-type { border-top: none; }
+  section.doc-section > h2 { font-size: 1.5rem; scroll-margin-top: 1.4rem; }
+  section.doc-section > h2 .tag {
+    font-family: var(--mono); font-size: 0.65rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); border: 1px solid var(--border); padding: 0.15em 0.55em; border-radius: 999px;
+    margin-left: 0.7em; vertical-align: middle; font-weight: 500;
+  }
+  .doc-sub { margin-top: 2rem; scroll-margin-top: 1.4rem; }
+  .doc-sub > h3 { font-size: 1.15rem; }
+  .doc-sub > h4 { font-size: 0.98rem; margin-top: 1.4rem; color: var(--ink); }
+
+  /* ---------- Code cards ---------- */
+  .code-card {
+    background: var(--code-bg); color: var(--code-ink);
+    border-radius: 8px; border: 1px solid color-mix(in srgb, var(--copper) 25%, transparent);
+    box-shadow: var(--shadow); overflow: hidden; margin: 1.1rem 0;
+  }
+  .code-card .titlebar {
+    display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;
+    padding: 0.5rem 0.9rem; border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-family: var(--mono); font-size: 0.74rem; color: var(--code-muted);
+  }
+  .code-card pre { margin: 0; padding: 1rem 1.1rem; font-size: 0.84rem; line-height: 1.6; overflow-x: auto; }
+  .code-card pre, .code-card code { color: var(--code-ink); }
+  .kw { color: var(--accent, #57bb87); }
+  .str { color: var(--copper); }
+  .cm { color: var(--code-muted); font-style: italic; }
+  .ty { color: #8fb8d6; }
+  .fn { color: #d7b45a; }
+  .num { color: #c99ee0; }
+
+  code:not(.code-card code) {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px;
+    padding: 0.1em 0.4em; font-size: 0.88em;
+  }
+
+  /* ---------- Tables ---------- */
+  .tblwrap { overflow-x: auto; margin: 1.1rem 0; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+  th, td { text-align: left; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); background: var(--surface); }
+  tr:last-child td { border-bottom: none; }
+  td code, th code { white-space: nowrap; }
+
+  /* ---------- Callouts ---------- */
+  .callout {
+    border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+    padding: 0.95rem 1.1rem; margin: 1.1rem 0; font-size: 0.92rem;
+  }
+  .callout .k {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+    display: block; margin-bottom: 0.4rem; color: var(--copper);
+  }
+  .callout.warn { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: var(--danger-bg); }
+  .callout.warn .k { color: var(--danger); }
+  .callout p { margin: 0.4rem 0; max-width: none; }
+  .callout p:first-of-type { margin-top: 0; }
+
+  /* ---------- Cards for example/module listings ---------- */
+  .cardgrid { display: grid; grid-template-columns: 1fr; gap: 0.9rem; margin: 1.1rem 0; }
+  .item-card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.15rem; background: var(--surface); }
+  .item-card h4 { margin: 0 0 0.35rem; font-size: 0.98rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .item-card .path { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); font-weight: 400; }
+  .item-card p { margin: 0.3rem 0; font-size: 0.9rem; color: var(--muted); max-width: none; }
+
+  .pill {
+    font-family: var(--mono); font-size: 0.63rem; letter-spacing: 0.06em; text-transform: uppercase;
+    background: var(--accent); color: var(--accent-ink); padding: 0.2em 0.55em; border-radius: 999px; white-space: nowrap;
+  }
+  .pill.alt { background: var(--copper); }
+  .pill.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+
+  footer.docfoot {
+    border-top: 1px solid var(--border); margin-top: 3rem; padding-top: 1.4rem;
+    color: var(--muted); font-size: 0.85rem; font-family: var(--mono);
+  }
+
+  ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+</style>
+
+<div class="menu-toggle" id="menuToggle" aria-label="Toggle navigation">≡</div>
+<div class="scrim" id="scrim"></div>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <a href="https://claude.ai/code/artifact/6963b593-290e-468f-8d81-5ff86e310e38" title="Back to the LLPL site">
+        <img class="logo" src="data:image/png;base64,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" alt="LLPL logo">
+        <div><strong>LLPL</strong><span>Documentation</span></div>
+      </a>
+    </div>
+    <a class="backlink" href="https://claude.ai/code/artifact/6963b593-290e-468f-8d81-5ff86e310e38">&larr; llpl-site</a>
+    <div class="searchbox">
+      <input type="text" id="navSearch" placeholder="Filter docs..." autocomplete="off">
+    </div>
+
+    <nav class="navgroup">
+      <a href="#overview">Overview</a>
+      <a href="#cli">Compiler &amp; CLI</a>
+    </nav>
+
+    <nav class="navgroup">
+      <div class="label">Language Reference</div>
+      <a href="#lang-syntax" class="sub">Core syntax</a>
+      <a href="#lang-classes" class="sub">Classes</a>
+      <a href="#lang-traits" class="sub">Traits &amp; generics</a>
+      <a href="#lang-opoverload" class="sub">Operator overloading</a>
+      <a href="#lang-operators" class="sub">Operators</a>
+      <a href="#lang-macros" class="sub">Macros</a>
+      <a href="#lang-result" class="sub">Result&lt;T,E&gt; &amp; ?</a>
+      <a href="#lang-exceptions" class="sub">throw / try / catch</a>
+      <a href="#lang-panics" class="sub">Panics</a>
+      <a href="#lang-assert" class="sub">Assert</a>
+      <a href="#lang-defer" class="sub">Defer</a>
+      <a href="#lang-asm" class="sub">Inline assembly</a>
+      <a href="#lang-pipe" class="sub">Pipe &amp; unless</a>
+      <a href="#lang-grammar" class="sub">grammar { }</a>
+      <a href="#lang-embed" class="sub">embed()</a>
+      <a href="#lang-modules" class="sub">Modules</a>
+      <a href="#lang-types" class="sub">Type system</a>
+      <a href="#lang-closures" class="sub">Closures</a>
+      <a href="#lang-strings" class="sub">Strings &amp; regex</a>
+    </nav>
+
+    <nav class="navgroup">
+      <div class="label">Standard Library</div>
+      <a href="#std-io" class="sub">std.io</a>
+      <a href="#std-net" class="sub">std.net</a>
+      <a href="#std-text" class="sub">std.text</a>
+      <a href="#std-collections" class="sub">std.collections</a>
+      <a href="#std-sdl" class="sub">std.sdl</a>
+      <a href="#std-args" class="sub">std.args</a>
+      <a href="#std-yaml" class="sub">std.yaml</a>
+      <a href="#std-json" class="sub">std.json</a>
+    </nav>
+
+    <nav class="navgroup">
+      <div class="label">Examples</div>
+      <a href="#ex-baremetal" class="sub">baremetal_demo</a>
+      <a href="#ex-limine" class="sub">limine_baremetal_demo</a>
+      <a href="#ex-collections" class="sub">collections</a>
+      <a href="#ex-regex" class="sub">regex</a>
+      <a href="#ex-sdl" class="sub">sdl</a>
+      <a href="#ex-tests" class="sub">test/ suite</a>
+      <a href="#ex-playground" class="sub">Web playground</a>
+    </nav>
+  </aside>
+
+  <main id="mainContent">
+
+    <div class="doctop" id="overview">
+      <span class="eyebrow">LLPL Documentation</span>
+      <h1>The compiler, the standard library, and the examples</h1>
+      <p class="lede">
+        LLPL is a low-level language with Swift/JavaScript-flavored syntax that
+        compiles to C — reference-counted classes, traits, macros, inline
+        assembly, and a compile-time <code>embed()</code> builtin, aimed
+        squarely at bare-metal and kernel-level work as much as ordinary
+        hosted programs. This page is the full reference: the language
+        itself, the standard library that ships with it, and a guided tour
+        of every example in the repository, including a full GRUB-booted
+        kernel with a windowing compositor and a DHCP-configured network
+        stack.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SECTION: CLI                                                  -->
+    <!-- ============================================================ -->
+    <section class="doc-section" id="cli">
+      <h2>Compiler &amp; CLI</h2>
+      <p>
+        The compiler is a single executable, <code>llpl</code>, built from
+        a small set of D sources under <code>source/</code>:
+        <code>lexer.d</code> (source → tokens), <code>parser.d</code>
+        (tokens → AST), <code>ast.d</code> (AST node definitions),
+        <code>codegen.d</code> (AST → C), <code>modules.d</code> (import
+        resolution), <code>grammar.d</code> (the inline <code>grammar {
+        }</code> feature), <code>errors.d</code> (diagnostics), and
+        <code>lspquery.d</code> (editor/LSP-facing hover and symbol
+        queries).
+      </p>
+
+      <div class="code-card">
+        <div class="titlebar"><span>build the compiler</span></div>
+        <pre>dub build
+<span class="cm"># optional, if your code imports the standard library from outside the repo root:</span>
+export LLPL_HOME=$(pwd)</pre>
+      </div>
+
+      <div class="tblwrap">
+        <table>
+          <tr><th>Flag</th><th>What it does</th></tr>
+          <tr><td><code>-o</code>, <code>--output</code></td><td>Output file path — a <code>.c</code> source file, or (with <code>-b</code>) a native binary.</td></tr>
+          <tr><td><code>-b</code>, <code>--binary</code></td><td>Compile straight to a native binary instead of emitting C — invokes a system C compiler (see <code>--cc</code>).</td></tr>
+          <tr><td><code>--cc</code></td><td>C compiler to invoke in <code>--binary</code> mode. Defaults to <code>$CC</code>, falling back to <code>cc</code>.</td></tr>
+          <tr><td><code>--keep-c</code></td><td>Keep the intermediate <code>.c</code> file in <code>--binary</code> mode even on success.</td></tr>
+          <tr><td><code>-v</code>, <code>--verbose</code></td><td>Verbose output.</td></tr>
+          <tr><td><code>--safe</code></td><td>Enable runtime safety checks — currently, bounds-checked fixed-size array indexing. Off by default. See <a href="#lang-types-pointers">Pointers &amp; arrays</a>.</td></tr>
+          <tr><td><code>--dce</code></td><td>Dead-code elimination. On by default.</td></tr>
+          <tr><td><code>--lsp-symbols</code></td><td>Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling.</td></tr>
+          <tr><td><code>-h</code>, <code>--help</code></td><td>Help text.</td></tr>
+        </table>
+      </div>
+
+      <div class="code-card">
+        <div class="titlebar"><span>two ways to run a program</span></div>
+        <pre><span class="cm"># emit C, then compile it yourself</span>
+./llpl hello.llpl -o hello.c &amp;&amp; gcc hello.c runtime/runtime.c -o hello &amp;&amp; ./hello
+
+<span class="cm"># or straight to a native binary in one step (links runtime/runtime.c automatically)</span>
+./llpl hello.llpl -b -o hello</pre>
+      </div>
+
+      <div class="callout">
+        <span class="k">Scope of -b/--binary</span>
+        <p>
+          <code>-b</code>/<code>--binary</code> only targets ordinary hosted
+          programs. A freestanding/kernel target like
+          <a href="#ex-baremetal">baremetal_demo</a> needs its own
+          <code>tools/llplbuild</code> build instead — a custom linker
+          script, hand-written boot assembly, and <code>-ffreestanding</code>
+          flags that <code>-b</code> doesn't attempt to set up.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- SECTION: LANGUAGE REFERENCE                                   -->
+    <!-- ============================================================ -->
+    <section class="doc-section" id="lang-syntax">
+      <h2>Language Reference <span class="tag">core syntax</span></h2>
+      <p>
+        No semicolons, no parentheses around <code>if</code>/<code>while</code>
+        conditions, and type annotations that are usually optional. The
+        syntax reads like a cross between Swift and JavaScript; everything
+        underneath compiles straight to plain C.
+      </p>
+
+      <div class="doc-sub" id="lang-syntax-vars">
+        <h3>Variables</h3>
+        <div class="code-card"><pre><span class="kw">let</span> x: <span class="ty">i64</span> = <span class="num">42</span>              <span class="cm">// mutable</span>
+<span class="kw">const</span> MAX: <span class="ty">i64</span> = <span class="num">100</span>        <span class="cm">// constant</span>
+<span class="kw">let</span> name: <span class="ty">u8</span>* = <span class="str">"Bob"</span>     <span class="cm">// string literals are already u8*, no cast needed</span>
+<span class="kw">let</span> x = <span class="num">42</span>                    <span class="cm">// type inferred</span>
+<span class="kw">volatile</span> <span class="kw">let</span> ready: <span class="ty">bool</span> = <span class="kw">false</span>   <span class="cm">// never cached in a register - for MMIO/shared state</span></pre></div>
+      </div>
+
+      <div class="doc-sub" id="lang-syntax-fns">
+        <h3>Functions &amp; overloading</h3>
+        <div class="code-card"><pre><span class="kw">func</span> add(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> {
+    <span class="kw">return</span> a + b
+}
+<span class="kw">func</span> add(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>, c: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> {   <span class="cm">// overload by parameter shape</span>
+    <span class="kw">return</span> a + b + c
+}
+<span class="kw">func</span> greet(name: <span class="ty">u8</span>*) {
+    print(name)
+}</pre></div>
+        <p>
+          Overloads are picked by exact argument type at each call site — no
+          implicit numeric coercion decides between them. Two declarations
+          with identical parameter types is a compile error, and a call
+          matching no overload is a compile error. Overloaded <em>generic
+          function templates</em> aren't supported (only one <code>func
+          foo&lt;T&gt;</code> per name), though a generic class's own methods
+          can still be overloaded once monomorphized.
+        </p>
+
+        <h4>Named arguments and defaults</h4>
+        <div class="code-card"><pre><span class="kw">func</span> greet(name: <span class="ty">u8</span>*, greeting: <span class="ty">u8</span>* = <span class="str">"Hello"</span>) {
+    puts(greeting); puts(name)
+}
+greet(<span class="str">"Alice"</span>, <span class="str">"Hi"</span>)                  <span class="cm">// positional</span>
+greet(<span class="str">"Bob"</span>)                          <span class="cm">// trailing default omitted</span>
+greet(name: <span class="str">"Cara"</span>, greeting: <span class="str">"Yo"</span>)   <span class="cm">// named, in order</span>
+greet(greeting: <span class="str">"Hey"</span>, name: <span class="str">"Dave"</span>)  <span class="cm">// named, any order</span></pre></div>
+        <p>
+          Once a parameter has a default, every later parameter must too.
+          Once any named argument appears, no further positional argument
+          may follow. This resolves entirely at compile time at the call
+          site — the callee's own signature is unchanged, so it works even
+          against <code>extern func</code> declarations. Not supported for
+          tagged-enum variant construction or macro invocations, which stay
+          positional-only.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-syntax-flow">
+        <h3>Control flow</h3>
+        <div class="code-card"><pre><span class="cm">// no parentheses around conditions</span>
+<span class="kw">if</span> x &gt; <span class="num">10</span> {
+    print(<span class="str">"Big"</span>)
+} <span class="kw">else</span> {
+    print(<span class="str">"Small"</span>)
+}
+
+<span class="kw">while</span> count &lt; <span class="num">10</span> {
+    count = count + <span class="num">1</span>
+}
+
+<span class="cm">// init, condition, update - comma separated, no parens</span>
+<span class="kw">for</span> <span class="kw">let</span> i: <span class="ty">i64</span> = <span class="num">0</span>, i &lt; <span class="num">10</span>, i = i + <span class="num">1</span> {
+    print(<span class="str">"."</span>)
+}
+
+<span class="cm">// range-based, counts up to (not including) end</span>
+<span class="kw">for</span> i <span class="kw">in</span> <span class="num">0</span>..<span class="num">10</span> {
+    print_int(<span class="str">"i"</span>, i)
+}</pre></div>
+        <p>
+          <code>break</code>/<code>continue</code> affect only the
+          lexically-innermost enclosing loop — nesting a <code>match</code>
+          or <code>if</code> in between doesn't change the target, since
+          <code>match</code> itself compiles to an if/else-if chain, not a C
+          <code>switch</code>.
+        </p>
+
+        <h4>Custom iterators</h4>
+        <p>
+          Any class with <code>iter_has_next() -&gt; bool</code> and
+          <code>iter_next() -&gt; T</code> (plus an optional
+          <code>iter_reset()</code>, auto-called before the loop if present)
+          works with <code>for x in obj { }</code> — either written inline
+          or via <code>impl Iterator&lt;T&gt; for X { ... }</code>. The
+          trait's own <code>&lt;T&gt;</code> is a documentation convenience;
+          only method names/arities are actually checked against the impl.
+        </p>
+
+        <h4><code>if</code> as an expression, and implicit returns</h4>
+        <div class="code-card"><pre><span class="kw">func</span> classify(n: <span class="ty">i64</span>) -&gt; <span class="ty">u8</span>* {
+    <span class="kw">return</span> <span class="kw">if</span> n &lt; <span class="num">0</span> { <span class="str">"negative"</span> } <span class="kw">else</span> <span class="kw">if</span> n == <span class="num">0</span> { <span class="str">"zero"</span> } <span class="kw">else</span> { <span class="str">"positive"</span> }
+}
+<span class="kw">let</span> y = <span class="kw">if</span> <span class="kw">false</span> { <span class="num">1</span> } <span class="kw">else</span> { <span class="num">2</span> }   <span class="cm">// type inferred from both branches</span>
+
+<span class="cm">// a function/method/lambda's trailing bare expression is its own value</span>
+<span class="kw">func</span> square(n: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> { n * n }             <span class="cm">// same as { return n * n }</span></pre></div>
+        <p>
+          <code>else</code> is mandatory on an expression-<code>if</code>,
+          and both branches' trailing expression types must match exactly.
+          A bare, unparenthesized <code>if</code> as literally the last
+          line of a body parses as an if-<em>statement</em>, not an
+          expression value — wrap it in parens,
+          <code>(if ... else ...)</code>, to use it as a trailing value.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-syntax-cast">
+        <h3>Type casting &amp; sizeof</h3>
+        <div class="code-card"><pre><span class="kw">let</span> addr: <span class="ty">u64</span> = <span class="num">0xB8000</span>
+<span class="kw">let</span> buffer: <span class="ty">u8</span>* = addr <span class="kw">as</span> <span class="ty">u8</span>*
+
+x.sizeof            <span class="cm">// no parens - infers the value's own type</span>
+sizeof(<span class="ty">SomeType</span>)     <span class="cm">// explicit type reference</span></pre></div>
+        <p>
+          A class-typed value's <code>.sizeof</code> reflects the
+          <em>pointer's</em> size (8 bytes), since classes are always
+          heap-allocated and accessed by pointer.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-syntax-unary">
+        <h4>A note on newline-sensitive unary parsing</h4>
+        <p>
+          A statement starting with <code>*</code>, <code>-</code>, or
+          <code>&amp;</code> right after a prior statement is read as
+          <em>continuing</em> that statement only if it's on the
+          <strong>same source line</strong>; on a new line it starts a
+          fresh unary expression instead (the same rule Go and Kotlin use).
+          So double-dereference assignment just works with no special
+          syntax:
+        </p>
+        <div class="code-card"><pre><span class="kw">func</span> set_via_pp(pp: <span class="ty">i64</span>**, v: <span class="ty">i64</span>) {
+    **pp = v      <span class="cm">// parses correctly as its own statement</span>
+}</pre></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-classes">
+      <h2>Classes</h2>
+      <div class="code-card"><pre><span class="kw">class</span> Rectangle {
+    <span class="kw">let</span> width: <span class="ty">i64</span>
+    <span class="kw">let</span> height: <span class="ty">i64</span>
+
+    constructor(w: <span class="ty">i64</span>, h: <span class="ty">i64</span>) { self.width = w; self.height = h }
+    destructor() { <span class="cm">/* cleanup */</span> }
+
+    <span class="kw">func</span> area() -&gt; <span class="ty">i64</span> { <span class="kw">return</span> self.width * self.height }
+}
+<span class="kw">let</span> rect: Rectangle = <span class="kw">new</span> Rectangle(<span class="num">10</span>, <span class="num">20</span>)</pre></div>
+      <p>
+        A field can drop its <code>let</code> — <code>width: i64</code> in
+        a class body means the same thing as <code>let width: i64</code>
+        (still mutable); <code>const</code>/<code>volatile</code> fields
+        must keep their keyword, since that's the only way to distinguish
+        them from a plain mutable field.
+      </p>
+
+      <div class="doc-sub" id="lang-classes-private">
+        <h4><code>private</code></h4>
+        <p>
+          Restricts access to the declaring class's own body — any method,
+          constructor, or a matching <code>impl Trait for ThisClass {}</code>
+          block. It's <strong>class-scoped, not instance-scoped</strong>:
+          one instance's method can read <em>another</em> instance's
+          private field. Only fields and methods can be private, not
+          constructors (they must stay reachable via <code>new</code>).
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-classes-inherit">
+        <h4>Single inheritance, <code>super()</code>, <code>virtual</code>/<code>override</code></h4>
+        <p>
+          Dispatch overhead is opt-in per method: an ordinary method call is
+          always statically bound unless the method is declared
+          <code>virtual</code> (establishing a new dispatchable vtable slot)
+          or <code>override</code> (providing this class's implementation
+          of a slot a base declared). <code>override</code> requires an
+          exact signature match — no covariance; a mismatch is a compile
+          error.
+        </p>
+        <div class="code-card">
+          <div class="titlebar"><span>3-level hierarchy, from the bare-metal demo's UI widget library</span></div>
+          <pre><span class="kw">class</span> Widget {
+    <span class="kw">virtual</span> <span class="kw">func</span> draw(buf: <span class="ty">u32</span>*, buf_w: <span class="ty">i64</span>, buf_h: <span class="ty">i64</span>) {}
+    <span class="kw">virtual</span> <span class="kw">func</span> click(px: <span class="ty">i64</span>, py: <span class="ty">i64</span>) {}
+}
+<span class="kw">class</span> Button : Widget {
+    constructor(x: <span class="ty">i64</span>, y: <span class="ty">i64</span>, w: <span class="ty">i64</span>, h: <span class="ty">i64</span>, label: <span class="ty">u8</span>*) {
+        <span class="kw">super</span>(x, y, w, h)
+        self.label = label
+    }
+    <span class="kw">override</span> <span class="kw">func</span> draw(buf: <span class="ty">u32</span>*, buf_w: <span class="ty">i64</span>, buf_h: <span class="ty">i64</span>) { <span class="cm">/* ... */</span> }
+    <span class="kw">override</span> <span class="kw">func</span> click(px: <span class="ty">i64</span>, py: <span class="ty">i64</span>) {}
+}
+<span class="kw">class</span> ActionButton : Button {          <span class="cm">// 3rd level - inherits draw() unchanged</span>
+    <span class="kw">override</span> <span class="kw">func</span> click(px: <span class="ty">i64</span>, py: <span class="ty">i64</span>) {
+        self.target.value = self.target.value + <span class="num">10</span>
+    }
+}</pre>
+        </div>
+        <p>
+          The bare-metal demo's <code>ui_demo.elf</code> drives an entire
+          UI through one <code>Vector&lt;Widget&gt;</code>, dispatching
+          draw/click/drag purely through virtual calls instead of switching
+          on a type tag by hand. Dotted base names are supported too:
+          <code>class Derived : Ns.Base { ... }</code>.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-classes-static">
+        <h4><code>static</code></h4>
+        <p>
+          <code>static func</code> on a class has no implicit
+          <code>self</code> parameter and is called on the class rather
+          than an instance.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-classes-rc">
+        <h4>Reference counting — the exact rules</h4>
+        <ul>
+          <li><code>new</code> allocates and sets the reference count to 1.</li>
+          <li>
+            A local class-typed variable gets <code>rc_release</code>d
+            automatically at scope exit, on reassignment, and at function
+            return (RAII for class locals).
+          </li>
+          <li>
+            A class-typed <strong>field</strong> is released only when its
+            <em>owning object's destructor runs</em> — cascading, not
+            scope-based. There's no implicit release just because a field's
+            owner happens to go out of scope somewhere else; it always
+            waits for that owner's own destructor.
+          </li>
+          <li>
+            <code>delete expr</code> releases a reference explicitly — for
+            an object that was never stored as anyone's field. If it was
+            the last reference, the destructor runs and memory is freed;
+            otherwise the object simply survives. <code>delete</code> on a
+            struct or primitive is a compile error.
+          </li>
+        </ul>
+        <div class="code-card"><pre><span class="kw">class</span> Container {
+    <span class="kw">let</span> item: MyClass
+    constructor(item: MyClass) { self.item = item }
+    destructor() {}  <span class="cm">// self.item is released here, automatically</span>
+}
+<span class="kw">func</span> example() {
+    <span class="kw">let</span> obj: MyClass = <span class="kw">new</span> MyClass()
+    <span class="kw">let</span> c: Container = <span class="kw">new</span> Container(obj)  <span class="cm">// Container now owns obj</span>
+    <span class="kw">delete</span> c  <span class="cm">// releases obj too, via Container's destructor</span>
+}</pre></div>
+      </div>
+
+      <div class="doc-sub" id="lang-classes-weak">
+        <h4><code>Weak&lt;T&gt;</code></h4>
+        <p>
+          A non-owning reference that never keeps its target alive, and
+          safely reports whether it's still alive — use it to break a
+          reference cycle between two classes that hold each other, so
+          releasing one doesn't cascade back through the other.
+        </p>
+        <div class="code-card"><pre><span class="kw">class</span> Child {
+    <span class="kw">let</span> name: <span class="ty">u8</span>*
+    <span class="kw">let</span> parent: Weak&lt;Parent&gt;
+    <span class="kw">func</span> link_parent(p: Parent) { self.parent = <span class="kw">new</span> Weak&lt;Parent&gt;(p) }
+}
+<span class="kw">class</span> Parent {
+    <span class="kw">let</span> child: Child
+    constructor(name: <span class="ty">u8</span>*) { self.child = <span class="kw">new</span> Child(name); self.child.link_parent(self) }
+}
+<span class="kw">let</span> parent_ref: Parent = p.child.parent.upgrade()   <span class="cm">// real retained ref if alive, else null</span>
+<span class="kw">if</span> parent_ref != <span class="kw">null</span> { <span class="kw">delete</span> parent_ref }
+<span class="kw">delete</span> p  <span class="cm">// Parent destroyed, then Child destroyed - no crash</span></pre></div>
+      </div>
+
+      <div class="doc-sub" id="lang-classes-asstring">
+        <h4>The <code>as_string</code>/<code>as_int</code>/<code>as_float</code>/<code>as_bool</code> convention</h4>
+        <p>
+          Defining a no-arg method with one of these names is picked up
+          automatically by (1) a <code>let</code>/assignment where the
+          target type matches the kind, (2) <code>value as
+          string/i64/float/bool</code> casts, and (3) <code>.as_string</code>
+          property syntax and <code>"\(x)"</code> string interpolation. Only
+          <code>as_string</code> has a fallback (the type's own name as a
+          compile-time literal) for a class/struct/primitive that doesn't
+          define one — <code>as_int</code>/<code>as_float</code>/<code>as_bool</code>
+          have no fallback.
+        </p>
+        <div class="code-card"><pre><span class="kw">class</span> Point3D {
+    <span class="kw">func</span> as_string() -&gt; <span class="ty">string</span> {
+        <span class="kw">if</span> self.x == <span class="num">0</span> &amp;&amp; self.y == <span class="num">0</span> &amp;&amp; self.z == <span class="num">0</span> { <span class="kw">return</span> <span class="str">"Point3D(origin)"</span> }
+        <span class="kw">return</span> <span class="str">"Point3D(non-origin)"</span>
+    }
+}
+puts(p.as_string)           <span class="cm">// custom method, no call parens needed</span>
+puts(p <span class="kw">as</span> <span class="ty">string</span>)           <span class="cm">// same, via cast</span>
+<span class="kw">let</span> s: <span class="ty">string</span> = p         <span class="cm">// same, via plain assignment</span>
+puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit as_string inside interpolation</span></pre></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-traits">
+      <h2>Traits &amp; Bounded Generics</h2>
+      <p>
+        A <code>trait</code> is a compile-time-only contract — signatures,
+        no bodies. <code>impl TraitName for TargetType { ... }</code> is
+        how a primitive or struct gains a method body for it (classes can
+        alternatively just define the method inline). Dispatch is entirely
+        <strong>static</strong> (monomorphization) — there are no vtables
+        or trait objects here, and no heterogeneous "any Comparable"
+        collection through a shared pointer type.
+      </p>
+      <div class="code-card"><pre><span class="kw">trait</span> Comparable {
+    <span class="kw">func</span> compare(other: Self) -&gt; <span class="ty">i64</span>
+}
+<span class="kw">impl</span> Comparable <span class="kw">for</span> <span class="ty">i64</span> {
+    <span class="kw">func</span> compare(other: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> {
+        <span class="kw">if</span> self &lt; other { <span class="kw">return</span> -<span class="num">1</span> }
+        <span class="kw">if</span> self &gt; other { <span class="kw">return</span> <span class="num">1</span> }
+        <span class="kw">return</span> <span class="num">0</span>
+    }
+}
+<span class="kw">func</span> max_of&lt;T: Comparable&gt;(a: T, b: T) -&gt; T {   <span class="cm">// bounded generic type parameter</span>
+    <span class="kw">if</span> a.compare(b) &gt;= <span class="num">0</span> { <span class="kw">return</span> a }
+    <span class="kw">return</span> b
+}</pre></div>
+      <p>
+        <code>Self</code> in a trait signature (and the matching impl body)
+        resolves by substitution to whatever concrete type the impl
+        targets — it isn't a keyword in its own right. An impl is
+        considered valid if it defines a same-named method for every one
+        the trait declares. <strong>v1 limits:</strong> at most one bound
+        per type parameter (no <code>T: A + B</code>), no default method
+        bodies, and an impl's target must be concrete (<code>impl X for
+        Vector&lt;i64&gt;</code> is rejected).
+      </p>
+      <p>
+        <code>prelude.llpl</code> ships <code>Hashable</code>
+        (<code>hash()</code>/<code>equals(other: Self)</code> — implemented
+        for <code>i64</code>/<code>u64</code>/<code>u8</code>/<code>u8*</code>/<code>String</code>,
+        the last two hashing/comparing by content via FNV-1a, not pointer
+        identity), <code>Comparable</code>, <code>StringOperators</code>
+        (content-based <code>==</code>/<code>&lt;</code>/etc. for
+        <code>u8*</code>), and the operator traits <code>Add</code>/<code>Sub</code>/<code>Neg</code>/<code>Mul</code>
+        — deliberately <em>without</em> impls for primitives, since plain
+        <code>+</code>/<code>-</code>/<code>*</code> already works on
+        <code>i64</code>/<code>u64</code>/<code>u8</code> and an impl
+        for them would recurse.
+      </p>
+
+      <div class="doc-sub" id="lang-traits-generics">
+        <h4>Generics / monomorphization</h4>
+        <div class="code-card"><pre><span class="kw">func</span> max_of&lt;T&gt;(a: T, b: T) -&gt; T { <span class="kw">if</span> a &gt; b { <span class="kw">return</span> a }; <span class="kw">return</span> b }
+<span class="kw">struct</span> Pair&lt;A, B&gt; { <span class="kw">let</span> first: A; <span class="kw">let</span> second: B }
+<span class="kw">let</span> m: <span class="ty">i64</span> = max_of(<span class="num">3</span>, <span class="num">7</span>)   <span class="cm">// T inferred from the arguments - never written explicitly</span>
+<span class="kw">let</span> p: Pair&lt;<span class="ty">i64</span>, <span class="ty">i64</span>&gt;</pre></div>
+        <p>
+          A generic function's type parameters are always inferred from
+          arguments (every parameter must appear in at least one argument's
+          type); a generic class or struct is always instantiated
+          explicitly. Standard generic containers ship in
+          <code>prelude.llpl</code> with no import needed:
+          <code>Vector&lt;T&gt;</code>, <code>Optional&lt;T&gt;</code>,
+          <code>LinkedList&lt;T&gt;</code>, <code>HashMap&lt;K: Hashable,
+          V&gt;</code>, <code>Result&lt;T,E&gt;</code>, <code>Weak&lt;T&gt;</code>,
+          <code>Slice&lt;T&gt;</code>, <code>Owned&lt;T&gt;</code>,
+          <code>OwnedBuffer</code>, <code>Regex</code>/<code>RegexMatch</code>,
+          <code>ParseNode</code>, <code>String</code>.
+        </p>
+        <div class="callout">
+          <span class="k">Known limitation</span>
+          <p>
+            <code>Vector&lt;T&gt;</code> cannot hold an explicit pointer
+            element type (<code>Vector&lt;u8*&gt;</code>/<code>Vector&lt;string&gt;</code>)
+            — it needs a genuine C pointer-to-pointer type this system
+            can't express yet. Wrap the pointer in a one-field struct
+            instead.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-opoverload">
+      <h2>Operator Overloading</h2>
+      <p>
+        <code>func operator+(other: T) -&gt; T</code> is a special
+        method-name form, not a distinct language construct — it's usable
+        <strong>inline directly on a <code>class</code></strong>, or (the
+        only option for a <code>struct</code> or a primitive, which can't
+        carry inline methods) via <code>impl SomeTrait for TargetType</code>.
+        Both forms compile down to the same internal method name (e.g.
+        <code>op_add</code> for <code>+</code>), so a generic function
+        bounded by the right trait works identically either way.
+      </p>
+      <div class="tblwrap">
+        <table>
+          <tr><th>Kind</th><th>Operators</th></tr>
+          <tr><td>Binary</td><td><code>+ - * / % == != &lt; &gt; &lt;= &gt;= &amp; | ^ &lt;&lt; &gt;&gt;</code></td></tr>
+          <tr><td>Unary</td><td><code>- ! ~ []</code></td></tr>
+        </table>
+      </div>
+
+      <div class="doc-sub" id="lang-opoverload-class">
+        <h4>Inline on a class</h4>
+        <p>
+          A class defines an operator the same way it defines any other
+          method — no trait or <code>impl</code> block needed, since the
+          class already owns its own method table.
+        </p>
+        <div class="code-card"><pre><span class="kw">class</span> Money {
+    <span class="kw">let</span> cents: <span class="ty">i64</span>
+    constructor(cents: <span class="ty">i64</span>) { self.cents = cents }
+
+    <span class="kw">func</span> operator+(other: Money) -&gt; Money {
+        <span class="kw">return</span> <span class="kw">new</span> Money(self.cents + other.cents)
+    }
+    <span class="kw">func</span> operator==(other: Money) -&gt; <span class="ty">bool</span> {
+        <span class="kw">return</span> self.cents == other.cents
+    }
+    <span class="kw">func</span> operator-() -&gt; Money {          <span class="cm">// unary minus</span>
+        <span class="kw">return</span> <span class="kw">new</span> Money(-self.cents)
+    }
+}
+<span class="kw">let</span> total: Money = <span class="kw">new</span> Money(<span class="num">150</span>) + <span class="kw">new</span> Money(<span class="num">250</span>)   <span class="cm">// Money(400)</span>
+<span class="kw">let</span> refund: Money = -total</pre></div>
+      </div>
+
+      <div class="doc-sub" id="lang-opoverload-impl">
+        <h4>Via a trait <code>impl</code>, for a struct or primitive</h4>
+        <p>
+          A <code>struct</code> (or a primitive, when you actually need to
+          override the built-in behavior) can't hold inline methods, so
+          the operator body lives in an <code>impl</code> block instead —
+          the trait itself just declares the signature.
+        </p>
+        <div class="code-card"><pre><span class="kw">struct</span> Vec2 { <span class="kw">let</span> x: <span class="ty">i64</span>; <span class="kw">let</span> y: <span class="ty">i64</span> }
+<span class="kw">trait</span> Add { <span class="kw">func</span> operator+(other: Self) -&gt; Self }
+<span class="kw">impl</span> Add <span class="kw">for</span> Vec2 {
+    <span class="kw">func</span> operator+(other: Vec2) -&gt; Vec2 {
+        <span class="kw">let</span> r: Vec2
+        r.x = self.x + other.x
+        r.y = self.y + other.y
+        <span class="kw">return</span> r
+    }
+}
+<span class="kw">let</span> c: Vec2 = a + b        <span class="cm">// Vec2 { x: 11, y: 22 }</span>
+
+<span class="cm">// indexing: struct/class operator[] takes the index and returns the element</span>
+<span class="kw">impl</span> ... <span class="kw">for</span> Vec2 {
+    <span class="kw">func</span> operator[](i: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> {
+        <span class="kw">if</span> i == <span class="num">0</span> { <span class="kw">return</span> self.x }
+        <span class="kw">return</span> self.y
+    }
+}
+<span class="kw">let</span> first: <span class="ty">i64</span> = a[<span class="num">0</span>]   <span class="cm">// a.operator[](0)</span></pre></div>
+        <p>
+          Validation is nominal (name-only), so an impl's parameter needn't
+          literally be <code>Self</code>:
+        </p>
+        <div class="code-card"><pre><span class="kw">impl</span> Mul <span class="kw">for</span> Vec2 {
+    <span class="kw">func</span> operator*(scalar: <span class="ty">i64</span>) -&gt; Vec2 {   <span class="cm">// scaling by a plain i64, not another Vec2</span>
+        <span class="kw">return</span> Vec2 { x: self.x * scalar, y: self.y * scalar }
+    }
+}
+<span class="kw">let</span> doubled: Vec2 = v * <span class="num">2</span></pre></div>
+      </div>
+
+      <div class="callout">
+        <span class="k">Why prelude.llpl doesn't implement these for i64/u64/u8</span>
+        <p>
+          <code>prelude.llpl</code> ships the operator traits
+          <code>Add</code>/<code>Sub</code>/<code>Neg</code>/<code>Mul</code>
+          themselves (so your own bounded generics can require them), but
+          deliberately leaves them <em>unimplemented</em> for the
+          primitives — plain <code>+</code>/<code>-</code>/<code>*</code>
+          already works on <code>i64</code>/<code>u64</code>/<code>u8</code>
+          via the compiler's built-in arithmetic, and an <code>impl Add
+          for i64</code> here would recurse, since operator lookup can't
+          distinguish "the native operator" from "this exact impl".
+        </p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-operators">
+      <h2>Operators</h2>
+      <p>
+        The built-in operators, always available on primitives. To make
+        any of these work on your own <code>class</code>/<code>struct</code>
+        types, see <a href="#lang-opoverload">Operator Overloading</a>.
+      </p>
+      <div class="tblwrap">
+        <table>
+          <tr><th>Category</th><th>Operators</th></tr>
+          <tr><td>Arithmetic</td><td><code>+ - * / %</code></td></tr>
+          <tr><td>Comparison</td><td><code>== != &lt; &gt; &lt;= &gt;=</code></td></tr>
+          <tr><td>Logical</td><td><code>&amp;&amp;</code> (and), <code>||</code> (or), <code>!</code> (not)</td></tr>
+          <tr><td>Bitwise</td><td><code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code></td></tr>
+          <tr><td>Compound assignment</td><td><code>+= -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code> — <code>x += y</code> desugars to <code>x = x + y</code></td></tr>
+          <tr><td>Increment/decrement</td><td><code>++ --</code> (postfix only) — <code>i++</code> desugars to <code>i = i + 1</code>; only recognized as its own statement or parenthesized, never spliced mid-expression like <code>i++ + 5</code></td></tr>
+          <tr><td>Member/index</td><td><code>.</code> member access, <code>[]</code> array indexing, <code>-&gt;</code> function return type</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-macros">
+      <h2>Macros</h2>
+      <p>
+        Macros expand at compile time. <code>quote { ... }</code> produces
+        statements; <code>quote(expr)</code> produces an expression.
+        Identifiers inside <code>quote</code> are copied literally;
+        <code>unquote(arg)</code> splices a macro argument into the
+        generated syntax.
+      </p>
+      <div class="code-card"><pre><span class="kw">macro</span> assignTwice(target, value) {
+    <span class="kw">quote</span> {
+        unquote(target) = unquote(value)
+        unquote(target) = unquote(target) + <span class="num">1</span>
+    }
+}
+<span class="kw">macro</span> square(value) {
+    <span class="kw">quote</span>(unquote(value) * unquote(value))
+}
+<span class="kw">func</span> compute() -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> x: <span class="ty">i64</span> = <span class="num">0</span>
+    assignTwice!(x, <span class="num">41</span>)     <span class="cm">// macro invocation: name!(args)</span>
+    <span class="kw">return</span> square!(x)
+}</pre></div>
+      <p>Macro parameter lists are positional-only, like tagged-enum variant construction — no named-argument support.</p>
+    </section>
+
+    <section class="doc-section" id="lang-result">
+      <h2>Result&lt;T, E&gt; and the <code>?</code> operator</h2>
+      <p>
+        <code>Result&lt;T, E&gt;</code> (<code>prelude.llpl</code>) is a plain
+        class, not a tagged enum — built that way specifically because a
+        generic tagged enum can't infer both <code>T</code> and
+        <code>E</code> from either variant constructor alone.
+      </p>
+      <div class="code-card"><pre><span class="kw">class</span> Result&lt;T, E&gt; {
+    <span class="kw">func</span> set_ok(v: T) { self.ok = <span class="kw">true</span>; self.value = v }
+    <span class="kw">func</span> set_err(e: E) { self.ok = <span class="kw">false</span>; self.error = e }
+    <span class="kw">func</span> get_ok() -&gt; T { <span class="kw">return</span> self.value }
+    <span class="kw">func</span> unwrap() -&gt; T { <span class="kw">return</span> self.value }     <span class="cm">// alias for get_ok()</span>
+    <span class="kw">func</span> get_err() -&gt; E { <span class="kw">return</span> self.error }
+    <span class="kw">func</span> get_trace() -&gt; <span class="ty">u8</span>* { <span class="kw">return</span> self.trace }
+    <span class="kw">func</span> is_ok() -&gt; <span class="ty">bool</span> { <span class="kw">return</span> self.ok }
+    <span class="kw">func</span> is_err() -&gt; <span class="ty">bool</span> { <span class="kw">return</span> !self.ok }
+}</pre></div>
+      <p>
+        <code>expr?</code> unwraps an <code>Optional&lt;T&gt;</code> or
+        <code>Result&lt;T,E&gt;</code> inline: it evaluates to the wrapped
+        value on Some/Ok, or <strong>returns early out of the enclosing
+        function</strong> with an equivalent None/Err otherwise — the
+        enclosing function must itself return a compatible Optional/Result.
+      </p>
+      <div class="code-card"><pre><span class="kw">func</span> safe_div(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; {
+    <span class="kw">let</span> r: Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; = <span class="kw">new</span> Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;()
+    <span class="kw">if</span> b == <span class="num">0</span> { r.set_err(<span class="str">"division by zero"</span>); <span class="kw">return</span> r }
+    r.set_ok(a / b)
+    <span class="kw">return</span> r
+}
+<span class="kw">func</span> sum_of_divisions(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>, c: <span class="ty">i64</span>, d: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; {
+    <span class="kw">let</span> first: <span class="ty">i64</span> = safe_div(a, b)?    <span class="cm">// early-return on failure, never reaching the addition</span>
+    <span class="kw">let</span> second: <span class="ty">i64</span> = safe_div(c, d)?
+    <span class="kw">let</span> result: Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; = <span class="kw">new</span> Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;()
+    result.set_ok(first + second)
+    <span class="kw">return</span> result
+}</pre></div>
+      <p>
+        <strong>Trace chaining:</strong> each <code>?</code> propagation
+        step records the call-site <code>file:line</code> in the returned
+        <code>Result</code>'s trace field. If the error travels through
+        multiple functions, the trace chains textually as
+        <code>"file:line -&gt; file:line"</code>. Read it with
+        <code>r.get_trace()</code> (returns <code>u8*</code>,
+        <code>null</code> if none was set).
+      </p>
+    </section>
+
+    <section class="doc-section" id="lang-exceptions">
+      <h2>throw / try / catch / finally</h2>
+      <p>
+        Backed by an SJLJ (setjmp/longjmp-style) exception runtime: the
+        compiler emits an explicit handler stack and an x86_64 register
+        save/restore jump buffer, so <code>throw</code> can cross LLPL
+        function boundaries on hosted <em>and</em> bare-metal targets
+        without libc or platform unwind tables.
+      </p>
+      <div class="code-card"><pre><span class="kw">func</span> safe_div(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">i64</span>&gt; {
+    <span class="kw">if</span> b == <span class="num">0</span> { <span class="kw">throw</span> -<span class="num">1</span> }
+    <span class="kw">let</span> r: Result&lt;<span class="ty">i64</span>, <span class="ty">i64</span>&gt; = <span class="kw">new</span> Result&lt;<span class="ty">i64</span>, <span class="ty">i64</span>&gt;()
+    r.set_ok(a / b)
+    <span class="kw">return</span> r
+}
+<span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    <span class="kw">try</span> {
+        <span class="kw">let</span> x: <span class="ty">i64</span> = safe_div(<span class="num">10</span>, <span class="num">2</span>)?
+        print_int(<span class="str">"x"</span>, x)
+        <span class="kw">throw</span> <span class="num">7</span>
+    } <span class="kw">catch</span> (e: <span class="ty">i64</span>) {
+        print_int(<span class="str">"caught"</span>, e)
+    } <span class="kw">finally</span> {
+        puts(<span class="str">"finally always runs"</span>)
+    }
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre></div>
+      <p>
+        <code>catch</code> and <code>finally</code> are each independently
+        optional, but at least one must be present — a bare <code>try
+        {}</code> alone is a parse error. Parens around the caught variable
+        are optional (<code>catch e</code>, <code>catch (e: i64)</code>, ...
+        all parse identically). <code>finally</code> runs on normal
+        completion, after a caught error, before any <code>return</code>
+        from inside try/catch, and before a throw crosses outward through
+        that try.
+      </p>
+      <div class="callout">
+        <span class="k">Known limitations</span>
+        <p>One error type per <code>try</code> block. The SJLJ runtime is x86_64-only currently. <code>Optional&lt;T&gt;</code>'s <code>None</code> isn't catchable (a plain <code>?</code>/<code>is_none()</code> still propagates normally). Cannot safely cross arbitrary external C callbacks that never return to LLPL-generated code.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-panics">
+      <h2>Panics</h2>
+      <div class="code-card"><pre><span class="kw">extern</span> <span class="kw">func</span> llpl_panic(msg: <span class="ty">u8</span>*)
+<span class="kw">extern</span> <span class="kw">func</span> llpl_set_panic_handler(handler: (<span class="ty">u8</span>*) -&gt; <span class="ty">void</span>)
+
+<span class="kw">func</span> my_handler(msg: <span class="ty">u8</span>*) {
+    <span class="cm">// log msg, clean up resources, etc.</span>
+}
+<span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    llpl_set_panic_handler(my_handler)
+    llpl_panic(<span class="str">"unrecoverable error"</span>)
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre></div>
+      <p>
+        <code>llpl_panic</code> prints <code>"PANIC: &lt;msg&gt;\n"</code> and
+        halts — on hosted targets, stderr + <code>abort()</code>; on
+        freestanding targets, whatever a kernel wired up via
+        <code>llpl_set_panic_handler</code> or the weak
+        <code>llpl_panic_putc</code>/<code>llpl_panic_halt</code> hooks (the
+        bare-metal demo overrides these so panics are never silent there).
+        A custom handler runs <em>before</em> the default halt/abort. Used
+        internally by <code>Slice&lt;T&gt;</code>/<code>Vector&lt;T&gt;</code>/<code>OwnedBuffer</code>
+        bounds checks, <code>Optional</code>/<code>Owned&lt;T&gt;</code>
+        access on null, and <code>HashMap.iter_next()</code> exhaustion.
+      </p>
+    </section>
+
+    <section class="doc-section" id="lang-assert">
+      <h2>Assert</h2>
+      <p>
+        <code>assert(condition)</code> aborts with a panic if
+        <code>condition</code> is false; an optional second argument
+        supplies a custom message. It's a real statement, not a macro or a
+        function call — the compiler emits it directly as a guarded
+        <a href="#lang-panics"><code>llpl_panic</code></a> call:
+      </p>
+      <div class="tblwrap">
+        <table>
+          <tr><th>Written as</th><th>Compiles to</th></tr>
+          <tr><td><code>assert(cond)</code></td><td><code>if (!(cond)) llpl_panic("assertion failed at &lt;file&gt;:&lt;line&gt;");</code></td></tr>
+          <tr><td><code>assert(cond, msg)</code></td><td><code>if (!(cond)) llpl_panic(msg);</code></td></tr>
+        </table>
+      </div>
+      <div class="code-card"><pre><span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    assert(<span class="num">1</span> == <span class="num">1</span>)
+    assert(<span class="num">2</span> &gt; <span class="num">1</span>, <span class="str">"two is greater than one"</span>)
+    <span class="cm">// assert(1 == 2, "this would panic")</span>
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre></div>
+      <p>
+        With no message given, the generated panic text includes the
+        assert's own source file and line
+        (<code>"assertion failed at &lt;file&gt;:&lt;line&gt;"</code>), the
+        same way an unhandled <code>?</code> failure's trace does — so a
+        failing assert is always locatable from its panic output alone,
+        even without a custom message.
+      </p>
+    </section>
+
+    <section class="doc-section" id="lang-defer">
+      <h2>Defer</h2>
+      <div class="code-card"><pre><span class="kw">func</span> process_file(path: <span class="ty">u8</span>*) -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> fd: <span class="ty">i64</span> = open_file(path)
+    <span class="kw">if</span> fd &lt; <span class="num">0</span> { <span class="kw">return</span> -<span class="num">1</span> }
+    <span class="kw">defer</span> close_file(fd)
+    <span class="kw">let</span> buffer: <span class="ty">u8</span>[<span class="num">1024</span>]
+    <span class="kw">let</span> bytes: <span class="ty">i64</span> = read_file(fd, buffer <span class="kw">as</span> <span class="ty">u8</span>*, <span class="num">1024</span>)
+    <span class="kw">return</span> bytes   <span class="cm">// close_file(fd) runs automatically here</span>
+}</pre></div>
+      <p>
+        Multiple <code>defer</code>s run in reverse (LIFO) order. A common
+        RAII-cleanup idiom: <code>defer buf = null</code> — reassigning a
+        class-typed local to null triggers its release per the "RAII for
+        class locals" rule (see <a href="#lang-classes-rc">Reference
+        counting</a>). <code>OwnedBuffer</code>/<code>Owned&lt;T&gt;</code>
+        in <code>prelude.llpl</code> are defer-friendly wrappers with an
+        idempotent <code>.free()</code>.
+      </p>
+    </section>
+
+    <section class="doc-section" id="lang-asm">
+      <h2>Inline Assembly</h2>
+      <div class="code-card"><pre><span class="kw">func</span> read_cr0() -&gt; <span class="ty">u64</span> {
+    <span class="kw">let</span> value: <span class="ty">u64</span> = <span class="num">0</span>
+    asm(<span class="str">"mov %%cr0, %0"</span> : <span class="str">"=r"</span>(value))
+    <span class="kw">return</span> value
+}
+<span class="kw">func</span> atomic_inc(p: <span class="ty">i64</span>*) -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> one: <span class="ty">i64</span> = <span class="num">1</span>
+    <span class="kw">let</span> old: <span class="ty">i64</span> = <span class="num">0</span>
+    asm(<span class="str">"lock; xaddq %0, %1"</span>
+        : <span class="str">"=r"</span>(old), <span class="str">"+m"</span>(*p)
+        : <span class="str">"0"</span>(one)
+        : <span class="str">"cc"</span>, <span class="str">"memory"</span>)
+    <span class="kw">return</span> old
+}</pre></div>
+      <p>
+        Syntax: <code>asm("template" : outputs : inputs : clobbers)</code>
+        — GCC-style extended asm. Outputs/inputs are comma-separated
+        <code>"constraint"(expression)</code> pairs, exactly like GCC's own.
+        Multiple consecutive string literals concatenate into one template,
+        for multi-line asm.
+      </p>
+    </section>
+
+    <section class="doc-section" id="lang-pipe">
+      <h2>Pipe operator &amp; <code>unless</code></h2>
+      <div class="doc-sub" id="lang-pipe-op">
+        <h4>Pipe: <code>|&gt;</code></h4>
+        <p>
+          <code>x |&gt; f</code> desugars to <code>f(x)</code>;
+          <code>x |&gt; f(a, b)</code> to <code>f(x, a, b)</code> — the
+          piped value is always inserted as the callee's <strong>first</strong>
+          argument. Chains read left to right, and it binds looser than
+          every other operator.
+        </p>
+        <div class="code-card"><pre><span class="kw">func</span> double_it(x: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> { <span class="kw">return</span> x * 2 }
+<span class="kw">func</span> add(a: <span class="ty">i64</span>, b: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> { <span class="kw">return</span> a + b }
+
+<span class="kw">let</span> a: <span class="ty">i64</span> = <span class="num">5</span> |&gt; double_it              <span class="cm">// double_it(5) = 10</span>
+<span class="kw">let</span> b: <span class="ty">i64</span> = <span class="num">5</span> |&gt; double_it |&gt; add(<span class="num">1</span>)    <span class="cm">// add(double_it(5), 1) = 11</span>
+<span class="kw">let</span> precedence: <span class="ty">i64</span> = <span class="num">2</span> + <span class="num">3</span> |&gt; double_it   <span class="cm">// (2+3) |> double_it = 10, binds looser than +</span></pre></div>
+        <p>Composes with <code>Optional</code>/<code>T?</code>:</p>
+        <div class="code-card"><pre><span class="kw">let</span> parsed: <span class="ty">i64</span>? = <span class="str">"123"</span> |&gt; parse_positive</pre></div>
+      </div>
+      <div class="doc-sub" id="lang-pipe-unless">
+        <h4><code>unless</code></h4>
+        <p>
+          <code>&lt;statement&gt; unless &lt;condition&gt;</code> is a trailing
+          modifier accepted after any statement, desugaring to
+          <code>if !(&lt;condition&gt;) { &lt;statement&gt; }</code>. Checked
+          after the whole statement parses, so it applies to an entire
+          if/else chain if that's the statement it trails.
+        </p>
+        <div class="code-card"><pre><span class="str">"123"</span> |&gt; puts() <span class="kw">unless</span> <span class="kw">false</span></pre></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-grammar">
+      <h2>grammar { }</h2>
+      <p>
+        An ANTLR-like grammar DSL, compiled by the LLPL compiler itself
+        into a real recursive-descent parser class — no runtime
+        interpreter involved.
+      </p>
+      <div class="code-card"><pre><span class="kw">grammar</span> Calc {
+    expr   : expr <span class="str">'+'</span> term
+           | expr <span class="str">'-'</span> term
+           | term
+           ;
+    term   : term <span class="str">'*'</span> factor
+           | term <span class="str">'/'</span> factor
+           | factor
+           ;
+    factor : <span class="str">'('</span> expr <span class="str">')'</span>
+           | NUMBER
+           ;
+    <span class="cm">// ALL-CAPS rule name -> "lexer-style": no whitespace skipped between</span>
+    <span class="cm">// its own elements. Lowercase rule names are "parser-style": whitespace</span>
+    <span class="cm">// is skipped automatically before each element.</span>
+    NUMBER : [0-9]+ ;
+}
+
+<span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    <span class="cm">// Calc(text) is sugar for (new Calc(text)).parse_expr() - expr is</span>
+    <span class="cm">// Calc's first-declared rule, so it's the implicit start rule.</span>
+    <span class="kw">let</span> tree: ParseNode = Calc(<span class="kw">new</span> String(<span class="str">"1 + 2 * 3"</span>))
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre></div>
+      <ul>
+        <li>Terminals: quoted literals (<code>'+'</code>, <code>"hello"</code>) or bracket character classes (<code>[0-9]</code>, negated <code>[^\n]</code>), combinable with postfix <code>* + ?</code>; <code>(...)</code> groups a sub-choice.</li>
+        <li>Parsing is <strong>fully predictive</strong> (lookahead-only, never backtracking) — FIRST/FOLLOW sets are computed at compile time; any ambiguity is a <strong>compile-time error</strong>, not a runtime misparse.</li>
+        <li><strong>Direct left recursion</strong> (like <code>expr : expr '+' term | ... ;</code> above) is automatically rewritten into a standard precedence-climbing loop — alternatives listed first bind tighter, and every operator is left-associative.</li>
+        <li>Every rule becomes a walkable <code>ParseNode</code> (<code>prelude.llpl</code>): <code>.name()</code>, <code>.text()</code>, <code>.child(i)</code>, <code>.child_count()</code>.</li>
+        <li>An input that fails to match at a point already proven unambiguous reports via <code>llpl_panic</code>, matching this codebase's "loud failure for should-be-unreachable" convention rather than threading a <code>Result</code> through every generated call.</li>
+      </ul>
+      <p>Used for real by <code>stdlib/json/json_parser.llpl</code>'s own JSON grammar.</p>
+    </section>
+
+    <section class="doc-section" id="lang-embed">
+      <h2>embed("path")</h2>
+      <p>
+        A compiler builtin that bakes a file's raw bytes into the compiled
+        binary as a static array <strong>at compile time</strong> — no
+        filesystem dependency, no on-target decoding.
+      </p>
+      <div class="code-card"><pre><span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> asset = embed(<span class="str">"embed_asset.txt"</span>)
+    print_int(<span class="str">"len"</span>, asset.len <span class="kw">as</span> <span class="ty">i64</span>)
+    print_int(<span class="str">"first"</span>, asset.data[<span class="num">0</span>] <span class="kw">as</span> <span class="ty">i64</span>)
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre></div>
+      <p>
+        Returns an <code>EmbeddedFile</code> (<code>prelude.llpl</code>):
+      </p>
+      <div class="code-card"><pre><span class="kw">struct</span> EmbeddedFile {
+    <span class="kw">let</span> data: <span class="ty">u8</span>*
+    <span class="kw">let</span> len: <span class="ty">u64</span>
+}</pre></div>
+      <p>
+        The argument must be exactly one string-literal path (a non-literal
+        argument is a compile error), resolved relative to the
+        <em>importing module's own directory</em>. At compile time the
+        compiler reads the file's raw bytes and emits a top-level
+        <code>static unsigned char __llpl_embed_N[len] = { ... };</code>
+        array, and the <code>embed(...)</code> call site is replaced with a
+        C compound literal pointing at it. A missing file is a compile
+        error. Used by the bare-metal demo's windowing compositor to bake
+        in the desktop wallpaper and cursor images with zero runtime
+        decoding.
+      </p>
+    </section>
+
+    <section class="doc-section" id="lang-modules">
+      <h2>Modules</h2>
+      <div class="code-card"><pre><span class="kw">import</span> graphics                 <span class="cm">// resolves to graphics.llpl next to the importing file (or a search path)</span>
+<span class="kw">import</span> drivers.serial            <span class="cm">// dotted -> subdirectory: drivers/serial.llpl</span>
+<span class="kw">import</span> <span class="str">"weird-path.llpl"</span>         <span class="cm">// quoted path, for names that aren't valid identifiers</span>
+<span class="kw">import</span> graphics <span class="kw">as</span> G             <span class="cm">// alias, qualify via G.member</span>
+<span class="kw">import</span> { Point, draw <span class="kw">as</span> render } <span class="kw">from</span> graphics   <span class="cm">// selective import, optional rename</span></pre></div>
+      <p><strong>Search order</strong> (exact):</p>
+      <ol>
+        <li>Relative to the importing file itself.</li>
+        <li><code>$LLPL_HOME</code>, if set — e.g. <code>import stdlib.io.file</code> checks <code>$LLPL_HOME/stdlib/io/file.llpl</code>.</li>
+        <li>Current directory.</li>
+        <li><code>lib/</code> directory.</li>
+        <li><code>modules/</code> directory.</li>
+      </ol>
+      <p>
+        <code>$LLPL_HOME</code> is what lets stdlib modules write
+        <code>import stdlib....</code> instead of a relative path whose
+        correctness would otherwise depend on the importing file's nesting
+        depth. Compiling from inside the repo's own root works even without
+        <code>LLPL_HOME</code> (current-directory search covers it); a
+        project living elsewhere needs it set, including transitively —
+        e.g. <code>stdlib/yaml/yaml_parser.llpl</code> imports
+        <code>stdlib/text/string_utils.llpl</code> the same way.
+      </p>
+      <p>
+        <strong>Circular imports are fully supported</strong>: dependency
+        resolution is a topological sort with cycle handling — when a
+        circular import is detected mid-parse, the compiler notes it and
+        continues, with C forward declarations for everything so
+        mutually-referencing modules compile correctly. Each file is
+        compiled exactly once regardless of how many times it's imported.
+      </p>
+      <p>
+        Modules are files, not logical namespacing units — use
+        <code>namespace Name { ... }</code> for true symbol isolation
+        independent of file layout:
+      </p>
+      <div class="code-card"><pre><span class="kw">namespace</span> Graphics.Utils {      <span class="cm">// sugar for namespace Graphics { namespace Utils { ... } }</span>
+    <span class="kw">const</span> VERSION = <span class="num">2</span>
+    <span class="kw">func</span> describe() { puts(<span class="str">"Graphics.Utils"</span>) }
+}
+Graphics.Utils.describe()</pre></div>
+      <p>
+        The <strong>prelude</strong> (<code>prelude.llpl</code>) is always
+        implicitly compiled in ahead of everything else, regardless of
+        whether the entry file or its imports ever mention it.
+      </p>
+    </section>
+
+    <section class="doc-section" id="lang-types">
+      <h2>Type System</h2>
+      <div class="doc-sub" id="lang-types-primitives">
+        <h4>Primitive types</h4>
+
+        <div class="callout warn">
+          <span class="k">Breaking change: int / uint / char are gone</span>
+          <p>
+            The bare, unsized <code>int</code>, <code>uint</code>, and
+            <code>char</code> spellings have been removed entirely —
+            attempting to use any of them is now a hard compile error, not
+            a warning:
+          </p>
+          <div class="code-card"><pre><span class="cm">error: 'int' is no longer a type; use 'i64' instead
+error: 'uint' is no longer a type; use 'u64' instead
+error: 'char' is no longer a type; use 'u8' instead</span></pre></div>
+          <p>
+            Always write the explicitly-sized name instead:
+            <code>i64</code> for <code>int</code>, <code>u64</code> for
+            <code>uint</code>, <code>u8</code> for <code>char</code>. The
+            other widths (<code>i8/i16/i32</code>, <code>u8/u16/u32</code>)
+            were never affected — this only removed the three
+            <em>unsized</em> aliases. <code>string</code> still works,
+            now defined as <code>alias string = u8*</code> (it used to be
+            <code>char*</code>).
+          </p>
+        </div>
+
+        <div class="tblwrap">
+          <table>
+            <tr><th>LLPL</th><th>C type</th></tr>
+            <tr><td><code>int8</code>/<code>i8</code> … <code>int64</code>/<code>i64</code></td><td><code>int8_t</code> … <code>int64_t</code></td></tr>
+            <tr><td><code>uint8</code>/<code>u8</code> … <code>uint64</code>/<code>u64</code></td><td><code>uint8_t</code> … <code>uint64_t</code></td></tr>
+            <tr><td><code>bool</code></td><td>real C99 <code>bool</code> (<code>&lt;stdbool.h&gt;</code>) — so <code>extern func</code> bindings to real C libraries returning actual <code>bool</code> (e.g. SDL3) don't conflict</td></tr>
+            <tr><td><code>void</code></td><td><code>void</code></td></tr>
+            <tr><td><code>float</code> / <code>double</code></td><td><code>float</code> / <code>double</code></td></tr>
+            <tr><td><code>string</code></td><td><code>u8*</code> (alias — <code>prelude.llpl</code>: <code>alias string = u8*</code>)</td></tr>
+          </table>
+        </div>
+        <p>
+          <code>String</code> is a distinct, full owned/heap-allocated
+          class (<code>prelude.llpl</code>) — separate from the bare
+          <code>string</code>/<code>u8*</code> alias, which owns nothing.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-types-pointers">
+        <h4>Pointers &amp; arrays</h4>
+        <div class="code-card"><pre><span class="kw">let</span> ptr: <span class="ty">i64</span>* = &amp;value
+<span class="kw">let</span> arr: <span class="ty">u8</span>[<span class="num">80</span>]           <span class="cm">// fixed-size array</span></pre></div>
+        <p>
+          Any depth of indirection is allowed (<code>i64*</code>,
+          <code>i64**</code>, ...). <code>T[]</code> (no size) denotes a
+          <em>dynamic</em> array field distinct from <code>T*</code> —
+          used internally by <code>Vector&lt;T&gt;.data</code>/<code>Slice&lt;T&gt;.ptr</code>
+          so a class type <code>T</code> correctly becomes e.g.
+          <code>String**</code> rather than collapsing to <code>String*</code>.
+        </p>
+
+        <div class="callout">
+          <span class="k">Bounds checking with --safe</span>
+          <p>
+            Fixed-size array indexing (<code>T[N]</code>, like
+            <code>arr</code> above) is <strong>unchecked by default</strong> —
+            an out-of-range index is undefined behavior, same as raw C.
+            Compiling with <code>llpl --safe</code> wraps every fixed-size
+            index expression in a runtime bounds check instead: an
+            out-of-range access panics with <code>"index out of bounds"</code>
+            rather than reading or writing past the array. It only covers
+            genuine fixed-size arrays — indexing through a plain pointer
+            (<code>T*</code>) or a dynamic array (<code>T[]</code>,
+            <code>Vector&lt;T&gt;</code>, <code>Slice&lt;T&gt;</code>) isn't
+            affected either way, since those already have (or lack) their
+            own bounds behavior independent of this flag. Off by default —
+            pass <code>--safe</code> explicitly to opt in.
+          </p>
+        </div>
+      </div>
+
+      <div class="doc-sub" id="lang-types-structs">
+        <h4>Structs, packed structs &amp; unions</h4>
+        <div class="code-card"><pre><span class="kw">struct</span> Point { <span class="kw">let</span> x: <span class="ty">i64</span>; <span class="kw">let</span> y: <span class="ty">i64</span> }
+<span class="kw">let</span> p: Point = Point { x: <span class="num">1</span>, y: <span class="num">2</span> }      <span class="cm">// struct literal - all fields by name, any order</span></pre></div>
+        <p>
+          Generic structs work the same way as generic classes; type
+          arguments for a struct literal are inferred from the enclosing
+          declared type, never written in the literal itself.
+        </p>
+        <p>
+          <code>packed struct</code> emits <code>__attribute__((packed))</code>
+          on the generated C struct — for exact-layout hardware/wire
+          structures. A real example from the bare-metal demo's GDT setup:
+        </p>
+        <div class="code-card">
+          <div class="titlebar"><span>examples/baremetal_demo/gdt.llpl</span></div>
+          <pre><span class="kw">namespace</span> GDT {
+    <span class="kw">packed</span> <span class="kw">struct</span> Entry {
+        <span class="kw">let</span> limit_low: <span class="ty">u16</span>
+        <span class="kw">let</span> base_low: <span class="ty">u16</span>
+        <span class="kw">let</span> base_mid: <span class="ty">u8</span>
+        <span class="kw">let</span> access: <span class="ty">u8</span>
+        <span class="kw">let</span> granularity: <span class="ty">u8</span>
+        <span class="kw">let</span> base_high: <span class="ty">u8</span>
+    }
+    <span class="kw">packed</span> <span class="kw">struct</span> Pointer {   <span class="cm">// the 10-byte lgdt/sgdt operand - packed avoids</span>
+        <span class="kw">let</span> limit: <span class="ty">u16</span>      <span class="cm">// padding a bare u16 followed by a u64 to an 8-byte boundary</span>
+        <span class="kw">let</span> base: <span class="ty">u64</span>
+    }
+}</pre>
+        </div>
+        <p>
+          <code>union Name { ... }</code> shares the same declaration shape
+          as struct (fields + optional constructors) minus
+          <code>packed</code>/generics/attributes — it exists mainly to
+          bind an exact C library union.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-types-enums">
+        <h4>Enums — plain and tagged</h4>
+        <div class="code-card"><pre><span class="kw">enum</span> Color { RED, GREEN, BLUE = <span class="num">10</span>, YELLOW }   <span class="cm">// YELLOW continues from 11</span>
+<span class="kw">let</span> c: <span class="ty">i64</span> = Color.BLUE</pre></div>
+        <p>Tagged (sum type — give any member a field list):</p>
+        <div class="code-card"><pre><span class="kw">enum</span> Shape {
+    Circle(radius: <span class="ty">i64</span>),
+    Rectangle(width: <span class="ty">i64</span>, height: <span class="ty">i64</span>),
+    Triangle(base: <span class="ty">i64</span>, height: <span class="ty">i64</span>)
+}
+<span class="kw">match</span> s {
+    <span class="kw">case</span> Shape.Circle(radius) =&gt; { <span class="kw">return</span> <span class="num">3</span> * radius * radius }
+    <span class="kw">case</span> Shape.Rectangle(width, height) =&gt; { <span class="kw">return</span> width * height }
+}</pre></div>
+        <p>
+          A variant is always constructed by calling it (<code>Shape.Circle(3)</code>,
+          <code>Shape.Triangle()</code> for zero fields) — never as a bare
+          value.
+        </p>
+
+        <h4>match — full pattern forms</h4>
+        <div class="code-card"><pre><span class="kw">match</span> t {
+    <span class="kw">case</span> (x, y) =&gt; { ... }               <span class="cm">// tuple pattern</span>
+}
+<span class="kw">match</span> p {
+    <span class="kw">case</span> Point { x, y } =&gt; { ... }       <span class="cm">// struct pattern</span>
+}
+<span class="kw">match</span> ss {
+    <span class="kw">case</span> <span class="str">"Hello, world!"</span> =&gt; { puts(<span class="str">"Matched!"</span>) }
+    <span class="kw">case</span> _ =&gt; { puts(<span class="str">"Did not match."</span>) }  <span class="cm">// wildcard catch-all</span>
+}</pre></div>
+        <p>
+          <code>case pattern[, pattern...] =&gt; { ... }</code> also allows
+          comma-separated multiple patterns per case; <code>default =&gt;
+          { ... }</code> is the keyword catch-all form, distinct from a
+          wildcard <code>case _</code> (both work).
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-types-tuples">
+        <h4>Tuples</h4>
+        <div class="code-card"><pre><span class="kw">func</span> split() -&gt; (<span class="ty">i64</span>, <span class="ty">i64</span>) { <span class="kw">return</span> (<span class="num">10</span>, <span class="num">20</span>) }
+<span class="kw">let</span> (x, y) = split()                         <span class="cm">// destructuring</span>
+<span class="kw">let</span> p = Point { x: <span class="num">7</span>, y: <span class="num">8</span> }
+<span class="kw">let</span> Point { px, py } = p                     <span class="cm">// struct destructuring</span>
+<span class="kw">let</span> ((u, v), w) = ((<span class="num">100</span>, <span class="num">200</span>), <span class="num">300</span>)          <span class="cm">// nested destructuring</span></pre></div>
+        <p>
+          <code>(T, U, ...)</code> types and <code>(a, b, ...)</code>
+          literals are value types, implemented internally as generic
+          structs from arity 2 through 8, with positional fields
+          <code>_0</code>, <code>_1</code>, etc.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-types-optional">
+        <h4>T? (nullable sugar)</h4>
+        <div class="code-card"><pre><span class="kw">let</span> maybe: <span class="ty">i64</span>? = <span class="num">42</span>       <span class="cm">// Optional&lt;i64&gt;, set to 42</span>
+<span class="kw">let</span> nothing: <span class="ty">i64</span>? = <span class="kw">null</span>   <span class="cm">// empty Optional&lt;i64&gt;</span></pre></div>
+        <p>
+          A <code>T?</code> <strong>global</strong> isn't supported (its
+          initializer needs a real function call, invalid as a C static
+          initializer) — declare it as a local instead.
+        </p>
+      </div>
+
+      <div class="doc-sub" id="lang-types-slice">
+        <h4>Slice&lt;T&gt;</h4>
+        <p>A bounds-checked, non-owning <code>{ptr, len}</code> view (plain value type, no constructor/destructor):</p>
+        <div class="code-card"><pre><span class="kw">struct</span> Slice&lt;T&gt; { <span class="kw">let</span> ptr: T[]; <span class="kw">let</span> len: <span class="ty">u64</span> }
+<span class="kw">let</span> view: Slice&lt;<span class="ty">i64</span>&gt; = Slice { ptr: arr <span class="kw">as</span> <span class="ty">i64</span>*, len: <span class="num">2</span> }</pre></div>
+        <p><code>Vector&lt;T&gt;.as_slice()</code> returns a <code>Slice&lt;T&gt;</code> of exactly its live elements (invalidated by a subsequent reallocating <code>push</code>).</p>
+      </div>
+
+      <div class="doc-sub" id="lang-types-bitfields">
+        <h4>Bit-fields &amp; global attributes</h4>
+        <p>Class fields only (not globals/locals) can declare a bit width:</p>
+        <div class="code-card"><pre><span class="kw">class</span> PageEntry {
+    <span class="kw">let</span> present: <span class="ty">u32</span> : <span class="num">1</span>
+    <span class="kw">let</span> writable: <span class="ty">u32</span> : <span class="num">1</span>
+    <span class="kw">let</span> frame: <span class="ty">u32</span> : <span class="num">20</span>
+}</pre></div>
+        <p><code>@section("NAME")</code>, <code>@used</code>, <code>@align(N)</code> are supported on global <code>let</code>/<code>const</code>/<code>volatile</code> declarations:</p>
+        <div class="code-card"><pre><span class="fn">@section</span>(<span class="str">".limine_requests"</span>)
+<span class="fn">@used</span>
+<span class="fn">@align</span>(<span class="num">16</span>)
+<span class="kw">let</span> request: <span class="ty">u64</span>[<span class="num">4</span>] = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>]</pre></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="lang-closures">
+      <h2>Closures</h2>
+      <p>
+        Type: <code>(ParamType, ...) -&gt; ReturnType</code>. Literal:
+        <code>func[captures](params) -&gt; ReturnType { ... }</code> — an
+        explicit capture list is required (a missing one is a compile
+        error). Each capture is snapshotted <strong>by value</strong> at
+        closure-creation time by default; prefix with <code>&amp;</code> to
+        capture <strong>by reference</strong> (a live pointer to the
+        original variable — lifetime is your own responsibility).
+      </p>
+      <div class="code-card"><pre><span class="kw">func</span> make_adder(n: <span class="ty">i64</span>) -&gt; (<span class="ty">i64</span>) -&gt; <span class="ty">i64</span> {
+    <span class="kw">return</span> func[n](x: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> { <span class="kw">return</span> x + n }
+}
+<span class="kw">let</span> add5: (<span class="ty">i64</span>) -&gt; <span class="ty">i64</span> = make_adder(<span class="num">5</span>)
+<span class="kw">let</span> result: <span class="ty">i64</span> = add5(<span class="num">10</span>)   <span class="cm">// 15</span>
+<span class="kw">let</span> doubler: (<span class="ty">i64</span>) -&gt; <span class="ty">i64</span> = func(x: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> { <span class="kw">return</span> x * 2 }   <span class="cm">// no captures: omit [...]</span></pre></div>
+    </section>
+
+    <section class="doc-section" id="lang-strings">
+      <h2>String Interpolation &amp; Regex</h2>
+      <div class="doc-sub" id="lang-strings-interp">
+        <h4>String interpolation</h4>
+        <p>
+          <code>"\(...)"</code> — the interpolated expression is captured
+          raw between <code>\(</code> and its matching <code>)</code>
+          (tracking paren depth, and copying nested string literals
+          verbatim so an internal <code>"</code>/<code>)</code> doesn't end
+          capture early), then re-parsed as an ordinary expression — nested
+          interpolation inside a nested string works recursively. Escape
+          sequences supported in string literals: <code>\n \t \r \\ \" \0
+          \e</code> (ESC, for ANSI codes), <code>\xHH</code> (exactly two
+          hex digits).
+        </p>
+      </div>
+      <div class="doc-sub" id="lang-strings-regex">
+        <h4>Regular expressions</h4>
+        <p>Regex literal syntax: <code>/pattern/</code>.</p>
+        <div class="code-card"><pre><span class="kw">let</span> r = /([a-z]+)-([0-9]+)/
+<span class="kw">let</span> m = r.captures(<span class="str">"id-42!"</span>)
+m.is_match()      <span class="cm">// true</span>
+m.group(<span class="num">0</span>)        <span class="cm">// "id-42" (whole match) - a String</span>
+m.group(<span class="num">1</span>)        <span class="cm">// "id"</span>
+m.group_start(<span class="num">2</span>)  <span class="cm">// byte offset of group 2 in the original text</span></pre></div>
+        <div class="code-card"><pre><span class="kw">for</span> m <span class="kw">in</span> digits.find_all(text) { puts(m.group(<span class="num">0</span>).c_str()) }
+
+digits.replace(text, <span class="str">"#"</span>)       <span class="cm">// first match only</span>
+digits.replace_all(text, <span class="str">"#"</span>)   <span class="cm">// every match</span>
+pair.replace(<span class="str">"id-42!"</span>, <span class="str">"$2:$1"</span>) <span class="cm">// "42:id!" - $0/$1/... backreferences, $$ = literal $</span></pre></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- SECTION: STANDARD LIBRARY                                     -->
+    <!-- ============================================================ -->
+    <section class="doc-section" id="std-io">
+      <h2>Standard Library <span class="tag">std.io</span></h2>
+      <p>
+        RAII-based file handling with automatic resource cleanup, plus
+        free-function convenience wrappers. Import the whole standard
+        library with <code>import stdlib.stdlib</code>, or just this
+        module with <code>import stdlib.io.file</code>.
+        (<code>$LLPL_HOME</code> must point at the repo root for
+        <code>stdlib/...</code> imports to resolve outside the repo — see
+        <a href="#lang-modules">Modules</a>.)
+      </p>
+
+      <div class="code-card"><pre><span class="cm">// Constants (namespace std.io)</span>
+O_RDONLY = <span class="num">0</span>     O_WRONLY = <span class="num">1</span>     O_RDWR = <span class="num">2</span>
+O_CREAT  = <span class="num">64</span>    O_TRUNC  = <span class="num">512</span>   O_APPEND = <span class="num">1024</span>
+SEEK_SET = <span class="num">0</span>     SEEK_CUR = <span class="num">1</span>     SEEK_END = <span class="num">2</span></pre></div>
+
+      <h4><code>class std.io.File</code> <span class="pill ghost">alias std.File</span></h4>
+      <div class="tblwrap">
+        <table>
+          <tr><th>Member</th><th>Signature</th></tr>
+          <tr><td>constructor</td><td><code>(path: u8*, flags: i64)</code> — mode defaults to <code>0o644</code></td></tr>
+          <tr><td>constructor</td><td><code>(path: u8*, flags: i64, mode: i64)</code></td></tr>
+          <tr><td>destructor</td><td>calls <code>close(fd)</code> if still open</td></tr>
+          <tr><td><code>is_valid</code></td><td><code>() -&gt; bool</code></td></tr>
+          <tr><td><code>read_bytes</code></td><td><code>(buffer: u8*, size: u64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
+          <tr><td><code>write_bytes</code></td><td><code>(buffer: u8*, size: u64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
+          <tr><td><code>read_string</code></td><td><code>(max_size: u64) -&gt; Result&lt;String, u8*&gt;</code></td></tr>
+          <tr><td><code>write_string</code></td><td><code>(s: String) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
+          <tr><td><code>seek</code></td><td><code>(offset: i64, whence: i64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
+          <tr><td><code>tell</code></td><td><code>() -&gt; Result&lt;i64, u8*&gt;</code> (<code>self.seek(0, SEEK_CUR)</code>)</td></tr>
+          <tr><td><code>size</code></td><td><code>() -&gt; Result&lt;i64, u8*&gt;</code> (seeks to end, records length, restores position)</td></tr>
+          <tr><td><code>read_all</code></td><td><code>() -&gt; Result&lt;String, u8*&gt;</code></td></tr>
+          <tr><td><code>flush</code></td><td><code>() -&gt; bool</code> — <strong>stubbed</strong>, always returns <code>true</code>; not a real <code>fsync</code></td></tr>
+        </table>
+      </div>
+
+      <h4>Free functions in <code>std.io</code></h4>
+      <div class="tblwrap">
+        <table>
+          <tr><th>Function</th><th>Signature</th><th>Notes</th></tr>
+          <tr><td><code>read_file</code></td><td><code>(path: u8*) -&gt; Result&lt;String, u8*&gt;</code></td><td>opens <code>O_RDONLY</code>, calls <code>read_all()</code></td></tr>
+          <tr><td><code>write_file</code></td><td><code>(path: u8*, content: String) -&gt; Result&lt;i64, u8*&gt;</code></td><td>opens <code>O_WRONLY | O_CREAT | O_TRUNC</code></td></tr>
+          <tr><td><code>append_file</code></td><td><code>(path: u8*, content: String) -&gt; Result&lt;i64, u8*&gt;</code></td><td>opens <code>O_WRONLY | O_CREAT | O_APPEND</code></td></tr>
+          <tr><td><code>file_exists</code></td><td><code>(path: u8*) -&gt; bool</code></td><td>tries opening <code>O_RDONLY</code></td></tr>
+          <tr><td><code>delete_file</code></td><td><code>(path: u8*) -&gt; bool</code></td><td>wraps <code>unlink</code></td></tr>
+          <tr><td><code>rename_file</code></td><td><code>(oldpath: u8*, newpath: u8*) -&gt; bool</code></td><td>wraps <code>rename</code></td></tr>
+        </table>
+      </div>
+
+      <div class="code-card">
+        <div class="titlebar"><span>quick start</span></div>
+        <pre><span class="kw">let</span> content: Result&lt;String, <span class="ty">u8</span>*&gt; = std.io.read_file(<span class="str">"test.txt"</span>)
+<span class="kw">if</span> content.is_ok() {
+    <span class="kw">let</span> text: String = content.unwrap()
+}
+std.io.write_file(<span class="str">"output.txt"</span>, <span class="kw">new</span> String(<span class="str">"Hello, World!"</span>))
+std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</span> String(<span class="str">"New log entry\n"</span>))</pre>
+      </div>
+      <div class="code-card">
+        <div class="titlebar"><span>the File class directly</span></div>
+        <pre><span class="kw">let</span> f: std.File = <span class="kw">new</span> std.File(<span class="str">"data.txt"</span>, std.io.O_RDWR | std.io.O_CREAT)
+<span class="kw">if</span> f.is_valid() {
+    f.write_string(<span class="kw">new</span> String(<span class="str">"Line 1\n"</span>))
+    f.seek(<span class="num">0</span>, std.io.SEEK_SET)
+    <span class="kw">let</span> result: Result&lt;String, <span class="ty">u8</span>*&gt; = f.read_string(<span class="num">100</span>)
+    <span class="kw">if</span> result.is_ok() { <span class="kw">let</span> data: String = result.unwrap() }
+}
+<span class="cm">// File automatically closed when f goes out of scope</span></pre>
+      </div>
+      <div class="callout">
+        <span class="k">Note</span>
+        <p>
+          <code>std.io.ERR_FILE_NOT_FOUND</code>/<code>ERR_PERMISSION_DENIED</code>/<code>ERR_IO_ERROR</code>
+          constants exist in source but are never actually returned by
+          anything — the real error convention throughout is always a
+          <code>u8*</code> message inside a <code>Result</code>, not
+          these codes.
+        </p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="std-net">
+      <h2>std.net</h2>
+      <p>
+        TCP/UDP sockets — a raw BSD-socket-style <code>Socket</code> class,
+        plus high-level <code>TcpServer</code>/<code>TcpClient</code>/<code>UdpSocket</code>
+        wrappers. Import: <code>import stdlib.net.socket</code>.
+      </p>
+
+      <h4><code>class std.net.Socket</code> <span class="pill ghost">alias std.Socket</span> — low-level</h4>
+      <div class="tblwrap">
+        <table>
+          <tr><th>Member</th><th>Signature</th></tr>
+          <tr><td>constructor</td><td><code>(domain: i64, type: i64, protocol: i64)</code></td></tr>
+          <tr><td><code>is_valid</code></td><td><code>() -&gt; bool</code></td></tr>
+          <tr><td><code>bind_addr</code></td><td><code>(addr: SockAddrIn) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
+          <tr><td><code>listen_backlog</code></td><td><code>(backlog: i64) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
+          <tr><td><code>accept_connection</code></td><td><code>() -&gt; Result&lt;Socket, u8*&gt;</code></td></tr>
+          <tr><td><code>connect_to</code></td><td><code>(addr: SockAddrIn) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
+          <tr><td><code>send_data</code> / <code>recv_data</code></td><td><code>(buffer: u8*, size: u64) -&gt; Result&lt;i64, u8*&gt;</code></td></tr>
+          <tr><td><code>send_string</code> / <code>recv_string</code></td><td><code>(s: String)</code> / <code>(max_size: u64) -&gt; Result&lt;..., u8*&gt;</code></td></tr>
+          <tr><td><code>set_reuse_addr</code></td><td><code>(enable: bool) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
+          <tr><td><code>shutdown_socket</code></td><td><code>(how: i64) -&gt; Result&lt;bool, u8*&gt;</code></td></tr>
+        </table>
+      </div>
+
+      <h4><code>class std.net.TcpServer</code> <span class="pill ghost">alias std.TcpServer</span></h4>
+      <div class="code-card"><pre>constructor(port: <span class="ty">u16</span>)
+<span class="kw">func</span> start_server(backlog: <span class="ty">i64</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
+<span class="kw">func</span> accept_client() -&gt; Result&lt;Socket, <span class="ty">u8</span>*&gt;
+<span class="kw">func</span> is_valid() -&gt; <span class="ty">bool</span></pre></div>
+
+      <h4><code>class std.net.TcpClient</code> <span class="pill ghost">alias std.TcpClient</span></h4>
+      <div class="code-card"><pre>constructor()
+<span class="kw">func</span> connect_to_host(host_a: <span class="ty">u8</span>, host_b: <span class="ty">u8</span>, host_c: <span class="ty">u8</span>, host_d: <span class="ty">u8</span>, port: <span class="ty">u16</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
+<span class="kw">func</span> send_message(data: String) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;
+<span class="kw">func</span> recv_message(max_size: <span class="ty">u64</span>) -&gt; Result&lt;String, <span class="ty">u8</span>*&gt;
+<span class="kw">func</span> is_valid() -&gt; <span class="ty">bool</span>
+<span class="kw">func</span> close_connection()</pre></div>
+
+      <div class="code-card">
+        <div class="titlebar"><span>examples/stdlib/tcp_server.llpl</span></div>
+        <pre><span class="kw">import</span> stdlib.net.socket
+<span class="kw">using</span> <span class="kw">namespace</span> std.net
+
+<span class="kw">func</span> handle_client(client: Socket) {
+    <span class="kw">let</span> recv_result: Result&lt;String, <span class="ty">u8</span>*&gt; = client.recv_string(<span class="num">1024</span>)
+    <span class="kw">if</span> recv_result.is_ok() {
+        <span class="kw">let</span> message: String = recv_result.unwrap()
+        client.send_string(<span class="kw">new</span> String(<span class="str">"Echo: "</span>) + message.c_str())
+    }
+}
+
+<span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> server: TcpServer = <span class="kw">new</span> TcpServer(<span class="num">8080</span>)
+    <span class="kw">if</span> !server.start_server(<span class="num">10</span>).is_ok() { <span class="kw">return</span> <span class="num">1</span> }
+
+    <span class="kw">while</span> <span class="kw">true</span> {
+        <span class="kw">let</span> client_result: Result&lt;Socket, <span class="ty">u8</span>*&gt; = server.accept_client()
+        <span class="kw">if</span> client_result.is_ok() {
+            handle_client(client_result.unwrap())
+            <span class="cm">// Client socket automatically closed when it goes out of scope</span>
+        }
+    }
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre>
+      </div>
+      <div class="code-card">
+        <div class="titlebar"><span>examples/stdlib/tcp_client.llpl</span></div>
+        <pre><span class="kw">let</span> client: std.net.TcpClient = <span class="kw">new</span> std.net.TcpClient()
+client.connect_to_host(<span class="num">127</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">0</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">0</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">1</span> <span class="kw">as</span> <span class="ty">u8</span>, <span class="num">8080</span> <span class="kw">as</span> <span class="ty">u16</span>)
+client.send_message(<span class="kw">new</span> String(<span class="str">"Hello, Server!"</span>))
+<span class="kw">let</span> recv_result: Result&lt;String, <span class="ty">u8</span>*&gt; = client.recv_message(<span class="num">1024</span>)  <span class="cm">// "Echo: Hello, Server!"</span>
+client.close_connection()</pre>
+      </div>
+
+      <h4><code>class std.net.UdpSocket</code> <span class="pill ghost">alias std.UdpSocket</span></h4>
+      <div class="code-card"><pre><span class="kw">let</span> udp: std.UdpSocket = <span class="kw">new</span> std.UdpSocket(<span class="num">9000</span>)
+<span class="kw">if</span> udp.bind_socket().is_ok() {
+    <span class="kw">let</span> buffer: <span class="ty">u8</span>[<span class="num">1024</span>]
+    <span class="kw">let</span> recv_result: Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt; = udp.recv_from(buffer, <span class="num">1024</span>)
+    <span class="kw">if</span> recv_result.is_ok() {
+        <span class="kw">let</span> dest_addr: std.SockAddrIn = <span class="kw">new</span> std.SockAddrIn()
+        dest_addr.set_port(<span class="num">9001</span>)
+        dest_addr.set_addr(<span class="num">192</span>, <span class="num">168</span>, <span class="num">1</span>, <span class="num">100</span>)
+        udp.send_to(<span class="str">"response"</span>, <span class="num">8</span>, dest_addr)
+    }
+}</pre></div>
+
+      <h4>Constants (namespace <code>std.net</code>)</h4>
+      <div class="code-card"><pre>AF_INET=<span class="num">2</span>  AF_INET6=<span class="num">10</span>
+SOCK_STREAM=<span class="num">1</span>  SOCK_DGRAM=<span class="num">2</span>  SOCK_RAW=<span class="num">3</span>
+IPPROTO_TCP=<span class="num">6</span>  IPPROTO_UDP=<span class="num">17</span>  IPPROTO_ICMP=<span class="num">1</span>
+SOL_SOCKET=<span class="num">1</span>  SO_REUSEADDR=<span class="num">2</span>  SO_KEEPALIVE=<span class="num">9</span>
+SHUT_RD=<span class="num">0</span>  SHUT_WR=<span class="num">1</span>  SHUT_RDWR=<span class="num">2</span></pre></div>
+    </section>
+
+    <section class="doc-section" id="std-text">
+      <h2>std.text</h2>
+      <p>
+        Trimming, case conversion, split/join, search, replace, padding, a
+        <code>StringBuilder</code> for efficient concatenation, a
+        <code>{}</code>-placeholder <code>Format.format</code>, and
+        byte-level character classification via <code>CharUtils</code>. Import:
+        <code>import stdlib.text.string_utils</code>.
+      </p>
+
+      <h4><code>class std.text.StringUtils</code> <span class="pill ghost">alias std.StringUtils</span> — all static</h4>
+      <div class="code-card"><pre>split(s: String, delimiter: <span class="ty">u8</span>) -&gt; Vector&lt;String&gt;
+split_str(s: String, delimiter: String) -&gt; Vector&lt;String&gt;
+join(strings: Vector&lt;String&gt;, delimiter: String) -&gt; String
+trim(s) / trim_start(s) / trim_end(s) -&gt; String
+to_upper(s) / to_lower(s) -&gt; String
+starts_with(s, prefix) / ends_with(s, suffix) / contains(s, substr) -&gt; <span class="ty">bool</span>
+index_of(s, substr) / last_index_of(s, substr) -&gt; <span class="ty">i64</span>
+replace_all(s, old, new) / replace_first(s, old, new) -&gt; String
+pad_left(s, length, pad_char) / pad_right(s, length, pad_char) -&gt; String
+reverse(s) -&gt; String
+repeat(s, times) -&gt; String</pre></div>
+
+      <div class="code-card">
+        <div class="titlebar"><span>examples</span></div>
+        <pre><span class="kw">let</span> s: String = <span class="kw">new</span> String(<span class="str">"  Hello, World!  "</span>)
+<span class="kw">let</span> trimmed: String = std.StringUtils.trim(s)              <span class="cm">// "Hello, World!"</span>
+<span class="kw">let</span> parts: Vector&lt;String&gt; = std.StringUtils.split(trimmed, <span class="str">','</span>)
+<span class="kw">let</span> joined: String = std.StringUtils.join(parts, <span class="kw">new</span> String(<span class="str">" | "</span>))
+
+<span class="kw">let</span> num: String = <span class="kw">new</span> String(<span class="str">"42"</span>)
+<span class="kw">let</span> padded: String = std.StringUtils.pad_left(num, <span class="num">5</span>, <span class="str">'0'</span>)    <span class="cm">// "00042"</span>
+<span class="kw">let</span> repeated: String = std.StringUtils.repeat(<span class="kw">new</span> String(<span class="str">"Ha"</span>), <span class="num">3</span>)  <span class="cm">// "HaHaHa"</span></pre>
+      </div>
+
+      <h4><code>class std.text.StringBuilder</code> <span class="pill ghost">alias std.StringBuilder</span></h4>
+      <div class="code-card"><pre><span class="kw">let</span> sb: std.StringBuilder = <span class="kw">new</span> std.StringBuilder()
+sb.append(<span class="kw">new</span> String(<span class="str">"Name: "</span>))
+sb.append(<span class="kw">new</span> String(<span class="str">"Alice"</span>))
+sb.append_char(<span class="str">'\n'</span>)
+sb.append(<span class="kw">new</span> String(<span class="str">"Age: "</span>))
+sb.append_int(<span class="num">30</span>)
+<span class="kw">let</span> result: String = sb.to_string()   <span class="cm">// "Name: Alice\nAge: 30\n"</span>
+sb.clear()</pre></div>
+      <p>Members: <code>append(s)</code>, <code>append_char(c)</code>, <code>append_int(v)</code>, <code>to_string()</code>, <code>clear()</code>, <code>length()</code>.</p>
+
+      <h4><code>class std.text.Format</code> <span class="pill ghost">alias std.Format</span></h4>
+      <div class="code-card"><pre><span class="kw">let</span> args: Vector&lt;String&gt; = <span class="kw">new</span> Vector&lt;String&gt;()
+args.push(<span class="kw">new</span> String(<span class="str">"Alice"</span>)); args.push(<span class="kw">new</span> String(<span class="str">"Engineer"</span>)); args.push(<span class="kw">new</span> String(<span class="str">"42"</span>))
+<span class="kw">let</span> formatted: String = std.Format.format(<span class="kw">new</span> String(<span class="str">"Name: {}, Role: {}, ID: {}"</span>), args)
+<span class="cm">// "Name: Alice, Role: Engineer, ID: 42"</span></pre></div>
+      <p><code>{}</code> placeholders are matched literally by scanning for <code>{</code> immediately followed by <code>}</code> — no positional/named args, no escaping of a literal <code>{}</code>.</p>
+
+      <h4><code>class std.text.CharUtils</code> <span class="pill ghost">alias std.CharUtils</span> — all static</h4>
+      <div class="code-card"><pre>is_alpha(c) / is_digit(c) / is_alphanumeric(c) / is_whitespace(c) -&gt; <span class="ty">bool</span>
+is_upper(c) / is_lower(c) -&gt; <span class="ty">bool</span>
+to_upper(c) / to_lower(c) -&gt; <span class="ty">u8</span></pre></div>
+    </section>
+
+    <section class="doc-section" id="std-collections">
+      <h2>std.collections</h2>
+      <p>
+        Linked lists, stack/queue/deque/circular buffer, a red-black tree,
+        heaps/priority queue, hash map/set, a trie, and graphs (list and
+        matrix representations). Import:
+        <code>import stdlib.collections.collections</code>.
+      </p>
+
+      <h4>Linear — <code>LinkedList&lt;T&gt;</code>, <code>DoublyLinkedList&lt;T&gt;</code>, <code>Stack&lt;T&gt;</code>, <code>Queue&lt;T&gt;</code>, <code>Deque&lt;T&gt;</code>, <code>CircularBuffer&lt;T&gt;</code></h4>
+      <div class="code-card"><pre><span class="cm">// LinkedList&lt;T&gt; / DoublyLinkedList&lt;T&gt; (the latter adds pop_back, reverse_iterate)</span>
+push_front(v) / push_back(v)
+pop_front() -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;
+front() / back() / get(index) -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;
+insert(index, v) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
+remove(index) -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;
+size() -&gt; <span class="ty">i64</span> / is_empty() -&gt; <span class="ty">bool</span> / clear() / to_vector() -&gt; Vector&lt;T&gt;
+
+<span class="cm">// Stack&lt;T&gt;: push(v), pop(), peek(), size(), is_empty(), clear()</span>
+<span class="cm">// Queue&lt;T&gt;: enqueue(v), dequeue(), front(), back(), size(), is_empty(), clear()</span>
+<span class="cm">// Deque&lt;T&gt;: push_front/push_back, pop_front/pop_back, front(), back()</span>
+
+<span class="cm">// CircularBuffer&lt;T&gt;(capacity: i64)</span>
+is_full() / is_empty() -&gt; <span class="ty">bool</span>
+push(v) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;    <span class="cm">// fails if full</span>
+push_overwrite(v)             <span class="cm">// overwrites oldest if full</span>
+pop() / peek() -&gt; Result&lt;T, <span class="ty">u8</span>*&gt;</pre></div>
+
+      <h4><code>RBTree&lt;K, V&gt;</code></h4>
+      <div class="code-card"><pre>insert(key: K, value: V)
+find(key: K) -&gt; Result&lt;V, <span class="ty">u8</span>*&gt;
+contains(key: K) -&gt; <span class="ty">bool</span>
+min_key() / max_key() -&gt; Result&lt;K, <span class="ty">u8</span>*&gt;
+keys() -&gt; Vector&lt;K&gt; / values() -&gt; Vector&lt;V&gt;
+height() -&gt; <span class="ty">i64</span> / clear()</pre></div>
+      <div class="callout"><span class="k">Note</span><p>Delete is not yet implemented, despite the general complexity table elsewhere listing an O(log n) delete.</p></div>
+
+      <h4>Heaps — <code>BinaryHeap&lt;T&gt;</code> (min-heap), <code>MaxHeap&lt;T&gt;</code>, <code>PriorityQueue&lt;T&gt;</code></h4>
+      <div class="code-card"><pre><span class="cm">// BinaryHeap&lt;T&gt;: insert(v), extract_min(), peek_min(), heapify(values: Vector&lt;T&gt;)</span>
+<span class="cm">// MaxHeap&lt;T&gt;: insert(v), extract_max(), peek_max()</span>
+<span class="cm">// PriorityQueue&lt;T&gt;: enqueue(v, priority: i64), dequeue(), peek()  - lower priority number served first</span></pre></div>
+
+      <h4><code>EnhancedHashMap&lt;K: Hashable, V&gt;</code></h4>
+      <div class="code-card"><pre>constructor() / constructor(initial_capacity: <span class="ty">i64</span>)
+insert(key: K, value: V)
+get(key: K) -&gt; Result&lt;V, <span class="ty">u8</span>*&gt;
+contains(key: K) -&gt; <span class="ty">bool</span>
+remove(key: K) -&gt; Result&lt;V, <span class="ty">u8</span>*&gt;
+keys() / values() -&gt; Vector&lt;...&gt;
+get_load_factor() -&gt; <span class="ty">i64</span>       <span class="cm">// percentage; resizes automatically at 75%</span>
+get_collision_count() -&gt; <span class="ty">i64</span></pre></div>
+
+      <h4><code>HashSet&lt;T: Hashable&gt;</code></h4>
+      <div class="code-card"><pre>insert(v) / contains(v) -&gt; <span class="ty">bool</span> / remove(v) -&gt; <span class="ty">bool</span>
+to_vector() -&gt; Vector&lt;T&gt;
+union_with(other: HashSet&lt;T&gt;) -&gt; HashSet&lt;T&gt;
+intersection(other: HashSet&lt;T&gt;) -&gt; HashSet&lt;T&gt;
+difference(other: HashSet&lt;T&gt;) -&gt; HashSet&lt;T&gt;</pre></div>
+
+      <h4><code>Trie</code></h4>
+      <div class="code-card"><pre>insert(word: <span class="ty">u8</span>*) / insert_with_value(word: <span class="ty">u8</span>*, value: <span class="ty">i64</span>)
+search(word: <span class="ty">u8</span>*) -&gt; <span class="ty">bool</span> / search_value(word) -&gt; Result&lt;<span class="ty">i64</span>, <span class="ty">u8</span>*&gt;
+starts_with(prefix: <span class="ty">u8</span>*) -&gt; <span class="ty">bool</span>
+get_words_with_prefix(prefix) -&gt; Vector&lt;String&gt;
+get_all_words() -&gt; Vector&lt;String&gt;
+count_prefix(prefix) -&gt; <span class="ty">i64</span>
+longest_common_prefix() -&gt; String</pre></div>
+      <p>Note: takes bare <code>u8*</code> for word/prefix arguments, not <code>String</code>.</p>
+
+      <h4><code>Graph</code> (adjacency list) / <code>GraphMatrix</code> (adjacency matrix)</h4>
+      <div class="code-card"><pre>Graph(vertices: <span class="ty">i64</span>, directed: <span class="ty">bool</span>)
+add_edge(from_v, to_v, weight) -&gt; <span class="ty">bool</span>
+has_edge(from_v, to_v) -&gt; <span class="ty">bool</span>
+get_neighbors(vertex) -&gt; Vector&lt;<span class="ty">i64</span>&gt;
+bfs(start) / dfs(start) -&gt; Vector&lt;<span class="ty">i64</span>&gt;
+is_connected() -&gt; <span class="ty">bool</span>
+topological_sort() -&gt; Result&lt;Vector&lt;<span class="ty">i64</span>&gt;, <span class="ty">u8</span>*&gt;   <span class="cm">// DAG only</span>
+has_cycle_directed() -&gt; <span class="ty">bool</span>
+
+<span class="cm">// GraphMatrix adds: get_weight(from_v, to_v), floyd_warshall() -&gt; i64** (all-pairs shortest paths)</span></pre></div>
+
+      <div class="code-card">
+        <div class="titlebar"><span>overview example</span></div>
+        <pre><span class="kw">import</span> stdlib.collections.collections
+
+<span class="kw">let</span> rbtree: std.RBTree&lt;<span class="ty">i64</span>, String&gt; = <span class="kw">new</span> std.RBTree&lt;<span class="ty">i64</span>, String&gt;()
+rbtree.insert(<span class="num">10</span>, <span class="kw">new</span> String(<span class="str">"value"</span>))
+
+<span class="kw">let</span> trie: std.Trie = <span class="kw">new</span> std.Trie()
+trie.insert(<span class="str">"hello"</span>)
+<span class="kw">let</span> words: Vector&lt;String&gt; = trie.get_words_with_prefix(<span class="str">"hel"</span>)
+
+<span class="kw">let</span> graph: std.Graph = <span class="kw">new</span> std.Graph(<span class="num">10</span>, <span class="kw">false</span>)  <span class="cm">// 10 vertices, undirected</span>
+graph.add_edge(<span class="num">0</span>, <span class="num">1</span>, <span class="num">5</span>)
+<span class="kw">let</span> bfs_order: Vector&lt;<span class="ty">i64</span>&gt; = graph.bfs(<span class="num">0</span>)</pre>
+      </div>
+
+      <div class="tblwrap">
+        <table>
+          <tr><th>Operation</th><th>LinkedList</th><th>RBTree</th><th>HashMap</th><th>BinaryHeap</th><th>Graph (list)</th></tr>
+          <tr><td>Insert</td><td>O(1)*</td><td>O(log n)</td><td>O(1)†</td><td>O(log n)</td><td>O(1)</td></tr>
+          <tr><td>Search</td><td>O(n)</td><td>O(log n)</td><td>O(1)†</td><td>—</td><td>O(degree)</td></tr>
+          <tr><td>Delete</td><td>O(n)</td><td>O(log n)</td><td>O(1)†</td><td>O(log n)</td><td>O(degree)</td></tr>
+          <tr><td>Space</td><td>O(n)</td><td>O(n)</td><td>O(n)</td><td>O(n)</td><td>O(V + E)</td></tr>
+        </table>
+      </div>
+      <p style="font-size:0.85rem;color:var(--muted)">* at head/tail. † average case.</p>
+    </section>
+
+    <section class="doc-section" id="std-sdl">
+      <h2>std.sdl</h2>
+      <p>
+        SDL3 bindings — window management, 2D rendering, textures,
+        keyboard/mouse input, and audio playback. Import:
+        <code>import stdlib.sdl.sdl</code>. Requires SDL3 installed
+        and linking with <code>-lSDL3</code>.
+      </p>
+
+      <h4>namespace <code>std.sdl.SDL</code></h4>
+      <div class="code-card"><pre>init(flags: <span class="ty">u32</span>) -&gt; Result&lt;<span class="ty">bool</span>, <span class="ty">u8</span>*&gt;
+quit()
+get_error() -&gt; String
+get_ticks() -&gt; <span class="ty">u64</span>
+delay(ms: <span class="ty">u32</span>)</pre></div>
+
+      <h4><code>class Window</code></h4>
+      <div class="code-card"><pre>constructor(title: String, w: <span class="ty">i64</span>, h: <span class="ty">i64</span>, flags: <span class="ty">u64</span>)
+constructor(title: String, w: <span class="ty">i64</span>, h: <span class="ty">i64</span>)
+is_valid() -&gt; <span class="ty">bool</span> / get_size() -&gt; (<span class="ty">i64</span>, <span class="ty">i64</span>) / set_size(w, h) -&gt; <span class="ty">bool</span>
+show() / hide() -&gt; <span class="ty">bool</span></pre></div>
+
+      <h4><code>class Renderer</code></h4>
+      <div class="code-card"><pre>constructor(win: Window)
+clear() -&gt; <span class="ty">bool</span> / present()
+set_draw_color(r: <span class="ty">u8</span>, g: <span class="ty">u8</span>, b: <span class="ty">u8</span>, a: <span class="ty">u8</span>) -&gt; <span class="ty">bool</span>
+draw_point / draw_line / draw_rect / fill_rect / draw_frect / fill_frect -&gt; <span class="ty">bool</span>
+render_texture(texture, src: <span class="ty">SDL_FRect</span>*, dst: <span class="ty">SDL_FRect</span>*) -&gt; <span class="ty">bool</span>
+load_texture(filepath: <span class="ty">u8</span>*) -&gt; Result&lt;Texture, <span class="ty">u8</span>*&gt;</pre></div>
+
+      <h4><code>class EventHandler</code></h4>
+      <div class="code-card"><pre>poll() -&gt; <span class="ty">bool</span> / wait() -&gt; <span class="ty">bool</span> / wait_timeout(ms: <span class="ty">i32</span>) -&gt; <span class="ty">bool</span>
+is_quit() / is_key_down() / is_key_up() -&gt; <span class="ty">bool</span>
+is_mouse_button_down() / is_mouse_button_up() / is_mouse_motion() -&gt; <span class="ty">bool</span>
+get_key_event() -&gt; <span class="ty">SDL_KeyboardEvent</span>*
+get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pre></div>
+
+      <div class="code-card">
+        <div class="titlebar"><span>quick start</span></div>
+        <pre><span class="kw">import</span> stdlib.sdl.sdl
+
+<span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    std.sdl.SDL.init(std.sdl.SDL_INIT_VIDEO)
+    <span class="kw">let</span> window: std.sdl.Window = <span class="kw">new</span> std.sdl.Window(<span class="kw">new</span> String(<span class="str">"My Game"</span>), <span class="num">800</span>, <span class="num">600</span>)
+    <span class="kw">let</span> renderer: std.sdl.Renderer = <span class="kw">new</span> std.sdl.Renderer(window)
+    <span class="kw">let</span> events: std.sdl.EventHandler = <span class="kw">new</span> std.sdl.EventHandler()
+
+    <span class="kw">let</span> running: <span class="ty">bool</span> = <span class="kw">true</span>
+    <span class="kw">for</span> running {
+        <span class="kw">for</span> events.poll() {
+            <span class="kw">if</span> events.is_quit() { running = <span class="kw">false</span> }
+        }
+        renderer.set_draw_color(<span class="num">0</span>, <span class="num">0</span>, <span class="num">0</span>, <span class="num">255</span>)
+        renderer.clear()
+        renderer.set_draw_color(<span class="num">255</span>, <span class="num">0</span>, <span class="num">0</span>, <span class="num">255</span>)
+        renderer.fill_rect(<span class="kw">new</span> std.sdl.SDL_Rect(<span class="num">100</span>, <span class="num">100</span>, <span class="num">200</span>, <span class="num">150</span>))
+        renderer.present()
+        std.sdl.SDL.delay(<span class="num">16</span>)
+    }
+    std.sdl.SDL.quit()
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre>
+      </div>
+      <div class="code-card">
+        <div class="titlebar"><span>keyboard state &amp; mouse events</span></div>
+        <pre><span class="kw">let</span> keys: <span class="ty">u8</span>* = std.sdl.Input.get_keyboard_state()
+<span class="kw">if</span> keys[std.sdl.SDLK_w <span class="kw">as</span> <span class="ty">i64</span>] != <span class="num">0</span> { y = y - speed * dt }
+
+<span class="kw">if</span> events.is_mouse_button_down() {
+    <span class="kw">let</span> mouse: std.sdl.SDL_MouseButtonEvent* = events.get_mouse_button_event()
+    <span class="kw">let</span> x: <span class="ty">float</span> = (*mouse).x
+}</pre>
+      </div>
+      <p>
+        Audio: <code>AudioDevice</code>, <code>AudioStream</code>,
+        <code>WavFile</code>, and free functions
+        <code>Audio.play_wav(filepath)</code>,
+        <code>Audio.get_num_playback_devices()</code>. Color presets:
+        <code>std.sdl.Colors.black()/white()/red()/green()/blue()/...</code>.
+        Window flags: <code>SDL_WINDOW_FULLSCREEN</code>,
+        <code>RESIZABLE</code>, <code>BORDERLESS</code>, <code>HIDDEN</code>,
+        <code>MAXIMIZED</code>, <code>MINIMIZED</code>,
+        <code>HIGH_PIXEL_DENSITY</code> — OR-able bit flags for the 4-arg
+        <code>Window</code> constructor.
+      </p>
+    </section>
+
+    <section class="doc-section" id="std-args">
+      <h2>std.args</h2>
+      <p>
+        <code>--name value</code> / <code>-n value</code> flag parsing,
+        positional arguments, required options, and a lone <code>--</code>
+        to force everything after it to be treated as positional. Import:
+        <code>import stdlib.args.args_parser</code>.
+      </p>
+      <p>
+        Two supported <code>main</code> shapes: <code>func main(args:
+        string[]) -&gt; i64</code> (preferred — pass <code>args</code> to
+        <code>parser.parse_args(args)</code>), or the literal C signature
+        <code>func main(argc: i32, argv: u8**) -&gt; i64</code> (pass to
+        <code>parser.parse(argc, argv)</code>).
+      </p>
+      <div class="code-card"><pre><span class="kw">class</span> ArgParser {
+    constructor(program_name: String)
+    <span class="kw">func</span> add_flag(name, short_name, description: String)
+    <span class="kw">func</span> add_option(name, short_name, description: String)
+    <span class="kw">func</span> add_option_default(name, short_name, default_value, description: String)
+    <span class="kw">func</span> add_required(name, short_name, description: String)
+    <span class="kw">func</span> parse(argc: <span class="ty">i32</span>, argv: <span class="ty">u8</span>**) -&gt; <span class="ty">bool</span>
+    <span class="kw">func</span> parse_args(args: <span class="ty">string</span>[]) -&gt; <span class="ty">bool</span>
+    <span class="kw">func</span> has_flag(name: String) -&gt; <span class="ty">bool</span>
+    <span class="kw">func</span> get_value(name: String) -&gt; Optional&lt;String&gt;
+    <span class="kw">func</span> get_value_or(name: String, fallback: String) -&gt; String
+    <span class="kw">func</span> get_positional() -&gt; Vector&lt;String&gt;
+    <span class="kw">func</span> get_errors() -&gt; Vector&lt;String&gt; / has_errors() -&gt; <span class="ty">bool</span>
+    <span class="kw">func</span> print_errors() / print_help()
+}</pre></div>
+      <div class="code-card">
+        <div class="titlebar"><span>example</span></div>
+        <pre><span class="kw">import</span> stdlib.args.args_parser
+<span class="kw">using</span> <span class="kw">namespace</span> std.args
+
+<span class="kw">func</span> main(args: <span class="ty">string</span>[]) -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> parser: ArgParser = <span class="kw">new</span> ArgParser(<span class="kw">new</span> String(<span class="str">"mytool"</span>))
+    parser.add_flag(<span class="kw">new</span> String(<span class="str">"verbose"</span>), <span class="kw">new</span> String(<span class="str">"v"</span>), <span class="kw">new</span> String(<span class="str">"Enable verbose output"</span>))
+    parser.add_option_default(<span class="kw">new</span> String(<span class="str">"output"</span>), <span class="kw">new</span> String(<span class="str">"o"</span>), <span class="kw">new</span> String(<span class="str">"a.out"</span>), <span class="kw">new</span> String(<span class="str">"Output file"</span>))
+    parser.add_required(<span class="kw">new</span> String(<span class="str">"input"</span>), <span class="kw">new</span> String(<span class="str">"i"</span>), <span class="kw">new</span> String(<span class="str">"Input file"</span>))
+
+    <span class="kw">if</span> !parser.parse_args(args) {
+        parser.print_errors(); parser.print_help()
+        <span class="kw">return</span> <span class="num">1</span>
+    }
+    <span class="kw">let</span> verbose: <span class="ty">bool</span> = parser.has_flag(<span class="kw">new</span> String(<span class="str">"verbose"</span>))
+    <span class="kw">let</span> output: String = parser.get_value_or(<span class="kw">new</span> String(<span class="str">"output"</span>), <span class="kw">new</span> String(<span class="str">"a.out"</span>))
+    <span class="kw">let</span> rest: Vector&lt;String&gt; = parser.get_positional()
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre>
+      </div>
+      <p>Supports <code>--name value</code>, <code>--name=value</code>, <code>-n value</code>, bare boolean flags, positional arguments, and <code>--</code> to force positional parsing.</p>
+    </section>
+
+    <section class="doc-section" id="std-yaml">
+      <h2>std.yaml</h2>
+      <p>
+        A pragmatic, read-only subset of YAML 1.x for config files. Import:
+        <code>import stdlib.yaml.yaml_parser</code>.
+      </p>
+      <p>
+        <strong>Supported:</strong> block-style mappings and sequences
+        (including sequence-of-mappings), flow-style collections
+        (<code>[a, b, c]</code>, <code>{k: v}</code>), single/double-quoted
+        scalars, plain scalars auto-typed as null/bool/i64/float/string,
+        <code>#</code> comments. <strong>Not supported:</strong>
+        anchors/aliases, multi-line block scalars, tags, multiple
+        documents. Parsing never fails outright — malformed input degrades
+        to a best-effort partial parse rather than an error.
+      </p>
+      <div class="code-card"><pre><span class="kw">class</span> YamlValue {
+    is_null() / is_bool() / is_int() / is_float() / is_string() / is_sequence() / is_mapping() -&gt; <span class="ty">bool</span>
+    as_bool() / as_int() / as_float() / as_string() / as_sequence() -&gt; ...
+    len() -&gt; <span class="ty">i64</span> / push(item) / get_index(i)
+    get(key: String) -&gt; Optional&lt;YamlValue&gt;
+    get_or(key: String, fallback: YamlValue) -&gt; YamlValue
+    set(key: String, value: YamlValue) / keys() -&gt; Vector&lt;String&gt;
+    <span class="cm">// static factories: make_null/make_bool/make_int/make_float/make_string/make_sequence/make_mapping</span>
+}
+<span class="kw">func</span> parse(text: String) -&gt; YamlValue   <span class="cm">// std.yaml.parse</span></pre></div>
+      <div class="code-card">
+        <div class="titlebar"><span>example</span></div>
+        <pre><span class="kw">import</span> stdlib.yaml.yaml_parser
+<span class="kw">import</span> stdlib.io.file
+<span class="kw">using</span> <span class="kw">namespace</span> std.yaml
+<span class="kw">using</span> <span class="kw">namespace</span> std.io
+
+<span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
+    <span class="kw">let</span> content: Result&lt;String, <span class="ty">u8</span>*&gt; = read_file(<span class="str">"config.yaml"</span>)
+    <span class="kw">if</span> !content.is_ok() { <span class="kw">return</span> <span class="num">1</span> }
+    <span class="kw">let</span> doc: YamlValue = parse(content.unwrap())
+
+    <span class="kw">let</span> name: String = doc.get_or(<span class="kw">new</span> String(<span class="str">"name"</span>), YamlValue.make_string(<span class="kw">new</span> String(<span class="str">""</span>))).as_string()
+    <span class="kw">let</span> port: <span class="ty">i64</span> = doc.get_or(<span class="kw">new</span> String(<span class="str">"server"</span>), YamlValue.make_mapping())
+        .get_or(<span class="kw">new</span> String(<span class="str">"port"</span>), YamlValue.make_int(<span class="num">8080</span>)).as_int()
+    <span class="kw">return</span> <span class="num">0</span>
+}</pre>
+      </div>
+    </section>
+
+    <section class="doc-section" id="std-json">
+      <h2>std.json</h2>
+      <p>
+        RFC 8259-compliant JSON — parse <em>and</em> stringify
+        (bidirectional, unlike the read-only <code>std.yaml</code>).
+        Import: <code>import stdlib.json.json_parser</code>.
+      </p>
+      <p>
+        Supports objects, arrays, strings (backslash escapes including
+        <code>\uXXXX</code>), numbers (auto-typed i64 or float depending on
+        whether the literal has a <code>.</code>/<code>e</code>/<code>E</code>),
+        booleans, and null.
+      </p>
+      <div class="code-card"><pre><span class="kw">class</span> JsonValue {
+    <span class="cm">// same shape as YamlValue above: is_*/as_*/len/push/get_index/get/get_or/set/keys</span>
+    <span class="cm">// static factories: make_null/make_bool/make_int/make_float/make_string/make_array/make_object</span>
+}
+<span class="kw">func</span> parse(text: String) -&gt; JsonValue
+<span class="kw">func</span> stringify(value: JsonValue) -&gt; String    <span class="cm">// serializes back to compact JSON</span></pre></div>
+      <div class="code-card">
+        <div class="titlebar"><span>parse, mutate, and re-serialize</span></div>
+        <pre><span class="kw">let</span> doc: JsonValue = parse(content.unwrap())
+<span class="kw">let</span> name: String = doc.get_or(<span class="kw">new</span> String(<span class="str">"name"</span>), JsonValue.make_string(<span class="kw">new</span> String(<span class="str">""</span>))).as_string()
+
+<span class="kw">let</span> payload: JsonValue = JsonValue.make_object()
+payload.set(<span class="kw">new</span> String(<span class="str">"ok"</span>), JsonValue.make_bool(<span class="kw">true</span>))
+<span class="kw">let</span> text: String = stringify(payload)  <span class="cm">// {"ok":true}</span></pre>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- SECTION: EXAMPLES                                             -->
+    <!-- ============================================================ -->
+    <section class="doc-section" id="ex-baremetal">
+      <h2>Examples <span class="tag">baremetal_demo</span></h2>
+      <p>
+        <code>examples/baremetal_demo/</code> is the flagship demo: a full
+        bare-metal x86-64 OS kernel written in LLPL, booted via
+        GRUB2/Multiboot2 in QEMU. It's the project's largest single
+        example — paging/VMM, a task scheduler, a persistent on-disk VFS,
+        a dynamic ELF loader with a shared-library ABI
+        (<code>libsys.so</code>), a windowing compositor, and a full
+        user-space network stack with DHCP — all authored in LLPL, with
+        only <code>boot64.asm</code> (the real-mode→long-mode trampoline)
+        and <code>runtime/runtime.c</code> (the C support runtime every
+        LLPL program links against) as non-LLPL glue.
+      </p>
+
+      <div class="code-card">
+        <div class="titlebar"><span>build &amp; run</span></div>
+        <pre><span class="cm">cd examples/baremetal_demo</span>
+../../tools/llplbuild/llplbuild build            <span class="cm"># final (optimized) build</span>
+../../tools/llplbuild/llplbuild build -c debug   <span class="cm"># unoptimized, with -g</span>
+../../tools/llplbuild/llplbuild run              <span class="cm"># builds, then launches QEMU</span>
+../../tools/llplbuild/llplbuild clean            <span class="cm"># remove all generated artifacts</span>
+../../tools/llplbuild/llplbuild configs          <span class="cm"># list configurations</span>
+
+<span class="cm"># the compiler's own persistence integration test (boots twice against the same disk.img):</span>
+./test-persistence.sh</pre>
+      </div>
+      <p>
+        <code>run</code> expands to <code>qemu-system-x86_64 -cdrom
+        kernel.iso -drive file=disk.img,format=raw,if=ide -serial stdio -m
+        256</code>. <code>disk.img</code> (64MB, the VFS backing store) is
+        created once and persists across ordinary builds — only
+        <code>clean</code> wipes it — which is what makes the VFS actually
+        survive across reboots. Every user-space program is packaged as a
+        GRUB Multiboot2 module inside <code>kernel.iso</code> and can be
+        launched from the in-kernel shell with <code>run
+        /boot/&lt;name&gt;.elf [args...]</code>.
+      </p>
+
+      <h4>OS-level features</h4>
+      <p>
+        A page-table-based VMM with per-process virtual memory
+        (<code>vmm.llpl</code>), a task/scheduler layer
+        (<code>task.llpl</code>), a persistent on-disk VFS with indirect
+        blocks (<code>vfs.llpl</code>) alongside a separate in-memory
+        <code>tmpfs.llpl</code> for GRUB-loaded modules, a dynamic ELF
+        loader plus shared-library ABI (<code>ldso.llpl</code>,
+        <code>libsys.so</code>), a syscall layer (<code>syscall.llpl</code>),
+        IPC (blocking send/reply and shared memory), a windowing compositor
+        (<code>wm.llpl</code>), and a full user-space e1000 NIC driver with
+        ARP/IPv4/ICMP/DHCP (<code>netd.llpl</code>).
+      </p>
+
+      <h4>User-space programs</h4>
+      <div class="cardgrid">
+        <div class="item-card">
+          <h4>wm.llpl <span class="path">→ wm.elf</span><span class="pill">Windowing</span></h4>
+          <p>The compositor. Owns the real framebuffer and one shared-memory pixel arena sliced into fixed-size per-window regions; clients talk to it over small-message IPC (<code>wm_protocol.llpl</code>), never touching the framebuffer or each other's memory directly. Input delivery is pull-based (<code>OP_POLL_INPUT</code>).</p>
+        </div>
+        <div class="item-card">
+          <h4>editor.llpl <span class="path">→ editor.elf</span></h4>
+          <p>Windowed text editor over the persistent VFS. Loads <code>argv[1]</code> (or <code>/untitled.txt</code>), F2 saves, ESC closes. Usually launched from the file browser on ENTER; standalone: <code>run /bin/editor.elf /some/path</code>.</p>
+        </div>
+        <div class="item-card">
+          <h4>filebrowser.llpl <span class="path">→ filebrowser.elf</span></h4>
+          <p>Windowed, read-only VFS directory browser — arrow keys navigate, ENTER opens a file in the editor or descends a directory, ESC goes up.</p>
+        </div>
+        <div class="item-card">
+          <h4>terminal.llpl <span class="path">→ terminal.elf</span></h4>
+          <p>Windowed terminal — the only in-GUI way to launch a program with arguments or browse/cat a path without the taskbar's fixed buttons.</p>
+        </div>
+        <div class="item-card">
+          <h4>tetris.llpl <span class="path">→ tetris.elf</span><span class="pill alt">Game</span></h4>
+          <p>Windowed Tetris, a real client of the <code>wm</code> compositor at its fixed 320×200 window size. Arrow keys move/rotate/soft-drop; shows a GAME OVER overlay and stays open on loss.</p>
+        </div>
+        <div class="item-card">
+          <h4>netd.llpl <span class="path">→ netd.elf</span><span class="pill alt">Networking</span></h4>
+          <p>User-space NIC driver for QEMU's emulated Intel e1000. Owns Ethernet TX/RX rings, ARP, a minimal IPv4 stack, ICMP echo, and a DHCP client (attempted first at boot; falls back to a hardcoded address if no server answers). Exposes one blocking <code>OP_PING</code> operation used by both <code>ping</code> and <code>traceroute</code>.</p>
+        </div>
+        <div class="item-card">
+          <h4>ping.llpl / traceroute.llpl <span class="path">→ ping.elf / traceroute.elf</span></h4>
+          <p><code>ping.llpl</code>: fixed TTL, incrementing sequence — <code>ping &lt;ip&gt; [count]</code>. <code>traceroute.llpl</code>: fixed id/seq, incrementing TTL — <code>traceroute &lt;ip&gt; [max_ttl]</code>. Both default to <code>10.0.2.2</code>, QEMU SLIRP's virtual gateway.</p>
+        </div>
+        <div class="item-card">
+          <h4>pingview.llpl <span class="path">→ pingview.elf</span><span class="pill alt">Networking</span></h4>
+          <p>Graphical, windowed ping monitor — the same <code>OP_PING</code> loop as <code>ping.llpl</code>, but renders a live scrolling bar graph of round-trip iteration count. <code>run /bin/pingview.elf [ip]</code>.</p>
+        </div>
+        <div class="item-card">
+          <h4>atad.llpl <span class="path">→ atad.elf</span></h4>
+          <p>User-space ATA disk driver, registers as <code>"atad"</code>, answers <code>{op, lba}</code> requests from the kernel's own <code>ata.llpl</code> client via a shared 512-byte-sector page.</p>
+        </div>
+        <div class="item-card">
+          <h4>ui_demo.llpl + ui_widgets.llpl <span class="path">→ ui_demo.elf</span></h4>
+          <p>Showcases the widget library: buttons, checkboxes, radio buttons, text boxes, sliders, progress bars — all driven through one <code>Vector&lt;Widget&gt;</code> and virtual dispatch, no manual type-switching (see <a href="#lang-classes-inherit">Single inheritance</a>).</p>
+        </div>
+      </div>
+
+      <p style="font-size:0.9rem;color:var(--muted)">
+        Smaller smoke tests live under <code>userapp/tests/</code>:
+        paired multi-window demos <code>winball1.elf</code>/<code>winball2.elf</code>
+        (proving concurrent compositing and focus-gated input routing),
+        named-service IPC (<code>echod.elf</code>/<code>echoclient.elf</code>),
+        one-shot IPC (<code>echoserver.elf</code>/<code>ipcdemo.elf</code>),
+        shared-memory proof (<code>shmserver.elf</code>/<code>shmclient.elf</code>),
+        the dynamic heap allocator (<code>memtest.elf</code>), a VFS file
+        reader (<code>cat.elf</code>), <code>sys_spawn</code>/<code>sys_wait</code>
+        (<code>spawnwait.elf</code>), <code>sys_exec</code>
+        (<code>execchain.elf</code>), a dynamically-linked LLPL program
+        (<code>dyn_userapp.elf</code>), a minimal statically-linked program
+        (<code>llpl_userapp.elf</code>), and one hand-written assembly
+        ring-3 program (<code>userapp.elf</code>) proving the loader isn't
+        LLPL-specific.
+      </p>
+    </section>
+
+    <section class="doc-section" id="ex-limine">
+      <h2>limine_baremetal_demo</h2>
+      <p>
+        A smaller companion to <code>baremetal_demo</code> that boots the
+        same kind of 64-bit higher-half kernel through the Limine boot
+        protocol instead of GRUB/Multiboot2 — Limine request markers,
+        framebuffer/memory-map/HHDM (higher-half direct map) requests,
+        COM1 serial output, direct framebuffer drawing, and a
+        physical-memory probe through the HHDM offset.
+      </p>
+      <p>
+        Far smaller in scope than <code>baremetal_demo</code> — one kernel
+        ELF, no userland/scheduler/VFS/windowing/networking. Its toolchain
+        uses <code>tcc</code> instead of <code>gcc</code>, and packaging
+        depends on external Limine tooling/assets rather than
+        <code>grub-mkrescue</code>.
+      </p>
+      <div class="code-card">
+        <div class="titlebar"><span>build &amp; run</span></div>
+        <pre><span class="cm">cd examples/limine_baremetal_demo</span>
+../../tools/llplbuild/llplbuild build
+../../tools/llplbuild/llplbuild run
+<span class="cm"># if Limine assets aren't at the default /usr/share/limine:</span>
+../../tools/llplbuild/llplbuild build --var LIMINE_DIR=/path/to/limine</pre>
+      </div>
+      <p>
+        At boot, serial prints each memory-map entry (<code>base..end len
+        type</code>), the HHDM offset, and a physical-memory probe result;
+        if a framebuffer is available it also draws a memory-map bar
+        (green=usable, grey=reserved, blue=bootloader-reclaimable,
+        yellow=kernel/modules, pink=framebuffer) below a color gradient.
+      </p>
+    </section>
+
+    <section class="doc-section" id="ex-collections">
+      <h2>collections</h2>
+      <p>
+        <code>examples/collections/collections_demo.llpl</code> is a
+        comprehensive demonstration of the <a href="#std-collections">std.collections</a>
+        standard library — linked lists, stack/queue, heaps, hash maps,
+        red-black trees, tries, and graphs, each actually exercised.
+      </p>
+      <div class="callout">
+        <span class="k">Namespace gotcha worth knowing</span>
+        <p>
+          The prelude has its own minimal <code>LinkedList&lt;T&gt;</code>,
+          so this file must fully-qualify
+          <code>std.collections.LinkedList&lt;i64&gt;</code> even under
+          <code>using namespace std.collections</code> — the bare name
+          would otherwise resolve to the prelude's own version.
+        </p>
+      </div>
+      <div class="code-card">
+        <div class="titlebar"><span>compile &amp; run</span></div>
+        <pre>./llpl examples/collections/collections_demo.llpl -o /tmp/collections_demo.c
+gcc /tmp/collections_demo.c runtime/runtime.c -o /tmp/collections_demo
+/tmp/collections_demo</pre>
+      </div>
+    </section>
+
+    <section class="doc-section" id="ex-regex">
+      <h2>regex</h2>
+      <p>
+        <code>examples/regex.llpl</code> demonstrates regex literals
+        (<code>/[0-9]+/</code>), <code>find_all()</code> iteration with
+        <code>.group(0)</code>/<code>.group_start(0)</code>, single and
+        global <code>replace()</code>/<code>replace_all()</code>,
+        capture-group backreferences in replacement strings
+        (<code>"$2:$1"</code>), literal <code>$</code> escaping
+        (<code>"$$100"</code>), and empty-match handling.
+      </p>
+      <div class="code-card">
+        <div class="titlebar"><span>compile &amp; run</span></div>
+        <pre>./llpl examples/regex.llpl -o /tmp/regex.c
+gcc /tmp/regex.c runtime/runtime.c -o /tmp/regex
+/tmp/regex</pre>
+      </div>
+    </section>
+
+    <section class="doc-section" id="ex-sdl">
+      <h2>sdl</h2>
+      <p>
+        <code>examples/sdl/</code> exercises the <a href="#std-sdl">std.sdl</a>
+        bindings across five programs: <code>simple_test.llpl</code>
+        (minimal init/quit smoke test), <code>basic_window.llpl</code>
+        (window + renderer + shape drawing), <code>interactive_demo.llpl</code>
+        (keyboard/mouse input driving a bouncing ball),
+        <code>pong_game.llpl</code> (a complete two-paddle Pong), and
+        <code>tetris.llpl</code> (a full Tetris with smooth falling-piece
+        interpolation and a timed line-clear flash/compact sequence).
+      </p>
+      <div class="code-card">
+        <div class="titlebar"><span>compile &amp; run (requires SDL3)</span></div>
+        <pre>./llpl examples/sdl/pong_game.llpl -o /tmp/pong_game.c
+gcc /tmp/pong_game.c runtime/runtime.c -lSDL3 -o /tmp/pong_game
+/tmp/pong_game</pre>
+      </div>
+      <p>None of the five example programs exercise SDL audio, even though the bindings fully support it (<code>AudioDevice</code>, <code>AudioStream</code>, <code>WavFile</code>, WAV playback).</p>
+    </section>
+
+    <section class="doc-section" id="ex-tests">
+      <h2>test/ suite</h2>
+      <p>
+        The compiler's own regression suite —
+        <code>/home/nix/Claude/LLPL/test/*.llpl</code>, 51 files, run via:
+      </p>
+      <div class="code-card"><pre>./run_tests.sh</pre></div>
+      <p>
+        For each test file, the script compiles it, links against
+        <code>runtime/runtime.c</code>, runs it, and — if a matching
+        <code>test/&lt;name&gt;.expected</code> exists — diffs stdout against
+        it; otherwise it just checks for a clean compile and exit. Reports
+        <code>[PASS]</code>/<code>[FAIL]</code> per file and a final tally.
+      </p>
+      <p>Representative coverage by area:</p>
+      <div class="tblwrap">
+        <table>
+          <tr><th>Area</th><th>Sample files</th></tr>
+          <tr><td>Core language</td><td><code>if_expr_demo</code>, <code>implicit_return_demo</code>, <code>closures_demo</code>, <code>increment_decrement_demo</code>, <code>named_args_demo</code>, <code>overloading_demo</code>, <code>test_tuples</code>, <code>range_for_demo</code></td></tr>
+          <tr><td>Type system</td><td><code>generics_demo</code>, <code>traits_demo</code>, <code>tagged_enums_demo</code>, <code>pointer_to_pointer_demo</code>, <code>slice_demo</code>, <code>sizeof_demo</code>, <code>as_string_demo</code>, <code>utf8_string</code></td></tr>
+          <tr><td>Modules/namespaces</td><td><code>import_alias</code>, <code>import_selective</code>, <code>namespace_alias_demo</code>, <code>nested_namespace_demo</code></td></tr>
+          <tr><td>Memory/ownership</td><td><code>owned_helpers</code>, <code>weak_reference_demo</code>, <code>delete_demo</code>, <code>private_members_demo</code>, <code>test_allocator</code></td></tr>
+          <tr><td>Error handling</td><td><code>throw_try_demo</code>, <code>try_catch_demo</code>, <code>test_panic</code>, <code>test_result_trace</code></td></tr>
+          <tr><td>Reflection/metaprogramming</td><td><code>reflection_demo</code>, <code>symbol_table_demo</code>, <code>method_address_demo</code>, <code>macro_quote</code></td></tr>
+          <tr><td>Pattern matching / regex</td><td><code>test_match_destructuring</code>, <code>regex_demo</code>, <code>regex_replace_demo</code></td></tr>
+          <tr><td>Collections</td><td><code>hashmap_resize_iter</code>, <code>test_hashmap_string</code>, <code>iterator_trait_demo</code></td></tr>
+          <tr><td><code>embed()</code></td><td><code>embed_demo</code> + <code>embed_asset.txt</code> (see <a href="#lang-embed">embed()</a>)</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section class="doc-section" id="ex-playground">
+      <h2>Web playground</h2>
+      <p>
+        <code>playground/</code> is a local, single-user web playground —
+        write LLPL in an in-browser editor and see both the generated C
+        and the compiled program's real stdout/stderr/exit code side by
+        side. Each "Run" click compiles the submitted source with the real
+        <code>llpl</code> binary, compiles the generated C with
+        <code>gcc</code> (linking <code>runtime/runtime.c</code>, exactly
+        like <code>test/</code> and <code>examples/*.llpl</code> are
+        built), and runs the result with a 5-second timeout.
+      </p>
+      <div class="code-card">
+        <div class="titlebar"><span>run it</span></div>
+        <pre>dub build --force        <span class="cm"># build the compiler first, if not already built</span>
+cd playground
+node server.js            <span class="cm"># then open http://localhost:8787</span>
+<span class="cm"># PORT=3000 node server.js   to use a different port</span></pre>
+      </div>
+      <p>Requires <code>gcc</code> on <code>PATH</code> and Node.js — no <code>npm install</code> needed.</p>
+      <div class="callout warn">
+        <span class="k">Security</span>
+        <p>
+          This executes arbitrary, unsandboxed native code submitted
+          through the browser — no container, VM, seccomp, user, or
+          network isolation, only process-level timeouts and output-size
+          limits. It's meant for local personal experimentation only:
+          don't expose it on a network, run it as a shared/multi-tenant
+          service, or run it with elevated privileges without adding a
+          real sandbox first.
+        </p>
+      </div>
+    </section>
+
+    <footer class="docfoot">
+      LLPL — a low-level language that compiles to C. Source, issues, and
+      the rest of the project live in the repository this documentation
+      was generated from.
+    </footer>
+
+  </main>
+</div>
+
+<script>
+(function () {
+  var sidebar = document.getElementById('sidebar');
+  var menuToggle = document.getElementById('menuToggle');
+  var scrim = document.getElementById('scrim');
+  var navSearch = document.getElementById('navSearch');
+  var navLinks = Array.prototype.slice.call(document.querySelectorAll('.navgroup a'));
+  var navGroups = Array.prototype.slice.call(document.querySelectorAll('.navgroup'));
+
+  function closeMenu() {
+    sidebar.classList.remove('open');
+    scrim.classList.remove('open');
+  }
+  function openMenu() {
+    sidebar.classList.add('open');
+    scrim.classList.add('open');
+  }
+  menuToggle.addEventListener('click', function () {
+    if (sidebar.classList.contains('open')) closeMenu(); else openMenu();
+  });
+  scrim.addEventListener('click', closeMenu);
+  navLinks.forEach(function (a) {
+    a.addEventListener('click', function () {
+      if (window.innerWidth <= 900) closeMenu();
+    });
+  });
+
+  /* ---- sidebar search filter ---- */
+  navSearch.addEventListener('input', function () {
+    var q = navSearch.value.trim().toLowerCase();
+    navLinks.forEach(function (a) {
+      var match = q === '' || a.textContent.toLowerCase().indexOf(q) !== -1;
+      a.classList.toggle('hidden', !match);
+    });
+    navGroups.forEach(function (g) {
+      var label = g.querySelector('.label');
+      var anyVisible = Array.prototype.slice.call(g.querySelectorAll('a'))
+        .some(function (a) { return !a.classList.contains('hidden'); });
+      if (label) label.style.display = anyVisible ? '' : 'none';
+    });
+  });
+
+  /* ---- scrollspy: highlight the sidebar link for whatever section/sub is in view ---- */
+  var targets = navLinks
+    .map(function (a) {
+      var id = a.getAttribute('href').slice(1);
+      var el = document.getElementById(id);
+      return el ? { link: a, el: el } : null;
+    })
+    .filter(Boolean);
+
+  function updateActive() {
+    var y = window.scrollY + 120;
+    var current = null;
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i].el.offsetTop <= y) current = targets[i];
+    }
+    navLinks.forEach(function (a) { a.classList.remove('active'); });
+    if (current) current.link.classList.add('active');
+  }
+  window.addEventListener('scroll', updateActive, { passive: true });
+  updateActive();
+})();
+</script>
