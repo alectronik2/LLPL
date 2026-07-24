@@ -1,0 +1,5 @@
+import tgaimage
+
+func main( args: string[] ) {
+    puts("Hello, world")
+}

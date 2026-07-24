@@ -36,6 +36,6 @@ func _start(argc: u64, argv: u64*) {
             continue
         }
         fill_bulk(shm)
-        sys_msg_reply(sender, "ok", 3)
+        sys_msg_reply(sender, "ok" as u8*, 3)
     }
 }

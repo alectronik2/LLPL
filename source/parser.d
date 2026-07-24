@@ -635,6 +635,12 @@ class Parser {
                 }
                 string paramName = expect(TokenType.Identifier).value;
                 expect(TokenType.Colon);
+                // `name: const Type` - see ast.Parameter.isConst's own
+                // comment. Sits between the colon and the type, not before
+                // the name like a `let`/`const` local - there's no `let`
+                // here to put it in front of, and this position reads as
+                // the same "const Type" a C parameter would use.
+                bool isParamConst = match(TokenType.Const);
                 Type paramType = parseType();
                 ASTNode defaultValue = null;
                 if (match(TokenType.Assign)) {
@@ -645,7 +651,7 @@ class Parser {
                         "Parameter '%s' has no default value, but appears after a parameter that does",
                         paramName));
                 }
-                params ~= new Parameter(paramName, paramType, defaultValue);
+                params ~= new Parameter(paramName, paramType, defaultValue, isParamConst);
             } while (match(TokenType.Comma));
         }
         if (isVariadic && params.length == 0) {
@@ -767,11 +773,12 @@ class Parser {
         Block body_ = block();
 
         if (isOperator) {
-            string resolved = operatorMethodName(rawOp, params.length == 0);
+            string resolved = operatorMethodName(rawOp, params.length);
             if (resolved.length == 0) {
                 errorAt(operatorLine, operatorColumn,
-                    format("'%s' isn't an overloadable %s operator", rawOp,
-                        params.length == 0 ? "unary" : "binary"));
+                    format("'%s' isn't an overloadable operator with %d parameter(s)%s", rawOp, params.length,
+                        rawOp == "[]" ? " (expected 1 for a getter or 2 for a setter)" :
+                            params.length == 0 ? " (expected a unary operator)" : " (expected a binary operator)"));
             }
             name = resolved;
         }
@@ -867,6 +874,12 @@ class Parser {
                 fields ~= varDecl();
             } else if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
+            } else if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
+                // `name: Type` with no `let` - same bare-field shorthand
+                // classDecl already offers (see varDeclBody's own comment).
+                int declLine = current.line;
+                int declColumn = current.column;
+                fields ~= varDeclBody(declLine, declColumn, false, false);
             } else {
                 error("Expected field or constructor declaration");
             }
@@ -1121,11 +1134,12 @@ class Parser {
             }
 
             if (isOperator) {
-                methodName = operatorMethodName(rawOp, params.length == 0);
+                methodName = operatorMethodName(rawOp, params.length);
                 if (methodName.length == 0) {
                     errorAt(sigLine, sigColumn,
-                        format("'%s' isn't an overloadable %s operator", rawOp,
-                            params.length == 0 ? "unary" : "binary"));
+                        format("'%s' isn't an overloadable operator with %d parameter(s)%s", rawOp, params.length,
+                            rawOp == "[]" ? " (expected 1 for a getter or 2 for a setter)" :
+                                params.length == 0 ? " (expected a unary operator)" : " (expected a binary operator)"));
                 }
             }
 
@@ -1464,6 +1478,15 @@ class Parser {
             case "i16": return "i16";
             case "i32": return "i32";
             case "i64": return "i64";
+            // Same idea as the fixed-width ints above, extended to the two
+            // floating-point widths: "float"/"double" are still accepted
+            // (see isPrimitiveTypeName/primitiveToC), but this rewrite - the
+            // one point every type annotation passes through - makes f32/f64
+            // what everything downstream (isFloatType, numericBinaryResultType,
+            // ...) actually sees, matching the i8/u8/... naming convention
+            // instead of C's.
+            case "float": return "f32";
+            case "double": return "f64";
             default: return name;
         }
     }

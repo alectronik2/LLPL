@@ -61,7 +61,7 @@ let status: char[64]
 let clipboard_path: char[160]
 let clipboard_name: char[32]
 let clipboard_valid: bool = false
-let copy_buf: char[4096]
+let copy_buf: u8[4096]
 let prev_mouse_left: bool = false
 let dialog_mode: i64 = 0
 let dialog_text: char[32]
@@ -379,7 +379,7 @@ func refresh_listing() {
     let done: bool = false
     while (i as i64) < MAX_ENTRIES && !done {
         let buf: char[48]
-        let ok: u64 = sys_readdir(cur_path as char*, i, buf as char*)
+        let ok: u64 = sys_readdir(cur_path as char*, i, buf as u8*)
         if ok == RT_SYS_ERR {
             done = true
         } else {
@@ -893,7 +893,7 @@ func create_named_file(name: char*) {
     let full: char[160]
     join_path(full as char*, cur_path as char*, name)
     let text: char* = "" as char*
-    if sys_write_all(full as char*, text, 0) == RT_SYS_ERR {
+    if sys_write_all(full as char*, text as u8*, 0) == RT_SYS_ERR {
         set_status("create file failed" as char*)
     } else {
         set_status("file created" as char*)
@@ -917,14 +917,14 @@ func rename_selected_to(new_name: char*) {
         set_status("rename failed" as char*)
         return
     }
-    let n: u64 = sys_read_all(dialog_old_path as char*, copy_buf as char*, 4096)
+    let n: u64 = sys_read_all(dialog_old_path as char*, copy_buf as u8*, 4096)
     if n == RT_SYS_ERR {
         set_status("read failed" as char*)
         return
     }
     let full: char[160]
     join_path(full as char*, cur_path as char*, new_name)
-    if sys_write_all(full as char*, copy_buf as char*, n) == RT_SYS_ERR {
+    if sys_write_all(full as char*, copy_buf as u8*, n) == RT_SYS_ERR {
         set_status("write failed" as char*)
         return
     }
@@ -965,7 +965,7 @@ func create_generated_file() {
     make_generated_name(name as char*, "file" as char*, ".txt" as char*)
     join_path(full as char*, cur_path as char*, name as char*)
     let text: char* = "" as char*
-    if sys_write_all(full as char*, text, 0) == RT_SYS_ERR {
+    if sys_write_all(full as char*, text as u8*, 0) == RT_SYS_ERR {
         set_status("create file failed" as char*)
     } else {
         set_status("file created" as char*)
@@ -1047,7 +1047,7 @@ func paste_file(prefix: char*) -> bool {
             return false
         }
     }
-    let n: u64 = sys_read_all(clipboard_path as char*, copy_buf as char*, 4096)
+    let n: u64 = sys_read_all(clipboard_path as char*, copy_buf as u8*, 4096)
     if n == RT_SYS_ERR {
         set_status("read failed" as char*)
         return false
@@ -1056,7 +1056,7 @@ func paste_file(prefix: char*) -> bool {
     let full: char[160]
     make_generated_name(name as char*, prefix, ".txt" as char*)
     join_path(full as char*, cur_path as char*, name as char*)
-    if sys_write_all(full as char*, copy_buf as char*, n) == RT_SYS_ERR {
+    if sys_write_all(full as char*, copy_buf as u8*, n) == RT_SYS_ERR {
         set_status("write failed" as char*)
         return false
     }
@@ -1075,7 +1075,7 @@ func paste_image_file() -> bool {
         set_status("image too large" as char*)
         return true
     }
-    let image_clip_buf: char* = sys_malloc(needed)
+    let image_clip_buf: u8* = sys_malloc(needed)
     if image_clip_buf == null {
         set_status("image alloc failed" as char*)
         return true

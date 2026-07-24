@@ -110,7 +110,7 @@ func load_png_or_embedded(path: char*, fallback: u8*) -> EmbeddedImage {
 
 func load_png_from_embedded(asset: EmbeddedFile, fallback: u8*) -> EmbeddedImage {
     let decoded: DecodedPng
-    if png_decode_bytes(asset.data, asset.len, &decoded) {
+    if png_decode_bytes(asset.data as u8*, asset.len, &decoded) {
         return png_image_to_embedded(decoded)
     }
     return load_embedded_image(fallback)

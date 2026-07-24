@@ -641,7 +641,7 @@ namespace Syscall {
             clipboard_len = 0
             return 0
         }
-        if copy_from_user(buf, clipboard_data as char*, n) != n {
+        if copy_from_user(buf, clipboard_data as u8*, n) != n {
             return 0xFFFFFFFFFFFFFFFF
         }
         clipboard_len = n
@@ -656,7 +656,7 @@ namespace Syscall {
         if n == 0 {
             return 0
         }
-        if copy_to_user(out_buf, clipboard_data as char*, n) != n {
+        if copy_to_user(out_buf, clipboard_data as u8*, n) != n {
             return 0xFFFFFFFFFFFFFFFF
         }
         return n

@@ -3069,6 +3069,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
         }
 
         code ~= format("%s %s(%s) {\n", sName, mangleConstructorName(structDecl, sName, constructor), params);
@@ -3098,6 +3099,7 @@ class CodeGenerator {
         // permanently shadow any later same-named global/field.
         foreach (param; constructor.params) {
             variableTypes.remove(param.name);
+            constVariables.remove(param.name);
         }
         variableTypes.remove("self");
 
@@ -3163,6 +3165,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
         }
 
         code ~= format("%s %s(%s) {\n", uName, mangleConstructorName(unionDecl, uName, constructor), params);
@@ -3189,6 +3192,7 @@ class CodeGenerator {
 
         foreach (param; constructor.params) {
             variableTypes.remove(param.name);
+            constVariables.remove(param.name);
         }
         variableTypes.remove("self");
 
@@ -3625,6 +3629,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
         }
 
         code ~= format("%s* %s(%s) {\n", cName, mangleConstructorName(classDecl, cName, constructor), params);
@@ -3663,6 +3668,7 @@ class CodeGenerator {
         // candidate - see enclosingQualifications).
         foreach (param; constructor.params) {
             variableTypes.remove(param.name);
+            constVariables.remove(param.name);
         }
         variableTypes.remove("self");
 
@@ -3727,6 +3733,7 @@ class CodeGenerator {
             paramsNoSelf ~= format("%s %s", typeToC(param.type), param.name);
             forwardArgs ~= param.name;
             variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
         }
         string initParams = format("%s* self%s", cName, paramsNoSelf.length > 0 ? ", " ~ paramsNoSelf : "");
 
@@ -3804,6 +3811,7 @@ class CodeGenerator {
         currentClassName = prevClassName;
         foreach (param; constructor.params) {
             variableTypes.remove(param.name);
+            constVariables.remove(param.name);
         }
         variableTypes.remove("self");
 
@@ -4000,6 +4008,7 @@ class CodeGenerator {
             if (!method.isStatic || i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
         }
 
         code ~= format("%s %s(%s) {\n",
@@ -4031,6 +4040,7 @@ class CodeGenerator {
         // are only valid names inside this method's own body.
         foreach (param; method.params) {
             variableTypes.remove(param.name);
+            constVariables.remove(param.name);
         }
         if (!method.isStatic) {
             variableTypes.remove("self");
@@ -4079,6 +4089,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
         }
         if (funcDecl.isVariadic) params ~= ", ...";
 
@@ -4129,6 +4140,7 @@ class CodeGenerator {
         // valid names inside this function's own body.
         foreach (param; funcDecl.params) {
             variableTypes.remove(param.name);
+            constVariables.remove(param.name);
         }
 
         if (isMainArgsFunction(funcDecl)) {
@@ -4187,6 +4199,7 @@ class CodeGenerator {
             resolveType(param.type);
             params ~= format(", %s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
         }
 
         string code = format("__attribute__((interrupt)) void %s(%s) {\n", mangledFunc(funcDecl), params);
@@ -4211,6 +4224,7 @@ class CodeGenerator {
         variableTypes.remove("__frame");
         if (funcDecl.params.length == 1) {
             variableTypes.remove(funcDecl.params[0].name);
+            constVariables.remove(funcDecl.params[0].name);
         }
         currentFunctionIsInterrupt = prevInterrupt;
 
@@ -4326,7 +4340,7 @@ class CodeGenerator {
 
     private bool isFloatType(Type t) {
         return t !is null && !t.isPointer && !t.isArray &&
-            (t.name == "float" || t.name == "double");
+            (t.name == "f32" || t.name == "f64");
     }
 
     private bool isNumericType(Type t) {
@@ -4376,8 +4390,8 @@ class CodeGenerator {
 
     private Type numericBinaryResultType(Type left, Type right) {
         if (!isNumericType(left) || !isNumericType(right)) return null;
-        if (left.name == "double" || right.name == "double") return new Type("double");
-        if (left.name == "float" || right.name == "float") return new Type("float");
+        if (left.name == "f64" || right.name == "f64") return new Type("f64");
+        if (left.name == "f32" || right.name == "f32") return new Type("f32");
         if (isSignedIntegerType(left) && isSignedIntegerType(right)) {
             return integerRank(left) >= integerRank(right) ? cloneType(left) : cloneType(right);
         }
@@ -5960,6 +5974,11 @@ class CodeGenerator {
             case "i16": return "i16";
             case "i32": return "i32";
             case "i64": return "i64";
+            // See parser.d's own copy of this function - same rewrite,
+            // needed again here for an alias target (below), which never
+            // goes through the parser's own call to it.
+            case "float": return "f32";
+            case "double": return "f64";
             default: return name;
         }
     }
@@ -5985,6 +6004,11 @@ class CodeGenerator {
             case "u16": case "i16":
             case "u32": case "i32":
             case "bool": case "void": case "string":
+            // Same story as float/double just below, in reverse: f32/f64
+            // are what canonicalIntTypeName above rewrites float/double
+            // *to*, so an alias target already spelled the new way
+            // (`alias Real = f64`) needs recognizing directly too.
+            case "f32": case "f64":
             case "float": case "double":
             case "int": case "uint":
                 return true;
@@ -7816,7 +7840,7 @@ class CodeGenerator {
             case "i32": case "u32": case "int32": case "uint32":
             case "int64": case "uint64":
                 return "int";
-            case "float": return "float";
+            case "f32": return "float";
             case "bool": return "bool";
             default: return "";
         }
@@ -7905,7 +7929,7 @@ class CodeGenerator {
     // before this could happen at all.
     private FunctionDecl findOperatorMethodDecl(ASTNode selfOperand, string op, bool isUnary,
             ASTNode rightOperand = null) {
-        string methodName = operatorMethodName(op, isUnary);
+        string methodName = operatorMethodName(op, isUnary ? 0 : 1);
         if (methodName.length == 0) return null;
         try {
             Type selfType = inferType(selfOperand);
@@ -7958,7 +7982,7 @@ class CodeGenerator {
             ASTNode rightOperand = null) {
         auto matched = findOperatorMethodDecl(selfOperand, op, isUnary, rightOperand);
         if (matched is null) return "";
-        string methodName = operatorMethodName(op, isUnary);
+        string methodName = operatorMethodName(op, isUnary ? 0 : 1);
         try {
             Type selfType = inferType(selfOperand);
             resolveType(selfType);
@@ -7993,15 +8017,82 @@ class CodeGenerator {
     }
 
     // Same idea as tryBinaryOperatorOverloadCall, for `arr[index]` where
-    // `arr` defines `operator[]` (op_index). Read-only: there's no
-    // op_index= counterpart, so this never fires for the left side of an
-    // assignment in a way that would need an lvalue - see
-    // ast.operatorMethodName's doc comment.
+    // `arr` defines `operator[]` (op_index) - the getter, one param.
     private string tryIndexOperatorOverloadCall(IndexExpr indexExpr) {
         string callName = findOperatorMethodCallName(indexExpr.array, "[]", false, indexExpr.index);
         if (callName.length == 0) return "";
         return format("%s(%s, %s)", callName,
             generateExpression(indexExpr.array), generateExpression(indexExpr.index));
+    }
+
+    // The write side of the above: `arr[index] = value` where `arr`'s type
+    // defines a 2-param `operator[](index, value)` overload (op_index_set).
+    // Handled as its own path rather than folding into
+    // tryBinaryOperatorOverloadCall/findOperatorMethodDecl's isUnary/
+    // rightOperand model - every other overloadable operator has at most
+    // one non-self operand to disambiguate by, but op_index_set has two
+    // (index and value), so overload resolution here calls resolveOverload
+    // directly with both rather than through findOperatorMethodDecl's
+    // single-rightOperand shape. Mirrors findOperatorMethodDecl's own two
+    // lookup sources: an inline class method (classRegistry) or an impl
+    // block's desugared free function (functionRegistry, mangled
+    // `<mangleTypeArg(target)>_op_index_set` by processImplBlock).
+    // Returns "" (falling back to a plain, likely-invalid C assignment)
+    // when `arr`'s type defines no such overload - same "not found" shape
+    // every other tryXOperatorOverloadCall above already uses.
+    private string tryIndexSetOperatorOverloadCall(IndexExpr indexExpr, ASTNode valueExpr) {
+        string methodName = operatorMethodName("[]", 2);
+        try {
+            Type selfType = inferType(indexExpr.array);
+            resolveType(selfType);
+            if (selfType.pointerDepth > 0 || selfType.isArray) return "";
+
+            string callName;
+            if (auto classDecl = selfType.name in classRegistry) {
+                ClassDecl owner;
+                auto candidates = resolveMethodOnHierarchy(*classDecl, methodName, owner);
+                if (candidates.length == 1) {
+                    callName = format("%s_%s", mangledClass(owner), methodName);
+                } else if (candidates.length > 1) {
+                    auto matched = resolveOverload(candidates, [indexExpr.index, valueExpr], [],
+                        "operator '[]='", indexExpr.line, indexExpr.column);
+                    callName = format("%s_%s%s", mangledClass(owner), methodName, overloadSuffix(matched.params));
+                }
+            }
+            if (callName.length == 0) {
+                if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
+                    callName = format("%s_%s", mangleTypeArg(selfType), methodName);
+                }
+            }
+            if (callName.length == 0) {
+                // A class with a getter but no setter would otherwise fall
+                // through to a plain C assignment against the getter call's
+                // result - "lvalue required as left operand of assignment",
+                // a real error but a confusing one to land on for a class
+                // that quite reasonably only wants to support `arr[i]`, not
+                // `arr[i] = x`. Give a clear LLPL-level error instead, but
+                // only when the type is unambiguously a class defining the
+                // getter - anything else (no operator[] at all) isn't this
+                // function's problem to diagnose.
+                string getterName = operatorMethodName("[]", 1);
+                if (auto classDecl = selfType.name in classRegistry) {
+                    ClassDecl owner;
+                    if (resolveMethodOnHierarchy(*classDecl, getterName, owner).length > 0) {
+                        throw new CompileError(format(
+                            "'%s' defines operator[] for reading but not writing - add a 2-parameter " ~
+                            "'func operator[](index, value)' overload to support 'x[i] = value'",
+                            selfType.name), currentModulePath, indexExpr.line, indexExpr.column);
+                    }
+                }
+                return "";
+            }
+            return format("%s(%s, %s, %s)", callName, generateExpression(indexExpr.array),
+                generateExpression(indexExpr.index), generateExpression(valueExpr));
+        } catch (CompileError e) {
+            throw e;
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     // When --safe is enabled, fixed-size array indexing (T[N]) is wrapped
@@ -8446,6 +8537,12 @@ class CodeGenerator {
         if (auto binExpr = cast(BinaryExpr)node) {
             if (binExpr.op == "=") {
                 checkNotConstAssignment(binExpr.left);
+                if (auto indexExpr = cast(IndexExpr)binExpr.left) {
+                    string setterCall = tryIndexSetOperatorOverloadCall(indexExpr, binExpr.right);
+                    if (setterCall.length > 0) {
+                        return setterCall;
+                    }
+                }
                 Type leftType = null;
                 try {
                     leftType = inferType(binExpr.left);
@@ -9184,9 +9281,9 @@ class CodeGenerator {
             // Check suffix to determine float vs double
             string val = floatLit.value;
             if (val.length > 0 && (val[$-1] == 'f' || val[$-1] == 'F')) {
-                return new Type("float");
+                return new Type("f32");
             }
-            return new Type("double"); // default to double
+            return new Type("f64"); // default to f64
         } else if (cast(CharLiteral)expr) {
             return new Type("char");
         } else if (cast(StringLiteral)expr) {
@@ -9403,7 +9500,7 @@ class CodeGenerator {
                 return new Type(arrType.name, arrType.pointerDepth - 1, false, 0);
             }
             if (auto classDecl = arrType.name in classRegistry) {
-                string methodName = operatorMethodName("[]", false);
+                string methodName = operatorMethodName("[]", 1);
                 foreach (method; classDecl.methods) {
                     if (method.name == methodName) return method.returnType;
                 }
@@ -9485,8 +9582,12 @@ class CodeGenerator {
                                         // own header declaration - see the SDL
                                         // stdlib bindings (stdlib/sdl/*.llpl)
             case "void": return "void";
-            case "float": return "float";
-            case "double": return "double";
+            // f32/f64 (see canonicalIntTypeName) are what a parsed type
+            // annotation actually is by the time it gets here; float/double
+            // stay recognized too, for any Type built with the pre-rewrite
+            // spelling directly.
+            case "f32": case "float": return "float";
+            case "f64": case "double": return "double";
             default: return name;
         }
     }

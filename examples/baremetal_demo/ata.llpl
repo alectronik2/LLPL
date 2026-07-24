@@ -133,7 +133,7 @@ namespace ATA {
     func cache_read(lba: u64, buf: u8*) -> bool {
         let idx: i64 = cache_index(lba)
         if cache_valid[idx] && cache_lba[idx] == lba {
-            llpl_memcpy(buf, cache_slot_ptr(idx), SECTOR_SIZE as u64)
+            llpl_memcpy(buf as char*, cache_slot_ptr(idx) as char*, SECTOR_SIZE as u64)
             cache_hits = cache_hits + 1
             return true
         }
@@ -146,7 +146,7 @@ namespace ATA {
             return true
         }
         let dst: u8* = shm_ptr()
-        llpl_memcpy(dst, cache_slot_ptr(idx), SECTOR_SIZE as u64)
+        llpl_memcpy(dst as char*, cache_slot_ptr(idx) as char*, SECTOR_SIZE as u64)
         if call(OP_WRITE, cache_lba[idx], 1) != 0 {
             return false
         }
@@ -164,7 +164,7 @@ namespace ATA {
         cache_valid[idx] = true
         cache_dirty[idx] = dirty
         cache_lba[idx] = lba
-        llpl_memcpy(cache_slot_ptr(idx), src, SECTOR_SIZE as u64)
+        llpl_memcpy(cache_slot_ptr(idx) as char*, src as char*, SECTOR_SIZE as u64)
         return true
     }
 
@@ -371,7 +371,7 @@ namespace ATA {
                 let src: u8* = shm_ptr()
                 let bytes: u64 = chunk * (SECTOR_SIZE as u64)
                 let base: i64 = (done * (SECTOR_SIZE as u64)) as i64
-                llpl_memcpy(buf + base, src, bytes as u64)
+                llpl_memcpy((buf + base) as char*, src as char*, bytes as u64)
                 let c: u64 = 0
                 while c < chunk {
                     let off: i64 = (c * (SECTOR_SIZE as u64)) as i64
@@ -404,7 +404,7 @@ namespace ATA {
             let dst: u8* = shm_ptr()
             let bytes: u64 = chunk * (SECTOR_SIZE as u64)
             let base: i64 = (done * (SECTOR_SIZE as u64)) as i64
-            llpl_memcpy(dst, buf + base, bytes as u64)
+            llpl_memcpy(dst as char*, (buf + base) as char*, bytes as u64)
             let ok: bool = call(OP_WRITE, lba + done, chunk) == 0
             if !ok {
                 release_ata()

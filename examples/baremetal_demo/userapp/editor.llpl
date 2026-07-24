@@ -585,7 +585,7 @@ func _start(argc: u64, argv: u64*) {
     }
     path[i] = 0
 
-    let n: u64 = sys_read_all(path as string, text as string, (TEXT_CAP as u64) - 1)
+    let n: u64 = sys_read_all(path as string, text as u8*, (TEXT_CAP as u64) - 1)
     if n == RT_SYS_ERR {
         text_len = 0
     } else {

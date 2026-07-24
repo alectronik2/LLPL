@@ -49,6 +49,7 @@ namespace VMM {
         let pml4: u64
         let next_virt: u64
         let pt_count: i64
+        
         let pt_pages: u64[32]
         let map_count: i64
         let map_virt: u64[256]

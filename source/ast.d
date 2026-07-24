@@ -437,11 +437,20 @@ class Parameter {
     // site, at compile time - the callee's own generated C signature never
     // changes, so this works uniformly for extern functions too.
     ASTNode defaultValue;
+    // `name: const Type` - rejects any assignment to this parameter's own
+    // binding inside the function body (codegen.d's checkNotConstAssignment,
+    // the same check a `const`-declared local already goes through). Purely
+    // a compile-time LLPL-level guarantee, like `const` on a local - there's
+    // no "pointer to const" in this type system (see Type's own doc
+    // comments), so `bar: const T*` still only protects the pointer
+    // variable itself from being reassigned, not what it points to.
+    bool isConst;
 
-    this(string name, Type type, ASTNode defaultValue = null) {
+    this(string name, Type type, ASTNode defaultValue = null, bool isConst = false) {
         this.name = name;
         this.type = type;
         this.defaultValue = defaultValue;
+        this.isConst = isConst;
     }
 }
 
@@ -1588,15 +1597,27 @@ class TupleLiteral : ASTNode {
 // "+", or a binary "!") - shared by the parser (to validate/name the method
 // declaration) and the code generator (to look one up at a use site).
 //
-// "[]" (subscript, `func operator[](index: T) -> U`) is read-only - there's
-// no "op_index=" counterpart, so `s[i] = x` isn't supported on classes;
-// String (prelude.llpl) offers a `set(index, value)` method instead. It's
-// listed as a binary operator (arity 1: the index) even though there's no
-// token-level "[]" operator elsewhere in the grammar - the parser recognizes
-// the `[` `]` pair specially in functionDecl rather than via
-// isOverloadableOperatorToken.
-string operatorMethodName(string rawOp, bool isUnary) {
-    if (isUnary) {
+// "[]" (subscript) is arity-overloaded rather than unary/binary like every
+// other entry here: `func operator[](index: T) -> U` (1 param) is the
+// getter, op_index; `func operator[](index: T, value: U)` (2 params) is
+// the setter, op_index_set, called for the left side of `arr[i] = value`
+// (see codegen.d's tryIndexSetOperatorOverloadCall) - the one overloadable
+// operator with a real assignment counterpart, since unlike `+=`-style
+// compound assignment (always desugared to `a = a + b`) there's no way to
+// spell "read arr[i], combine, write it back" without the getter and
+// setter as two separate calls. A class that only defines the getter still
+// works exactly as before; String (prelude.llpl) predates this and still
+// offers its own `set(index, value)` method rather than op_index_set.
+// There's no token-level "[]" operator elsewhere in the grammar - the
+// parser recognizes the `[` `]` pair specially in functionDecl rather than
+// via isOverloadableOperatorToken.
+string operatorMethodName(string rawOp, size_t paramCount) {
+    if (rawOp == "[]") {
+        if (paramCount == 1) return "op_index";
+        if (paramCount == 2) return "op_index_set";
+        return "";
+    }
+    if (paramCount == 0) {
         switch (rawOp) {
             case "-": return "op_neg";
             case "!": return "op_not";
@@ -1621,7 +1642,6 @@ string operatorMethodName(string rawOp, bool isUnary) {
         case "^": return "op_xor";
         case "<<": return "op_shl";
         case ">>": return "op_shr";
-        case "[]": return "op_index";
         default: return "";
     }
 }

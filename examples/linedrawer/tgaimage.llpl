@@ -1,0 +1,26 @@
+namespace Tga {
+    packed struct Header {
+        idlength:       u8
+        colormaptype:   u8
+        datatypecode:   u8
+        colormaporigin: u16
+        colormaplength: u16
+        colormapdepth:  u8
+        x_origin:       u16
+        y_origin:       u16
+        width:          u16
+        height:         u16
+        bitsperpixel:   u8
+        imagedescriptor: u8
+    }
+
+    class TGAColor {
+        brga:           u8[4]
+        bytespp:        u8
+
+        func operator[]( i: u32 ) { 
+            assert( i < 4 )
+            return self.brga[i]
+        }
+    }
+}

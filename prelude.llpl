@@ -21,6 +21,15 @@ alias string = char*
 // specifiers, width/zero-pad, and why the parameter types are what they
 // are (they're chosen to exactly match what this declaration generates).
 extern func ksnprintf(buf: char*, size: u64, fmt: char*, ...) -> i64
+// The real libc puts, always available without an `extern func`
+// declaration of your own - every program in this codebase that prints a
+// line already redeclares this identically itself, so having it here
+// once removes that boilerplate. A file that still declares its own
+// identical copy (nothing here requires updating existing code) compiles
+// fine too - C tolerates repeating an *identical* extern declaration,
+// unlike ksnprintf/the SDL bindings above, which use a real header's own
+// (differently-shaped) prototype and would conflict.
+extern func puts(s: char*) -> i64
 // Used by grammar-generated parser classes (see codegen.d's grammar
 // desugaring) to report a malformed-input syntax error - a `grammar { }`
 // block's generated parser is backtrack-free (predictive, not PEG-style),
