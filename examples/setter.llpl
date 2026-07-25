@@ -35,6 +35,7 @@ func main() -> i64 {
         puts("getter mismatch")
         return 1
     }
+
     puts("index operator overload ok")
     return 0
 }

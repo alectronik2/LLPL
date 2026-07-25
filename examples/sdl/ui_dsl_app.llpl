@@ -1,0 +1,109 @@
+// Real SDL-backed UI DSL demo. ESC or the window close button exits.
+
+import stdlib.ui.sdl
+
+using namespace std.ui
+
+let clicks: i64 = 0
+
+ui DemoWindow: Window {
+    title: "LLPL UI"
+    width: 640
+    height: 560
+    padding: 24
+    spacing: 14
+
+    Text {
+        text: "LLPL UI DSL"
+        preferred_height: 32
+    }
+
+    Panel {
+        spacing: 10
+        padding: 16
+        preferred_height: 180
+
+        Text {
+            text: "This tree was built by DemoWindow.build()"
+            preferred_height: 28
+        }
+
+        ProgressBar {
+            value: 68
+            text: "Build progress"
+        }
+
+        Button {
+            text: "Click me"
+            onClick: {
+                clicks = clicks + 1
+                puts("button clicked")
+            }
+        }
+    }
+
+    Card {
+        spacing: 10
+        padding: 14
+        preferred_height: 150
+
+        SelectableText {
+            text: "Drag across this line to select text."
+        }
+
+        Checkbox {
+            text: "Enable live preview"
+            checked: true
+            onClick: {
+                puts("checkbox toggled")
+            }
+        }
+
+        Slider {
+            value: 42
+        }
+    }
+
+    Row {
+        spacing: 12
+        preferred_height: 50
+
+        Badge {
+            text: "Dark theme"
+            width: 120
+        }
+
+        Button {
+            text: "Primary"
+            width: 120
+            onClick: {
+                puts("primary")
+            }
+        }
+
+        Button {
+            text: "Secondary"
+            width: 140
+            onHover: {
+                puts("secondary hover")
+            }
+            onHoverEnd: {
+                puts("secondary leave")
+            }
+            onClick: {
+                puts("secondary")
+            }
+        }
+    }
+}
+
+func main() -> i64 {
+    let root: Window = DemoWindow.build()
+    root.apply_dark_theme()
+    let app: App = new App("LLPL UI DSL", 640, 420, root)
+    if !app.is_valid() {
+        return 1
+    }
+    app.run()
+    return 0
+}

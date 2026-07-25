@@ -42,6 +42,16 @@ struct UsageInfo {
     int column;
 }
 
+struct LocalInfo {
+    string name;
+    string type;
+    string file;
+    int line;
+    int column;
+    string scopeName;
+    string kind; // "parameter", "local", or "self"
+}
+
 // Conservative per-function capability/effect summary. This is intentionally
 // a compiler side-channel rather than new syntax for now: audit/debug tooling
 // can consume it today, and later language-level capability checks can reuse
@@ -113,6 +123,7 @@ class CodeGenerator {
     private int tryCounter; // numbers each try block's labels/temp uniquely
     private int tempVarCounter;
     private string currentClassName;
+    private string currentScopeName;
     private Type currentReturnType; // Enclosing function/method/lambda's declared return type, for ReturnStmt's nullable-sugar auto-wrap (see generateNullableWrap)
     private Type currentReturnTypeAsWritten; // Same, but a clone captured *before* resolveType mutated it - see resolveStructLiteralTarget
     private string currentModulePath; // Module whose code is currently being generated, for error citations
@@ -146,6 +157,111 @@ class CodeGenerator {
     // resolve exactly as before.
     private string[string] variableCNames;
     private int shadowRenameCounter;
+    // RAII tracking for the function/method/constructor body currently
+    // being generated - see generateStatement's VarDecl case (registers +
+    // retains-on-alias), generateReturnStmt (releases everything except a
+    // directly-returned identifier), generateDeleteStmt (deregisters), and
+    // every function-body-generating site's own trailing "release what's
+    // still live" emission. Only tracks a `let` declared directly in the
+    // function/method/constructor/destructor body's own top-level statement
+    // list (gated by `indentLevel == rcFunctionBodyIndent`, recorded right
+    // after that body's own opening brace) - NOT one nested inside an
+    // `if`/`while`/`for`/etc: real C block scoping means a variable
+    // declared inside a nested `{ ... }` no longer exists once that block's
+    // own closing brace has run, so releasing it from code emitted at the
+    // *function's* closing brace (outside that inner block) would reference
+    // an out-of-scope C identifier - a hard compile error, not just
+    // imprecise (this was caught for real: prelude.llpl's
+    // Regex.replace_all's `let m = it.iter_next()`, declared inside a
+    // `while`, broke the build before this gating was added). A top-level
+    // local's own release code, by contrast, is always valid from any point
+    // in the function (including inside a nested block that returns) since
+    // C always lets an inner block see its enclosing scope's locals. Net
+    // effect: this fixes the reported bug (RAII for locals declared
+    // directly in a function body, the common case) without attempting
+    // real per-block scope tracking - a nested-block class-typed local
+    // still just leaks exactly as it did before this feature existed, a
+    // pre-existing gap, not a new regression.
+    private string[] rcLocalNames;
+    private Type[] rcLocalTypes;
+    private int rcFunctionBodyIndent = -1;
+
+    private bool isRcManagedType(Type t) {
+        return !isPrimitiveTypeName(t.name) && !t.isPointer && !t.isArray &&
+            !isStructTypeName(t.name) && !isUnionTypeName(t.name);
+    }
+
+    private void trackRcLocal(string emitName, Type type) {
+        rcLocalNames ~= emitName;
+        rcLocalTypes ~= type;
+    }
+
+    // Stops tracking `emitName` (used by `delete`, so a later function-exit
+    // release doesn't double-release something already explicitly deleted).
+    private void untrackRcLocal(string emitName) {
+        foreach (i, name; rcLocalNames) {
+            if (name == emitName) {
+                rcLocalNames = rcLocalNames[0 .. i] ~ rcLocalNames[i + 1 .. $];
+                rcLocalTypes = rcLocalTypes[0 .. i] ~ rcLocalTypes[i + 1 .. $];
+                break;
+            }
+        }
+    }
+
+    // Emits `rc_release` for every currently-tracked local, in reverse
+    // declaration order, skipping `exceptName` (the "move" exception for a
+    // bare-identifier `return`). Does NOT itself mutate rcLocalNames - the
+    // two call sites (mid-function early return, and true end-of-body) have
+    // different needs: a `return` may run this several times (once per
+    // early exit) while more locals are still yet to be declared further
+    // down in the same function, so untracking here would incorrectly
+    // "forget" a local that a *later* return in the same function still
+    // needs to release too.
+    // Whether `expr` reads an *existing* reference (a variable, a field, or
+    // a container element) rather than producing a fresh one - the former
+    // needs an `rc_retain` when it's copied into a new owning slot (a `let`
+    // or a plain reassignment), since something else already owns it and
+    // will release its own copy independently; a `new X(...)` call or any
+    // function/method call result is assumed fresh (the callee either just
+    // allocated it, or - like Rc<T>.clone() - already transferred a real
+    // retained reference to the caller), so retaining those too would leak
+    // a reference that's never released. This can't be proven sound in
+    // general (a method that returns `self` for chaining and gets bound to
+    // a persistent `let` would be mis-classified as fresh) - no code in
+    // this codebase does that today, so it's not a new bug in practice,
+    // just a known sharp edge if a future chaining API gets `let`-bound.
+    private bool isAliasingRcExpr(ASTNode expr) {
+        return cast(Identifier)expr !is null || cast(MemberExpr)expr !is null ||
+            cast(IndexExpr)expr !is null;
+    }
+
+    private string releaseRcLocals(string exceptName) {
+        string code = "";
+        foreach_reverse (i, name; rcLocalNames) {
+            if (name == exceptName) continue;
+            code ~= indent() ~ format("if (%s) rc_release(%s, %s);\n",
+                name, name, fieldDestructorSymbol(rcLocalTypes[i]));
+        }
+        return code;
+    }
+
+    private struct DeferredRcState {
+        DeferInfo[] deferredStatements;
+        string[] rcLocalNames;
+        Type[] rcLocalTypes;
+        int rcFunctionBodyIndent;
+    }
+
+    private DeferredRcState saveDeferredRcState() {
+        return DeferredRcState(deferredStatements.dup, rcLocalNames.dup, rcLocalTypes.dup, rcFunctionBodyIndent);
+    }
+
+    private void restoreDeferredRcState(DeferredRcState state) {
+        deferredStatements = state.deferredStatements;
+        rcLocalNames = state.rcLocalNames;
+        rcLocalTypes = state.rcLocalTypes;
+        rcFunctionBodyIndent = state.rcFunctionBodyIndent;
+    }
     private bool[string] constVariables; // Names (mangled) of `const`-declared variables
     private FunctionDecl[string] functionRegistry; // Functions, by mangled (namespace-prefixed) name
     private ClassDecl[string] classRegistry; // Classes, by mangled (namespace-prefixed) name
@@ -192,6 +308,7 @@ class CodeGenerator {
     private int macroExpansionDepth; // Guards against (possibly indirect) macro self-recursion
     private SymbolInfo[] collectedSymbols; // Declaration-site symbol table, built by generateMultiple; see symbols()
     private UsageInfo[] usageRecords; // Resolved reference sites, recorded via recordUsage; see usages()
+    private LocalInfo[] localRecords; // Function-scope variables for LSP/editor tooling; see locals()
     private EffectInfo[] effectRecords; // Conservative per-function effect summaries; see effects()
     // Every CompileError caught instead of letting it abort the whole
     // compile - see errors.MultiCompileError, thrown with this list once
@@ -295,6 +412,7 @@ class CodeGenerator {
     private bool[string] resultInstantiations;
     private int propagateCounter; // numbers each `expr?`'s scratch temp var uniquely
     private int inExprCounter; // numbers each `value in arr`'s scratch temp vars uniquely
+    private int rcAssignTmpCounter; // numbers each RAII reassignment's scratch temp var uniquely
 
     // Traits/interfaces (see processImplBlock): static, monomorphization-time
     // only - a trait bound never participates in any runtime dispatch, so
@@ -985,10 +1103,17 @@ class CodeGenerator {
     // after it's been called. See SymbolInfo/UsageInfo above and lspquery.d.
     SymbolInfo[] symbols() { return collectedSymbols; }
     UsageInfo[] usages() { return usageRecords; }
+    LocalInfo[] locals() { return localRecords; }
     EffectInfo[] effects() { return effectRecords; }
 
     private void recordUsage(string name, int line, int column) {
         usageRecords ~= UsageInfo(name, currentModulePath, line, column);
+    }
+
+    private void recordLocal(string name, Type type, int line, int column, string kind) {
+        if (currentScopeName.length == 0) return;
+        localRecords ~= LocalInfo(name, type !is null ? type.toString() : "?",
+            currentModulePath, line, column, currentScopeName, kind);
     }
 
     private string functionSignature(FunctionDecl fn, string displayName) {
@@ -2051,6 +2176,11 @@ class CodeGenerator {
         }
 
         // Include runtime header
+        code ~= "/*\n";
+        code ~= " * AUTO-GENERATED FILE - DO NOT EDIT.\n";
+        code ~= " * This C source was generated by the LLPL compiler.\n";
+        code ~= " * Edit the original .llpl source instead.\n";
+        code ~= " */\n\n";
         code ~= "#include <stdint.h>\n";
         code ~= "#include <stddef.h>\n";
         code ~= "#include <stdbool.h>\n"; // for `bool` - see primitiveToC's own comment
@@ -3173,6 +3303,9 @@ class CodeGenerator {
         currentClassName = sName;
         currentNamespaceSegments = structDecl.namespaceSegments;
         variableTypes["self"] = new Type(sName);
+        string prevScopeName = currentScopeName;
+        currentScopeName = sName ~ ".constructor";
+        recordLocal("self", variableTypes["self"], constructor.line, constructor.column, "self");
         // See variableCNames' own comment: a `let`-shadow's renamed-C-name
         // mapping only ever applies within the one function/method/
         // constructor body it was recorded in, never across into the next
@@ -3187,6 +3320,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            recordLocal(param.name, param.type, constructor.line, constructor.column, "parameter");
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -3195,6 +3329,8 @@ class CodeGenerator {
         code ~= indent() ~ format("%s self = {0};\n\n", sName);
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
         if (constructor.body_) {
@@ -3206,11 +3342,13 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
         code ~= indent() ~ "return self;\n";
         indentLevel--;
         code ~= "}\n\n";
 
         currentClassName = prevClassName;
+        currentScopeName = prevScopeName;
 
         // See generateConstructor's matching comment on why these are
         // un-bound again immediately after: leaving them live would
@@ -3240,11 +3378,14 @@ class CodeGenerator {
         string prevClassName = currentClassName;
         currentClassName = sName;
         currentNamespaceSegments = structDecl.namespaceSegments;
+        string prevScopeName = currentScopeName;
+        currentScopeName = sName ~ "." ~ method.name;
         Type prevReturnType = currentReturnType;
         currentReturnType = method.returnType;
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
         currentReturnTypeAsWritten = cloneType(method.returnType);
         variableTypes["self"] = new Type(sName);
+        recordLocal("self", variableTypes["self"], method.line, method.column, "self");
         variableCNames = null;
         shadowRenameCounter = 0;
 
@@ -3252,6 +3393,7 @@ class CodeGenerator {
             resolveType(param.type);
             params ~= format(", %s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            recordLocal(param.name, param.type, method.line, method.column, "parameter");
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -3261,6 +3403,8 @@ class CodeGenerator {
         indentLevel++;
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
         if (method.body_) {
@@ -3272,12 +3416,14 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
         indentLevel--;
         code ~= "}\n\n";
 
         currentClassName = prevClassName;
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
+        currentScopeName = prevScopeName;
 
         foreach (param; method.params) {
             variableTypes.remove(param.name);
@@ -3338,6 +3484,9 @@ class CodeGenerator {
         currentClassName = uName;
         currentNamespaceSegments = unionDecl.namespaceSegments;
         variableTypes["self"] = new Type(uName);
+        string prevScopeName = currentScopeName;
+        currentScopeName = uName ~ ".constructor";
+        recordLocal("self", variableTypes["self"], constructor.line, constructor.column, "self");
         // See generateStructConstructor's matching comment.
         variableCNames = null;
         shadowRenameCounter = 0;
@@ -3347,6 +3496,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            recordLocal(param.name, param.type, constructor.line, constructor.column, "parameter");
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -3355,6 +3505,8 @@ class CodeGenerator {
         code ~= indent() ~ format("%s self = {0};\n\n", uName);
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
         if (constructor.body_) {
@@ -3366,11 +3518,13 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
         code ~= indent() ~ "return self;\n";
         indentLevel--;
         code ~= "}\n\n";
 
         currentClassName = prevClassName;
+        currentScopeName = prevScopeName;
 
         foreach (param; constructor.params) {
             variableTypes.remove(param.name);
@@ -3803,6 +3957,9 @@ class CodeGenerator {
         currentClassName = cName;
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
+        string prevScopeName = currentScopeName;
+        currentScopeName = cName ~ ".constructor";
+        recordLocal("self", variableTypes["self"], constructor.line, constructor.column, "self");
         // See generateStructConstructor's matching comment.
         variableCNames = null;
         shadowRenameCounter = 0;
@@ -3812,6 +3969,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            recordLocal(param.name, param.type, constructor.line, constructor.column, "parameter");
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -3823,6 +3981,8 @@ class CodeGenerator {
         code ~= indent() ~ "rc_init(&self->ref_count);\n\n";
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         // Generate constructor body
         string bodyCode = "";
@@ -3835,12 +3995,14 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
         code ~= indent() ~ "return self;\n";
         indentLevel--;
         code ~= "}\n\n";
 
         // Restore previous context
         currentClassName = prevClassName;
+        currentScopeName = prevScopeName;
 
         // Un-bind the constructor's own params (and self) from
         // variableTypes now that its body is done - otherwise their bare,
@@ -3942,6 +4104,8 @@ class CodeGenerator {
         indentLevel++;
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         ASTNode[] statements = constructor.body_ ? constructor.body_.statements : [];
         size_t bodyStart = 0;
@@ -3988,6 +4152,7 @@ class CodeGenerator {
         code ~= chainCode;
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
         indentLevel--;
         code ~= "}\n\n";
 
@@ -4027,6 +4192,8 @@ class CodeGenerator {
         code ~= indent() ~ format("%s* self = (%s*)ptr;\n", cName, cName);
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         // Generate destructor body
         string bodyCode = "";
@@ -4039,6 +4206,7 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
 
         // Release reference-counted fields. Struct-typed fields (including
         // __LLPL_Closure - see runtime.h/generateLambdaExpr) are plain
@@ -4122,6 +4290,8 @@ class CodeGenerator {
         code ~= indent() ~ format("%s* self = (%s*)ptr;\n", cName, cName);
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
         if (classDecl.destructor !is null && classDecl.destructor.body_ !is null) {
@@ -4133,6 +4303,7 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
 
         // See generateDestructor's matching comment.
         foreach (field; classDecl.fields) {
@@ -4172,10 +4343,13 @@ class CodeGenerator {
         string prevClassName = currentClassName;
         currentClassName = cName;
         currentNamespaceSegments = classDecl.namespaceSegments;
+        string prevScopeName = currentScopeName;
+        currentScopeName = cName ~ "." ~ method.name;
 
         // Register 'self' only for non-static methods
         if (!method.isStatic) {
             variableTypes["self"] = new Type(cName);
+            recordLocal("self", variableTypes["self"], method.line, method.column, "self");
         }
         // See generateStructConstructor's matching comment.
         variableCNames = null;
@@ -4191,6 +4365,7 @@ class CodeGenerator {
             if (!method.isStatic || i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            recordLocal(param.name, param.type, method.line, method.column, "parameter");
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -4199,6 +4374,8 @@ class CodeGenerator {
         indentLevel++;
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
         if (method.body_) {
@@ -4210,6 +4387,7 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
 
         indentLevel--;
         code ~= "}\n\n";
@@ -4218,6 +4396,7 @@ class CodeGenerator {
         currentClassName = prevClassName;
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
+        currentScopeName = prevScopeName;
 
         // See generateConstructor's matching comment: params (and self)
         // are only valid names inside this method's own body.
@@ -4258,6 +4437,8 @@ class CodeGenerator {
         string code = "";
         string params = "";
         currentNamespaceSegments = funcDecl.namespaceSegments;
+        string prevScopeName = currentScopeName;
+        currentScopeName = mangleFreeFunctionName(funcDecl);
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
         currentReturnTypeAsWritten = cloneType(funcDecl.returnType);
         resolveType(funcDecl.returnType);
@@ -4272,6 +4453,7 @@ class CodeGenerator {
             if (i > 0) params ~= ", ";
             params ~= format("%s %s", typeToC(param.type), param.name);
             variableTypes[param.name] = param.type;
+            recordLocal(param.name, param.type, funcDecl.line, funcDecl.column, "parameter");
             if (param.isConst) constVariables[param.name] = true;
         }
         if (funcDecl.isVariadic) params ~= ", ...";
@@ -4295,6 +4477,8 @@ class CodeGenerator {
         indentLevel++;
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
         if (funcDecl.body_) {
@@ -4311,6 +4495,7 @@ class CodeGenerator {
         // never writes one needs this too, the same as generateMethod
         // already does).
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
 
         indentLevel--;
         code ~= "}\n";
@@ -4318,6 +4503,7 @@ class CodeGenerator {
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
         currentClassName = prevClassNameForSelf;
+        currentScopeName = prevScopeName;
 
         // See generateConstructor's matching comment: params are only
         // valid names inside this function's own body.
@@ -4389,6 +4575,8 @@ class CodeGenerator {
         indentLevel++;
 
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
         if (funcDecl.body_) {
@@ -4400,6 +4588,7 @@ class CodeGenerator {
         code ~= deferFrameDeclarations();
         code ~= bodyCode;
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
 
         indentLevel--;
         code ~= "}\n";
@@ -4676,7 +4865,12 @@ class CodeGenerator {
         return code;
     }
 
-    private string cleanupCodeForFunctionExit() {
+    // `exceptName` is the "move" exception - a bare-identifier `return`
+    // hands its tracked local's own reference straight to the caller
+    // rather than releasing it here (see rcLocalNames' own comment); every
+    // other early-exit site (an Optional/Result `?` propagation building
+    // its own fresh return value) has nothing to except and passes null.
+    private string cleanupCodeForFunctionExit(string exceptName = null) {
         string code = allActiveFinallyCode();
         if (tryFrameStack.length > 0) {
             foreach_reverse (frame; tryFrameStack) {
@@ -4686,6 +4880,7 @@ class CodeGenerator {
             }
         }
         code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(exceptName);
         return code;
     }
 
@@ -4924,8 +5119,15 @@ class CodeGenerator {
                 "primitives aren't reference-counted", t.toString()),
                 currentModulePath, stmt.line, stmt.column);
         }
-        return indent() ~ format("rc_release(%s, %s_destroy);\n",
-            generateExpression(stmt.value), t.name);
+        string targetCode = generateExpression(stmt.value);
+        // A tracked local that's been explicitly `delete`d is no longer
+        // this scope's responsibility - stop tracking it so the function's
+        // own exit-time release (see rcLocalNames) doesn't release it
+        // a second time.
+        if (cast(Identifier)stmt.value !is null) {
+            untrackRcLocal(targetCode);
+        }
+        return indent() ~ format("rc_release(%s, %s);\n", targetCode, fieldDestructorSymbol(t));
     }
 
     // `value in arr` - true if any element of a fixed-size array equals
@@ -5183,6 +5385,7 @@ class CodeGenerator {
 
             // Track the variable type
             variableTypes[varDecl.name] = varDecl.type;
+            recordLocal(varDecl.name, varDecl.type, varDecl.line, varDecl.column, "local");
             if (varDecl.isConst) {
                 constVariables[varDecl.name] = true;
             }
@@ -5227,6 +5430,20 @@ class CodeGenerator {
                 code ~= " = " ~ format("%s_new()", varDecl.type.name);
             }
             code ~= ";\n";
+
+            // RAII: a class-typed local is now this function's
+            // responsibility to release at scope exit (see rcLocalNames'
+            // own comment) - and if its initializer merely aliases an
+            // existing reference rather than producing a fresh one, it
+            // needs its own retain first so the alias and the original can
+            // each be safely released independently.
+            if (varDecl.initializer && isRcManagedType(varDecl.type) &&
+                    indentLevel == rcFunctionBodyIndent) {
+                if (isAliasingRcExpr(varDecl.initializer)) {
+                    code ~= indent() ~ format("if (%s) rc_retain((char*)%s);\n", emitName, emitName);
+                }
+                trackRcLocal(emitName, varDecl.type);
+            }
         } else if (auto destructStmt = cast(DestructuringStmt)node) {
             code ~= generateDestructuringStmt(destructStmt);
         } else if (auto ifStmt = cast(IfStmt)node) {
@@ -5311,7 +5528,16 @@ class CodeGenerator {
                 string retName = format("__llpl_ret%d", tempVarCounter);
                 code ~= indent() ~ format("%s %s = %s;\n", typeToC(currentReturnType), retName, valueCode);
                 if (!isDeferred) {
-                    code ~= cleanupCodeForFunctionExit();
+                    // A bare `return someTrackedLocal` moves that local's
+                    // own reference out to the caller (already copied into
+                    // retName above) rather than releasing it here - see
+                    // cleanupCodeForFunctionExit's own comment.
+                    string exceptName = null;
+                    if (auto retIdent = cast(Identifier)returnStmt.value) {
+                        string emitName = generateExpression(retIdent);
+                        if (rcLocalNames.canFind(emitName)) exceptName = emitName;
+                    }
+                    code ~= cleanupCodeForFunctionExit(exceptName);
                 }
                 code ~= indent() ~ format("return %s;\n", retName);
             } else {
@@ -5496,7 +5722,7 @@ class CodeGenerator {
                 newExpr.line, newExpr.column, newExpr.argNames.dup);
         } else if (auto castExpr = cast(CastExpr)node) {
             return new CastExpr(cloneType(castExpr.type, typeSubs), cloneNode(castExpr.expression, subs, typeSubs),
-                castExpr.line, castExpr.column);
+                castExpr.line, castExpr.column, castExpr.useImplicitConversion);
         } else if (auto sizeofExpr = cast(SizeofExpr)node) {
             return new SizeofExpr(cloneType(sizeofExpr.type, typeSubs), sizeofExpr.line, sizeofExpr.column);
         } else if (auto structLit = cast(StructLiteral)node) {
@@ -5727,7 +5953,7 @@ class CodeGenerator {
                 newExpr.line, newExpr.column, newExpr.argNames.dup);
         } else if (auto castExpr = cast(CastExpr)node) {
             return new CastExpr(cloneType(castExpr.type), expandQuotedNode(castExpr.expression, subs),
-                castExpr.line, castExpr.column);
+                castExpr.line, castExpr.column, castExpr.useImplicitConversion);
         } else if (auto varDecl = cast(VarDecl)node) {
             return new VarDecl(varDecl.name, cloneType(varDecl.type),
                 expandQuotedNode(varDecl.initializer, subs), varDecl.isConst,
@@ -7015,7 +7241,9 @@ class CodeGenerator {
             // known to be reentrant today, but the guard costs nothing and
             // keeps both eager-instantiation sites consistent).
             Type[string] savedVarTypes = variableTypes.dup;
+            auto savedDeferredRc = saveDeferredRcState();
             deferredFunctionBodies ~= generateFunction(asFunction);
+            restoreDeferredRcState(savedDeferredRc);
             variableTypes = savedVarTypes;
         }
     }
@@ -7223,12 +7451,14 @@ class CodeGenerator {
                 // cleanup would otherwise delete a same-named live binding
                 // the caller still needs.
                 Type[string] savedVarTypes = variableTypes.dup;
+                auto savedDeferredRc = saveDeferredRcState();
                 string savedModulePath = currentModulePath;
                 currentModulePath = templateModulePath;
                 string classBody = generateClass(clone);
                 genericInstanceDecls ~= classBody;
                 genericClassInstances ~= classBody;
                 currentModulePath = savedModulePath;
+                restoreDeferredRcState(savedDeferredRc);
                 variableTypes = savedVarTypes;
                 currentGenericTemplateNamespace = savedGenericNamespace;
             } else {
@@ -7245,12 +7475,14 @@ class CodeGenerator {
                     if (field.type is null) field.type = inferType(field.initializer);
                     resolveType(field.type);
                 }
+                auto savedDeferredRc = saveDeferredRcState();
                 string savedModulePath = currentModulePath;
                 currentModulePath = templateModulePath;
                 string structBody = generateStruct(clone);
                 genericInstanceDecls ~= structBody;
                 genericStructInstances ~= structBody;
                 currentModulePath = savedModulePath;
+                restoreDeferredRcState(savedDeferredRc);
                 currentGenericTemplateNamespace = savedGenericNamespace;
             }
         }
@@ -7400,10 +7632,12 @@ class CodeGenerator {
             // isolates this instantiation's variable scope from whatever
             // the caller had before, regardless of name collisions.
             Type[string] savedVarTypes = variableTypes.dup;
+            auto savedDeferredRc = saveDeferredRcState();
             string savedModulePath = currentModulePath;
             currentModulePath = templateModulePath;
             deferredFunctionBodies ~= generateFunction(clone);
             currentModulePath = savedModulePath;
+            restoreDeferredRcState(savedDeferredRc);
             variableTypes = savedVarTypes;
         }
 
@@ -7732,7 +7966,7 @@ class CodeGenerator {
         }
         if (argType.pointerDepth != 0 || argType.isArray) return arg;
         if ((argType.name in classRegistry) is null && (argType.name in structRegistry) is null) return arg;
-        return new CastExpr(cloneType(targetType), arg, arg.line, arg.column);
+        return new CastExpr(cloneType(targetType), arg, arg.line, arg.column, true);
     }
 
     // "(Type1, Type2)" - the parameter-types half of a human-readable
@@ -8215,27 +8449,39 @@ class CodeGenerator {
     // tryImplicitConversionCall - both go through this for kind ==
     // "string"), and string interpolation's implicit conversion
     // (generateInterpolatedString): a class defining a no-argument
-    // `as_string()` method has it called (bridged through String's own
-    // c_str() if it returns this codebase's String class rather than a
-    // bare char*/string directly - see bridgeStringReturnToCharPtr);
-    // everything else (a struct, which can't have methods at all, or a
-    // class that doesn't define one) falls back to a compile-time string
-    // literal of the type's own name - there's always *something*
-    // meaningful to produce either way.
+    // `as_string()` or `to_string()` method has it called (bridged through
+    // String's own c_str() if it returns this codebase's String class rather
+    // than a bare char*/string directly - see bridgeStringReturnToCharPtr);
+    // everything else (a struct, which can't have methods at all, or a class
+    // that doesn't define one) falls back to a compile-time string literal of
+    // the type's own name - there's always *something* meaningful to produce
+    // either way.
     private string generateAsStringValue(Type objType, ASTNode objectExpr, int line, int column) {
         if (auto classDecl = objType.name in classRegistry) {
+            string call = generateStringConversionMethodCall(*classDecl, objType.name, objectExpr, line, column);
+            if (call.length > 0) return call;
+        }
+        return format("\"%s\"", escapeCString(objType.toString()));
+    }
+
+    // One resolver for the supported stringification spellings. `as_string`
+    // remains first for compatibility; `to_string` is the newer alias used by
+    // code that expects the common method name.
+    private string generateStringConversionMethodCall(ClassDecl classDecl, string receiverTypeName,
+            ASTNode objectExpr, int line, int column) {
+        foreach (methodName; ["as_string", "to_string"]) {
             ClassDecl owner;
-            auto candidates = resolveMethodOnHierarchy(*classDecl, "as_string", owner);
+            auto candidates = resolveMethodOnHierarchy(classDecl, methodName, owner);
             foreach (m; candidates) {
                 if (m.params.length == 0) {
-                    recordUsage(objType.name ~ ".as_string", line, column);
+                    recordUsage(receiverTypeName ~ "." ~ methodName, line, column);
                     string call = format("%s(%s)",
                         mangleMethodName(owner, mangledClass(owner), m), generateExpression(objectExpr));
                     return bridgeStringReturnToCharPtr(m.returnType, call);
                 }
             }
         }
-        return format("\"%s\"", escapeCString(objType.toString()));
+        return "";
     }
 
     // `as_string()` conventionally returns this codebase's own String
@@ -8964,6 +9210,8 @@ class CodeGenerator {
         // function's variableTypes once it's done generating.
         DeferInfo[] savedDeferred = deferredStatements;
         deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
         LambdaCaptureCtx[string] savedCaptures = currentLambdaCaptures.dup;
         Type prevReturnType = currentReturnType;
         currentReturnType = lambdaExpr.returnType;
@@ -8995,6 +9243,7 @@ class CodeGenerator {
         trampolineCode ~= deferFrameDeclarations();
         trampolineCode ~= bodyCode;
         trampolineCode ~= deferredCleanupCode();
+        trampolineCode ~= releaseRcLocals(null);
         indentLevel = savedIndent;
 
         foreach (cap; lambdaExpr.captures) {
@@ -9077,6 +9326,39 @@ class CodeGenerator {
         if (auto binExpr = cast(BinaryExpr)node) {
             if (binExpr.op == "=") {
                 checkNotConstAssignment(binExpr.left);
+                // RAII: reassigning a tracked rc-managed local (see
+                // rcLocalNames) must release whatever it currently holds
+                // before taking on the new value, or the old target leaks
+                // (a plain `x = y` used to just overwrite the pointer with
+                // no release at all) - and retain the new value first if
+                // it's only an alias of an existing reference (see
+                // isAliasingRcExpr), or that reference ends up
+                // double-released once this and its original owner each
+                // release their own copy independently. Only applies to a
+                // bare-identifier LHS that's actually tracked - an
+                // untracked class variable (e.g. a `let` with no
+                // initializer, left uninitialized) can't be safely
+                // `if (ptr) rc_release`d, since C leaves it as garbage
+                // stack memory, not NULL.
+                if (auto leftIdent = cast(Identifier)binExpr.left) {
+                    string leftEmitName = generateExpression(leftIdent);
+                    Type identType = null;
+                    try {
+                        identType = inferType(leftIdent);
+                    } catch (Exception e) {
+                        identType = null;
+                    }
+                    if (identType !is null && isRcManagedType(identType) &&
+                            rcLocalNames.canFind(leftEmitName)) {
+                        string tmp = format("__llpl_assign_tmp%d", rcAssignTmpCounter++);
+                        string retain = isAliasingRcExpr(binExpr.right)
+                            ? format("rc_retain((char*)%s); ", tmp) : "";
+                        return format("({ %s %s = %s; %sif (%s) rc_release(%s, %s); %s = %s; %s; })",
+                            typeToC(identType), tmp, generateExpression(binExpr.right),
+                            retain, leftEmitName, leftEmitName, fieldDestructorSymbol(identType),
+                            leftEmitName, tmp, leftEmitName);
+                    }
+                }
                 if (auto indexExpr = cast(IndexExpr)binExpr.left) {
                     string setterCall = tryIndexSetOperatorOverloadCall(indexExpr, binExpr.right);
                     if (setterCall.length > 0) {
@@ -9820,24 +10102,21 @@ class CodeGenerator {
             }
             return format("%s(%s)", ctorSymbol, args);
         } else if (auto castExpr = cast(CastExpr)node) {
-            resolveType(castExpr.type);
             // Casting a class/struct value `as string`/`as int`/`as
             // float`/`as bool` resolves the same way `.as_string`/`let s:
             // string = value` do (a custom as_string()/as_int()/etc.
             // method, or - for "string" specifically - the type's own
             // name) instead of reinterpreting the object as a raw
-            // pointer/int - see tryImplicitConversionCall. An already-
-            // explicit pointer to a class/struct (Foo*, Foo**, ...) is
-            // unambiguously a raw-reinterpret request instead (matching
-            // how a generic T* field must keep working when T is a class -
-            // see Weak<T>/Vector<T> in prelude.llpl), not "convert this
-            // value" the way a plain Foo value's cast is - every other
-            // cast (including one already of the target type) is
-            // unaffected either way.
-            string converted = tryImplicitConversionCall(castExpr.expression, castExpr.type);
-            if (converted.length > 0) {
-                return converted;
+            // pointer/int - see tryImplicitConversionCall. Parser-written
+            // `as char*` leaves useImplicitConversion false, so it remains
+            // a raw pointer cast even though `string` resolves to char*.
+            if (castExpr.useImplicitConversion) {
+                string converted = tryImplicitConversionCall(castExpr.expression, castExpr.type);
+                if (converted.length > 0) {
+                    return converted;
+                }
             }
+            resolveType(castExpr.type);
             return format("((%s)%s)", typeToC(castExpr.type), generateExpression(castExpr.expression));
         } else if (auto macroInvocation = cast(MacroInvocation)node) {
             return generateMacroExpression(macroInvocation);

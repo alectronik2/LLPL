@@ -16,7 +16,8 @@ import errors;
 //
 //   { "diagnostics": [ {message, file, line, column} ],
 //     "symbols":     [ {name, kind, file, line, column, signature} ],
-//     "usages":      [ {name, file, line, column} ] }
+//     "usages":      [ {name, file, line, column} ],
+//     "locals":      [ {name, type, file, line, column, scopeName, kind} ] }
 //
 // `symbols` is declaration sites (one per top-level function/class/struct/
 // macro/global, plus one per class method/field with a dotted name like
@@ -39,10 +40,21 @@ void runLspSymbols(string entryFile) {
     JSONValue[] diagnostics;
     JSONValue[] symbolsJson;
     JSONValue[] usagesJson;
+    JSONValue[] localsJson;
+    ProjectConfig project;
 
     auto gen = new CodeGenerator();
     try {
-        auto programs = resolveWithPrelude(entryFile);
+        CompileError[] parseDiagnostics;
+        auto programs = resolveWithPreludeRecovering(entryFile, parseDiagnostics, project);
+        foreach (err; parseDiagnostics) {
+            JSONValue j;
+            j["message"] = err.msg;
+            j["file"] = err.filePath;
+            j["line"] = err.line;
+            j["column"] = err.column;
+            diagnostics ~= j;
+        }
         gen.generateMultiple(programs);
     } catch (MultiCompileError e) {
         foreach (err; e.errors) {
@@ -89,10 +101,30 @@ void runLspSymbols(string entryFile) {
         usagesJson ~= j;
     }
 
+    foreach (local; gen.locals()) {
+        JSONValue j;
+        j["name"] = local.name;
+        j["type"] = local.type;
+        j["file"] = local.file;
+        j["line"] = local.line;
+        j["column"] = local.column;
+        j["scopeName"] = local.scopeName;
+        j["kind"] = local.kind;
+        localsJson ~= j;
+    }
+
     JSONValue result;
     result["diagnostics"] = diagnostics;
     result["symbols"] = symbolsJson;
     result["usages"] = usagesJson;
+    result["locals"] = localsJson;
+    if (project !is null) {
+        JSONValue projectJson;
+        projectJson["path"] = project.path;
+        projectJson["rootDir"] = project.rootDir;
+        projectJson["target"] = project.target;
+        result["project"] = projectJson;
+    }
 
     writeln(result.toString());
 }

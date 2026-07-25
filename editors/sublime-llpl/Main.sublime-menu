@@ -1,0 +1,25 @@
+[
+  {
+    "id": "view",
+    "children": [
+      {
+        "id": "syntax",
+        "children": [
+          {
+            "id": "LLPL",
+            "caption": "LLPL",
+            "children": [
+              {
+                "caption": "LLPL",
+                "command": "set_file_type",
+                "args": {
+                  "syntax": "Packages/LLPL/LLPL.sublime-syntax"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,21 @@
+extern func puts(s: char*) -> i64
+
+class Named {
+    constructor() {}
+    destructor() {}
+
+    func to_string() -> string {
+        return "Named via to_string"
+    }
+}
+
+func main() -> i64 {
+    let n = new Named()
+
+    puts(n.as_string)
+    puts(n as string)
+    puts("interpolated: \(n)")
+
+    delete n
+    return 0
+}

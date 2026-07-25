@@ -34,11 +34,12 @@ void main(string[] args) {
     string lspSymbolsFile;
     bool safeMode = false;
     bool enableDCE = true;
-    string targetProfile = "hosted";
+    string targetProfile;
     string provenanceFile;
     string effectsFile;
     string debugBundleDir;
     string auditDir;
+    string diagnosticsJsonFile;
 
     auto helpInfo = getopt(
         args,
@@ -58,6 +59,8 @@ void main(string[] args) {
         "dce", "Enable dead-code elimination (default: true)", &enableDCE,
         "lsp-symbols", "Analyze <file> and dump diagnostics/symbols/usages as JSON (for editor tooling)",
             &lspSymbolsFile,
+        "diagnostics-json", "Write machine-readable diagnostics JSON to <file> on compiler errors",
+            &diagnosticsJsonFile,
         "emit-provenance", "Write generated-C to LLPL source provenance JSON to <file>",
             &provenanceFile,
         "emit-effects", "Write conservative per-function capability/effect JSON to <file>",
@@ -85,8 +88,19 @@ void main(string[] args) {
     inputFile = args[1];
 
     if (!exists(inputFile)) {
+        if (diagnosticsJsonFile.length > 0) {
+            auto err = new CompileError(format("Input file '%s' not found", inputFile), inputFile, 1, 1);
+            std.file.write(diagnosticsJsonFile, buildDiagnosticsJson([err]));
+        }
         stderr.writefln("Error: Input file '%s' not found", inputFile);
         return;
+    }
+
+    auto projectConfig = findProjectConfig(inputFile);
+    if (targetProfile.length == 0) {
+        targetProfile = projectConfig !is null && projectConfig.target.length > 0
+            ? projectConfig.target
+            : "hosted";
     }
 
     if (outputFile.length == 0) {
@@ -113,6 +127,10 @@ void main(string[] args) {
         // Code generation for all modules
         auto codegen = new CodeGenerator(safeMode, enableDCE, targetProfile);
         string cCode = codegen.generateMultiple(programs);
+        if (projectConfig !is null) {
+            codegen.linkLibraries ~= projectConfig.linkLibraries;
+            codegen.compilerFlags ~= projectConfig.compilerFlags;
+        }
 
         if (verbose) {
             writefln("Code generation complete");
@@ -157,15 +175,25 @@ void main(string[] args) {
         }
 
     } catch (MultiCompileError e) {
+        if (diagnosticsJsonFile.length > 0) {
+            std.file.write(diagnosticsJsonFile, buildDiagnosticsJson(e.errors));
+        }
         foreach (i, err; e.errors) {
             if (i > 0) stderr.writeln();
             stderr.write(formatCompileError(err));
         }
         exit(1);
     } catch (CompileError e) {
+        if (diagnosticsJsonFile.length > 0) {
+            std.file.write(diagnosticsJsonFile, buildDiagnosticsJson([e]));
+        }
         stderr.write(formatCompileError(e));
         exit(1);
     } catch (Exception e) {
+        if (diagnosticsJsonFile.length > 0) {
+            auto err = new CompileError(e.msg, inputFile, 1, 1);
+            std.file.write(diagnosticsJsonFile, buildDiagnosticsJson([err]));
+        }
         stderr.writefln("error: %s", e.msg);
         exit(1);
     }
@@ -248,7 +276,29 @@ private string buildSymbolsJson(CodeGenerator gen) {
         json ~= format("    { \"name\": \"%s\", \"file\": \"%s\", \"line\": %d, \"column\": %d }",
             jsonEscape(u.name), jsonEscape(u.file), u.line, u.column);
     }
+    json ~= "\n  ],\n  \"locals\": [\n";
+    first = true;
+    foreach (local; gen.locals()) {
+        if (!first) json ~= ",\n";
+        first = false;
+        json ~= format("    { \"name\": \"%s\", \"type\": \"%s\", \"file\": \"%s\", " ~
+            "\"line\": %d, \"column\": %d, \"scopeName\": \"%s\", \"kind\": \"%s\" }",
+            jsonEscape(local.name), jsonEscape(local.type), jsonEscape(local.file),
+            local.line, local.column, jsonEscape(local.scopeName), jsonEscape(local.kind));
+    }
     json ~= "\n  ]\n}\n";
+    return json;
+}
+
+private string buildDiagnosticsJson(CompileError[] errors) {
+    string json = "[\n";
+    foreach (i, err; errors) {
+        if (i > 0) json ~= ",\n";
+        json ~= format("  { \"severity\": \"error\", \"message\": \"%s\", \"file\": \"%s\", " ~
+            "\"line\": %d, \"column\": %d }",
+            jsonEscape(err.msg), jsonEscape(err.filePath), err.line, err.column);
+    }
+    json ~= "\n]\n";
     return json;
 }
 

@@ -1,0 +1,8 @@
+<snippet>
+  <content><![CDATA[impl ${1:Type} {
+    $0
+}]]></content>
+  <tabTrigger>impl</tabTrigger>
+  <scope>source.llpl</scope>
+  <description>LLPL impl block</description>
+</snippet>

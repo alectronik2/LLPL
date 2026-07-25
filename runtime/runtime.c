@@ -272,6 +272,12 @@ bool rc_is_alive(char* ptr) {
     return rc->count > 0;
 }
 
+int64_t rc_use_count(char* ptr) {
+    if (!ptr) return 0;
+    RefCount* rc = (RefCount*)ptr;
+    return (int64_t)rc->count;
+}
+
 void* memset(void* dest, int val, size_t count) {
     uint8_t* d = (uint8_t*)dest;
     for (size_t i = 0; i < count; i++) {

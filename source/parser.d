@@ -14,6 +14,8 @@ class Parser {
     private size_t pos;
     private Token current;
     private string filePath;
+    private CompileError[] collectedParseErrors;
+    private bool recoveryMode = false;
 
     // Suppresses struct-literal parsing (`Name { ... }`) while parsing an
     // if/while/for/match/foreach construct's own condition/subject/iterable
@@ -232,6 +234,77 @@ class Parser {
         return new Program(declarations);
     }
 
+    Program parseRecovering() {
+        recoveryMode = true;
+        return new Program(declarationList(TokenType.EOF));
+    }
+
+    CompileError[] diagnostics() {
+        return collectedParseErrors;
+    }
+
+    private ASTNode[] declarationList(TokenType terminator) {
+        ASTNode[] declarations;
+        while (!check(terminator) && !check(TokenType.EOF)) {
+            auto before = pos;
+            try {
+                declarations ~= declaration();
+            } catch (CompileError e) {
+                collectedParseErrors ~= e;
+                synchronizeDeclaration();
+                if (pos == before && !check(TokenType.EOF)) advance();
+            }
+        }
+        return declarations;
+    }
+
+    private bool isDeclarationStart(TokenType type) {
+        switch (type) {
+            case TokenType.Hash:
+            case TokenType.At:
+            case TokenType.Import:
+            case TokenType.Using:
+            case TokenType.Namespace:
+            case TokenType.Enum:
+            case TokenType.Macro:
+            case TokenType.Alias:
+            case TokenType.Interrupt:
+            case TokenType.Function:
+            case TokenType.Class:
+            case TokenType.Struct:
+            case TokenType.Packed:
+            case TokenType.Union:
+            case TokenType.Ui:
+            case TokenType.Grammar:
+            case TokenType.Extern:
+            case TokenType.Trait:
+            case TokenType.Impl:
+            case TokenType.Let:
+            case TokenType.Const:
+            case TokenType.Volatile:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void synchronizeDeclaration() {
+        int braceDepth = 0;
+        while (!check(TokenType.EOF)) {
+            if (braceDepth == 0) {
+                if (check(TokenType.RightBrace)) return;
+                if (isDeclarationStart(current.type)) return;
+            }
+            if (check(TokenType.LeftBrace)) {
+                braceDepth++;
+            } else if (check(TokenType.RightBrace)) {
+                if (braceDepth == 0) return;
+                braceDepth--;
+            }
+            advance();
+        }
+    }
+
     private ASTNode declaration() {
         if (check(TokenType.Hash)) {
             return hashDirective();
@@ -361,8 +434,8 @@ class Parser {
         }
         expect(TokenType.LeftBrace);
 
-        ASTNode[] declarations;
-        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+        ASTNode[] declarations = recoveryMode ? declarationList(TokenType.RightBrace) : null;
+        while (!recoveryMode && !check(TokenType.RightBrace) && !check(TokenType.EOF)) {
             declarations ~= declaration();
         }
 
@@ -2502,7 +2575,16 @@ class Parser {
 
         if (match(TokenType.As)) {
             Type type = parseType();
-            expr = new CastExpr(type, expr, startLine, startColumn);
+            bool useImplicitConversion =
+                (type.name == "string" && type.pointerDepth == 0 && !type.isArray) ||
+                (type.pointerDepth == 0 && !type.isArray &&
+                    (type.name == "i64" || type.name == "u64" ||
+                     type.name == "i8" || type.name == "int8" || type.name == "uint8" ||
+                     type.name == "i16" || type.name == "u16" || type.name == "int16" || type.name == "uint16" ||
+                     type.name == "i32" || type.name == "u32" || type.name == "int32" || type.name == "uint32" ||
+                     type.name == "int64" || type.name == "uint64" ||
+                     type.name == "f32" || type.name == "bool"));
+            expr = new CastExpr(type, expr, startLine, startColumn, useImplicitConversion);
         }
 
         return expr;

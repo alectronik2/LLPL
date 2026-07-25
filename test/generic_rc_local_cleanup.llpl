@@ -1,0 +1,21 @@
+extern func puts(s: char*) -> i64
+
+class Item {
+    constructor() {
+        puts("Item ctor")
+    }
+
+    destructor() {
+        puts("Item dtor")
+    }
+}
+
+func main() -> i64 {
+    let item = new Item()
+    let owner = new Rc<Item>(item)
+    let clone = owner.clone()
+
+    delete item
+
+    return 0
+}

@@ -1,0 +1,78 @@
+import stdlib.text.string_utils
+import stdlib.io.file
+
+using namespace std.text
+using namespace std.io
+
+func putty(x: string) -> string {
+    return x
+}
+
+class Klass {
+    constructor() {
+        puts("Klass::constructor()")
+    }
+
+    destructor() {
+        puts("Klass::destructo()r")
+    }
+    
+    func to_string() -> string {
+        return "A KLASS"
+    }
+
+    func hello( s: string ) {
+
+    }
+}
+
+let pub: Klass
+
+func main() {
+    let x = 128
+
+    match x {
+        case 1..10, 100 => {
+            puts("gotcha")
+        }
+        case 128 => {
+            puts("yeah, got it")
+        }
+        case _ => {
+            puts("default")
+        }
+    }
+
+    let ss = new stringstream()
+    ss << "Hello" << " World"
+
+    let ss = new stringstream("42 3.14 7")
+
+    let a: i64 = 0
+    let b: f64 = 0.0
+    let c: i64 = 0
+    ss >> &a >> &b >> &c
+
+    puts("b is \(b), ss is \(ss)")
+
+    "hello" |> putty() |> puts() if true
+    "not shown" |> puts() unless true
+
+    let k = new Klass()
+    let kc = new Rc<Klass>(k)
+    let pub = kc.clone()
+    
+    puts("Autoconvert: \(k)")
+
+    defer { puts("Defer") }
+
+    let o = new ofstream("FILE.txt")
+    o << "foo bar baz"
+
+    let i = new ifstream("FILE.txt")
+    let s1: string
+    i >> &s1
+    puts( s1 )
+
+    //delete k
+}

@@ -1,0 +1,1041 @@
+// SDL-backed UI runtime for the `ui Name: Root { ... }` DSL.
+// The DSL lowers into ordinary constructors, field assignments, and
+// add_child() calls against these classes.
+
+import "../sdl/sdl_core.llpl"
+import "../sdl/sdl_window.llpl"
+import "../sdl/sdl_ttf.llpl"
+
+namespace std {
+namespace ui {
+
+const LAYOUT_NONE: i64 = 0
+const LAYOUT_COLUMN: i64 = 1
+const LAYOUT_ROW: i64 = 2
+const WIDGET_GENERIC: i64 = 0
+const WIDGET_WINDOW: i64 = 1
+const WIDGET_COLUMN: i64 = 2
+const WIDGET_ROW: i64 = 3
+const WIDGET_PANEL: i64 = 4
+const WIDGET_CARD: i64 = 5
+const WIDGET_TEXT: i64 = 6
+const WIDGET_BUTTON: i64 = 7
+const WIDGET_PROGRESS: i64 = 8
+const WIDGET_SLIDER: i64 = 9
+const WIDGET_CHECKBOX: i64 = 10
+const WIDGET_BADGE: i64 = 11
+const DEFAULT_FONT_PATH: string = "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf"
+const FALLBACK_FONT_PATH: string = "/usr/share/fonts/TTF/DejaVuSans.ttf"
+const FALLBACK_FONT_PATH_2: string = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+const LIGHT_WINDOW_BG: u32 = 0xFFF7F8FB as u32
+const LIGHT_PANEL_BG: u32 = 0xFFEDEFF5 as u32
+const LIGHT_TEXT: u32 = 0xFF151A22 as u32
+const LIGHT_BORDER: u32 = 0xFFB6BECC as u32
+const LIGHT_BUTTON_BG: u32 = 0xFF2F7CF6 as u32
+const LIGHT_BUTTON_HOVER_BG: u32 = 0xFF4D8DFF as u32
+const LIGHT_BUTTON_BORDER: u32 = 0xFF195BC0 as u32
+const LIGHT_BUTTON_HOVER_BORDER: u32 = 0xFF0F48A4 as u32
+
+const DARK_WINDOW_BG: u32 = 0xFF121418 as u32
+const DARK_PANEL_BG: u32 = 0xFF1C222B as u32
+const DARK_PANEL_HOVER_BG: u32 = 0xFF232B36 as u32
+const DARK_TEXT: u32 = 0xFFE9EEF6 as u32
+const DARK_MUTED_TEXT: u32 = 0xFFC4CCD8 as u32
+const DARK_BORDER: u32 = 0xFF3B4656 as u32
+const DARK_HOVER_BORDER: u32 = 0xFF53667E as u32
+const DARK_BUTTON_BG: u32 = 0xFF1E8A78 as u32
+const DARK_BUTTON_HOVER_BG: u32 = 0xFF26A890 as u32
+const DARK_BUTTON_BORDER: u32 = 0xFF126456 as u32
+const DARK_BUTTON_HOVER_BORDER: u32 = 0xFF52C7B2 as u32
+const LIGHT_TRACK: u32 = 0xFFD4DAE5 as u32
+const DARK_TRACK: u32 = 0xFF2A3340 as u32
+const LIGHT_SELECTION: u32 = 0x663D7DFF as u32
+const DARK_SELECTION: u32 = 0x6652C7B2 as u32
+
+func color_r(color: u32) -> char {
+    return ((color >> 16) & 255) as char
+}
+
+func color_g(color: u32) -> char {
+    return ((color >> 8) & 255) as char
+}
+
+func color_b(color: u32) -> char {
+    return (color & 255) as char
+}
+
+func color_a(color: u32) -> char {
+    return ((color >> 24) & 255) as char
+}
+
+func mix_channel(a: char, b: char, amount: i64) -> char {
+    let av: i64 = a as i64
+    let bv: i64 = b as i64
+    return (av + ((bv - av) * amount) / 100) as char
+}
+
+func mix_color(a: u32, b: u32, amount: i64) -> u32 {
+    let aa: u32 = mix_channel(color_a(a), color_a(b), amount) as u32
+    let rr: u32 = mix_channel(color_r(a), color_r(b), amount) as u32
+    let gg: u32 = mix_channel(color_g(a), color_g(b), amount) as u32
+    let bb: u32 = mix_channel(color_b(a), color_b(b), amount) as u32
+    return (aa << 24) | (rr << 16) | (gg << 8) | bb
+}
+
+func clamp_i64(value: i64, min_value: i64, max_value: i64) -> i64 {
+    if value < min_value {
+        return min_value
+    }
+    if value > max_value {
+        return max_value
+    }
+    return value
+}
+
+func text_len(text: string) -> i64 {
+    let n: i64 = 0
+    while text[n] != 0 {
+        n = n + 1
+    }
+    return n
+}
+
+func set_color(renderer: std.sdl.Renderer, color: u32) {
+    renderer.set_draw_color(color_r(color), color_g(color), color_b(color), color_a(color))
+}
+
+func draw_rect(renderer: std.sdl.Renderer, x: i64, y: i64, w: i64, h: i64, color: u32) {
+    set_color(renderer, color)
+    let rect: SDL_Rect = new SDL_Rect(x as i32, y as i32, w as i32, h as i32)
+    renderer.fill_rect(rect)
+}
+
+func draw_outline(renderer: std.sdl.Renderer, x: i64, y: i64, w: i64, h: i64, color: u32) {
+    set_color(renderer, color)
+    let rect: SDL_Rect = new SDL_Rect(x as i32, y as i32, w as i32, h as i32)
+    renderer.draw_rect(rect)
+}
+
+// Lightweight placeholder text renderer. Each character is represented as
+// a small vertical mark, enough to make labels visible without SDL_ttf.
+func draw_placeholder_text(renderer: std.sdl.Renderer, x: i64, y: i64, text: string, color: u32) {
+    set_color(renderer, color)
+    let i: i64 = 0
+    while text[i] != 0 {
+        let code: i64 = text[i] as i64
+        if code != 32 {
+            let h: i64 = 10 + (code % 5)
+            let rect: SDL_Rect = new SDL_Rect((x + i * 7) as i32, y as i32, 5, h as i32)
+            renderer.fill_rect(rect)
+        }
+        i = i + 1
+    }
+}
+
+func draw_text(renderer: std.sdl.Renderer, font: TTF_Font*, x: i64, y: i64, text: string, color: u32) {
+    if font == null {
+        draw_placeholder_text(renderer, x, y, text, color)
+        return
+    }
+
+    let len: i64 = text_len(text)
+    if len == 0 {
+        return
+    }
+
+    let w: i32 = 0
+    let h: i32 = 0
+    let fg: SDL_Color = new SDL_Color(color_r(color), color_g(color), color_b(color), color_a(color))
+    if !std.sdl.TTF_GetStringSize(font, text, len as u64, &w, &h) {
+        draw_placeholder_text(renderer, x, y, text, color)
+        return
+    }
+
+    let surface: SDL_Surface* = std.sdl.TTF_RenderText_Blended(font, text, len as u64, fg)
+    if surface == null {
+        draw_placeholder_text(renderer, x, y, text, color)
+        return
+    }
+
+    let texture: SDL_Texture* = std.sdl.SDL_CreateTextureFromSurface(renderer.get_handle(), surface)
+    std.sdl.SDL_DestroySurface(surface)
+    if texture == null {
+        draw_placeholder_text(renderer, x, y, text, color)
+        return
+    }
+
+    let dst: SDL_FRect = new SDL_FRect(x as float, y as float, w as float, h as float)
+    std.sdl.SDL_RenderTexture(renderer.get_handle(), texture, null, &dst)
+    std.sdl.SDL_DestroyTexture(texture)
+}
+
+func draw_text_box(renderer: std.sdl.Renderer, font: TTF_Font*, x: i64, y: i64, w: i64, h: i64, text: string, color: u32) {
+    let left: i64 = x + 10
+    let top: i64 = y
+
+    if font == null {
+        let marker_h: i64 = 14
+        if h > marker_h {
+            top = y + (h - marker_h) / 2
+        }
+        draw_placeholder_text(renderer, left, top, text, color)
+        return
+    }
+
+    let len: i64 = text_len(text)
+    if len == 0 {
+        return
+    }
+
+    let text_w: i32 = 0
+    let text_h: i32 = 0
+    if std.sdl.TTF_GetStringSize(font, text, len as u64, &text_w, &text_h) {
+        if h > text_h as i64 {
+            top = y + (h - text_h as i64) / 2
+        }
+    }
+
+    draw_text(renderer, font, left, top, text, color)
+}
+
+class Widget {
+    let kind: string
+    let kind_id: i64
+    let title: string
+    let text: string
+    let x: i64
+    let y: i64
+    let width: i64
+    let height: i64
+    let padding: i64
+    let spacing: i64
+    let preferred_height: i64
+    let layout: i64
+    let background: u32
+    let hover_background: u32
+    let foreground: u32
+    let hover_foreground: u32
+    let border: u32
+    let hover_border: u32
+    let accent: u32
+    let track: u32
+    let selection: u32
+    let value: i64
+    let min_value: i64
+    let max_value: i64
+    let checked: bool
+    let selectable: bool
+    let selecting: bool
+    let selection_start: i64
+    let selection_end: i64
+    let hovered: bool
+    let hover_amount: i64
+    let first_child: Widget
+    let next_sibling: Widget
+    let onClick: () -> void
+    let has_onClick: bool
+    let onHover: () -> void
+    let has_onHover: bool
+    let onHoverEnd: () -> void
+    let has_onHoverEnd: bool
+
+    constructor(kind: string) {
+        self.kind = kind
+        self.kind_id = WIDGET_GENERIC
+        self.title = ""
+        self.text = ""
+        self.x = 0
+        self.y = 0
+        self.width = 0
+        self.height = 0
+        self.padding = 12
+        self.spacing = 8
+        self.preferred_height = 32
+        self.layout = LAYOUT_NONE
+        self.background = 0xFFE8ECF3 as u32
+        self.hover_background = self.background
+        self.foreground = 0xFF151A22 as u32
+        self.hover_foreground = self.foreground
+        self.border = 0xFF7B8493 as u32
+        self.hover_border = self.border
+        self.accent = 0xFF2F7CF6 as u32
+        self.track = LIGHT_TRACK
+        self.selection = LIGHT_SELECTION
+        self.value = 0
+        self.min_value = 0
+        self.max_value = 100
+        self.checked = false
+        self.selectable = false
+        self.selecting = false
+        self.selection_start = 0
+        self.selection_end = 0
+        self.hovered = false
+        self.hover_amount = 0
+        self.first_child = null
+        self.next_sibling = null
+        self.has_onClick = false
+        self.has_onHover = false
+        self.has_onHoverEnd = false
+    }
+
+    func add_child(child: Widget) {
+        if self.first_child == null {
+            rc_retain(child as char*)
+            self.first_child = child
+            return
+        }
+
+        let tail: Widget = self.first_child
+        while tail.next_sibling != null {
+            tail = tail.next_sibling
+        }
+        rc_retain(child as char*)
+        tail.next_sibling = child
+    }
+
+    func contains(px: i64, py: i64) -> bool {
+        return px >= self.x && py >= self.y && px < self.x + self.width && py < self.y + self.height
+    }
+
+    func value_percent() -> i64 {
+        let span: i64 = self.max_value - self.min_value
+        if span <= 0 {
+            return 0
+        }
+        let clamped: i64 = clamp_i64(self.value, self.min_value, self.max_value)
+        return ((clamped - self.min_value) * 100) / span
+    }
+
+    func text_index_at(px: i64) -> i64 {
+        let len: i64 = text_len(self.text)
+        let rel: i64 = px - (self.x + 10)
+        if rel <= 0 {
+            return 0
+        }
+        return clamp_i64(rel / 7, 0, len)
+    }
+
+    func set_value_from_x(px: i64) {
+        let usable: i64 = self.width - self.padding * 2
+        if usable <= 0 {
+            return
+        }
+        let rel: i64 = clamp_i64(px - (self.x + self.padding), 0, usable)
+        self.value = self.min_value + ((self.max_value - self.min_value) * rel) / usable
+    }
+
+    func begin_pointer(px: i64, py: i64) -> bool {
+        let child: Widget = self.first_child
+        while child != null {
+            if child.begin_pointer(px, py) {
+                return true
+            }
+            child = child.next_sibling
+        }
+
+        if !self.contains(px, py) {
+            return false
+        }
+
+        if self.kind_id == WIDGET_CHECKBOX {
+            self.checked = !self.checked
+            return true
+        }
+        if self.kind_id == WIDGET_SLIDER {
+            self.selecting = true
+            self.set_value_from_x(px)
+            return true
+        }
+        if self.selectable {
+            self.selecting = true
+            self.selection_start = self.text_index_at(px)
+            self.selection_end = self.selection_start
+            return true
+        }
+        return false
+    }
+
+    func drag_pointer(px: i64, py: i64) {
+        if self.selecting {
+            if self.kind_id == WIDGET_SLIDER {
+                self.set_value_from_x(px)
+            } else if self.selectable {
+                self.selection_end = self.text_index_at(px)
+            }
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.drag_pointer(px, py)
+            child = child.next_sibling
+        }
+    }
+
+    func end_pointer(px: i64, py: i64) {
+        self.selecting = false
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.end_pointer(px, py)
+            child = child.next_sibling
+        }
+    }
+
+    func apply_light_theme() {
+        if self.kind_id == WIDGET_WINDOW {
+            self.background = LIGHT_WINDOW_BG
+            self.hover_background = self.background
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = 0xFF3B4250 as u32
+            self.hover_border = self.border
+        } else if self.kind_id == WIDGET_PANEL || self.kind_id == WIDGET_CARD {
+            self.background = LIGHT_PANEL_BG
+            self.hover_background = 0xFFF5F7FC as u32
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = 0xFF99A5B8 as u32
+        } else if self.kind_id == WIDGET_BUTTON {
+            self.background = LIGHT_BUTTON_BG
+            self.hover_background = LIGHT_BUTTON_HOVER_BG
+            self.foreground = 0xFFFFFFFF as u32
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BUTTON_BORDER
+            self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+            self.accent = LIGHT_BUTTON_BG
+            self.track = LIGHT_TRACK
+            self.selection = LIGHT_SELECTION
+        } else if self.kind_id == WIDGET_PROGRESS || self.kind_id == WIDGET_SLIDER {
+            self.background = 0x00FFFFFF as u32
+            self.hover_background = self.background
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+            self.accent = LIGHT_BUTTON_BG
+            self.track = LIGHT_TRACK
+            self.selection = LIGHT_SELECTION
+        } else if self.kind_id == WIDGET_CHECKBOX || self.kind_id == WIDGET_BADGE {
+            self.background = 0x00FFFFFF as u32
+            self.hover_background = 0x1A2F7CF6 as u32
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+            self.accent = LIGHT_BUTTON_BG
+            self.track = LIGHT_TRACK
+            self.selection = LIGHT_SELECTION
+        } else if self.kind_id == WIDGET_TEXT {
+            self.background = 0x00FFFFFF as u32
+            self.hover_background = self.background
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = 0x00FFFFFF as u32
+            self.hover_border = self.border
+            self.selection = LIGHT_SELECTION
+        } else {
+            self.background = 0x00FFFFFF as u32
+            self.hover_background = self.background
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = 0x00FFFFFF as u32
+            self.hover_border = self.border
+            self.accent = LIGHT_BUTTON_BG
+            self.track = LIGHT_TRACK
+            self.selection = LIGHT_SELECTION
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.apply_light_theme()
+            child = child.next_sibling
+        }
+    }
+
+    func apply_dark_theme() {
+        if self.kind_id == WIDGET_WINDOW {
+            self.background = DARK_WINDOW_BG
+            self.hover_background = self.background
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_HOVER_BORDER
+        } else if self.kind_id == WIDGET_PANEL || self.kind_id == WIDGET_CARD {
+            self.background = DARK_PANEL_BG
+            self.hover_background = DARK_PANEL_HOVER_BG
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_HOVER_BORDER
+        } else if self.kind_id == WIDGET_BUTTON {
+            self.background = DARK_BUTTON_BG
+            self.hover_background = DARK_BUTTON_HOVER_BG
+            self.foreground = DARK_TEXT
+            self.hover_foreground = 0xFFFFFFFF as u32
+            self.border = DARK_BUTTON_BORDER
+            self.hover_border = DARK_BUTTON_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+            self.track = DARK_TRACK
+            self.selection = DARK_SELECTION
+        } else if self.kind_id == WIDGET_PROGRESS || self.kind_id == WIDGET_SLIDER {
+            self.background = 0x00000000 as u32
+            self.hover_background = self.background
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_BUTTON_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+            self.track = DARK_TRACK
+            self.selection = DARK_SELECTION
+        } else if self.kind_id == WIDGET_CHECKBOX || self.kind_id == WIDGET_BADGE {
+            self.background = 0x00000000 as u32
+            self.hover_background = 0x1A26A890 as u32
+            self.foreground = DARK_TEXT
+            self.hover_foreground = 0xFFFFFFFF as u32
+            self.border = DARK_BORDER
+            self.hover_border = DARK_BUTTON_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+            self.track = DARK_TRACK
+            self.selection = DARK_SELECTION
+        } else if self.kind_id == WIDGET_TEXT {
+            self.background = 0x00000000 as u32
+            self.hover_background = self.background
+            self.foreground = DARK_MUTED_TEXT
+            self.hover_foreground = DARK_TEXT
+            self.border = 0x00000000 as u32
+            self.hover_border = self.border
+            self.selection = DARK_SELECTION
+        } else {
+            self.background = 0x00000000 as u32
+            self.hover_background = self.background
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = 0x00000000 as u32
+            self.hover_border = self.border
+            self.accent = DARK_BUTTON_BG
+            self.track = DARK_TRACK
+            self.selection = DARK_SELECTION
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.apply_dark_theme()
+            child = child.next_sibling
+        }
+    }
+
+    func update_hover(px: i64, py: i64) {
+        let was_hovered: bool = self.hovered
+        self.hovered = self.contains(px, py)
+
+        if self.hovered && !was_hovered && self.has_onHover {
+            let handler: () -> void = self.onHover
+            handler()
+        }
+        if !self.hovered && was_hovered && self.has_onHoverEnd {
+            let end_handler: () -> void = self.onHoverEnd
+            end_handler()
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.update_hover(px, py)
+            child = child.next_sibling
+        }
+    }
+
+    func animate() {
+        let visual_hover: bool = self.hover_background != self.background ||
+            self.hover_foreground != self.foreground || self.hover_border != self.border
+        if self.hovered && visual_hover {
+            if self.hover_amount < 100 {
+                self.hover_amount = self.hover_amount + 12
+                if self.hover_amount > 100 {
+                    self.hover_amount = 100
+                }
+            }
+        } else {
+            if self.hover_amount > 0 {
+                self.hover_amount = self.hover_amount - 12
+                if self.hover_amount < 0 {
+                    self.hover_amount = 0
+                }
+            }
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.animate()
+            child = child.next_sibling
+        }
+    }
+
+    func layout_tree() {
+        let child: Widget = self.first_child
+        if child == null {
+            return
+        }
+
+        if self.layout == LAYOUT_COLUMN {
+            let cy: i64 = self.y + self.padding
+            while child != null {
+                child.x = self.x + self.padding
+                child.y = cy
+                child.width = self.width - self.padding * 2
+                if child.height == 0 {
+                    child.height = child.preferred_height
+                }
+                child.layout_tree()
+                cy = cy + child.height + self.spacing
+                child = child.next_sibling
+            }
+            return
+        }
+
+        if self.layout == LAYOUT_ROW {
+            let cx: i64 = self.x + self.padding
+            while child != null {
+                child.x = cx
+                child.y = self.y + self.padding
+                if child.width == 0 {
+                    child.width = 96
+                }
+                child.height = self.height - self.padding * 2
+                child.layout_tree()
+                cx = cx + child.width + self.spacing
+                child = child.next_sibling
+            }
+            return
+        }
+
+        while child != null {
+            child.layout_tree()
+            child = child.next_sibling
+        }
+    }
+
+    func draw_self(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        let visual_hover: bool = self.hover_background != self.background ||
+            self.hover_foreground != self.foreground || self.hover_border != self.border
+        let bg: u32 = mix_color(self.background, self.hover_background, self.hover_amount)
+        let fg: u32 = mix_color(self.foreground, self.hover_foreground, self.hover_amount)
+        let bd: u32 = mix_color(self.border, self.hover_border, self.hover_amount)
+        let lift: i64 = self.hover_amount / 35
+        let draw_y: i64 = self.y - lift
+
+        if self.kind_id == WIDGET_PROGRESS {
+            let bar_x: i64 = self.x
+            let bar_y: i64 = self.y + (self.height - 12) / 2
+            let fill_w: i64 = (self.width * self.value_percent()) / 100
+            draw_rect(renderer, bar_x, bar_y, self.width, 12, self.track)
+            draw_rect(renderer, bar_x, bar_y, fill_w, 12, self.accent)
+            draw_outline(renderer, bar_x, bar_y, self.width, 12, bd)
+            if text_len(self.text) > 0 {
+                draw_text_box(renderer, font, self.x, self.y, self.width, self.height, self.text, fg)
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_SLIDER {
+            let track_y: i64 = self.y + self.height / 2 - 3
+            let usable: i64 = self.width - self.padding * 2
+            let pct: i64 = self.value_percent()
+            let fill_w: i64 = (usable * pct) / 100
+            let thumb_x: i64 = self.x + self.padding + fill_w - 6
+            draw_rect(renderer, self.x + self.padding, track_y, usable, 6, self.track)
+            draw_rect(renderer, self.x + self.padding, track_y, fill_w, 6, self.accent)
+            draw_rect(renderer, thumb_x, track_y - 5, 12, 16, mix_color(self.accent, self.hover_border, self.hover_amount))
+            draw_outline(renderer, thumb_x, track_y - 5, 12, 16, bd)
+            return
+        }
+
+        if self.kind_id == WIDGET_CHECKBOX {
+            let box_size: i64 = 18
+            let box_y: i64 = self.y + (self.height - box_size) / 2
+            draw_rect(renderer, self.x, box_y, box_size, box_size, bg)
+            draw_outline(renderer, self.x, box_y, box_size, box_size, bd)
+            if self.checked {
+                draw_rect(renderer, self.x + 4, box_y + 8, 4, 6, self.accent)
+                draw_rect(renderer, self.x + 8, box_y + 5, 8, 4, self.accent)
+            }
+            if text_len(self.text) > 0 {
+                draw_text_box(renderer, font, self.x + 24, self.y, self.width - 24, self.height, self.text, fg)
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_BADGE {
+            draw_rect(renderer, self.x, draw_y + 4, self.width, self.height - 8, bg)
+            draw_outline(renderer, self.x, draw_y + 4, self.width, self.height - 8, bd)
+            if text_len(self.text) > 0 {
+                draw_text_box(renderer, font, self.x, draw_y, self.width, self.height, self.text, fg)
+            }
+            return
+        }
+
+        if visual_hover && self.hover_amount > 0 {
+            draw_rect(renderer, self.x + 1, self.y + 2, self.width, self.height, 0x22000000 as u32)
+        }
+        draw_rect(renderer, self.x, draw_y, self.width, self.height, bg)
+        draw_outline(renderer, self.x, draw_y, self.width, self.height, bd)
+
+        if self.selectable && self.selection_start != self.selection_end {
+            let start: i64 = self.selection_start
+            let end: i64 = self.selection_end
+            if end < start {
+                let tmp: i64 = start
+                start = end
+                end = tmp
+            }
+            let sel_x: i64 = self.x + 10 + start * 7
+            let sel_w: i64 = (end - start) * 7
+            draw_rect(renderer, sel_x, draw_y + 5, sel_w, self.height - 10, self.selection)
+        }
+
+        if text_len(self.title) > 0 {
+            draw_text_box(renderer, font, self.x, draw_y, self.width, self.height, self.title, fg)
+        }
+        if text_len(self.text) > 0 {
+            draw_text_box(renderer, font, self.x, draw_y, self.width, self.height, self.text, fg)
+        }
+    }
+
+    func render(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        self.draw_self(renderer, font)
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.render(renderer, font)
+            child = child.next_sibling
+        }
+    }
+
+    func dispatch_click(px: i64, py: i64) -> bool {
+        let child: Widget = self.first_child
+        while child != null {
+            if child.dispatch_click(px, py) {
+                return true
+            }
+            child = child.next_sibling
+        }
+
+        if self.contains(px, py) && self.has_onClick {
+            let handler: () -> void = self.onClick
+            handler()
+            return true
+        }
+        return false
+    }
+}
+
+class Window : Widget {
+    constructor() {
+        super("Window")
+        self.kind_id = WIDGET_WINDOW
+        self.background = 0xFFF7F8FB as u32
+        self.hover_background = self.background
+        self.border = 0xFF3B4250 as u32
+        self.hover_border = self.border
+        self.layout = LAYOUT_COLUMN
+        self.padding = 18
+        self.spacing = 12
+    }
+}
+
+class Column : Widget {
+    constructor() {
+        super("Column")
+        self.kind_id = WIDGET_COLUMN
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = 0x00FFFFFF as u32
+        self.hover_border = self.border
+        self.layout = LAYOUT_COLUMN
+        self.preferred_height = 220
+    }
+}
+
+class Row : Widget {
+    constructor() {
+        super("Row")
+        self.kind_id = WIDGET_ROW
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = 0x00FFFFFF as u32
+        self.hover_border = self.border
+        self.layout = LAYOUT_ROW
+        self.preferred_height = 48
+    }
+}
+
+class Panel : Widget {
+    constructor() {
+        super("Panel")
+        self.kind_id = WIDGET_PANEL
+        self.background = 0xFFEDEFF5 as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = 0xFFB6BECC as u32
+        self.hover_border = 0xFF99A5B8 as u32
+        self.layout = LAYOUT_COLUMN
+        self.preferred_height = 120
+    }
+}
+
+class Card : Widget {
+    constructor() {
+        super("Card")
+        self.kind_id = WIDGET_CARD
+        self.background = 0xFFEDEFF5 as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = 0xFFB6BECC as u32
+        self.hover_border = 0xFF99A5B8 as u32
+        self.layout = LAYOUT_COLUMN
+        self.padding = 14
+        self.spacing = 10
+        self.preferred_height = 120
+    }
+}
+
+class Text : Widget {
+    constructor() {
+        super("Text")
+        self.kind_id = WIDGET_TEXT
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = 0x00FFFFFF as u32
+        self.hover_border = self.border
+        self.preferred_height = 24
+    }
+}
+
+class SelectableText : Text {
+    constructor() {
+        super()
+        self.kind = "Text"
+        self.kind_id = WIDGET_TEXT
+        self.selectable = true
+        self.preferred_height = 28
+    }
+}
+
+class Button : Widget {
+    constructor() {
+        super("Button")
+        self.kind_id = WIDGET_BUTTON
+        self.background = 0xFF2F7CF6 as u32
+        self.hover_background = 0xFF4D8DFF as u32
+        self.foreground = 0xFFFFFFFF as u32
+        self.hover_foreground = 0xFFFFFFFF as u32
+        self.border = 0xFF195BC0 as u32
+        self.hover_border = 0xFF0F48A4 as u32
+        self.preferred_height = 40
+    }
+}
+
+class ProgressBar : Widget {
+    constructor() {
+        super("ProgressBar")
+        self.kind_id = WIDGET_PROGRESS
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+        self.track = LIGHT_TRACK
+        self.accent = LIGHT_BUTTON_BG
+        self.preferred_height = 30
+        self.value = 40
+        self.min_value = 0
+        self.max_value = 100
+    }
+}
+
+class Slider : Widget {
+    constructor() {
+        super("Slider")
+        self.kind_id = WIDGET_SLIDER
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+        self.track = LIGHT_TRACK
+        self.accent = LIGHT_BUTTON_BG
+        self.padding = 8
+        self.preferred_height = 34
+        self.value = 50
+        self.min_value = 0
+        self.max_value = 100
+    }
+}
+
+class Checkbox : Widget {
+    constructor() {
+        super("Checkbox")
+        self.kind_id = WIDGET_CHECKBOX
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = 0x1A2F7CF6 as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+        self.accent = LIGHT_BUTTON_BG
+        self.preferred_height = 30
+    }
+}
+
+class Badge : Widget {
+    constructor() {
+        super("Badge")
+        self.kind_id = WIDGET_BADGE
+        self.background = 0xFFE6F0FF as u32
+        self.hover_background = 0xFFD8E8FF as u32
+        self.foreground = 0xFF195BC0 as u32
+        self.hover_foreground = self.foreground
+        self.border = 0xFFB8D2FF as u32
+        self.hover_border = 0xFF8AB4FF as u32
+        self.preferred_height = 28
+        self.width = 110
+    }
+}
+
+class App {
+    let window: std.sdl.Window
+    let renderer: std.sdl.Renderer
+    let events: std.sdl.EventHandler
+    let root: Widget
+    let font: TTF_Font*
+    let mouse_x: i64
+    let mouse_y: i64
+    let mouse_down: bool
+    let running: bool
+    let valid: bool
+    let ttf_ready: bool
+
+    constructor(title: string, width: i64, height: i64, root: Widget) {
+        self.valid = false
+        self.ttf_ready = false
+        self.font = null
+        self.mouse_x = -1
+        self.mouse_y = -1
+        self.mouse_down = false
+        let init_result = std.sdl.SDL.init(std.sdl.SDL_INIT_VIDEO | std.sdl.SDL_INIT_EVENTS)
+        if init_result.is_err() {
+            puts(init_result.get_err())
+        } else {
+            self.window = new std.sdl.Window(new String(title), width, height, std.sdl.SDL_WINDOW_RESIZABLE)
+            if !self.window.is_valid() {
+                puts(std.sdl.SDL_GetError())
+            } else {
+                self.window.show()
+                self.renderer = new std.sdl.Renderer(self.window)
+                if !self.renderer.is_valid() {
+                    puts(std.sdl.SDL_GetError())
+                } else {
+                    self.renderer.set_blend_mode(std.sdl.SDL_BLENDMODE_BLEND)
+                    if std.sdl.TTF_Init() {
+                        self.ttf_ready = true
+                        self.font = std.sdl.TTF_OpenFont(DEFAULT_FONT_PATH, 16.0)
+                        if self.font == null {
+                            self.font = std.sdl.TTF_OpenFont(FALLBACK_FONT_PATH, 16.0)
+                        }
+                        if self.font == null {
+                            self.font = std.sdl.TTF_OpenFont(FALLBACK_FONT_PATH_2, 16.0)
+                        }
+                        if self.font == null {
+                            puts(std.sdl.SDL_GetError())
+                        }
+                    } else {
+                        puts(std.sdl.SDL_GetError())
+                    }
+                    self.events = new std.sdl.EventHandler()
+                    self.root = root
+                    self.root.x = 0
+                    self.root.y = 0
+                    self.root.width = width
+                    self.root.height = height
+                    self.running = true
+                    self.valid = true
+                }
+            }
+        }
+    }
+
+    func is_valid() -> bool {
+        return self.valid
+    }
+
+    func run() {
+        if !self.is_valid() {
+            return
+        }
+        while self.running {
+            while self.events.poll() {
+                if self.events.is_quit() {
+                    self.running = false
+                }
+                if self.events.is_key_down() {
+                    let key: SDL_KeyboardEvent* = self.events.get_key_event()
+                    if (*key).key == std.sdl.SDLK_ESCAPE {
+                        self.running = false
+                    }
+                }
+                if self.events.is_mouse_button_down() {
+                    let mouse: SDL_MouseButtonEvent* = self.events.get_mouse_button_event()
+                    self.mouse_x = (*mouse).x as i64
+                    self.mouse_y = (*mouse).y as i64
+                    if (*mouse).button == std.sdl.SDL_BUTTON_LEFT {
+                        self.mouse_down = true
+                        self.root.begin_pointer(self.mouse_x, self.mouse_y)
+                        self.root.dispatch_click((*mouse).x as i64, (*mouse).y as i64)
+                    }
+                }
+                if self.events.is_mouse_button_up() {
+                    let up: SDL_MouseButtonEvent* = self.events.get_mouse_button_event()
+                    self.mouse_x = (*up).x as i64
+                    self.mouse_y = (*up).y as i64
+                    if (*up).button == std.sdl.SDL_BUTTON_LEFT {
+                        self.mouse_down = false
+                        self.root.end_pointer(self.mouse_x, self.mouse_y)
+                    }
+                }
+                if self.events.is_mouse_motion() {
+                    let motion: SDL_MouseMotionEvent* = self.events.get_mouse_motion_event()
+                    self.mouse_x = (*motion).x as i64
+                    self.mouse_y = (*motion).y as i64
+                    if self.mouse_down {
+                        self.root.drag_pointer(self.mouse_x, self.mouse_y)
+                    }
+                }
+                if self.events.is_window_resized() {
+                    let resized: SDL_WindowEvent* = self.events.get_window_event()
+                    if (*resized).data1 > 0 && (*resized).data2 > 0 {
+                        self.window.width = (*resized).data1 as i64
+                        self.window.height = (*resized).data2 as i64
+                        self.root.width = self.window.width
+                        self.root.height = self.window.height
+                    }
+                }
+            }
+
+            self.root.layout_tree()
+            self.root.update_hover(self.mouse_x, self.mouse_y)
+            self.root.animate()
+            set_color(self.renderer, self.root.background)
+            self.renderer.clear()
+            self.root.render(self.renderer, self.font)
+            self.renderer.present()
+            std.sdl.SDL.delay(16)
+        }
+        if self.font != null {
+            std.sdl.TTF_CloseFont(self.font)
+            self.font = null
+        }
+        if self.ttf_ready {
+            std.sdl.TTF_Quit()
+            self.ttf_ready = false
+        }
+        std.sdl.SDL.quit()
+    }
+}
+
+} // namespace ui
+} // namespace std

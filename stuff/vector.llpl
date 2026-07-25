@@ -1,0 +1,37 @@
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let v: Vector<u8> = new Vector<u8>(10, 0)
+    if v.size() != 10 {
+        puts("count constructor: wrong size")
+        return 1
+    }
+    let i: i64 = 0
+    while i < 10 {
+        if v[i] != 0 {
+            puts("count constructor: not all zeroed")
+            return 1
+        }
+        i = i + 1
+    }
+
+    let v2: Vector<i64> = new Vector<i64>(3, 42)
+    if v2.size() != 3 || v2[0] != 42 || v2[1] != 42 || v2[2] != 42 {
+        puts("count constructor: wrong fill value")
+        return 1
+    }
+
+    let v3: Vector<i64> = new Vector<i64>(0, 5)
+    if v3.size() != 0 {
+        puts("count constructor: zero count should give empty vector")
+        return 1
+    }
+    v3.push_back(99)
+    if v3.size() != 1 || v3[0] != 99 {
+        puts("count constructor: zero-count vector unusable afterward")
+        return 1
+    }
+
+    puts("vector count-constructor ok")
+    return 0
+}

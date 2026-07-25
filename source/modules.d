@@ -6,10 +6,29 @@ import std.path;
 import std.array;
 import std.algorithm;
 import std.format;
+import std.json;
 import std.process : environment;
 import ast;
 import lexer;
 import parser;
+import errors;
+
+class ProjectConfig {
+    string path;
+    string rootDir;
+    string[] importPaths;
+    string[] sourceRoots;
+    string[] linkLibraries;
+    string[] compilerFlags;
+    string target;
+
+    string[] moduleSearchPaths() {
+        string[] result;
+        foreach (p; sourceRoots) result ~= buildNormalizedPath(rootDir, p);
+        foreach (p; importPaths) result ~= buildNormalizedPath(rootDir, p);
+        return result;
+    }
+}
 
 class ModuleInfo {
     string path;
@@ -31,9 +50,12 @@ class ModuleResolver {
     private ModuleInfo[string] modules;  // Map absolute path -> module info
     private string[] searchPaths;
     private string[] importOrder;  // Order in which modules were fully processed
+    private bool recoverParseErrors;
+    private CompileError[] collectedDiagnostics;
 
-    this(string[] searchPaths = []) {
+    this(string[] searchPaths = [], bool recoverParseErrors = false) {
         this.searchPaths = searchPaths ~ [".", "lib", "modules"];
+        this.recoverParseErrors = recoverParseErrors;
     }
 
     // Resolve a module and all its dependencies
@@ -82,7 +104,10 @@ class ModuleResolver {
         auto lexer = new Lexer(source);
         auto tokens = lexer.tokenize();
         auto parser = new Parser(tokens, absPath);
-        modInfo.ast = parser.parse();
+        modInfo.ast = recoverParseErrors ? parser.parseRecovering() : parser.parse();
+        if (recoverParseErrors) {
+            collectedDiagnostics ~= parser.diagnostics();
+        }
         modInfo.ast.modulePath = absPath;
 
         // Extract imports
@@ -142,6 +167,10 @@ class ModuleResolver {
         }
         return result;
     }
+
+    CompileError[] diagnostics() {
+        return collectedDiagnostics;
+    }
 }
 
 // `prelude.llpl` ships as a sibling of the compiler binary itself (not
@@ -153,6 +182,39 @@ class ModuleResolver {
 string findPreludePath() {
     string candidate = buildNormalizedPath(dirName(thisExePath()), "prelude.llpl");
     return exists(candidate) ? candidate : "";
+}
+
+private string[] jsonStringArray(JSONValue root, string key) {
+    string[] result;
+    if (key !in root.object) return result;
+    foreach (item; root[key].array) {
+        result ~= item.str;
+    }
+    return result;
+}
+
+ProjectConfig findProjectConfig(string entryPath) {
+    string start = exists(entryPath) && isDir(entryPath) ? absolutePath(entryPath) : dirName(absolutePath(entryPath));
+    string dir = start;
+    while (dir.length > 0) {
+        string candidate = buildNormalizedPath(dir, "llpl.json");
+        if (exists(candidate)) {
+            auto config = new ProjectConfig();
+            config.path = candidate;
+            config.rootDir = dir;
+            JSONValue root = parseJSON(readText(candidate));
+            config.importPaths = jsonStringArray(root, "import_paths");
+            config.sourceRoots = jsonStringArray(root, "source_roots");
+            config.linkLibraries = jsonStringArray(root, "link");
+            config.compilerFlags = jsonStringArray(root, "flags");
+            if ("target" in root.object) config.target = root["target"].str;
+            return config;
+        }
+        string parent = dirName(dir);
+        if (parent == dir) break;
+        dir = parent;
+    }
+    return null;
 }
 
 // Resolves `entryPath` and everything it imports, exactly like
@@ -174,10 +236,34 @@ Program[] resolveWithPrelude(string entryPath) {
     if (llplHome.length > 0) {
         extraSearchPaths ~= llplHome;
     }
+    auto project = findProjectConfig(entryPath);
+    if (project !is null) {
+        extraSearchPaths ~= project.moduleSearchPaths();
+    }
     auto resolver = new ModuleResolver(extraSearchPaths);
     string preludePath = findPreludePath();
     if (preludePath.length > 0) {
         resolver.resolveAll(preludePath);
     }
     return resolver.resolveAll(entryPath);
+}
+
+Program[] resolveWithPreludeRecovering(string entryPath, out CompileError[] diagnostics, out ProjectConfig project) {
+    string[] extraSearchPaths;
+    string llplHome = environment.get("LLPL_HOME", "");
+    if (llplHome.length > 0) {
+        extraSearchPaths ~= llplHome;
+    }
+    project = findProjectConfig(entryPath);
+    if (project !is null) {
+        extraSearchPaths ~= project.moduleSearchPaths();
+    }
+    auto resolver = new ModuleResolver(extraSearchPaths, true);
+    string preludePath = findPreludePath();
+    if (preludePath.length > 0) {
+        resolver.resolveAll(preludePath);
+    }
+    auto programs = resolver.resolveAll(entryPath);
+    diagnostics = resolver.diagnostics();
+    return programs;
 }

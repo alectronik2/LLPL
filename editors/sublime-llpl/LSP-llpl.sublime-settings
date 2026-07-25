@@ -1,0 +1,12 @@
+{
+  "clients": {
+    "llpl": {
+      "enabled": true,
+      "selector": "source.llpl",
+      "command": ["node", "${packages}/LLPL/server/out/server.js", "--stdio"],
+      "initializationOptions": {
+        "compilerPath": ""
+      }
+    }
+  }
+}

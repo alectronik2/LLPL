@@ -1,0 +1,26 @@
+import stdlib.ui.prototype
+
+ui DemoWindow: Window {
+    title: "Counter"
+    width: 320
+    height: 180
+
+    Column {
+        spacing: 8
+
+        Text {
+            text: "Count: 0"
+        }
+
+        Button {
+            text: "Increment"
+        }
+    }
+}
+
+func main() -> i64 {
+    let window = DemoWindow.build()
+    let app = new App("Demo", 640, 480, window)
+    app.run()
+    return 0
+}

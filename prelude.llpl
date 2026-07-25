@@ -76,6 +76,7 @@ extern func rc_retain(ptr: char*)
 extern func rc_weak_retain(ptr: char*)
 extern func rc_weak_release(ptr: char*)
 extern func rc_is_alive(ptr: char*) -> bool
+extern func rc_use_count(ptr: char*) -> i64
 // Symbolized panic backtraces - see runtime.h's own comment. `addr` is a
 // raw instruction-pointer value (as already used throughout
 // examples/baremetal_demo/backtrace.llpl), not necessarily a function's
@@ -330,6 +331,7 @@ class RegexMatchIterator {
         llpl_memcpy(self.text, text, (self.text_len + 1) as u64)
 
         self.pos = 0
+        self.current = null
         self.has_current = false
         self.done = false
     }
@@ -349,6 +351,10 @@ class RegexMatchIterator {
             self.done = true
             return false
         }
+        if self.current != null {
+            delete self.current
+        }
+        rc_retain(m as char*)
         self.current = m
         let end_in_suffix: i64 = m.group_end(0) - self.pos
         let start_in_suffix: i64 = m.group_start(0) - self.pos
@@ -973,6 +979,68 @@ class Weak<T> {
 
     func is_alive() -> bool {
         return self.target != null && rc_is_alive(self.target as char*)
+    }
+}
+
+// Explicit shared ownership over a class instance, on top of the same
+// refcounted runtime Weak<T> already relies on (see Weak<T>'s own comment
+// for the underlying model). A plain class-typed field only ever holds
+// one implicit owner - the enclosing instance - and releases it once,
+// unconditionally, when that owner is destroyed; Rc<T> is for the case
+// where a single instance genuinely needs more than one independent
+// owner (say, two different collections that must each keep a shared
+// node alive), by retaining on construction/clone and releasing on
+// destruction, so the instance survives until every Rc<T> pointing at it
+// is gone rather than just the first one.
+//
+// The constructor retains its OWN reference on top of whatever ownership
+// `t` already carries in from `new` - it does not consume/take over that
+// one. To hand full ownership to Rc<T> (so the instance lives exactly as
+// long as its Rc<T>s do, no longer), `delete` the raw value right after
+// wrapping it:
+//   let raw: Node = new Node(...)
+//   let owner: Rc<Node> = new Rc<Node>(raw)
+//   delete raw   // cancels the `new`'s own implicit ownership; owner's
+//                // retain above keeps the instance alive regardless
+class Rc<T> {
+    let target: T*
+
+    constructor(t: T) {
+        self.target = t
+        if self.target != null {
+            rc_retain(self.target as char*)
+        }
+    }
+
+    destructor() {
+        if self.target != null {
+            delete self.target
+        }
+    }
+
+    // A second, independently-owning Rc<T> over the same instance - the
+    // intended way to hand out shared ownership instead of passing the
+    // raw target around and calling rc_retain by hand.
+    func clone() -> Rc<T> {
+        return new Rc<T>(self.target)
+    }
+
+    func get() -> T {
+        return self.target
+    }
+
+    func is_null() -> bool {
+        return self.target == null
+    }
+
+    // How many Rc<T>/owning references currently exist for this target -
+    // 0 once dropped to nothing (never observed through a live Rc<T>,
+    // since this instance itself is one of the counted owners).
+    func use_count() -> i64 {
+        if self.target == null {
+            return 0
+        }
+        return rc_use_count(self.target as char*)
     }
 }
 

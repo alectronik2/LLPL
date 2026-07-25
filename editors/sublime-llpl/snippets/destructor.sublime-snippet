@@ -1,0 +1,8 @@
+<snippet>
+  <content><![CDATA[destructor() {
+    $0
+}]]></content>
+  <tabTrigger>destructor</tabTrigger>
+  <scope>source.llpl</scope>
+  <description>LLPL destructor</description>
+</snippet>

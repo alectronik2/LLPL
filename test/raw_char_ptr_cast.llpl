@@ -1,0 +1,22 @@
+extern func puts(s: char*) -> i64
+
+class Named {
+    constructor() {}
+    destructor() {}
+
+    func to_string() -> string {
+        return "Named via to_string"
+    }
+}
+
+func main() -> i64 {
+    let n = new Named()
+
+    puts(n as string)
+    if rc_use_count(n as char*) == 1 {
+        puts("raw char pointer cast")
+    }
+
+    delete n
+    return 0
+}

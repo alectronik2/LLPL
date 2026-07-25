@@ -1605,11 +1605,17 @@ class NewExpr : ASTNode {
 class CastExpr : ASTNode {
     Type type;
     ASTNode expression;
+    // True when this cast should try class/struct conversion methods
+    // (`as_string`/`to_string`, `as_int`, etc.) before falling back to a raw
+    // C cast. Parser-written `as string` sets this; parser-written `as char*`
+    // deliberately does not, even though `string` resolves to `char*`.
+    bool useImplicitConversion;
 
-    this(Type type, ASTNode expression, int line = 0, int column = 0) {
+    this(Type type, ASTNode expression, int line = 0, int column = 0, bool useImplicitConversion = false) {
         super(NodeType.CastExpr, line, column);
         this.type = type;
         this.expression = expression;
+        this.useImplicitConversion = useImplicitConversion;
     }
 }
 

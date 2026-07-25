@@ -1,0 +1,31 @@
+// Declarative UI prototype demo.
+// The `ui` block compiles to `DemoWindow.build()`, which constructs this
+// widget tree using ordinary LLPL classes from stdlib.ui.prototype.
+// This example prints the tree; run examples/sdl/ui_dsl_app.llpl for a
+// graphical SDL window.
+
+import stdlib.ui.prototype
+
+ui DemoWindow: Window {
+    title: "Counter"
+    width: 320
+    height: 180
+
+    Column {
+        spacing: 8
+
+        Text {
+            text: "Count: 0"
+        }
+
+        Button {
+            text: "Increment"
+        }
+    }
+}
+
+func main() -> i64 {
+    let window: Window = DemoWindow.build()
+    window.render(0)
+    return 0
+}

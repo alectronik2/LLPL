@@ -1,0 +1,16 @@
+// Minimal SDL3_ttf bindings used by stdlib.ui.sdl.
+
+#link "SDL3_ttf"
+
+namespace std {
+namespace sdl {
+
+extern func TTF_Init() -> bool
+extern func TTF_Quit()
+extern func TTF_OpenFont(file: char*, ptsize: float) -> TTF_Font*
+extern func TTF_CloseFont(font: TTF_Font*)
+extern func TTF_GetStringSize(font: TTF_Font*, text: char*, length: u64, w: i32*, h: i32*) -> bool
+extern func TTF_RenderText_Blended(font: TTF_Font*, text: char*, length: u64, fg: SDL_Color) -> SDL_Surface*
+
+} // namespace sdl
+} // namespace std

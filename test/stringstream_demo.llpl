@@ -1,0 +1,85 @@
+// Example: std::stringstream-style formatting/parsing via << and >>
+
+import stdlib.text.string_utils
+
+using namespace std.text
+
+extern func puts(s: char*) -> i64
+
+// Build a string with <<, chained across mixed types.
+func demo_insertion() {
+    let ss: stringstream = new stringstream()
+    ss << "Player " as char* << 1 << ": score=" as char* << 9001 << ", ratio=" as char* << (0.875 as f64)
+
+    let result: String = ss.str()
+    puts(result.c_str())
+}
+
+// Parse whitespace-separated fields back out with >>. Chains just like
+// insertion (each operator>> returns the stream), and reads in order.
+func demo_extraction() {
+    let ss: stringstream = new stringstream("42 3.14 7")
+
+    let a: i64 = 0
+    let b: f64 = 0.0
+    let c: i64 = 0
+    ss >> &a >> &b >> &c
+
+    // ksnprintf (prelude.llpl) has no %f - build the mixed int/float
+    // report with another stringstream's << instead, which does.
+    let report: stringstream = new stringstream()
+    report << "a=" as char* << a << " b=" as char* << b << " c=" as char* << c
+    puts(report.str().c_str())
+}
+
+// Round-trip: format a value with <<, hand the resulting text to another
+// stringstream, extract it back with >>.
+func demo_round_trip() {
+    let out: stringstream = new stringstream()
+    out << 123 << " " as char* << 456
+
+    let inp: stringstream = new stringstream(out.str().c_str())
+    let x: i64 = 0
+    let y: i64 = 0
+    inp >> &x >> &y
+
+    if x == 123 && y == 456 {
+        puts("round trip ok")
+    } else {
+        puts("round trip mismatch")
+    }
+}
+
+// good()/fail() track extraction state, same as ifstream. (eof() alone
+// isn't a reliable "did the last read succeed" check right after reading
+// the final token - the cursor can legitimately land on the buffer's end
+// the instant that last, perfectly valid read finishes, same nuance real
+// C++ streams have; fail() is the one that actually means "the last
+// extraction found nothing".)
+func demo_stream_state() {
+    let ss: stringstream = new stringstream("1 2")
+    let a: i64 = 0
+    let b: i64 = 0
+    let c: i64 = 0
+
+    ss >> &a >> &b
+    if !ss.good() {
+        puts("expected good() after two valid reads")
+        return
+    }
+
+    ss >> &c // nothing left to extract
+    if !ss.fail() {
+        puts("expected fail() after reading past the end")
+        return
+    }
+    puts("stream state ok")
+}
+
+func main() -> i64 {
+    demo_insertion()
+    demo_extraction()
+    demo_round_trip()
+    demo_stream_state()
+    return 0
+}

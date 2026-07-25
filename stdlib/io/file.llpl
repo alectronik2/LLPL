@@ -31,17 +31,17 @@ extern func lseek(fd: i64, offset: i64, whence: i64) -> i64
 extern func unlink(path: char*) -> i64
 extern func rename(oldpath: char*, newpath: char*) -> i64
 
-// For ifstream's operator>> (text extraction) and ofstream's operator<<
-// (float formatting) below - ksnprintf (prelude.llpl) covers %d/%u/%s/%c
-// already (see runtime.c's kvsnprintf) but has no %f at all, and there's
-// no string->number parser anywhere in this stdlib yet either. Binding
-// straight to libc rather than writing new parsing/formatting logic from
-// scratch - same "declare just enough of the real signature to call it,
-// don't re-implement it" stance every other extern in this file already
-// takes for open/read/write/etc.
+// For ifstream's operator>> (text extraction) below - there's no
+// string->number parser anywhere in this stdlib yet, so binding straight
+// to libc rather than writing new parsing logic from scratch - same
+// "declare just enough of the real signature to call it, don't
+// re-implement it" stance every other extern in this file already takes
+// for open/read/write/etc. (Float *formatting* used to need the same
+// treatment - ksnprintf/kvsnprintf had no %f - but that gap is closed
+// now, see runtime.c's kfmt_putfloat, so operator<<(f64) below just uses
+// ksnprintf like every other overload.)
 extern func atoll(s: char*) -> i64
 extern func strtod(s: char*, endptr: char**) -> f64
-extern func snprintf(buf: char*, size: u64, fmt: char*, value: f64) -> i64
 
 // File class with RAII semantics
 class File {
@@ -399,6 +399,15 @@ class ifstream {
         return self
     }
 
+    func operator>>(out: char**) -> ifstream {
+        let tok: char[256]
+        let n: u64 = self.extract_token(tok as char*, 256)
+        let value: char* = llpl_alloc(n + 1)
+        llpl_memcpy(value, tok as char*, n + 1)
+        *out = value
+        return self
+    }
+
     // C++ ifstream's own tellg()/seekg() ("get position", as opposed to
     // ofstream's tellp()/seekp() - meaningless for a read-only stream, so
     // not offered here).
@@ -526,7 +535,7 @@ class ofstream {
 
     func operator<<(value: f64) -> ofstream {
         let buf: char[64]
-        snprintf(buf as char*, 64, "%f" as char*, value)
+        ksnprintf(buf as char*, 64, "%f", value)
         self.write(buf as char*, llpl_strlen(buf as char*))
         return self
     }

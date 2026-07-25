@@ -1,0 +1,8 @@
+<snippet>
+  <content><![CDATA[ui ${1:Screen}: ${2:Window} {
+    $0
+}]]></content>
+  <tabTrigger>ui</tabTrigger>
+  <scope>source.llpl</scope>
+  <description>LLPL UI declaration</description>
+</snippet>

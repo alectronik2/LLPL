@@ -1,0 +1,174 @@
+%YAML 1.2
+---
+name: LLPL
+file_extensions:
+  - llpl
+scope: source.llpl
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+  path: '[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*'
+  primitive: '\b(?:void|bool|char|string|i8|u8|int8|uint8|i16|u16|int16|uint16|i32|u32|int32|uint32|i64|u64|int64|uint64|int|uint|f32|f64|float|double)\b'
+
+contexts:
+  main:
+    - include: comments
+    - include: compiler-directives
+    - include: strings
+    - include: chars
+    - include: regexes
+    - include: numbers
+    - include: declarations
+    - include: keywords
+    - include: types
+    - include: constants
+    - include: macro-invocations
+    - include: function-calls
+    - include: member-access
+    - include: operators
+    - include: punctuation
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.llpl
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.llpl
+      push:
+        - meta_scope: comment.block.llpl
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.llpl
+          pop: true
+
+  compiler-directives:
+    - match: '\#(?:link|flags)\b'
+      scope: keyword.control.directive.llpl
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.llpl
+      push:
+        - meta_scope: string.quoted.double.llpl
+        - match: '"'
+          scope: punctuation.definition.string.end.llpl
+          pop: true
+        - include: escapes
+        - match: '\\\('
+          scope: punctuation.section.embedded.begin.llpl
+          push:
+            - meta_scope: meta.interpolation.llpl
+            - match: '\)'
+              scope: punctuation.section.embedded.end.llpl
+              pop: true
+            - include: main
+
+  chars:
+    - match: "'"
+      scope: punctuation.definition.string.begin.llpl
+      push:
+        - meta_scope: string.quoted.single.llpl
+        - match: "'"
+          scope: punctuation.definition.string.end.llpl
+          pop: true
+        - include: escapes
+
+  escapes:
+    - match: '\\(?:x[0-9a-fA-F]{1,2}|[nrt0\\"''ex])'
+      scope: constant.character.escape.llpl
+
+  regexes:
+    - match: '/(?![/*])(?:\\.|[^/\\\n])+/[A-Za-z]*'
+      scope: string.regexp.llpl
+
+  numbers:
+    - match: '\b0x[0-9a-fA-F]+\b'
+      scope: constant.numeric.integer.hexadecimal.llpl
+    - match: '\b0b[01]+\b'
+      scope: constant.numeric.integer.binary.llpl
+    - match: '\b0o[0-7]+\b'
+      scope: constant.numeric.integer.octal.llpl
+    - match: '\b(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\b'
+      scope: constant.numeric.float.llpl
+    - match: '\b[0-9]+(?:[eE][+-]?[0-9]+)?\b'
+      scope: constant.numeric.integer.llpl
+
+  declarations:
+    - match: '\b(namespace)\s+({{ident}})\b'
+      captures:
+        1: keyword.declaration.namespace.llpl
+        2: entity.name.namespace.llpl meta.symbol.llpl
+    - match: '\b(using)\s+(namespace)\s+({{path}})\b'
+      captures:
+        1: keyword.control.import.llpl
+        2: keyword.control.import.llpl
+        3: entity.name.namespace.llpl
+    - match: '\b(enum|struct|union|trait|impl)\s+({{ident}})\b'
+      captures:
+        1: keyword.declaration.type.llpl
+        2: entity.name.type.llpl meta.symbol.llpl
+    - match: '\b(class)\s+({{ident}})(?:\s*(:)\s*({{path}}))?'
+      captures:
+        1: keyword.declaration.class.llpl
+        2: entity.name.type.class.llpl meta.symbol.llpl
+        3: punctuation.separator.inheritance.llpl
+        4: entity.other.inherited-class.llpl
+    - match: '\b(ui)\s+({{ident}})\s*(:)\s*({{path}})'
+      captures:
+        1: keyword.declaration.ui.llpl
+        2: entity.name.type.ui.llpl meta.symbol.llpl
+        3: punctuation.separator.inheritance.llpl
+        4: entity.other.inherited-class.llpl
+    - match: '\b(func)\s+(operator)\s*(==|!=|<=|>=|<<|>>|[+\-*/%=<>!&|^~])'
+      captures:
+        1: keyword.declaration.function.llpl
+        2: keyword.operator.word.llpl
+        3: keyword.operator.llpl
+    - match: '\b(func)\s+({{ident}})\b'
+      captures:
+        1: keyword.declaration.function.llpl
+        2: entity.name.function.llpl meta.symbol.llpl
+    - match: '\b(alias|macro)\s+({{ident}})\b'
+      captures:
+        1: keyword.declaration.llpl
+        2: entity.name.function.llpl meta.symbol.llpl
+
+  keywords:
+    - match: '\b(?:if|else|while|for|foreach|in|match|case|return|break|continue|defer|try|catch|finally|throw|unless)\b'
+      scope: keyword.control.llpl
+    - match: '\b(?:import|from|as|new|delete|sizeof|assert|extern|static|constructor|destructor|operator|quote|unquote|asm|packed|volatile|const|let|pub|priv|mut)\b'
+      scope: keyword.other.llpl
+
+  types:
+    - match: '{{primitive}}'
+      scope: storage.type.primitive.llpl
+    - match: '\b(?:Self|Window|Column|Row|Panel|Card|Text|Button|ProgressBar|Slider|Checkbox|Badge|App|Widget|UiWidget)\b'
+      scope: support.type.llpl
+    - match: '\b{{ident}}\b(?=\s*[\[&*])'
+      scope: storage.type.llpl
+
+  constants:
+    - match: '\b(?:true|false|null)\b'
+      scope: constant.language.llpl
+    - match: '\b(?:self|super)\b'
+      scope: variable.language.llpl
+
+  macro-invocations:
+    - match: '\b{{ident}}!(?=\s*\()'
+      scope: entity.name.function.macro.llpl
+
+  function-calls:
+    - match: '\b{{ident}}\b(?=\s*\()'
+      scope: entity.name.function.call.llpl
+
+  member-access:
+    - match: '(\.)({{ident}})\b'
+      captures:
+        1: punctuation.accessor.llpl
+        2: variable.other.member.llpl
+
+  operators:
+    - match: '==|!=|<=|>=|<<|>>|\.\.|\?|[+\-*/%=<>!&|^~]'
+      scope: keyword.operator.llpl
+
+  punctuation:
+    - match: '[{}()\[\],:;]'
+      scope: punctuation.separator.llpl

@@ -123,6 +123,7 @@ void rc_retain(char* ptr);
 void rc_weak_retain(char* ptr);
 void rc_weak_release(char* ptr);
 bool rc_is_alive(char* ptr);
+int64_t rc_use_count(char* ptr);
 
 // Memory functions for kernel
 void* memset(void* dest, int val, size_t count);

@@ -1,0 +1,116 @@
+// Prototype retained-mode UI tree for the `ui Name: Root { ... }` DSL.
+// This hosted version renders a deterministic text tree, which keeps the
+// compiler feature testable while leaving real backends free to provide the
+// same class/field/add_child surface later.
+
+class UiWidget {
+    let kind: string
+    let title: string
+    let text: string
+    let width: i64
+    let height: i64
+    let spacing: i64
+    let first_child: UiWidget
+    let next_sibling: UiWidget
+
+    constructor(kind: string) {
+        self.kind = kind
+        self.title = ""
+        self.text = ""
+        self.width = 0
+        self.height = 0
+        self.spacing = 0
+        self.first_child = null
+        self.next_sibling = null
+    }
+
+    func add_child(child: UiWidget) {
+        if self.first_child == null {
+            rc_retain(child as char*)
+            self.first_child = child
+            return
+        }
+
+        let tail: UiWidget = self.first_child
+        while tail.next_sibling != null {
+            tail = tail.next_sibling
+        }
+        rc_retain(child as char*)
+        tail.next_sibling = child
+    }
+
+    func render(depth: i64) {
+        let indent: char[64]
+        let i: i64 = 0
+        while i < depth * 2 && i < 63 {
+            indent[i] = 32 as char
+            i = i + 1
+        }
+        indent[i] = 0
+
+        let line: char[256]
+        ksnprintf(line as string, 256, "%s%s title=\"%s\" text=\"%s\" width=%d height=%d spacing=%d",
+            indent as string, self.kind, self.title, self.text, self.width, self.height, self.spacing)
+        puts(line as string)
+
+        let child: UiWidget = self.first_child
+        while child != null {
+            child.render(depth + 1)
+            child = child.next_sibling
+        }
+    }
+}
+
+class Window : UiWidget {
+    constructor() {
+        super("Window")
+    }
+}
+
+class Column : UiWidget {
+    constructor() {
+        super("Column")
+    }
+}
+
+class Row : UiWidget {
+    constructor() {
+        super("Row")
+    }
+}
+
+class Text : UiWidget {
+    constructor() {
+        super("Text")
+    }
+}
+
+class Button : UiWidget {
+    constructor() {
+        super("Button")
+    }
+}
+
+class App {
+    let title: string
+    let width: i64
+    let height: i64
+    let root: UiWidget
+
+    constructor(title: string, width: i64, height: i64, root: UiWidget) {
+        self.title = title
+        self.width = width
+        self.height = height
+        self.root = root
+    }
+
+    func is_valid() -> bool {
+        return self.root != null
+    }
+
+    func run() {
+        if self.root != null {
+            self.root.render(0)
+        }
+    }
+}

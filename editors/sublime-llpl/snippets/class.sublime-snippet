@@ -1,0 +1,10 @@
+<snippet>
+  <content><![CDATA[class ${1:Name} {
+    constructor() {
+        $0
+    }
+}]]></content>
+  <tabTrigger>class</tabTrigger>
+  <scope>source.llpl</scope>
+  <description>LLPL class</description>
+</snippet>

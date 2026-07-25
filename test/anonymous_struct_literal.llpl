@@ -1,0 +1,29 @@
+extern func puts(s: char*) -> i64
+
+struct s {
+     bar: int
+     baz: int
+}
+
+func print_int(label: char*, value: int) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func make_s() -> s {
+    return { .bar = 128, .baz = 256 }
+}
+
+func main() -> i64 {
+    let x: s = { .bar = 64, .baz = 12 }
+    print_int("x.bar", x.bar)
+
+    let y: s = make_s()
+    print_int("y.bar", y.bar)
+
+    x = { .bar = 256, .baz = 67 }
+    print_int("x.new", x.bar)
+
+    return 0
+}

@@ -4,13 +4,15 @@
 namespace std {
 namespace text {
 
-// For stringstream's operator<</operator>> below - same "declare just
-// enough of the real signature to call it" stance stdlib/io/file.llpl's
-// own atoll/strtod/snprintf bindings already take (re-declaring an
-// identical extern is harmless, so no risk in both files doing it).
+// For stringstream's operator>> (text extraction) below - same "declare
+// just enough of the real signature to call it" stance
+// stdlib/io/file.llpl's own atoll/strtod bindings already take
+// (re-declaring an identical extern is harmless, so no risk in both
+// files doing it). operator<<(f64) needs no such binding anymore -
+// ksnprintf grew real %f support (see runtime.c's kfmt_putfloat), so it
+// uses that like every other overload below.
 extern func atoll(s: char*) -> i64
 extern func strtod(s: char*, endptr: char**) -> f64
-extern func snprintf(buf: char*, size: u64, fmt: char*, value: f64) -> i64
 
 // Helper function to create a string from a single character
 func char_to_string(c: char) -> String {
@@ -609,7 +611,7 @@ class stringstream {
 
     func operator<<(value: f64) -> stringstream {
         let b: char[64]
-        snprintf(b as char*, 64, "%f" as char*, value)
+        ksnprintf(b as char*, 64, "%f", value)
         self.append_cstr(b as char*)
         return self
     }
