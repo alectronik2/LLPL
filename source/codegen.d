@@ -294,6 +294,7 @@ class CodeGenerator {
     private bool[string] optionalInstantiations;
     private bool[string] resultInstantiations;
     private int propagateCounter; // numbers each `expr?`'s scratch temp var uniquely
+    private int inExprCounter; // numbers each `value in arr`'s scratch temp vars uniquely
 
     // Traits/interfaces (see processImplBlock): static, monomorphization-time
     // only - a trait bound never participates in any runtime dispatch, so
@@ -613,6 +614,9 @@ class CodeGenerator {
         } else if (auto whileStmt = cast(WhileStmt)node) {
             changed |= walkForReachableCalls(whileStmt.condition);
             changed |= walkForReachableCalls(whileStmt.body_);
+        } else if (auto doWhileStmt = cast(DoWhileStmt)node) {
+            changed |= walkForReachableCalls(doWhileStmt.body_);
+            changed |= walkForReachableCalls(doWhileStmt.condition);
         } else if (auto forStmt = cast(ForStmt)node) {
             if (forStmt.initializer) changed |= walkForReachableCalls(forStmt.initializer);
             if (forStmt.condition) changed |= walkForReachableCalls(forStmt.condition);
@@ -857,6 +861,17 @@ class CodeGenerator {
         bool isUnsigned = t.name == "u64" || t.name == "u8" ||
             t.name == "uint8" || t.name == "u16" || t.name == "uint16" ||
             t.name == "u32" || t.name == "uint32";
+        bool isFloat = !t.isPointer && !t.isArray && (t.name == "f32" || t.name == "f64");
+
+        if (spec.precision >= 0) {
+            if (!isFloat) {
+                throw new CompileError(
+                    format("Cannot use ':.%d' precision on a value of type '%s' - only floats support it",
+                        spec.precision, t.toString()),
+                    currentModulePath, expr.line, expr.column);
+            }
+            return format("%%.%df", spec.precision);
+        }
 
         if (spec.radix.length > 0 || spec.width > 0) {
             if (!isPlainInt) {
@@ -885,6 +900,11 @@ class CodeGenerator {
         switch (t.name) {
             case "i64": case "i8": case "int8": case "i16": case "int16": case "i32": case "int32": return "%d";
             case "u64": case "u8": case "uint8": case "u16": case "uint16": case "u32": case "uint32": return "%u";
+            // f32/f64 (see canonicalIntTypeName) both promote to `double`
+            // in the generated ksnprintf varargs call regardless, same as
+            // C's own float->double default argument promotion - runtime.c's
+            // kvsnprintf reads it back with `va_arg(args, double)`.
+            case "f32": case "f64": return "%f";
             default:
                 throw new CompileError(
                     format("Cannot interpolate a value of type '%s' inside a string - only " ~
@@ -1248,6 +1268,9 @@ class CodeGenerator {
         } else if (auto w = cast(WhileStmt)node) {
             collectNodeEffects(w.condition, effects);
             collectNodeEffects(w.body_, effects);
+        } else if (auto dw = cast(DoWhileStmt)node) {
+            collectNodeEffects(dw.body_, effects);
+            collectNodeEffects(dw.condition, effects);
         } else if (auto f = cast(ForStmt)node) {
             collectNodeEffects(f.initializer, effects);
             collectNodeEffects(f.condition, effects);
@@ -1521,6 +1544,9 @@ class CodeGenerator {
             } else if (auto unionDecl = cast(UnionDecl)decl) {
                 unionDecl.namespaceSegments = segments;
                 result ~= unionDecl;
+            } else if (auto uiDecl = cast(UiDecl)decl) {
+                uiDecl.namespaceSegments = segments;
+                result ~= uiDecl;
             } else if (auto enumDecl = cast(EnumDecl)decl) {
                 enumDecl.namespaceSegments = segments;
                 result ~= enumDecl;
@@ -1559,6 +1585,52 @@ class CodeGenerator {
             }
         }
         return result;
+    }
+
+    private string desugarUiNode(UiNode node, string parentVar, ref ASTNode[] stmts, ref int counter) {
+        string varName = format("__ui%d", counter++);
+        stmts ~= new VarDecl(varName, new Type(node.typeName),
+            new NewExpr(new Type(node.typeName), [], node.line, node.column),
+            false, node.line, node.column);
+
+        foreach (prop; node.properties) {
+            ASTNode value = prop.isHandler
+                ? cast(ASTNode)new LambdaExpr([], [], new Type("void"), prop.handlerBody, prop.line, prop.column)
+                : prop.value;
+            stmts ~= new ExprStmt(new BinaryExpr("=",
+                new MemberExpr(new Identifier(varName, prop.line, prop.column), prop.name, prop.line, prop.column),
+                value, prop.line, prop.column));
+            if (prop.isHandler) {
+                stmts ~= new ExprStmt(new BinaryExpr("=",
+                    new MemberExpr(new Identifier(varName, prop.line, prop.column),
+                        "has_" ~ prop.name, prop.line, prop.column),
+                    new BoolLiteral(true, prop.line, prop.column), prop.line, prop.column));
+            }
+        }
+
+        if (parentVar.length > 0) {
+            stmts ~= new ExprStmt(new CallExpr(
+                new MemberExpr(new Identifier(parentVar, node.line, node.column), "add_child", node.line, node.column),
+                [new Identifier(varName, node.line, node.column)], node.line, node.column));
+        }
+
+        foreach (child; node.children) {
+            desugarUiNode(child, varName, stmts, counter);
+        }
+
+        return varName;
+    }
+
+    private FunctionDecl desugarUiDecl(UiDecl decl) {
+        ASTNode[] stmts;
+        int counter = 0;
+        string rootVar = desugarUiNode(decl.root, "", stmts, counter);
+        stmts ~= new ReturnStmt(new Identifier(rootVar, decl.line, decl.column), decl.line, decl.column);
+
+        auto fn = new FunctionDecl("build", [], new Type(decl.root.typeName),
+            new Block(stmts), false, false, false, decl.line, decl.column);
+        fn.namespaceSegments = decl.namespaceSegments ~ decl.name;
+        return fn;
     }
 
     string generateMultiple(Program[] programs) {
@@ -1641,6 +1713,20 @@ class CodeGenerator {
                 }
             }
             prog.declarations = withGrammarsDesugared;
+        }
+
+        // Desugar `ui Name: Root { ... }` into a normal `Name.build()`
+        // function before registries/reachability/codegen see declarations.
+        foreach (prog; programs) {
+            ASTNode[] withUiDesugared;
+            foreach (decl; prog.declarations) {
+                if (auto uiDecl = cast(UiDecl)decl) {
+                    withUiDesugared ~= desugarUiDecl(uiDecl);
+                } else {
+                    withUiDesugared ~= decl;
+                }
+            }
+            prog.declarations = withUiDesugared;
         }
 
         // Pull every generic declaration (typeParams non-empty) out of
@@ -1984,6 +2070,9 @@ class CodeGenerator {
 
         if (usesSDL) {
             code ~= "#include <SDL3/SDL.h>\n";
+            if (linkLibraries.canFind("SDL3_ttf")) {
+                code ~= "#include <SDL3_ttf/SDL_ttf.h>\n";
+            }
         }
 
         code ~= "\n";
@@ -2114,7 +2203,7 @@ class CodeGenerator {
                         // needs to generate a correct call site, it just
                         // doesn't need to also re-assert them to the C
                         // compiler.
-                        bool isSdlBinding = funcDecl.name.startsWith("SDL_");
+                        bool isSdlBinding = funcDecl.name.startsWith("SDL_") || funcDecl.name.startsWith("TTF_");
                         if (!isSdlBinding) {
                             string params = "";
                             foreach (i, param; funcDecl.params) {
@@ -2290,6 +2379,31 @@ class CodeGenerator {
                             earlyDeclCode ~= format("%s %s(%s);\n", sName, mangleConstructorName(structDecl, sName, ctor), params);
                         }
                     }
+                    // Method forward declaration(s) - `self` is an
+                    // ordinary-by-value first parameter here (see
+                    // generateStructMethod's own comment), not a pointer
+                    // like a class method's.
+                    if (structDecl.methods.length > 0) {
+                        currentNamespaceSegments = structDecl.namespaceSegments;
+                        string sName = mangledStruct(structDecl);
+                        bool[string] checkedMethodNames;
+                        foreach (method; structDecl.methods) {
+                            if (method.name !in checkedMethodNames) {
+                                checkedMethodNames[method.name] = true;
+                                checkNoDuplicateSignatures(methodCandidatesNamed(structDecl, method.name),
+                                    format("method '%s.%s'", sName, method.name), method.line, method.column);
+                            }
+                            Type returnTypeForFwd = cloneType(method.returnType);
+                            resolveType(returnTypeForFwd);
+                            string params = format("%s self", sName);
+                            foreach (param; method.params) {
+                                resolveType(param.type);
+                                params ~= format(", %s %s", typeToC(param.type), param.name);
+                            }
+                            earlyDeclCode ~= format("%s %s(%s);\n",
+                                typeToC(returnTypeForFwd), mangleMethodName(structDecl, sName, method), params);
+                        }
+                    }
                 } else if (auto unionDecl = cast(UnionDecl)decl) {
                     // Same shape as the StructDecl case just above.
                     if (unionDecl.constructors.length > 0) {
@@ -2348,7 +2462,8 @@ class CodeGenerator {
                     } else if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
                         string baseType = primitiveToC(varDecl.type.name);
                         baseType ~= pointerStars(varDecl.type);
-                        earlyDeclCode ~= format("extern %s%s %s[%d];\n", constPrefix, baseType, cName, varDecl.type.arraySize);
+                        earlyDeclCode ~= format("extern %s%s %s[%d]%s;\n", constPrefix, baseType, cName,
+                            varDecl.type.arraySize, extraDimsSuffix(varDecl.type));
                     } else {
                         earlyDeclCode ~= format("extern %s%s %s;\n", constPrefix, typeToC(varDecl.type), cName);
                     }
@@ -2977,7 +3092,7 @@ class CodeGenerator {
         if (type.isArray && type.arraySize > 0) {
             string baseType = primitiveToC(type.name);
             baseType ~= pointerStars(type);
-            return format("    %s %s[%d];\n", baseType, name, type.arraySize);
+            return format("    %s %s[%d]%s;\n", baseType, name, type.arraySize, extraDimsSuffix(type));
         }
         return format("    %s %s;\n", typeToC(type), name);
     }
@@ -3020,14 +3135,17 @@ class CodeGenerator {
         return code;
     }
 
-    // This struct's constructors only - see generateStructLayout's own
-    // comment for why these are split apart and emitted at a different
-    // point in the final output.
+    // This struct's constructors and methods - see generateStructLayout's
+    // own comment for why these are split apart and emitted at a
+    // different point in the final output.
     private string generateStructMethods(StructDecl structDecl) {
         currentNamespaceSegments = structDecl.namespaceSegments;
         string code = "";
         foreach (ctor; structDecl.constructors) {
             code ~= generateStructConstructor(structDecl, ctor);
+        }
+        foreach (method; structDecl.methods) {
+            code ~= generateStructMethod(structDecl, method);
         }
         return code;
     }
@@ -3098,6 +3216,70 @@ class CodeGenerator {
         // un-bound again immediately after: leaving them live would
         // permanently shadow any later same-named global/field.
         foreach (param; constructor.params) {
+            variableTypes.remove(param.name);
+            constVariables.remove(param.name);
+        }
+        variableTypes.remove("self");
+
+        return code;
+    }
+
+    // A struct method (`func`/`func operator...` in the struct body - see
+    // ast.StructDecl.methods). `self` is an explicit, ordinary first
+    // parameter here (registered with pointerDepth 0, exactly like a
+    // constructor's own `self` at generateStructConstructor) rather than
+    // implicit-and-a-pointer the way a class method's is - there's no
+    // "struct reference" in this language, so self.field below already
+    // generates the right "." (not "->") via memberAccessor's own plain
+    // value-type check, with no special-casing needed here at all.
+    private string generateStructMethod(StructDecl structDecl, FunctionDecl method) {
+        string sName = mangledStruct(structDecl);
+        string code = "";
+        string params = format("%s self", sName);
+
+        string prevClassName = currentClassName;
+        currentClassName = sName;
+        currentNamespaceSegments = structDecl.namespaceSegments;
+        Type prevReturnType = currentReturnType;
+        currentReturnType = method.returnType;
+        Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
+        currentReturnTypeAsWritten = cloneType(method.returnType);
+        variableTypes["self"] = new Type(sName);
+        variableCNames = null;
+        shadowRenameCounter = 0;
+
+        foreach (param; method.params) {
+            resolveType(param.type);
+            params ~= format(", %s %s", typeToC(param.type), param.name);
+            variableTypes[param.name] = param.type;
+            if (param.isConst) constVariables[param.name] = true;
+        }
+
+        resolveType(method.returnType);
+        code ~= format("%s %s(%s) {\n", typeToC(method.returnType), mangleMethodName(structDecl, sName, method),
+            params);
+        indentLevel++;
+
+        deferredStatements = [];
+
+        string bodyCode = "";
+        if (method.body_) {
+            foreach (stmt; withImplicitReturn(method.body_.statements, method.returnType)) {
+                bodyCode ~= generateBodyStatement(stmt, false);
+            }
+        }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+        indentLevel--;
+        code ~= "}\n\n";
+
+        currentClassName = prevClassName;
+        currentReturnType = prevReturnType;
+        currentReturnTypeAsWritten = prevReturnTypeAsWritten;
+
+        foreach (param; method.params) {
             variableTypes.remove(param.name);
             constVariables.remove(param.name);
         }
@@ -3237,7 +3419,8 @@ class CodeGenerator {
         if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
             string baseType = primitiveToC(varDecl.type.name);
             baseType ~= pointerStars(varDecl.type);
-            code = format("%s%s%s %s[%d]", attrPrefix, constPrefix, baseType, cName, varDecl.type.arraySize);
+            code = format("%s%s%s %s[%d]%s", attrPrefix, constPrefix, baseType, cName, varDecl.type.arraySize,
+                extraDimsSuffix(varDecl.type));
         } else {
             code = format("%s%s%s %s", attrPrefix, constPrefix, typeToC(varDecl.type), cName);
         }
@@ -4057,7 +4240,7 @@ class CodeGenerator {
             // via <SDL3/SDL.h>, and re-declaring it here too (with LLPL's
             // best non-const approximation) conflicts with it rather than
             // harmlessly duplicating it. Same skip, same reason.
-            if (funcDecl.name.startsWith("SDL_")) return "";
+            if (funcDecl.name.startsWith("SDL_") || funcDecl.name.startsWith("TTF_")) return "";
             string params = "";
             foreach (i, param; funcDecl.params) {
                 if (i > 0) params ~= ", ";
@@ -4745,6 +4928,34 @@ class CodeGenerator {
             generateExpression(stmt.value), t.name);
     }
 
+    // `value in arr` - true if any element of a fixed-size array equals
+    // value. Desugars to a GCC statement-expression scan loop; only a
+    // fixed-size array (T[N], arraySize known at compile time) is
+    // supported - a dynamic T[]/pointer has no length to scan, so that
+    // throws a clear error instead of reading past whatever memory
+    // happens to follow.
+    private string generateInExpr(BinaryExpr binExpr) {
+        Type arrType;
+        try {
+            arrType = inferType(binExpr.right);
+            resolveType(arrType);
+        } catch (Exception e) {
+            throw new CompileError("'in' needs a typed array on its right side",
+                currentModulePath, binExpr.line, binExpr.column);
+        }
+        if (!arrType.isArray || arrType.arraySize <= 0) {
+            throw new CompileError(
+                format("'in' needs a fixed-size array (T[N]) on its right side, not '%s'", arrType.toString()),
+                currentModulePath, binExpr.line, binExpr.column);
+        }
+        string valueCode = generateExpression(binExpr.left);
+        string arrCode = generateExpression(binExpr.right);
+        string tmp = format("__in%d", inExprCounter++);
+        return format("({ bool %s_found = false; for (uint64_t %s_i = 0; %s_i < %d; %s_i++) " ~
+            "{ if (%s[%s_i] == (%s)) { %s_found = true; break; } } %s_found; })",
+            tmp, tmp, tmp, arrType.arraySize, tmp, arrCode, tmp, valueCode, tmp, tmp);
+    }
+
     private string generateAssertStmt(AssertStmt stmt) {
         string condition = generateExpression(stmt.condition);
         string message = "";
@@ -4981,7 +5192,8 @@ class CodeGenerator {
             if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
                 string baseType = primitiveToC(varDecl.type.name);
                 baseType ~= pointerStars(varDecl.type);
-                code ~= indent() ~ format("%s%s %s[%d]", constPrefix, baseType, emitName, varDecl.type.arraySize);
+                code ~= indent() ~ format("%s%s %s[%d]%s", constPrefix, baseType, emitName, varDecl.type.arraySize,
+                    extraDimsSuffix(varDecl.type));
             } else {
                 code ~= indent() ~ format("%s%s %s", constPrefix, typeToC(varDecl.type), emitName);
             }
@@ -5041,6 +5253,14 @@ class CodeGenerator {
             }
             indentLevel--;
             code ~= indent() ~ "}\n";
+        } else if (auto doWhileStmt = cast(DoWhileStmt)node) {
+            code ~= indent() ~ "do {\n";
+            indentLevel++;
+            foreach (stmt; doWhileStmt.body_.statements) {
+                code ~= generateStatement(stmt, isDeferred);
+            }
+            indentLevel--;
+            code ~= indent() ~ "} while (" ~ generateExpression(doWhileStmt.condition) ~ ");\n";
         } else if (auto forStmt = cast(ForStmt)node) {
             code ~= indent() ~ "{\n";
             indentLevel++;
@@ -5135,7 +5355,12 @@ class CodeGenerator {
             indentLevel--;
             code ~= indent() ~ "}\n";
         } else if (auto exprStmt = cast(ExprStmt)node) {
-            code ~= indent() ~ generateExpression(exprStmt.expression) ~ ";\n";
+            string arrayAssign = generateArrayLiteralAssignmentStmt(exprStmt.expression);
+            if (arrayAssign.length > 0) {
+                code ~= arrayAssign;
+            } else {
+                code ~= indent() ~ generateExpression(exprStmt.expression) ~ ";\n";
+            }
         } else if (auto asmStmt = cast(AsmStmt)node) {
             code ~= generateAsm(asmStmt);
         } else if (auto matchStmt = cast(MatchStmt)node) {
@@ -5175,6 +5400,7 @@ class CodeGenerator {
             }
         }
         auto copy = new Type(t.name, t.pointerDepth, t.isArray, t.arraySize);
+        copy.extraDims = t.extraDims.dup;
         copy.typeArgs = t.typeArgs.map!(a => cloneType(a, typeSubs)).array;
         if (t.closureReturnType !is null) {
             Parameter[] cps;
@@ -5307,6 +5533,9 @@ class CodeGenerator {
                 cloneBlock(ifStmt.elseBlock, subs, typeSubs));
         } else if (auto whileStmt = cast(WhileStmt)node) {
             return new WhileStmt(cloneNode(whileStmt.condition, subs, typeSubs), cloneBlock(whileStmt.body_, subs, typeSubs));
+        } else if (auto doWhileStmt = cast(DoWhileStmt)node) {
+            return new DoWhileStmt(cloneBlock(doWhileStmt.body_, subs, typeSubs),
+                cloneNode(doWhileStmt.condition, subs, typeSubs), doWhileStmt.line, doWhileStmt.column);
         } else if (auto forStmt = cast(ForStmt)node) {
             return new ForStmt(cloneNode(forStmt.initializer, subs, typeSubs), cloneNode(forStmt.condition, subs, typeSubs),
                 cloneNode(forStmt.update, subs, typeSubs), cloneBlock(forStmt.body_, subs, typeSubs));
@@ -5510,6 +5739,9 @@ class CodeGenerator {
         } else if (auto whileStmt = cast(WhileStmt)node) {
             return new WhileStmt(expandQuotedNode(whileStmt.condition, subs),
                 expandQuotedBlock(whileStmt.body_, subs));
+        } else if (auto doWhileStmt = cast(DoWhileStmt)node) {
+            return new DoWhileStmt(expandQuotedBlock(doWhileStmt.body_, subs),
+                expandQuotedNode(doWhileStmt.condition, subs), doWhileStmt.line, doWhileStmt.column);
         } else if (auto forStmt = cast(ForStmt)node) {
             return new ForStmt(expandQuotedNode(forStmt.initializer, subs),
                 expandQuotedNode(forStmt.condition, subs), expandQuotedNode(forStmt.update, subs),
@@ -5860,6 +6092,20 @@ class CodeGenerator {
             string cond = "";
             foreach (i, pattern; matchCase.patterns) {
                 if (i > 0) cond ~= " || ";
+                // `case 1..5 => ...` - an inclusive range pattern (same
+                // `..` RangeExpr `for i in 1..5` already uses), matched by
+                // bounds rather than equality. Only meaningful for a
+                // numeric subject - isString's own strcmp path has no
+                // sensible reading of "in range".
+                if (auto rangeExpr = cast(RangeExpr)pattern) {
+                    if (isString) {
+                        throw new CompileError("A range pattern ('..') needs a numeric match subject, not a string",
+                            currentModulePath, rangeExpr.line, rangeExpr.column);
+                    }
+                    cond ~= format("(%s >= %s && %s <= %s)", tmpName, generateExpression(rangeExpr.start),
+                        tmpName, generateExpression(rangeExpr.end));
+                    continue;
+                }
                 string patternExpr = generateExpression(pattern);
                 cond ~= isString
                     ? format("(strcmp(%s, %s) == 0)", tmpName, patternExpr)
@@ -6123,6 +6369,138 @@ class CodeGenerator {
                     lit.elements.length, varDecl.name, varDecl.type.name, varDecl.type.arraySize),
                 currentModulePath, varDecl.initializer.line, varDecl.initializer.column);
         }
+        if (varDecl.type.extraDims.length > 0) {
+            checkNestedArrayDims(lit, varDecl.type.extraDims, varDecl.name, varDecl.type.name);
+        }
+    }
+
+    // `T[2][3]`'s own nested-literal check - each element of `lit` must
+    // itself be an array literal of size `dims[0]`, recursing for any
+    // further dims. Only the outer dimension auto-fills its size from the
+    // literal (checkArrayLiteralInit above); every nested dimension must
+    // already be written explicitly in the declared type.
+    private void checkNestedArrayDims(ArrayLiteral lit, int[] dims, string varName, string typeName) {
+        if (dims.length == 0) return;
+        foreach (elem; lit.elements) {
+            auto subLit = cast(ArrayLiteral)elem;
+            if (subLit is null) {
+                throw new CompileError(
+                    format("Array literal for '%s' needs a nested array literal here (declared as %s[]...[%d])",
+                        varName, typeName, dims[0]),
+                    currentModulePath, elem.line, elem.column);
+            }
+            if (subLit.elements.length != dims[0]) {
+                throw new CompileError(
+                    format("Nested array literal for '%s' has %d element(s), expected %d",
+                        varName, subLit.elements.length, dims[0]),
+                    currentModulePath, subLit.line, subLit.column);
+            }
+            checkNestedArrayDims(subLit, dims[1 .. $], varName, typeName);
+        }
+    }
+
+    // `arr = [1, 2, 3]` (or a nested `arr = [[1,2],[3,4]]`) as a
+    // standalone assignment, not just a `let` initializer. Same shape
+    // validation as checkArrayLiteralInit/checkNestedArrayDims, but the
+    // target's size is already fixed (nothing to auto-fill from the
+    // literal - the variable was declared earlier), and instead of C's
+    // own brace-init (only legal in a declaration) this compiles to a
+    // memcpy from a GCC compound literal, which C does allow anywhere an
+    // expression goes.
+    private string generateArrayLiteralAssignment(BinaryExpr binExpr, ArrayLiteral arrLit, Type leftType) {
+        if (!leftType.isArray || leftType.arraySize <= 0) {
+            throw new CompileError(
+                "Cannot assign an array literal here: target isn't a fixed-size array",
+                currentModulePath, arrLit.line, arrLit.column);
+        }
+        if (cast(int)arrLit.elements.length != leftType.arraySize) {
+            throw new CompileError(
+                format("Array literal has %d element(s), but the target is %s[%d]",
+                    arrLit.elements.length, leftType.name, leftType.arraySize),
+                currentModulePath, arrLit.line, arrLit.column);
+        }
+        if (leftType.extraDims.length > 0) {
+            checkNestedArrayDims(arrLit, leftType.extraDims, "assignment target", leftType.name);
+        }
+
+        string baseType = primitiveToC(leftType.name) ~ pointerStars(leftType);
+        string typeText = format("%s[%d]%s", baseType, leftType.arraySize, extraDimsSuffix(leftType));
+        string targetCode = generateExpression(binExpr.left);
+        string valueCode = generateExpression(arrLit);
+        // memcpy is a GCC/libc builtin recognized without any explicit
+        // extern/include - same "GCC already knows this symbol" reasoning
+        // this codebase's own puts/ksnprintf declarations already lean on.
+        return format("memcpy(%s, (%s)%s, sizeof(%s))", targetCode, typeText, valueCode, targetCode);
+    }
+
+    private Type fixedArrayElementType(Type arrType) {
+        Type elemType = cloneType(arrType);
+        if (arrType.extraDims.length > 0) {
+            elemType.isArray = true;
+            elemType.arraySize = arrType.extraDims[0];
+            elemType.extraDims = arrType.extraDims[1 .. $].dup;
+        } else {
+            elemType.isArray = false;
+            elemType.arraySize = 0;
+            elemType.extraDims = [];
+        }
+        return elemType;
+    }
+
+    private void checkArrayLiteralAssignment(ArrayLiteral lit, Type targetType) {
+        if (!targetType.isArray || targetType.arraySize <= 0) {
+            throw new CompileError(
+                format("Cannot assign an array literal here: target type is '%s', not a fixed-size array",
+                    targetType.toString()),
+                currentModulePath, lit.line, lit.column);
+        }
+        if (targetType.arraySize != lit.elements.length) {
+            throw new CompileError(
+                format("Array literal has %d element(s), but assignment target is declared as %s[%d]",
+                    lit.elements.length, targetType.name, targetType.arraySize),
+                currentModulePath, lit.line, lit.column);
+        }
+        if (targetType.extraDims.length > 0) {
+            checkNestedArrayDims(lit, targetType.extraDims, "assignment target", targetType.name);
+        } else {
+            foreach (elem; lit.elements) {
+                if (cast(ArrayLiteral)elem) {
+                    throw new CompileError(
+                        "Nested array literal cannot be assigned into a one-dimensional array",
+                        currentModulePath, elem.line, elem.column);
+                }
+            }
+        }
+    }
+
+    private string generateArrayLiteralStores(string targetCode, Type targetType, ArrayLiteral lit) {
+        Type elemType = fixedArrayElementType(targetType);
+        string code = "";
+        foreach (i, elem; lit.elements) {
+            string slot = format("%s[%d]", targetCode, i);
+            if (auto nested = cast(ArrayLiteral)elem) {
+                code ~= generateArrayLiteralStores(slot, elemType, nested);
+            } else {
+                ASTNode value = insertNumericCoercionIfNeeded(elem, elemType);
+                code ~= indent() ~ format("%s = %s;\n", slot, generateExpression(value));
+            }
+        }
+        return code;
+    }
+
+    private string generateArrayLiteralAssignmentStmt(ASTNode expr) {
+        auto binExpr = cast(BinaryExpr)expr;
+        if (binExpr is null || binExpr.op != "=") return "";
+
+        ASTNode rhs = expandArrayAliasesShallow(binExpr.right);
+        auto lit = cast(ArrayLiteral)rhs;
+        if (lit is null) return "";
+
+        checkNotConstAssignment(binExpr.left);
+        Type targetType = inferType(binExpr.left);
+        resolveType(targetType);
+        checkArrayLiteralAssignment(lit, targetType);
+        return generateArrayLiteralStores(generateExpression(binExpr.left), targetType, lit);
     }
 
     // Structs (and unions) are plain value types with no allocator -
@@ -6197,6 +6575,28 @@ class CodeGenerator {
     // (ast.StructLiteral's doc comment) - the same "context supplies T"
     // relationship generateNullableWrap's Optional<T> already relies on.
     private StructDecl resolveStructLiteralTarget(StructLiteral lit, Type expectedType, out string mangledName) {
+        if (lit.typeName.length == 0) {
+            if (expectedType is null) {
+                throw new CompileError(
+                    "Anonymous struct literal needs an explicit expected type",
+                    currentModulePath, lit.line, lit.column);
+            }
+            Type targetType = cloneType(expectedType);
+            resolveType(targetType);
+            if (targetType.name in structRegistry) {
+                mangledName = targetType.name;
+                return structRegistry[mangledName];
+            }
+            if (targetType.name in classRegistry) {
+                throw new CompileError(
+                    "Anonymous struct literal target is a class; use 'new' instead",
+                    currentModulePath, lit.line, lit.column);
+            }
+            throw new CompileError(
+                format("Anonymous struct literal target type '%s' is not a struct", targetType.toString()),
+                currentModulePath, lit.line, lit.column);
+        }
+
         string aliased = resolveLocalImportAlias(lit.typeName);
         if (aliased.length > 0) {
             lit.typeName = aliased;
@@ -6275,9 +6675,10 @@ class CodeGenerator {
         StructDecl decl = resolveStructLiteralTarget(lit, expectedType, mangledName);
 
         if (lit.fieldNames.length != decl.fields.length) {
+            string displayName = lit.typeName.length > 0 ? lit.typeName : mangledName;
             throw new CompileError(format(
                 "Struct literal for '%s' has %d field(s), but '%s' declares %d",
-                lit.typeName, lit.fieldNames.length, mangledName, decl.fields.length),
+                displayName, lit.fieldNames.length, mangledName, decl.fields.length),
                 currentModulePath, lit.line, lit.column);
         }
 
@@ -6285,8 +6686,9 @@ class CodeGenerator {
         bool[string] seen;
         foreach (i, fieldName; lit.fieldNames) {
             if (fieldName in seen) {
+                string displayName = lit.typeName.length > 0 ? lit.typeName : mangledName;
                 throw new CompileError(format("Field '%s' given more than once in this '%s' literal",
-                    fieldName, lit.typeName), currentModulePath, lit.line, lit.column);
+                    fieldName, displayName), currentModulePath, lit.line, lit.column);
             }
             seen[fieldName] = true;
 
@@ -6873,7 +7275,27 @@ class CodeGenerator {
         foreach (i, param; tmpl.params) {
             if (i >= args.length) continue;
             if (tmpl.typeParams.canFind(param.type.name) && (param.type.name in bindings) is null) {
-                bindings[param.type.name] = inferType(args[i]);
+                Type argType = inferType(args[i]);
+                // `param.type` may itself be `T*` and/or `T[]` (pointerDepth
+                // > 0 / isArray true), not just a bare `T` - e.g. `func
+                // swap<T>(a: T*, b: T*)` called as `swap(&x, &y)`, or `func
+                // first<T>(arr: T[]) -> T` called with an `i64[]` argument.
+                // The binding recorded for T needs whichever of those the
+                // parameter's own declared type already accounts for
+                // *removed* from the argument's inferred type, or the
+                // monomorphized clone doubles them - a `T*` parameter making
+                // `i64*` become `i64**` (this file's own cloneType already
+                // adds pointerDepth back on top of a binding that has its
+                // own, deliberately - see its comment - so a binding that
+                // hasn't first had the parameter's own depth subtracted
+                // ends up double-counted), and a bare `T` return type
+                // wrongly inheriting `isArray` from a `T[]` parameter's
+                // argument, turning a plain `i64` return into an `int64_t*`
+                // one instead.
+                int depthAdjust = param.type.pointerDepth;
+                bool bindingIsArray = param.type.isArray ? false : argType.isArray;
+                bindings[param.type.name] = new Type(argType.name, argType.pointerDepth - depthAdjust,
+                    bindingIsArray, argType.arraySize);
                 continue;
             }
             // A param shaped like `Slice<T>` (T nested inside another
@@ -7106,6 +7528,19 @@ class CodeGenerator {
                     isUnionTypeName(t.name)) {
                 return argCode;
             }
+            // f32/f64 need C's own float->double promotion here, not the
+            // long long every other non-pointer vararg needs below - a
+            // real `(long long)(3.14)` cast *converts the value* (to 3),
+            // which va_arg(args, double) on the receiving end (runtime.c's
+            // kvsnprintf, for %f) then reads back as the bit pattern of a
+            // completely different, near-zero double. Explicit (double)
+            // here isn't even strictly required (C already promotes a
+            // bare `float` this way in a varargs call), just documents
+            // that this is the one non-pointer type that must *not* fall
+            // through to the long long cast below.
+            if (t.name == "f32" || t.name == "f64" || t.name == "float" || t.name == "double") {
+                return format("((double)(%s))", argCode);
+            }
             return format("((long long)(%s))", argCode);
         } catch (Exception e) {
             return argCode;
@@ -7264,8 +7699,40 @@ class CodeGenerator {
             if (i >= result.length) break;
             result[i] = insertUpcastIfNeeded(result[i], param.type);
             result[i] = insertNumericCoercionIfNeeded(result[i], param.type);
+            result[i] = insertImplicitConversionCastIfNeeded(result[i], param.type);
         }
         return result;
+    }
+
+    // Same idea as insertUpcastIfNeeded/insertNumericCoercionIfNeeded just
+    // above, for a *class*/struct that implicitly converts (see
+    // tryImplicitConversionCall/implicitConversionKind) - `puts(someStream)`
+    // now works the same way `let s: char* = someStream` (an assignment,
+    // which already went through tryImplicitConversionCall) always could.
+    // Wraps the argument in the same synthetic `as TargetType` cast an
+    // explicit one would be, so CastExpr's own already-correct codegen
+    // (which already calls tryImplicitConversionCall, falling back to a
+    // plain C cast when it doesn't apply) does the real work - no new
+    // conversion logic here, just reaching the existing one from a new
+    // call site.
+    //
+    // Only wraps when the argument is *actually* a class/struct value -
+    // never for an already-compatible or genuinely mismatched primitive,
+    // which needs to stay a real "incompatible pointer type" compile
+    // error instead of silently type-punning through a pointless cast
+    // (an int argument passed where char* was expected, say).
+    private ASTNode insertImplicitConversionCastIfNeeded(ASTNode arg, Type targetType) {
+        if (implicitConversionKind(targetType).length == 0) return arg;
+        Type argType;
+        try {
+            argType = inferType(arg);
+            resolveType(argType);
+        } catch (Exception e) {
+            return arg;
+        }
+        if (argType.pointerDepth != 0 || argType.isArray) return arg;
+        if ((argType.name in classRegistry) is null && (argType.name in structRegistry) is null) return arg;
+        return new CastExpr(cloneType(targetType), arg, arg.line, arg.column);
     }
 
     // "(Type1, Type2)" - the parameter-types half of a human-readable
@@ -7431,6 +7898,21 @@ class CodeGenerator {
     private string mangleConstructorName(StructDecl sd, string sName, FunctionDecl ctor) {
         if (sd.constructors.length <= 1) return format("%s_new", sName);
         return format("%s_new%s", sName, overloadSuffix(ctor.params));
+    }
+
+    private FunctionDecl[] methodCandidatesNamed(StructDecl sd, string name) {
+        FunctionDecl[] result;
+        foreach (m; sd.methods) if (m.name == name) result ~= m;
+        return result;
+    }
+
+    // Same convention as the ClassDecl overload above - no hierarchy walk
+    // needed (a struct has no base/derived types to search), just this
+    // struct's own flat methods list.
+    private string mangleMethodName(StructDecl sd, string sName, FunctionDecl method) {
+        auto candidates = methodCandidatesNamed(sd, method.name);
+        if (candidates.length <= 1) return format("%s_%s", sName, method.name);
+        return format("%s_%s%s", sName, method.name, overloadSuffix(method.params));
     }
 
     // Same convention again, for `union`.
@@ -7953,6 +8435,17 @@ class CodeGenerator {
                             // entirely, same as any other lookup failure here.
                         }
                     }
+                } else if (auto structDecl = selfType.name in structRegistry) {
+                    // Same idea, no hierarchy to walk (a struct has none).
+                    auto candidates = methodCandidatesNamed(*structDecl, methodName);
+                    if (candidates.length == 1) return candidates[0];
+                    if (candidates.length > 1 && rightOperand !is null) {
+                        try {
+                            return resolveOverload(candidates, [rightOperand], [],
+                                format("operator '%s'", op), selfOperand.line, selfOperand.column);
+                        } catch (CompileError e) {
+                        }
+                    }
                 }
                 if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
                     return *fn;
@@ -7991,6 +8484,15 @@ class CodeGenerator {
                 auto candidates = resolveMethodOnHierarchy(*classDecl, methodName, owner);
                 if (candidates.length > 0) {
                     string ownerName = mangledClass(owner);
+                    if (candidates.length > 1) {
+                        return format("%s_%s%s", ownerName, methodName, overloadSuffix(matched.params));
+                    }
+                    return format("%s_%s", ownerName, methodName);
+                }
+            } else if (auto structDecl = selfType.name in structRegistry) {
+                auto candidates = methodCandidatesNamed(*structDecl, methodName);
+                if (candidates.length > 0) {
+                    string ownerName = mangledStruct(*structDecl);
                     if (candidates.length > 1) {
                         return format("%s_%s%s", ownerName, methodName, overloadSuffix(matched.params));
                     }
@@ -8058,6 +8560,24 @@ class CodeGenerator {
                         "operator '[]='", indexExpr.line, indexExpr.column);
                     callName = format("%s_%s%s", mangledClass(owner), methodName, overloadSuffix(matched.params));
                 }
+            } else if (auto structDecl = selfType.name in structRegistry) {
+                // Same lookup, no hierarchy - but see generateStructMethod's
+                // own comment: self is by value here, so this mutates only
+                // the callee's own local copy. Genuinely useless as a
+                // plain `x[i] = value` statement (the mutated copy is
+                // discarded the moment the call returns) - but still lets
+                // `x[i] = value` type-check and run rather than erroring,
+                // matching this language's general "struct methods take
+                // self by value" stance rather than special-casing this one
+                // operator to secretly take a pointer.
+                auto candidates = methodCandidatesNamed(*structDecl, methodName);
+                if (candidates.length == 1) {
+                    callName = format("%s_%s", mangledStruct(*structDecl), methodName);
+                } else if (candidates.length > 1) {
+                    auto matched = resolveOverload(candidates, [indexExpr.index, valueExpr], [],
+                        "operator '[]='", indexExpr.line, indexExpr.column);
+                    callName = format("%s_%s%s", mangledStruct(*structDecl), methodName, overloadSuffix(matched.params));
+                }
             }
             if (callName.length == 0) {
                 if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
@@ -8065,19 +8585,27 @@ class CodeGenerator {
                 }
             }
             if (callName.length == 0) {
-                // A class with a getter but no setter would otherwise fall
-                // through to a plain C assignment against the getter call's
-                // result - "lvalue required as left operand of assignment",
-                // a real error but a confusing one to land on for a class
-                // that quite reasonably only wants to support `arr[i]`, not
-                // `arr[i] = x`. Give a clear LLPL-level error instead, but
-                // only when the type is unambiguously a class defining the
-                // getter - anything else (no operator[] at all) isn't this
-                // function's problem to diagnose.
+                // A class/struct with a getter but no setter would otherwise
+                // fall through to a plain C assignment against the getter
+                // call's result - "lvalue required as left operand of
+                // assignment", a real error but a confusing one to land on
+                // for a type that quite reasonably only wants to support
+                // `arr[i]`, not `arr[i] = x`. Give a clear LLPL-level error
+                // instead, but only when the type is unambiguously a
+                // class/struct defining the getter - anything else (no
+                // operator[] at all) isn't this function's problem to
+                // diagnose.
                 string getterName = operatorMethodName("[]", 1);
                 if (auto classDecl = selfType.name in classRegistry) {
                     ClassDecl owner;
                     if (resolveMethodOnHierarchy(*classDecl, getterName, owner).length > 0) {
+                        throw new CompileError(format(
+                            "'%s' defines operator[] for reading but not writing - add a 2-parameter " ~
+                            "'func operator[](index, value)' overload to support 'x[i] = value'",
+                            selfType.name), currentModulePath, indexExpr.line, indexExpr.column);
+                    }
+                } else if (auto structDecl = selfType.name in structRegistry) {
+                    if (methodCandidatesNamed(*structDecl, getterName).length > 0) {
                         throw new CompileError(format(
                             "'%s' defines operator[] for reading but not writing - add a 2-parameter " ~
                             "'func operator[](index, value)' overload to support 'x[i] = value'",
@@ -8304,8 +8832,20 @@ class CodeGenerator {
     // tryResolveQualifiedPath's mangled-path lookup comes up empty. Scoped
     // to extern functions specifically (not a blanket bare-name fallback)
     // to avoid silently matching an unrelated same-named top-level symbol.
+    //
+    // Same "root is a real local/instance variable - prefer normal member
+    // access" guard tryResolveQualifiedPath already applies: without it,
+    // `file.read(...)` on a File instance whose own `read` *method* exists
+    // would incorrectly resolve to this module's unrelated extern
+    // `read(fd, buf, count)` instead, just because they happen to share a
+    // bare name - a real bug this exact File.read/extern read collision
+    // surfaced (stdlib/io/file.llpl).
     private string tryResolveExternFunctionMember(ASTNode expr) {
         if (auto member = cast(MemberExpr)expr) {
+            string root = leftmostName(member.object);
+            if (root.length > 0 && (root in variableTypes)) {
+                return ""; // root is a real local/instance variable; prefer normal member access
+            }
             if (auto fd = member.member in functionRegistry) {
                 if (fd.isExtern) return member.member;
             }
@@ -8561,6 +9101,17 @@ class CodeGenerator {
                 // (here, the already-inferred left-hand side's type) so a
                 // *generic* struct/tuple literal can resolve its type args.
                 if (leftType !is null) {
+                    // `arr = [1, 2, 3]` - a plain array literal as a
+                    // standalone assignment target, not just a `let`
+                    // initializer (checkArrayLiteralInit's original spot).
+                    // C arrays aren't assignable as a whole (`arr = ...`
+                    // isn't real C), so this compiles to a memcpy from a
+                    // GCC compound literal instead - `memcpy(arr, (T[N]){
+                    // ... }, sizeof(arr))` - which already indexes/nests
+                    // correctly for a multi-dim array (ast.Type.extraDims).
+                    if (auto arrLit = cast(ArrayLiteral)binExpr.right) {
+                        return generateArrayLiteralAssignment(binExpr, arrLit, leftType);
+                    }
                     if (auto structLit = cast(StructLiteral)binExpr.right) {
                         return generateExpression(binExpr.left) ~ " = " ~
                             generateStructLiteralValue(structLit, leftType);
@@ -8582,6 +9133,9 @@ class CodeGenerator {
                     }
                 }
                 return generateExpression(binExpr.left) ~ " = " ~ generateExpression(binExpr.right);
+            }
+            if (binExpr.op == "in") {
+                return generateInExpr(binExpr);
             }
             string overloadCall = tryBinaryOperatorOverloadCall(binExpr);
             if (overloadCall.length > 0) {
@@ -8838,6 +9392,14 @@ class CodeGenerator {
                     ? classRegistry[className] : null;
                 ClassDecl owner;
                 FunctionDecl[] candidates = cd !is null ? resolveMethodOnHierarchy(cd, methodName, owner) : [];
+                // A struct has no base/derived types to walk - just its own
+                // flat methods list (ast.StructDecl.methods). Only tried
+                // once cd itself came up empty, same "class takes priority"
+                // stance a struct and class could never share a name under
+                // anyway (mangleTypeArg gives each its own registry key).
+                StructDecl sd = (cd is null && className.length > 0 && className in structRegistry)
+                    ? structRegistry[className] : null;
+                FunctionDecl[] structCandidates = sd !is null ? methodCandidatesNamed(sd, methodName) : [];
                 string calleeDescription = format("method '%s.%s'", className, methodName);
                 ASTNode[] resolvedArgs;
                 FunctionDecl methodDecl = null;
@@ -8848,7 +9410,7 @@ class CodeGenerator {
                 // behavior of trusting that mechanism rather than requiring
                 // every method to be registered here.
                 string methodSymbol = className.length > 0 ? format("%s_%s", className, methodName) : "";
-                if (candidates.length == 0) {
+                if (candidates.length == 0 && structCandidates.length == 0) {
                     if (hasNamedArgs(callExpr.argNames)) {
                         throw new CompileError(
                             format("Cannot resolve named arguments for '%s' - its target method " ~
@@ -8856,7 +9418,7 @@ class CodeGenerator {
                             currentModulePath, callExpr.line, callExpr.column);
                     }
                     resolvedArgs = callExpr.args;
-                } else {
+                } else if (candidates.length > 0) {
                     methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
                         calleeDescription, callExpr.line, callExpr.column);
                     checkMemberAccess(methodDecl.isPrivate, mangledClass(owner), calleeDescription,
@@ -8866,6 +9428,18 @@ class CodeGenerator {
                             callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
                         methodDecl.params);
                     methodSymbol = mangleMethodName(owner, mangledClass(owner), methodDecl);
+                } else {
+                    // Struct method - self is passed by value (see
+                    // generateStructMethod), so objectExpr below needs no
+                    // address-of; structs have no `private` concept yet, so
+                    // no checkMemberAccess call to mirror the class path's.
+                    methodDecl = resolveOverload(structCandidates, callExpr.args, callExpr.argNames,
+                        calleeDescription, callExpr.line, callExpr.column);
+                    resolvedArgs = applyImplicitArgumentConversions(
+                        resolveCallArguments(methodDecl.params, false, callExpr.args,
+                            callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
+                        methodDecl.params);
+                    methodSymbol = mangleMethodName(sd, className, methodDecl);
                 }
 
                 // A virtual/overridden method dispatches through the
@@ -8897,7 +9471,14 @@ class CodeGenerator {
                 // Generate method call with object as first parameter (except for static methods)
                 string args = "";
                 if (methodDecl is null || !methodDecl.isStatic) {
-                    args = objectExpr;
+                    string receiverExpr = objectExpr;
+                    if (methodDecl !is null && cd !is null) {
+                        string ownerName = mangledClass(owner);
+                        if (ownerName != className) {
+                            receiverExpr = format("((%s*)%s)", ownerName, objectExpr);
+                        }
+                    }
+                    args = receiverExpr;
                 }
                 foreach (i, arg; resolvedArgs) {
                     if (args.length > 0) args ~= ", ";
@@ -9455,7 +10036,7 @@ class CodeGenerator {
             }
             switch (binExpr.op) {
                 case "==": case "!=": case "<": case ">": case "<=": case ">=":
-                case "&&": case "||":
+                case "&&": case "||": case "in":
                     return new Type("bool");
                 default:
                     Type leftType = inferType(binExpr.left);
@@ -9504,6 +10085,11 @@ class CodeGenerator {
                 foreach (method; classDecl.methods) {
                     if (method.name == methodName) return method.returnType;
                 }
+            } else if (auto structDecl = arrType.name in structRegistry) {
+                string methodName = operatorMethodName("[]", 1);
+                foreach (method; structDecl.methods) {
+                    if (method.name == methodName) return method.returnType;
+                }
             }
             throw inferError(expr, "Cannot infer type: indexing a non-array, non-pointer value");
         } else if (auto macroInvocation = cast(MacroInvocation)expr) {
@@ -9528,6 +10114,15 @@ class CodeGenerator {
     // string instead of going through typeToC itself.
     private string pointerStars(Type t) {
         return "*".replicate(t.pointerDepth);
+    }
+
+    // `[2][3]`-style suffix for a fixed array's *extra* nested dimensions
+    // (see ast.Type.extraDims) - the outer `[N]` is emitted by each call
+    // site itself (arraySize), this is just what comes after it.
+    private string extraDimsSuffix(Type t) {
+        string s = "";
+        foreach (dim; t.extraDims) s ~= format("[%d]", dim);
+        return s;
     }
 
     private string primitiveToC(string name) {

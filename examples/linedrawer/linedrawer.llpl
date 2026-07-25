@@ -1,5 +1,20 @@
-import tgaimage
+//import tgaimage
+
+//func line( ax: imt, ay: int, bx: int, by: int, framebuffer: TGA.Image, color: TGA.Color ) {
+
+//}
 
 func main( args: string[] ) {
     puts("Hello, world")
+
+    let ary: int[] = [1,2,3]
+    puts( "\(1 in ary)" )
+
+    let sarr: string[] = ["hello", "world"]
+    let x = "hello" in sarr
+
+    let f = func() { puts("Func called") }
+    f()
+
+    puts( "in rq: \(x)" )
 }

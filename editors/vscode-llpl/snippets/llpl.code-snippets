@@ -109,6 +109,11 @@
         "body": "${1:Name} { ${2:field}: ${3:value} }",
         "description": "Struct literal - constructs a struct value directly, every field given by name"
     },
+    "Anonymous Struct Literal": {
+        "prefix": "anonstruct",
+        "body": "{ .${1:field} = ${2:value} }",
+        "description": "Anonymous struct literal - target type comes from assignment/return context"
+    },
     "Union": {
         "prefix": "union",
         "body": [
@@ -317,5 +322,129 @@
         "prefix": "bitfield",
         "body": "let ${1:name}: ${2:uint32} : ${3:1}",
         "description": "Class field with a bit-field width"
+    },
+    "UI App": {
+        "prefix": "uiapp",
+        "body": [
+            "import stdlib.ui.sdl",
+            "",
+            "using namespace std.ui",
+            "",
+            "ui ${1:DemoWindow}: Window {",
+            "\ttitle: \"${2:LLPL UI}\"",
+            "\twidth: ${3:640}",
+            "\theight: ${4:420}",
+            "\tpadding: 24",
+            "\tspacing: 14",
+            "",
+            "\tText {",
+            "\t\ttext: \"${2:LLPL UI}\"",
+            "\t\tpreferred_height: 32",
+            "\t}",
+            "",
+            "\tPanel {",
+            "\t\tspacing: 10",
+            "\t\tpadding: 16",
+            "\t\tpreferred_height: 160",
+            "",
+            "\t\tButton {",
+            "\t\t\ttext: \"${5:Click me}\"",
+            "\t\t\tonClick: {",
+            "\t\t\t\t$0",
+            "\t\t\t}",
+            "\t\t}",
+            "\t}",
+            "}",
+            "",
+            "func main() -> i64 {",
+            "\tlet root: Window = ${1:DemoWindow}.build()",
+            "\troot.apply_dark_theme()",
+            "\tlet app: App = new App(\"${2:LLPL UI}\", ${3:640}, ${4:420}, root)",
+            "\tif !app.is_valid() {",
+            "\t\treturn 1",
+            "\t}",
+            "\tapp.run()",
+            "\treturn 0",
+            "}"
+        ],
+        "description": "SDL-backed UI DSL app"
+    },
+    "UI Declaration": {
+        "prefix": "ui",
+        "body": [
+            "ui ${1:DemoWindow}: ${2:Window} {",
+            "\ttitle: \"${3:LLPL UI}\"",
+            "\twidth: ${4:640}",
+            "\theight: ${5:420}",
+            "\t$0",
+            "}"
+        ],
+        "description": "Declarative UI tree lowered to Name.build()"
+    },
+    "UI Button": {
+        "prefix": "uibutton",
+        "body": [
+            "Button {",
+            "\ttext: \"${1:Click}\"",
+            "\tonClick: {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "UI button with click handler"
+    },
+    "UI ProgressBar": {
+        "prefix": "uiprogress",
+        "body": [
+            "ProgressBar {",
+            "\tvalue: ${1:68}",
+            "\tmin_value: ${2:0}",
+            "\tmax_value: ${3:100}",
+            "\ttext: \"${4:Loading}\"",
+            "}"
+        ],
+        "description": "UI progress bar"
+    },
+    "UI SelectableText": {
+        "prefix": "uiselect",
+        "body": [
+            "SelectableText {",
+            "\ttext: \"${1:Drag to select this text}\"",
+            "}"
+        ],
+        "description": "Selectable UI text"
+    },
+    "UI Slider": {
+        "prefix": "uislider",
+        "body": [
+            "Slider {",
+            "\tvalue: ${1:50}",
+            "\tmin_value: ${2:0}",
+            "\tmax_value: ${3:100}",
+            "}"
+        ],
+        "description": "Draggable UI slider"
+    },
+    "UI Checkbox": {
+        "prefix": "uicheck",
+        "body": [
+            "Checkbox {",
+            "\ttext: \"${1:Enabled}\"",
+            "\tchecked: ${2:true}",
+            "}"
+        ],
+        "description": "UI checkbox"
+    },
+    "UI Hover Handler": {
+        "prefix": "uihover",
+        "body": [
+            "onHover: {",
+            "\t$1",
+            "}",
+            "onHoverEnd: {",
+            "\t$0",
+            "}"
+        ],
+        "description": "UI hover enter/leave handlers"
     }
 }

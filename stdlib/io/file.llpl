@@ -31,6 +31,18 @@ extern func lseek(fd: i64, offset: i64, whence: i64) -> i64
 extern func unlink(path: char*) -> i64
 extern func rename(oldpath: char*, newpath: char*) -> i64
 
+// For ifstream's operator>> (text extraction) and ofstream's operator<<
+// (float formatting) below - ksnprintf (prelude.llpl) covers %d/%u/%s/%c
+// already (see runtime.c's kvsnprintf) but has no %f at all, and there's
+// no string->number parser anywhere in this stdlib yet either. Binding
+// straight to libc rather than writing new parsing/formatting logic from
+// scratch - same "declare just enough of the real signature to call it,
+// don't re-implement it" stance every other extern in this file already
+// takes for open/read/write/etc.
+extern func atoll(s: char*) -> i64
+extern func strtod(s: char*, endptr: char**) -> f64
+extern func snprintf(buf: char*, size: u64, fmt: char*, value: f64) -> i64
+
 // File class with RAII semantics
 class File {
     let fd: i64
@@ -59,6 +71,18 @@ class File {
         return self.is_open
     }
 
+    // Explicit early close (C++ `ifstream::close()`-style) rather than
+    // only ever closing implicitly via the destructor above - lets a
+    // caller release the fd before this File's last reference actually
+    // goes out of scope. Safe to call more than once; a second call sees
+    // is_open already false and does nothing.
+    func close() {
+        if self.is_open {
+            close(self.fd)
+            self.is_open = false
+        }
+    }
+
     func read_bytes(buffer: char*, size: u64) -> Result<i64, char*> {
         let result: Result<i64, char*> = new Result<i64, char*>()
 
@@ -75,6 +99,17 @@ class File {
         }
 
         return result
+    }
+
+    // C++ `ifstream::read(char* s, streamsize n)`-style alias for
+    // read_bytes above - same raw-byte read into a caller-owned buffer
+    // (e.g. `file.read(&header as char*, sizeof(Header))` to read a packed
+    // struct straight off disk), just under the name that convention uses.
+    // Still returns Result<i64, char*> (bytes actually read, or an error)
+    // rather than C++'s own stream-state-object model, matching every
+    // other fallible operation in this class.
+    func read(buffer: char*, size: u64) -> Result<i64, char*> {
+        return self.read_bytes(buffer, size)
     }
 
     func write_bytes(buffer: char*, size: u64) -> Result<i64, char*> {
@@ -184,6 +219,335 @@ class File {
     func flush() -> bool {
         // Note: Would call fsync(self.fd) if available
         return true
+    }
+}
+
+// C++ `std::ifstream`-style read-only stream, built on File above rather
+// than duplicating its open/read/seek/close logic. File is general-
+// purpose (read or write, POSIX-flag-driven); ifstream narrows that down
+// to C++'s own familiar surface for input: opens read-only by
+// construction (no flags to pass), tracks eof/fail state across reads
+// the way a real stream does, and offers get()/getline()/operator>> on
+// top of the raw read() every File already has.
+//
+// Truthiness: `if (stream) { ... }` and `assert(stream)` already work
+// today without any of this - every class instance is a real pointer in
+// the generated C, and C treats any non-null pointer as true - but that
+// only ever checks "did `new ifstream(...)` return an instance" (always
+// true), not "is the stream actually still healthy". as_bool() below is
+// this class's genuine, C++-equivalent truthiness (mirrors good()) - call
+// it explicitly (`if stream.as_bool() { ... }`) when you mean the real
+// check; this compiler doesn't (yet) call a class's as_bool() for you
+// inside a bare `if`/`while`/`assert` condition.
+class ifstream {
+    let file: File
+    let last_read_count: i64
+    let hit_eof: bool
+    let had_error: bool
+
+    constructor(path: char*) {
+        self.file = new File(path, O_RDONLY)
+        self.last_read_count = 0
+        self.hit_eof = false
+        self.had_error = !self.file.is_valid()
+    }
+
+    func is_open() -> bool {
+        return self.file.is_valid()
+    }
+
+    // True as long as the stream is open and hasn't hit eof or an error -
+    // C++ ifstream's own good().
+    func good() -> bool {
+        return self.file.is_valid() && !self.hit_eof && !self.had_error
+    }
+
+    func eof() -> bool {
+        return self.hit_eof
+    }
+
+    func fail() -> bool {
+        return self.had_error
+    }
+
+    func as_bool() -> bool {
+        return self.good()
+    }
+
+    // Bytes actually read by the *last* read()/get()/getline() call - C++
+    // ifstream's own gcount().
+    func gcount() -> i64 {
+        return self.last_read_count
+    }
+
+    // Raw read into a caller-owned buffer (C++ `ifstream::read`) - updates
+    // gcount()/eof() the way a real stream tracks them, unlike File.read
+    // (which just reports the byte count/error and leaves state tracking
+    // to the caller, having no state of its own to track).
+    func read(buffer: char*, size: u64) -> Result<i64, char*> {
+        let result: Result<i64, char*> = self.file.read(buffer, size)
+        if result.is_ok() {
+            let n: i64 = result.unwrap()
+            self.last_read_count = n
+            if (n as u64) < size {
+                self.hit_eof = true
+            }
+        } else {
+            self.last_read_count = 0
+            self.had_error = true
+        }
+        return result
+    }
+
+    // Single byte (C++ ifstream's own get()) - Result rather than that
+    // convention's own "returns int, EOF is -1" trick, matching every
+    // other fallible operation in this stdlib.
+    func get() -> Result<u8, char*> {
+        let buf: char[1]
+        let read_result: Result<i64, char*> = self.read(buf as char*, 1)
+        let result: Result<u8, char*> = new Result<u8, char*>()
+        if !read_result.is_ok() || read_result.unwrap() == 0 {
+            result.set_err("eof or read error")
+            return result
+        }
+        result.set_ok(buf[0] as u8)
+        return result
+    }
+
+    // Reads up to a '\n' (not included) or max_size - 1 bytes, whichever
+    // comes first, always null-terminating - C++ ifstream's own
+    // getline(char*, streamsize), one byte at a time via get() above
+    // rather than File's own block read(), since the line length isn't
+    // known ahead of time.
+    func getline(buffer: char*, max_size: u64) -> Result<i64, char*> {
+        let i: u64 = 0
+        while i < max_size - 1 {
+            let byte_result: Result<u8, char*> = self.get()
+            if !byte_result.is_ok() {
+                if i == 0 {
+                    let result: Result<i64, char*> = new Result<i64, char*>()
+                    result.set_err("eof")
+                    return result
+                }
+                break
+            }
+            let b: u8 = byte_result.unwrap()
+            if b == 10 { // '\n'
+                break
+            }
+            buffer[i] = b as char
+            i = i + 1
+        }
+        buffer[i] = 0
+        let result: Result<i64, char*> = new Result<i64, char*>()
+        result.set_ok(i as i64)
+        return result
+    }
+
+    // Shared by operator>> below: skips leading whitespace, then reads
+    // until the next whitespace/eof or max_size - 1 bytes, whichever
+    // comes first - a C++ `>>` extraction's own tokenizing rule, always
+    // null-terminated. Doesn't "unget" the whitespace that ended the
+    // token (this stream has no pushback buffer to do that with) - fine
+    // in practice, since it only ever stops on whitespace or eof, so the
+    // next call's own leading-whitespace skip just has one fewer
+    // separator byte to skip; the sequence of tokens read is identical
+    // either way.
+    func extract_token(buf: char*, max_size: u64) -> u64 {
+        let c: Result<u8, char*> = self.get()
+        while c.is_ok() {
+            let ch: u8 = c.unwrap()
+            if ch != 32 && ch != 9 && ch != 10 && ch != 13 {
+                break
+            }
+            c = self.get()
+        }
+
+        let i: u64 = 0
+        while c.is_ok() && i < max_size - 1 {
+            let ch: u8 = c.unwrap()
+            if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+                break
+            }
+            buf[i] = ch as char
+            i = i + 1
+            c = self.get()
+        }
+        buf[i] = 0
+        return i
+    }
+
+    // C++ `is >> out` extraction, chainable (`is >> &a >> &b`) since each
+    // overload returns `self`. Takes a pointer (this language has no
+    // reference type) - call as `is >> &x`, not `is >> x`. Only numeric
+    // targets are offered (there's no bounds-safe way to extract into a
+    // raw `char*` without a size, and this compiler's operators can't
+    // carry an extra size parameter the way get()/getline() above do) -
+    // extract into a fixed buffer with getline()/get() instead if you
+    // need the raw token text.
+    func operator>>(out: i64*) -> ifstream {
+        let tok: char[32]
+        self.extract_token(tok as char*, 32)
+        *out = atoll(tok as char*)
+        return self
+    }
+
+    func operator>>(out: f64*) -> ifstream {
+        let tok: char[32]
+        self.extract_token(tok as char*, 32)
+        *out = strtod(tok as char*, null)
+        return self
+    }
+
+    // C++ ifstream's own tellg()/seekg() ("get position", as opposed to
+    // ofstream's tellp()/seekp() - meaningless for a read-only stream, so
+    // not offered here).
+    func tellg() -> Result<i64, char*> {
+        return self.file.tell()
+    }
+
+    func seekg(pos: i64) -> Result<i64, char*> {
+        self.hit_eof = false
+        return self.file.seek(pos, SEEK_SET)
+    }
+
+    func close() {
+        self.file.close()
+    }
+}
+
+// C++ `std::ofstream`-style write-only stream, same "thin wrapper over
+// File, not a parallel reimplementation" shape as ifstream above. Opens
+// truncating by default (C++'s own default `ios::out` behavior discards
+// whatever was there); pass `append: true` for `ios::app` instead.
+//
+// operator<< below covers the common formattable types (one overload
+// each - there's no generic "any printable T" this compiler could
+// dispatch through); write()/put() (and File's own write_string) still
+// cover anything else, like a pre-formatted buffer or a byte count that
+// doesn't come from one of these types.
+class ofstream {
+    let file: File
+    let had_error: bool
+
+    constructor(path: char*) {
+        self.file = new File(path, O_WRONLY | O_CREAT | O_TRUNC)
+        self.had_error = !self.file.is_valid()
+    }
+
+    constructor(path: char*, append: bool) {
+        let flags: i64 = O_WRONLY | O_CREAT
+        if append {
+            flags = flags | O_APPEND
+        } else {
+            flags = flags | O_TRUNC
+        }
+        self.file = new File(path, flags)
+        self.had_error = !self.file.is_valid()
+    }
+
+    func is_open() -> bool {
+        return self.file.is_valid()
+    }
+
+    // True as long as the stream is open and no write has failed - C++
+    // ofstream's own good(). There's no eof() here - eof is a read-side
+    // concept (ifstream's own eof() reflects a *read* hitting the end of
+    // the underlying file; a write stream has nothing analogous to hit).
+    func good() -> bool {
+        return self.file.is_valid() && !self.had_error
+    }
+
+    func fail() -> bool {
+        return self.had_error
+    }
+
+    func as_bool() -> bool {
+        return self.good()
+    }
+
+    // Raw write (C++ `ofstream::write`) - updates fail() the way a real
+    // stream tracks it, unlike File.write_bytes (which just reports the
+    // byte count/error and leaves state tracking to the caller).
+    func write(buffer: char*, size: u64) -> Result<i64, char*> {
+        let result: Result<i64, char*> = self.file.write_bytes(buffer, size)
+        if result.is_ok() && (result.unwrap() as u64) == size {
+            return result
+        }
+        self.had_error = true
+        return result
+    }
+
+    // Single byte (C++ ofstream's own put()).
+    func put(value: u8) -> Result<i64, char*> {
+        let buf: char[1]
+        buf[0] = value as char
+        return self.write(buf as char*, 1)
+    }
+
+    // C++ ofstream's own tellp()/seekp() ("put position", as opposed to
+    // ifstream's tellg()/seekg() - meaningless for a write-only stream).
+    func tellp() -> Result<i64, char*> {
+        return self.file.tell()
+    }
+
+    func seekp(pos: i64) -> Result<i64, char*> {
+        return self.file.seek(pos, SEEK_SET)
+    }
+
+    func flush() -> bool {
+        return self.file.flush()
+    }
+
+    func close() {
+        self.file.close()
+    }
+
+    // C++ `os << value` insertion, chainable (`os << a << b << c`) since
+    // each overload returns `self` - cheap, since ofstream is a class
+    // (always a pointer already), not a copy. One overload per
+    // formattable type; numeric coercion (i8/i16/i32/int -> the i64
+    // overload, u8/u16/u32/uint -> the u64 one, f32 -> the f64 one) picks
+    // up anything narrower automatically, the same way an ordinary
+    // overloaded function call already does.
+    func operator<<(value: i64) -> ofstream {
+        let buf: char[24]
+        ksnprintf(buf as char*, 24, "%d", value)
+        self.write(buf as char*, llpl_strlen(buf as char*))
+        return self
+    }
+
+    func operator<<(value: u64) -> ofstream {
+        let buf: char[24]
+        ksnprintf(buf as char*, 24, "%u", value)
+        self.write(buf as char*, llpl_strlen(buf as char*))
+        return self
+    }
+
+    func operator<<(value: f64) -> ofstream {
+        let buf: char[64]
+        snprintf(buf as char*, 64, "%f" as char*, value)
+        self.write(buf as char*, llpl_strlen(buf as char*))
+        return self
+    }
+
+    func operator<<(value: char*) -> ofstream {
+        self.write(value, llpl_strlen(value))
+        return self
+    }
+
+    func operator<<(value: char) -> ofstream {
+        self.put(value as u8)
+        return self
+    }
+
+    func operator<<(value: bool) -> ofstream {
+        if value {
+            self.write("true" as char*, 4)
+        } else {
+            self.write("false" as char*, 5)
+        }
+        return self
     }
 }
 

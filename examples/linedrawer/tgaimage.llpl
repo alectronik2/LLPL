@@ -1,4 +1,8 @@
-namespace Tga {
+import "../../stdlib/io/file.llpl"
+
+using namespace std.io
+
+namespace TGA {
     packed struct Header {
         idlength:       u8
         colormaptype:   u8
@@ -14,13 +18,136 @@ namespace Tga {
         imagedescriptor: u8
     }
 
-    class TGAColor {
-        brga:           u8[4]
+    struct Color {
+        bgra:           u8[4]
         bytespp:        u8
 
-        func operator[]( i: u32 ) { 
+        func operator[]( i: u32 ) -> u8 {
             assert( i < 4 )
-            return self.brga[i]
+            return self.bgra[i]
+        }
+    }
+
+    enum Format {
+        GRAYSCALE = 1,
+        RGB = 3, 
+        RGBA = 4,
+    }
+
+    class Image {
+        let w:      int
+        let h:      int
+        let bpp:    int
+        let data:   Vector<u8>
+
+        func read_tga_file( filename: string ) -> bool {
+            let infile: ifstream = new ifstream( filename )
+            return false if !infile.is_open()
+
+            let header: Header
+            infile.read( &header as char*, sizeof(header) )
+            return false if !infile.good()
+
+            self.w = header.width
+            self.h = header.height
+            self.bpp = header.bitsperpixel >> 3
+
+            if self.w <= 0 || self.h <= 0 || self.bpp != Format.RGB && self.bpp != Format.RGBA {
+                return false
+            }
+
+            let nbytes = self.bpp * self.w * self.h
+            self.data = new Vector<u8>( nbytes as i64, 0 )
+
+            if header.datatypecode == 3 or 2 {
+                //infile.read( self.data.data(), nbytes )
+                if !infile.good() {
+                    return false
+                }
+            } else if header.datatypecode == 10 or 11 {
+                return false
+            } else {
+                return false
+            }
+
+            if header.imagedescriptor & 0x20 {
+                self.flip_vertically()
+            }
+            if header.imagedescriptor & 0x10 {
+                self.flip_horizontally()
+            }
+
+            return true
+        }
+
+        func load_rle_data( in_: ifstream ) -> bool {
+            let pixelcount = self.w * self.h
+            let currentpixel = 0
+            let currentbyte = 0
+            let colorbuffer: Color
+
+            do {
+                let chunkheader = in_.get()
+                return false if !in_.good()
+                for let i = 0, i < chunkheader, i++ {
+                    in_.read( colorbuffer.bgra, self.bpp )
+                    if !in_.good() {
+                        return false
+                    }
+                    if chunkheader < 128 {
+                        in_.read( colorbuffer.bgra as char*, self.bpp )
+                        if !in_.good() {
+                            return false
+                        }
+                        for let t=0, t<self.bpp,t++ {
+                            self.data[currentbyte++] = colorbuffer.bgra[t]
+                        }
+                        currentpixel++
+                        if currentpixel > pixelcount {
+                            return false
+                        }
+                    }
+                }
+                for let t=0, t<self.bpp, t++ {
+                    self.data[currentbyte++] = colorbuffer.bgra[t]
+                    currentpixel++
+                    if currentpixel > pixelcount[t] {
+                        return false
+                    }
+                }
+            } while currentpixel < pixelcount
+
+            return true
+        }
+
+        func flip_horizontally() {
+            let buf: u8* = self.data.data()
+            for let i = 0, i < self.w / 2, i++ {
+                for let j = 0, j < self.h / 2, j++ {
+                    for let b = 0, b < self.bpp, b++ {
+                        std.swap( &buf[(i+j*self.w)*self.bpp+b], &buf[(self.w-1-i+j*self.w)*self.bpp+b] )
+                    }
+                }
+            }
+        }
+
+        func flip_vertically() {
+            let buf: u8* = self.data.data()
+            for let i=0, i < self.w, i++ {
+                for let j=0, j<self.h/2, j++ {
+                    for let b=0, b<self.bpp, b++ {
+                        std.swap( &buf[(i+j*self.w)*self.bpp+b], &buf[(i+(self.h-1-j*self.w))*self.bpp+b])
+                    }
+                }
+            }
+        }
+
+        func width() -> int {
+            return self.w
+        }
+
+        func height() -> int {
+            return self.h
         }
     }
 }

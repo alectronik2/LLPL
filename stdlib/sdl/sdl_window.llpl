@@ -291,6 +291,10 @@ class EventHandler {
         return self.event.type == SDL_EVENT_MOUSE_MOTION
     }
 
+    func is_window_resized() -> bool {
+        return self.event.type == SDL_EVENT_WINDOW_RESIZED || self.event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED
+    }
+
     // Get keyboard event (cast event data)
     func get_key_event() -> SDL_KeyboardEvent* {
         return &self.event as SDL_KeyboardEvent*
@@ -304,6 +308,10 @@ class EventHandler {
     // Get mouse motion event
     func get_mouse_motion_event() -> SDL_MouseMotionEvent* {
         return &self.event as SDL_MouseMotionEvent*
+    }
+
+    func get_window_event() -> SDL_WindowEvent* {
+        return &self.event as SDL_WindowEvent*
     }
 }
 

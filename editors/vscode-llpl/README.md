@@ -11,7 +11,8 @@ find-references) for LLPL (`.llpl`) files.
   `NAME!(args)` invocations), `constructor`/`destructor`, `func` (including
   `static func`, `interrupt func`, and operator overloads like
   `func operator+`), `let`/`const`, `alias`,
-  control flow (`if`/`else`/`while`/`for`/`foreach`/`return`/`defer`/`try`/
+  `ui Name: Window { ... }` declarations, control flow
+  (`if`/`else`/`while`/`do`/`for`/`foreach`/`return`/`defer`/`try`/
   `catch`/`finally`/`throw`/`delete`/`match`/`case`/`default`/`unless`),
   range-based `for i in 0..5 { }`, `import`/`from`, `extern`,
   `new`/`as` casts, inline
@@ -20,8 +21,9 @@ find-references) for LLPL (`.llpl`) files.
   including the `i8`/`u8`/`i16`/`u16`/`i32`/`u32`/`i64`/`u64` short names,
   `char`, `bool`, `void`, `float`, `string`).
 - Type-annotation aware highlighting, including pointers/pointers-to-pointers
-  (`char*`, `int**`), fixed arrays (`char[17]`), and bit-fields
-  (`let flags: u32 : 3`).
+  (`char*`, `int**`), fixed/nested arrays (`char[17]`, `int[2][3]`),
+  bit-fields (`let flags: u32 : 3`), anonymous struct literals
+  (`{ .field = value }`), and dotted type names.
 - Numeric literals with `_` digit-group separators (`0x100_0000_0000`,
   `1_000_000`), float literals (`1.5`, `1.5e-5`, `1.0f`), and char literals
   (`'x'`, `'\n'`, `'\x1b'`).
@@ -33,7 +35,12 @@ find-references) for LLPL (`.llpl`) files.
   `namespace`, `using namespace`, `enum`, `macro`, `match`, `alias`,
   `unless`, `if`, `while`, `for`, range-based `for`, `defer`, `delete`,
   `try`/`catch`/`finally`, `extern`, `import`, `#link`, `#flags`, `asm`,
-  `bitfield`).
+  `bitfield`), plus UI snippets (`uiapp`, `ui`, `uibutton`,
+  `uiprogress`, `uislider`, `uicheck`, `uiselect`, `uihover`).
+- Completion includes LLPL keywords plus common `std.ui` widget names
+  (`Window`, `Panel`, `Card`, `ProgressBar`, `Slider`, `Checkbox`,
+  `SelectableText`, `Badge`) and widget properties before compiler-backed
+  project symbols are available.
 - **Language server** (`server/`): diagnostics, completion, hover,
   go-to-definition and find-references, backed directly by the `llpl`
   compiler's own name resolution (`llpl --lsp-symbols <file>` - see

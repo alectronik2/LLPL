@@ -4,6 +4,14 @@
 namespace std {
 namespace text {
 
+// For stringstream's operator<</operator>> below - same "declare just
+// enough of the real signature to call it" stance stdlib/io/file.llpl's
+// own atoll/strtod/snprintf bindings already take (re-declaring an
+// identical extern is harmless, so no risk in both files doing it).
+extern func atoll(s: char*) -> i64
+extern func strtod(s: char*, endptr: char**) -> f64
+extern func snprintf(buf: char*, size: u64, fmt: char*, value: f64) -> i64
+
 // Helper function to create a string from a single character
 func char_to_string(c: char) -> String {
     let buf: char* = llpl_alloc(2)
@@ -440,6 +448,212 @@ class StringBuilder {
 
     func length() -> i64 {
         return self.total_length
+    }
+}
+
+// C++ `std::stringstream` - an in-memory buffer usable both as an
+// insertion target (operator<<, like ofstream) and an extraction source
+// (operator>>, like ifstream), same idea as those two but backed by a
+// growable byte buffer instead of a file descriptor. A single shared
+// position (read_pos) walks forward as operator>> consumes tokens;
+// operator<< only ever appends, so building with << then immediately
+// extracting with >> reads back exactly what was just written, in order -
+// the same "one buffer, one cursor" shape a real stringstream has.
+class stringstream {
+    let buf: Vector<u8>
+    let read_pos: u64
+    let had_error: bool
+    // Backs as_string() below - a real field, not a fresh llpl_alloc
+    // returned straight from a throwaway temporary, so the pointer stays
+    // valid for as long as this stringstream itself does (matching what
+    // an implicit conversion's caller actually needs: `puts(ss)` keeps
+    // `ss` alive for the whole call, but nothing guarantees a temporary
+    // String's own backing buffer would be).
+    let cached_cstr: char*
+
+    constructor() {
+        self.buf = new Vector<u8>()
+        self.read_pos = 0
+        self.had_error = false
+        self.cached_cstr = null
+    }
+
+    // Preloads content - the usual way to build a stringstream you only
+    // ever intend to extract from (`new stringstream("42 3.5 hi")`).
+    constructor(initial: char*) {
+        self.buf = new Vector<u8>()
+        self.read_pos = 0
+        self.had_error = false
+        self.cached_cstr = null
+        let n: u64 = llpl_strlen(initial)
+        let i: u64 = 0
+        while i < n {
+            self.buf.push_back(initial[i] as u8)
+            i = i + 1
+        }
+    }
+
+    destructor() {
+        if self.cached_cstr != null {
+            llpl_free(self.cached_cstr)
+        }
+    }
+
+    // Materializes the buffer's current contents - C++ stringstream's own
+    // str().
+    func str() -> String {
+        let n: i64 = self.buf.size()
+        let tmp: char* = llpl_alloc((n + 1) as u64)
+        let i: i64 = 0
+        while i < n {
+            tmp[i] = self.buf[i] as char
+            i = i + 1
+        }
+        tmp[n] = 0
+        let s: String = new String(tmp)
+        llpl_free(tmp)
+        return s
+    }
+
+    // What lets `puts(ss)` work directly, without spelling out
+    // `ss.str().c_str()` - the compiler calls this automatically for any
+    // class value used where a `char*` is expected (see codegen.d's
+    // insertImplicitConversionCastIfNeeded), the same convention
+    // as_int()/as_float()/as_bool() already follow for their own target
+    // types.
+    func as_string() -> char* {
+        if self.cached_cstr != null {
+            llpl_free(self.cached_cstr)
+        }
+        let n: i64 = self.buf.size()
+        self.cached_cstr = llpl_alloc((n + 1) as u64)
+        let i: i64 = 0
+        while i < n {
+            self.cached_cstr[i] = self.buf[i] as char
+            i = i + 1
+        }
+        self.cached_cstr[n] = 0
+        return self.cached_cstr
+    }
+
+    func eof() -> bool {
+        return self.read_pos >= (self.buf.size() as u64)
+    }
+
+    func fail() -> bool {
+        return self.had_error
+    }
+
+    func good() -> bool {
+        return !self.had_error
+    }
+
+    func as_bool() -> bool {
+        return self.good()
+    }
+
+    func clear() {
+        self.buf = new Vector<u8>()
+        self.read_pos = 0
+        self.had_error = false
+    }
+
+    func append_cstr(s: char*) {
+        let n: u64 = llpl_strlen(s)
+        let i: u64 = 0
+        while i < n {
+            self.buf.push_back(s[i] as u8)
+            i = i + 1
+        }
+    }
+
+    // Same tokenizing rule as ifstream's own extract_token (stdlib/io/
+    // file.llpl) - skip leading whitespace, read to the next whitespace/
+    // end-of-buffer or max_size - 1 bytes, whichever comes first.
+    func extract_token(tok: char*, max_size: u64) -> u64 {
+        while self.read_pos < (self.buf.size() as u64) {
+            let c: u8 = self.buf[self.read_pos as i64]
+            if c != 32 && c != 9 && c != 10 && c != 13 {
+                break
+            }
+            self.read_pos = self.read_pos + 1
+        }
+
+        let i: u64 = 0
+        while self.read_pos < (self.buf.size() as u64) && i < max_size - 1 {
+            let c: u8 = self.buf[self.read_pos as i64]
+            if c == 32 || c == 9 || c == 10 || c == 13 {
+                break
+            }
+            tok[i] = c as char
+            i = i + 1
+            self.read_pos = self.read_pos + 1
+        }
+        tok[i] = 0
+        return i
+    }
+
+    func operator<<(value: i64) -> stringstream {
+        let b: char[24]
+        ksnprintf(b as char*, 24, "%d", value)
+        self.append_cstr(b as char*)
+        return self
+    }
+
+    func operator<<(value: u64) -> stringstream {
+        let b: char[24]
+        ksnprintf(b as char*, 24, "%u", value)
+        self.append_cstr(b as char*)
+        return self
+    }
+
+    func operator<<(value: f64) -> stringstream {
+        let b: char[64]
+        snprintf(b as char*, 64, "%f" as char*, value)
+        self.append_cstr(b as char*)
+        return self
+    }
+
+    func operator<<(value: char*) -> stringstream {
+        self.append_cstr(value)
+        return self
+    }
+
+    func operator<<(value: char) -> stringstream {
+        let b: char[2]
+        b[0] = value
+        b[1] = 0
+        self.append_cstr(b as char*)
+        return self
+    }
+
+    func operator<<(value: bool) -> stringstream {
+        if value {
+            self.append_cstr("true" as char*)
+        } else {
+            self.append_cstr("false" as char*)
+        }
+        return self
+    }
+
+    func operator>>(out: i64*) -> stringstream {
+        let tok: char[32]
+        let n: u64 = self.extract_token(tok as char*, 32)
+        if n == 0 {
+            self.had_error = true
+        }
+        *out = atoll(tok as char*)
+        return self
+    }
+
+    func operator>>(out: f64*) -> stringstream {
+        let tok: char[32]
+        let n: u64 = self.extract_token(tok as char*, 32)
+        if n == 0 {
+            self.had_error = true
+        }
+        *out = strtod(tok as char*, null)
+        return self
     }
 }
 

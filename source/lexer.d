@@ -28,6 +28,7 @@ enum TokenType {
     Class,
     Struct,
     Union,
+    Ui,
     Grammar,
     Packed,
     Interrupt,
@@ -43,6 +44,8 @@ enum TokenType {
     If,
     Else,
     While,
+    Do,
+    Until,
     For,
     Foreach,
     In,
@@ -158,6 +161,18 @@ struct Token {
     // see Lexer.string_ and Parser.primary's InterpolatedString case.
     string[] interpParts;
 
+    // True if at least one newline appeared in the source between the
+    // previous real token and this one. Newlines themselves carry no
+    // token of their own (Lexer.tokenize discards them - this grammar is
+    // otherwise entirely whitespace-insensitive, like C), so this is the
+    // *only* place that information survives at all. Exists for exactly
+    // one consumer: Parser.statement's postfix `if` (`return x if cond`),
+    // which needs to tell that same-line `if` apart from an ordinary,
+    // separate if-statement starting on the next line - not a general
+    // "significant whitespace" mechanism, so don't reach for it elsewhere
+    // without a similarly narrow, specific reason.
+    bool precededByNewline;
+
     string toString() const {
         return format("Token(%s, '%s', %d:%d)", type, value, line, column);
     }
@@ -198,6 +213,7 @@ class Lexer {
             "class": "Class",
             "struct": "Struct",
             "union": "Union",
+            "ui": "Ui",
             "grammar": "Grammar",
             "packed": "Packed",
             "interrupt": "Interrupt",
@@ -213,6 +229,8 @@ class Lexer {
             "if": "If",
             "else": "Else",
             "while": "While",
+            "do": "Do",
+            "until": "Until",
             "for": "For",
             "foreach": "Foreach",
             "in": "In",
@@ -743,6 +761,8 @@ class Lexer {
                 case "If": type = TokenType.If; break;
                 case "Else": type = TokenType.Else; break;
                 case "While": type = TokenType.While; break;
+                case "Do": type = TokenType.Do; break;
+                case "Until": type = TokenType.Until; break;
                 case "For": type = TokenType.For; break;
                 case "Foreach": type = TokenType.Foreach; break;
                 case "In": type = TokenType.In; break;
@@ -766,6 +786,7 @@ class Lexer {
                 case "Operator": type = TokenType.Operator; break;
                 case "Enum": type = TokenType.Enum; break;
                 case "Macro": type = TokenType.Macro; break;
+                case "Ui": type = TokenType.Ui; break;
                 case "Unless": type = TokenType.Unless; break;
                 case "Quote": type = TokenType.Quote; break;
                 case "Unquote": type = TokenType.Unquote; break;
@@ -1092,15 +1113,22 @@ class Lexer {
 
     Token[] tokenize() {
         Token[] tokens;
+        // See Token.precededByNewline's own comment - the only thing a
+        // Newline token itself ever contributes before being discarded.
+        bool sawNewline = false;
         while (true) {
             Token tok = nextToken();
             advanceGrammarState(tok.type);
-            if (tok.type != TokenType.Newline) { // Skip newlines for now
-                tokens ~= tok;
-                if (tok.type != TokenType.EOF) {
-                    previousTokenType = tok.type;
-                    hasPreviousToken = true;
-                }
+            if (tok.type == TokenType.Newline) {
+                sawNewline = true;
+                continue;
+            }
+            tok.precededByNewline = sawNewline;
+            sawNewline = false;
+            tokens ~= tok;
+            if (tok.type != TokenType.EOF) {
+                previousTokenType = tok.type;
+                hasPreviousToken = true;
             }
             if (tok.type == TokenType.EOF) break;
         }

@@ -1202,6 +1202,50 @@ static void kfmt_putint(char* buf, size_t size, size_t* pos, int64_t value, int 
     kfmt_putuint(buf, size, pos, (uint64_t)value, 10, 0, width, zero_pad);
 }
 
+// `%f` - fixed-point, `precision` digits after the point (6 if negative
+// ("no .N given" - see kvsnprintf below), C's
+// own default). No libm dependency (this runs on freestanding targets
+// too) - rounds by scaling into an integer rather than calling round()/
+// pow(), the same "just enough hand-rolled arithmetic" spirit
+// kfmt_putuint/kfmt_putint already use for everything else here. Doesn't
+// handle NaN/Infinity (not reachable from ordinary LLPL float literals/
+// arithmetic today) or values large enough to overflow a uint64_t once
+// scaled by 10^precision - fine for interpolation's actual use, not a
+// general-purpose float formatter.
+//
+// Guarded by __SSE2__ (GCC predefines this based on -mno-sse2, not
+// something this file has to track itself) - a `double` parameter/return
+// needs an SSE register by the x86-64 ABI regardless of whether this
+// function is ever actually *called*; examples/baremetal_demo's own
+// build.yaml passes -mno-sse -mno-sse2 -mno-80387 for its kernel target
+// (no FPU support at all), so merely having this function's signature in
+// the translation unit is a hard compile error there - "SSE register
+// argument/return with SSE disabled" - even though that target never
+// touches float/f64 anywhere and so never reaches the '%f' case below
+// either. kvsnprintf's own `default:` case (print the specifier
+// literally) covers '%f' there instead.
+#ifdef __SSE2__
+static void kfmt_putfloat(char* buf, size_t size, size_t* pos, double value, int precision) {
+    if (precision < 0) precision = 6; // -1 = "no .N given"; 0 is a real, explicit precision
+    if (value < 0) {
+        kfmt_putc(buf, size, pos, '-');
+        value = -value;
+    }
+    uint64_t scale = 1;
+    for (int i = 0; i < precision; i++) scale *= 10;
+    uint64_t scaled = (uint64_t)(value * (double)scale + 0.5);
+    uint64_t int_part = scaled / scale;
+    uint64_t frac_part = scaled % scale;
+    kfmt_putuint(buf, size, pos, int_part, 10, 0, 0, 0);
+    // Real printf's %.0f omits the point entirely ("3", not "3.") -
+    // only meaningful when there's at least one fractional digit to show.
+    if (precision > 0) {
+        kfmt_putc(buf, size, pos, '.');
+        kfmt_putuint(buf, size, pos, frac_part, 10, 0, precision, 1);
+    }
+}
+#endif
+
 int64_t kvsnprintf(char* buf, uint64_t size, char* fmt, va_list args) {
     size_t pos = 0;
 
@@ -1232,6 +1276,18 @@ int64_t kvsnprintf(char* buf, uint64_t size, char* fmt, va_list args) {
             width = width * 10 + (*fmt - '0');
             fmt++;
         }
+        // Optional `.N` precision, %f's own - the only specifier here
+        // that uses it (every int/uint one already means "N" as a field
+        // *width* via the digits above, not a precision).
+        int precision = -1;
+        if (*fmt == '.') {
+            fmt++;
+            precision = 0;
+            while (*fmt >= '0' && *fmt <= '9') {
+                precision = precision * 10 + (*fmt - '0');
+                fmt++;
+            }
+        }
 
         switch (*fmt) {
             case 'd':
@@ -1253,6 +1309,16 @@ int64_t kvsnprintf(char* buf, uint64_t size, char* fmt, va_list args) {
             case 'b':
                 kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 2, 0, width, zero_pad);
                 break;
+#ifdef __SSE2__
+            case 'f':
+                // C's own default argument promotion always widens a
+                // float argument to double in a varargs call, so this is
+                // correct regardless of whether the LLPL caller passed
+                // f32 or f64 - same reasoning codegen.d's own %c handling
+                // above already documents for a narrower int type.
+                kfmt_putfloat(buf, size, &pos, va_arg(args, double), precision);
+                break;
+#endif
             case 's': {
                 const char* s = va_arg(args, const char*);
                 kfmt_puts(buf, size, &pos, s ? s : "(null)");

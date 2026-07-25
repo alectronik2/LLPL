@@ -15,6 +15,7 @@
         { "include": "#enum-declaration" },
         { "include": "#struct-declaration" },
         { "include": "#union-declaration" },
+        { "include": "#ui-declaration" },
         { "include": "#class-declaration" },
         { "include": "#trait-declaration" },
         { "include": "#impl-declaration" },
@@ -190,6 +191,16 @@
                 "2": { "name": "entity.name.type.llpl" }
             }
         },
+        "ui-declaration": {
+            "comment": "ui DemoWindow: Window { ... } - declarative UI tree lowered by the compiler into DemoWindow.build().",
+            "match": "\\b(ui)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+            "captures": {
+                "1": { "name": "keyword.other.ui.llpl" },
+                "2": { "name": "entity.name.type.ui.llpl" },
+                "3": { "name": "punctuation.separator.annotation.llpl" },
+                "4": { "name": "entity.name.type.llpl" }
+            }
+        },
         "class-declaration": {
             "comment": "class Foo : Base { ... } - the optional ': Base' clause (single inheritance; Base may be dotted, e.g. Ns.Base) is captured too, with Base scoped entity.other.inherited-class per common TextMate convention.",
             "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b(?:\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*))?",
@@ -239,11 +250,11 @@
             }
         },
         "control-keywords": {
-            "match": "\\b(if|else|while|for|foreach|in|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw)\\b",
+            "match": "\\b(if|else|while|do|for|foreach|in|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {
-            "match": "\\b(import|from|let|const|extern|constructor|destructor|quote|unquote|delete)\\b",
+            "match": "\\b(import|from|let|const|extern|constructor|destructor|quote|unquote|delete|ui)\\b",
             "name": "keyword.other.llpl"
         },
         "modifier-keywords": {

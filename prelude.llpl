@@ -1007,11 +1007,36 @@ class Vector<T> {
     let data: T[]
     let length: i64
     let capacity: i64
+    let iter_pos: i64 // foreach cursor - see iter_has_next/iter_next/iter_reset
 
     constructor() {
         self.length = 0
         self.capacity = 4
         self.data = llpl_alloc((self.capacity as u64) * sizeof(T)) as T[]
+        self.iter_pos = 0
+    }
+
+    // C++ `std::vector<T> v(count, value)` - count copies of value,
+    // ready to use immediately (no push_back loop needed). Same
+    // "resize/reserve can't guess a default T" reasoning as resize(n,
+    // value) below - value is required, not optional, since there's no
+    // generic "construct a default T" this compiler can call for an
+    // arbitrary class-type T.
+    constructor(count: i64, value: T) {
+        if count > 0 {
+            self.length = count
+            self.capacity = count
+        } else {
+            self.length = 0
+            self.capacity = 4
+        }
+        self.data = llpl_alloc((self.capacity as u64) * sizeof(T)) as T[]
+        self.iter_pos = 0
+        let i: i64 = 0
+        while i < self.length {
+            self.data[i] = value
+            i = i + 1
+        }
     }
 
     destructor() {
@@ -1064,6 +1089,124 @@ class Vector<T> {
 
     func is_empty() -> bool {
         return self.length == 0
+    }
+
+    // C++ `std::vector`-style names for everything above (push_back/
+    // pop_back/size/empty), plus what it doesn't already have:
+    // reserve/clear/front/back/at, data()/capacity() (a field and a
+    // method may share one name in this language - bare `self.data`/`v.data`
+    // is still the plain field, `v.data()` calls this method, disambiguated
+    // by the call parens the same way any method name would be), and
+    // operator[]/[]= (bounds-checked, via get/set - `std::vector::operator[]`
+    // itself doesn't bounds-check, .at() does; this class only ever offers
+    // the checked behavior, under both names, matching this language's
+    // general "fail loudly on a bug rather than silently read garbage"
+    // stance elsewhere).
+    func push_back(item: T) {
+        self.push(item)
+    }
+
+    func pop_back() -> T {
+        return self.pop()
+    }
+
+    func size() -> i64 {
+        return self.length
+    }
+
+    func empty() -> bool {
+        return self.length == 0
+    }
+
+    // Drops every element (length -> 0) without releasing the backing
+    // buffer - capacity is unchanged, same as C++'s own clear().
+    func clear() {
+        self.length = 0
+    }
+
+    // Grows the backing buffer to at least `n` elements without changing
+    // length - C++'s own reserve(). A no-op if already at or past `n`;
+    // unlike grow() (which always doubles), this reallocates to exactly
+    // `n` so a caller that knows its final size up front pays for one
+    // allocation, not O(log n) doublings.
+    func reserve(n: i64) {
+        if n <= self.capacity {
+            return
+        }
+        let new_data: T[] = llpl_alloc((n as u64) * sizeof(T)) as T[]
+        llpl_memcpy(new_data as char*, self.data as char*, (self.length as u64) * sizeof(T))
+        llpl_free(self.data as char*)
+        self.data = new_data
+        self.capacity = n
+    }
+
+    // Grows or shrinks to exactly `n` elements. Only the two-argument
+    // form is offered (`value` fills every newly-added slot) - unlike
+    // C++'s own resize(n), which value-initializes new elements from T's
+    // default constructor, there's no generic "construct a default T"
+    // this compiler can call for an arbitrary class-type T, so this asks
+    // the caller for that value explicitly instead of guessing "zero" is
+    // always the right one.
+    func resize(n: i64, value: T) {
+        if n < self.length {
+            self.length = n
+            return
+        }
+        self.reserve(n)
+        while self.length < n {
+            self.data[self.length] = value
+            self.length = self.length + 1
+        }
+    }
+
+    func front() -> T {
+        return self.get(0)
+    }
+
+    func back() -> T {
+        return self.get(self.length - 1)
+    }
+
+    func at(index: i64) -> T {
+        return self.get(index)
+    }
+
+    func operator[](index: i64) -> T {
+        return self.get(index)
+    }
+
+    func operator[](index: i64, value: T) {
+        self.set(index, value)
+    }
+
+    // Raw pointer to the backing storage (C++'s own data()) - e.g. to
+    // hand off to an `extern func` expecting a plain `T*`/`u8*` buffer,
+    // like a file-read destination. Same "invalidated by a resize" caveat
+    // as as_slice() below - a push()/reserve()/resize() past capacity may
+    // reallocate and move the buffer this pointer refers to.
+    func data() -> T* {
+        return self.data as T*
+    }
+
+    func capacity() -> i64 {
+        return self.capacity
+    }
+
+    // `foreach`/`for x in vec` protocol (see String's own copy of this
+    // exact pattern above) - iter_reset lets the same instance be walked
+    // more than once instead of staying exhausted after the first loop.
+    func iter_reset() {
+        self.iter_pos = 0
+    }
+
+    func iter_has_next() -> bool {
+        return self.iter_pos < self.length
+    }
+
+    func iter_next() -> T {
+        let item: T = self.get(self.iter_pos)
+        self.iter_pos = self.iter_pos + 1
+        return item
     }
 
     // A bounds-checked view of exactly this Vector's *live* elements
@@ -1697,6 +1840,23 @@ class HashMap<K: Hashable, V> {
         item.key = entry.key
         item.value = entry.value
         return item
+    }
+}
+
+// C++ `std::swap` - exchanges the two values a real *pointer* refers to
+// (not the same as C++'s reference-based `T&` version - LLPL has no
+// reference type - but the call-site spelling is identical either way:
+// `std.swap(&x, &y)` for two plain variables, or `std.swap(&buf[i],
+// &buf[j])` for two elements of a raw `T*`/`T[]` buffer). Doesn't work
+// directly on a class's own `operator[]` result (e.g. `data[i]` on a
+// Vector<T>) - that's a value returned by a function call, not a real C
+// lvalue you can take the address of; get the raw buffer first
+// (`data.data()`) and index into that instead.
+namespace std {
+    func swap<T>(a: T*, b: T*) {
+        let tmp: T = *a
+        *a = *b
+        *b = tmp
     }
 }
 

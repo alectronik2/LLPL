@@ -93,13 +93,30 @@ const EMPTY_RESULT: AnalysisResult = { diagnostics: [], symbols: [], usages: [] 
 const KEYWORDS = [
     'import', 'from', 'namespace', 'using', 'class', 'struct', 'union', 'packed', 'enum', 'macro',
     'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'private', 'static', 'virtual',
-    'override', 'if', 'else', 'while', 'for', 'foreach', 'in', 'return', 'continue', 'break', 'defer',
+    'override', 'if', 'else', 'while', 'do', 'for', 'foreach', 'in', 'return', 'continue', 'break', 'defer',
     'unless', 'try', 'catch', 'finally', 'throw', 'delete', 'asm', 'new', 'true', 'false', 'null',
-    'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait',
+    'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait', 'ui',
     'impl', 'quote', 'unquote', 'interrupt',
     'sizeof', 'self', 'super', 'int', 'uint', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32',
     'int64', 'uint64', 'u8', 'u16', 'u32', 'u64', 'i8', 'i16', 'i32', 'i64',
     'char', 'bool', 'void', 'float', 'string',
+];
+
+const UI_WIDGETS = [
+    'Window', 'Column', 'Row', 'Panel', 'Card', 'Text', 'SelectableText',
+    'Button', 'ProgressBar', 'Slider', 'Checkbox', 'Badge',
+];
+
+const UI_PROPERTIES = [
+    'title', 'text', 'width', 'height', 'padding', 'spacing', 'preferred_height',
+    'background', 'hover_background', 'foreground', 'hover_foreground', 'border',
+    'hover_border', 'accent', 'track', 'selection', 'value', 'min_value',
+    'max_value', 'checked', 'selectable', 'onClick', 'onHover', 'onHoverEnd',
+];
+
+const UI_METHODS = [
+    'build', 'run', 'is_valid', 'apply_dark_theme', 'apply_light_theme',
+    'add_child', 'render',
 ];
 
 const connection = createConnection(ProposedFeatures.all);
@@ -405,6 +422,27 @@ connection.onCompletion((params): CompletionItem[] => {
     if (!dotPrefix) {
         for (const kw of KEYWORDS) {
             items.push({ label: kw, kind: CompletionItemKind.Keyword });
+        }
+        for (const widget of UI_WIDGETS) {
+            items.push({
+                label: widget,
+                kind: CompletionItemKind.Class,
+                detail: `std.ui ${widget} widget`,
+            });
+        }
+        for (const prop of UI_PROPERTIES) {
+            items.push({
+                label: prop,
+                kind: CompletionItemKind.Property,
+                detail: 'std.ui widget property',
+            });
+        }
+        for (const method of UI_METHODS) {
+            items.push({
+                label: method,
+                kind: CompletionItemKind.Method,
+                detail: 'std.ui helper method',
+            });
         }
     }
 

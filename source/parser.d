@@ -3,7 +3,7 @@ module parser;
 import std.stdio;
 import std.format;
 import std.conv;
-import std.string : strip, endsWith, split, indexOf;
+import std.string : strip, endsWith, split, indexOf, startsWith;
 import std.array : join;
 import lexer;
 import ast;
@@ -109,7 +109,7 @@ class Parser {
         // field/method literally named "match") and `x.sizeof` (see
         // codegen.d's `.sizeof` property) are both unambiguous in that
         // position, so allow them there specifically.
-        if (check(TokenType.Identifier) || check(TokenType.Match) || check(TokenType.Sizeof)) {
+        if (check(TokenType.Identifier) || check(TokenType.Match) || check(TokenType.Sizeof) || check(TokenType.Ui)) {
             Token tok = current;
             advance();
             return tok;
@@ -156,14 +156,29 @@ class Parser {
         }
         if (lastColon >= 0) {
             string candidate = trimmed[lastColon + 1 .. $];
-            bool allDigits = candidate.length > 0;
-            foreach (c; candidate) {
-                if (c < '0' || c > '9') { allDigits = false; break; }
-            }
-            if (allDigits) {
-                spec.zeroPad = candidate.length > 1 && candidate[0] == '0';
-                spec.width = to!int(candidate);
-                trimmed = trimmed[0 .. lastColon];
+            // `\(x:.2)` - a float's own precision, distinct from an int's
+            // `:width`/`:0width` above (a leading '.' can never start a
+            // valid width, so this is unambiguous).
+            if (candidate.length > 1 && candidate[0] == '.') {
+                string digits = candidate[1 .. $];
+                bool allDigitsAfterDot = digits.length > 0;
+                foreach (c; digits) {
+                    if (c < '0' || c > '9') { allDigitsAfterDot = false; break; }
+                }
+                if (allDigitsAfterDot) {
+                    spec.precision = to!int(digits);
+                    trimmed = trimmed[0 .. lastColon];
+                }
+            } else {
+                bool allDigits = candidate.length > 0;
+                foreach (c; candidate) {
+                    if (c < '0' || c > '9') { allDigits = false; break; }
+                }
+                if (allDigits) {
+                    spec.zeroPad = candidate.length > 1 && candidate[0] == '0';
+                    spec.width = to!int(candidate);
+                    trimmed = trimmed[0 .. lastColon];
+                }
             }
         }
 
@@ -247,6 +262,8 @@ class Parser {
             return structDecl(attrs);
         } else if (check(TokenType.Union)) {
             return unionDecl();
+        } else if (check(TokenType.Ui)) {
+            return uiDecl();
         } else if (check(TokenType.Grammar)) {
             return grammarDecl();
         } else if (check(TokenType.Extern)) {
@@ -338,9 +355,9 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Namespace);
-        string[] segments = [expect(TokenType.Identifier).value];
+        string[] segments = [expectName("Expected namespace name").value];
         while (match(TokenType.Dot)) {
-            segments ~= expect(TokenType.Identifier).value;
+            segments ~= expectName("Expected namespace path segment after '.'").value;
         }
         expect(TokenType.LeftBrace);
 
@@ -586,9 +603,9 @@ class Parser {
         if (check(TokenType.String)) {
             modulePath = expect(TokenType.String).value;
         } else {
-            modulePath = expect(TokenType.Identifier).value;
+            modulePath = expectName("Expected module name").value;
             while (match(TokenType.Dot)) {
-                modulePath ~= "/" ~ expect(TokenType.Identifier).value;
+                modulePath ~= "/" ~ expectName("Expected module path segment after '.'").value;
             }
         }
 
@@ -607,9 +624,9 @@ class Parser {
         expect(TokenType.Namespace);
 
         // Parse the namespace path: Foo or Foo.Bar.Baz
-        string namespacePath = expect(TokenType.Identifier).value;
+        string namespacePath = expectName("Expected namespace name").value;
         while (match(TokenType.Dot)) {
-            namespacePath ~= "." ~ expect(TokenType.Identifier).value;
+            namespacePath ~= "." ~ expectName("Expected namespace path segment after '.'").value;
         }
 
         return new UsingNamespaceStmt(namespacePath, startLine, startColumn);
@@ -678,6 +695,52 @@ class Parser {
         }
 
         return new FunctionDecl(name, params, returnType, null, true, false, isVariadic, startLine, startColumn);
+    }
+
+    private UiDecl uiDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Ui);
+        string name = expect(TokenType.Identifier).value;
+        expect(TokenType.Colon, "Expected ':' and a root widget type after ui name");
+        Type rootType = parseType();
+        if (rootType.typeArgs.length > 0 || rootType.pointerDepth > 0 || rootType.isArray) {
+            errorAt(startLine, startColumn, "A ui root type must be a plain widget class name");
+        }
+        UiNode root = uiNodeBody(rootType.name, startLine, startColumn);
+        return new UiDecl(name, root, startLine, startColumn);
+    }
+
+    private UiNode uiNode() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        string typeName = expect(TokenType.Identifier, "Expected widget type name").value;
+        return uiNodeBody(typeName, startLine, startColumn);
+    }
+
+    private UiNode uiNodeBody(string typeName, int startLine, int startColumn) {
+        expect(TokenType.LeftBrace);
+        UiProperty[] properties;
+        UiNode[] children;
+        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            if (check(TokenType.Identifier) && peek(1).type == TokenType.LeftBrace) {
+                children ~= uiNode();
+                continue;
+            }
+
+            int propLine = current.line;
+            int propColumn = current.column;
+            string propName = expect(TokenType.Identifier, "Expected property name or child widget").value;
+            expect(TokenType.Colon, "Expected ':' after ui property name");
+            if (propName.startsWith("on") && check(TokenType.LeftBrace)) {
+                properties ~= new UiProperty(propName, block(), true, propLine, propColumn);
+            } else {
+                properties ~= new UiProperty(propName, expression(), propLine, propColumn);
+            }
+            match(TokenType.Comma);
+        }
+        expect(TokenType.RightBrace);
+        return new UiNode(typeName, properties, children, startLine, startColumn);
     }
 
     // Operator tokens that can appear after `operator` in a method
@@ -869,11 +932,17 @@ class Parser {
 
         VarDecl[] fields;
         FunctionDecl[] constructors;
+        FunctionDecl[] methods;
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
             if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 fields ~= varDecl();
             } else if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
+            } else if (check(TokenType.Function)) {
+                // `func`/`func operator...` - see ast.StructDecl.methods'
+                // own comment on why `self` still ends up passed by value,
+                // same as a constructor's.
+                methods ~= functionDecl();
             } else if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
                 // `name: Type` with no `let` - same bare-field shorthand
                 // classDecl already offers (see varDeclBody's own comment).
@@ -881,13 +950,13 @@ class Parser {
                 int declColumn = current.column;
                 fields ~= varDeclBody(declLine, declColumn, false, false);
             } else {
-                error("Expected field or constructor declaration");
+                error("Expected field, method, or constructor declaration");
             }
         }
 
         expect(TokenType.RightBrace);
         return new StructDecl(name, fields, packed, startLine, startColumn, typeParams, typeParamBounds, attrs,
-            constructors);
+            constructors, methods);
     }
 
     // `union Name { let field: T  ...  constructor(...) { ... } }` - same
@@ -1495,13 +1564,13 @@ class Parser {
         if (check(TokenType.LeftParen)) {
             return parseParenType();
         }
-        auto nameTok = expect(TokenType.Identifier);
+        auto nameTok = expectName("Expected type name");
         string name = canonicalIntTypeName(nameTok.value);
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
         // Graphics_Point, matching how the code generator mangles namespaced
         // class declarations.
         while (match(TokenType.Dot)) {
-            name ~= "_" ~ expect(TokenType.Identifier).value;
+            name ~= "_" ~ expectName("Expected type name after '.'").value;
         }
 
         // `<T1, T2, ...>` type arguments, e.g. Vector<int>. Only ever
@@ -1525,6 +1594,7 @@ class Parser {
             pointerDepth++;
         }
 
+        int[] extraDims;
         if (match(TokenType.LeftBracket)) {
             isArray = true;
             if (check(TokenType.Integer)) {
@@ -1532,10 +1602,24 @@ class Parser {
                 advance();
             }
             expect(TokenType.RightBracket);
+            // `T[2][3]` - each further `[N]` group nests one more
+            // dimension (see ast.Type.extraDims). Only meaningful once
+            // the outer dimension is itself sized; an empty `[N][M]`
+            // pair on a dynamic array has nothing to nest inside.
+            while (match(TokenType.LeftBracket)) {
+                int dim = 0;
+                if (check(TokenType.Integer)) {
+                    dim = to!int(current.value);
+                    advance();
+                }
+                expect(TokenType.RightBracket);
+                extraDims ~= dim;
+            }
         }
 
         Type t = new Type(name, pointerDepth, isArray, arraySize);
         t.typeArgs = typeArgs;
+        t.extraDims = extraDims;
 
         // `T?` - sugar for `Optional<T>` (see ast.Type.isNullableSugar).
         // Always trailing, after everything else (`char*?` is
@@ -1578,6 +1662,27 @@ class Parser {
             ASTNode negated = new UnaryExpr("!", condition, condLine, condColumn);
             return new IfStmt(negated, new Block([stmt]));
         }
+        // Postfix `if` (`return false if variable_set`) - same idea as
+        // `unless` just above, but `if` (unlike `unless`) is *also* a
+        // valid way to start a brand new statement, so this only fires
+        // when the `if` sits on the same source line as the statement it
+        // would modify (see Token.precededByNewline). A genuine if-
+        // statement starting on its own next line - `return x\nif y {
+        // ... }` - is left alone here and parsed as the separate
+        // statement it looks like.
+        if (check(TokenType.If) && !current.precededByNewline) {
+            advance();
+            ASTNode condition = expression();
+            Block elseBlock = null;
+            // `foo() if cond else bar()` - `else` never starts a
+            // statement on its own, so no newline guard needed here
+            // (same as the real if-statement's own else, above).
+            if (match(TokenType.Else)) {
+                ASTNode elseStmt = statementInner();
+                elseBlock = new Block([elseStmt]);
+            }
+            return new IfStmt(condition, new Block([stmt]), elseBlock);
+        }
         return stmt;
     }
 
@@ -1586,6 +1691,10 @@ class Parser {
             return ifStmt();
         } else if (check(TokenType.While)) {
             return whileStmt();
+        } else if (check(TokenType.Do)) {
+            return doWhileStmt();
+        } else if (check(TokenType.Until)) {
+            return untilStmt();
         } else if (check(TokenType.For)) {
             return forStmt();
         } else if (check(TokenType.Foreach)) {
@@ -1781,6 +1890,28 @@ class Parser {
         }
 
         expect(TokenType.RightBrace);
+
+        // A `default =>` or wildcard `case _ =>` arm always matches - it
+        // compiles to a plain `if (1) { ... }` (see codegen.d's
+        // generateMatch), so any case *after* it is unreachable dead
+        // code, silently swallowed with no warning at all before this
+        // check existed. Catch it here instead of leaving it as a quiet
+        // footgun.
+        foreach (i, c; cases) {
+            bool isCatchAll = c.patterns.length == 0; // `default =>`
+            if (!isCatchAll && c.patterns.length == 1) {
+                if (auto patternExpr = cast(PatternExpr)c.patterns[0]) {
+                    isCatchAll = cast(WildcardPattern)patternExpr.pattern !is null;
+                }
+            }
+            if (isCatchAll && i != cases.length - 1) {
+                throw new CompileError(
+                    "A 'default'/wildcard ('_') match arm must be the last one - " ~
+                    "every case after it can never be reached",
+                    filePath, c.body_.line, c.body_.column);
+            }
+        }
+
         return new MatchStmt(subject, cases, startLine, startColumn);
     }
 
@@ -1869,6 +2000,30 @@ class Parser {
         ASTNode condition = expressionNoStructLiteral();
         Block body_ = block();
         return new WhileStmt(condition, body_);
+    }
+
+    // `until cond { ... }` - `unless`'s own loop counterpart, sugar for
+    // `while !cond { ... }`. No dedicated AST node - just negates the
+    // condition and reuses WhileStmt, same as postfix `unless` reuses
+    // IfStmt with a negated condition.
+    private WhileStmt untilStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Until);
+        ASTNode condition = expressionNoStructLiteral();
+        ASTNode negated = new UnaryExpr("!", condition, startLine, startColumn);
+        Block body_ = block();
+        return new WhileStmt(negated, body_);
+    }
+
+    private DoWhileStmt doWhileStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.Do);
+        Block body_ = block();
+        expect(TokenType.While);
+        ASTNode condition = expressionNoStructLiteral();
+        return new DoWhileStmt(body_, condition, startLine, startColumn);
     }
 
     private ASTNode forStmt() {
@@ -2186,12 +2341,29 @@ class Parser {
     }
 
     private ASTNode logicalAnd() {
-        ASTNode expr = bitwiseOr();
+        ASTNode expr = inExpr();
 
         while (match(TokenType.And)) {
             string op = "&&";
-            ASTNode right = bitwiseOr();
+            ASTNode right = inExpr();
             expr = new BinaryExpr(op, expr, right, expr.line, expr.column);
+        }
+
+        return expr;
+    }
+
+    // `value in arr` - true if arr (a fixed-size array) contains value.
+    // Same precedence tier Python gives `in` (binds like a comparison,
+    // looser than bitwise/arithmetic, tighter than &&/||) - reuses plain
+    // BinaryExpr rather than a dedicated node, since codegen.d already
+    // walks BinaryExpr generically everywhere except the one place ("in")
+    // actually needs special handling (generateInExpr).
+    private ASTNode inExpr() {
+        ASTNode expr = bitwiseOr();
+
+        while (match(TokenType.In)) {
+            ASTNode right = bitwiseOr();
+            expr = new BinaryExpr("in", expr, right, expr.line, expr.column);
         }
 
         return expr;
@@ -2240,7 +2412,33 @@ class Parser {
         while (match(TokenType.Equal, TokenType.NotEqual)) {
             string op = tokens[pos - 1].value;
             ASTNode right = relational();
-            expr = new BinaryExpr(op, expr, right, expr.line, expr.column);
+            ASTNode combined = new BinaryExpr(op, expr, right, expr.line, expr.column);
+
+            // `foo == a or b or c` - sugar for `foo == a || foo == b ||
+            // foo == c`, repeating the left operand instead of making the
+            // caller write it out for every value. `or` is a soft keyword
+            // here only (checked by value against an ordinary Identifier
+            // token, not a real reserved word - see lexer.d/TokenType,
+            // which has no word-based `or`/`and` at all, only the `||`/
+            // `&&` symbols) - it stays a perfectly ordinary identifier
+            // everywhere else in the grammar, so this can't collide with
+            // existing code that happens to use `or` as a variable name.
+            //
+            // For `!=`, combines with `&&` instead (De Morgan's), to match
+            // the natural-language reading of "foo is not a or b" as "foo
+            // isn't any of them" - `!=` chained with `||` would be
+            // vacuously true (foo is always != at least one of two
+            // distinct values) and never what anyone means by this.
+            string combineOp = "||";
+            if (op != "==") combineOp = "&&";
+            while (check(TokenType.Identifier) && current.value == "or") {
+                advance();
+                ASTNode nextValue = relational();
+                ASTNode nextComparison = new BinaryExpr(op, expr, nextValue, expr.line, expr.column);
+                combined = new BinaryExpr(combineOp, combined, nextComparison, expr.line, expr.column);
+            }
+
+            expr = combined;
         }
 
         return expr;
@@ -2546,6 +2744,9 @@ class Parser {
             noStructLiteral = savedNoStructLiteral;
             return new ArrayLiteral(elements, tokLine, tokColumn);
         }
+        if (check(TokenType.LeftBrace) && peek(1).type == TokenType.Dot) {
+            return anonymousStructLiteral(tokLine, tokColumn);
+        }
 
         error(format("Unexpected token: %s", current.type));
         return null;
@@ -2561,12 +2762,37 @@ class Parser {
         ASTNode[] fieldValues;
         if (!check(TokenType.RightBrace)) {
             do {
-                fieldNames ~= expect(TokenType.Identifier).value;
-                expect(TokenType.Colon);
+                if (match(TokenType.Dot)) {
+                    fieldNames ~= expect(TokenType.Identifier, "Expected field name after '.'").value;
+                    expect(TokenType.Assign, "Expected '=' after struct literal field name");
+                } else {
+                    fieldNames ~= expect(TokenType.Identifier).value;
+                    expect(TokenType.Colon);
+                }
                 fieldValues ~= expression();
             } while (match(TokenType.Comma));
         }
         expect(TokenType.RightBrace);
         return new StructLiteral(name, fieldNames, fieldValues, startLine, startColumn);
+    }
+
+    // `{ .field = value, ... }` - an anonymous struct literal whose type
+    // comes from the surrounding expected type (`let x: S = ...`, return
+    // type, or assignment target). A leading dot makes this unambiguous
+    // from a statement block.
+    private ASTNode anonymousStructLiteral(int startLine, int startColumn) {
+        expect(TokenType.LeftBrace);
+        string[] fieldNames;
+        ASTNode[] fieldValues;
+        if (!check(TokenType.RightBrace)) {
+            do {
+                expect(TokenType.Dot, "Expected '.field = value' in anonymous struct literal");
+                fieldNames ~= expect(TokenType.Identifier, "Expected field name after '.'").value;
+                expect(TokenType.Assign, "Expected '=' after struct literal field name");
+                fieldValues ~= expression();
+            } while (match(TokenType.Comma));
+        }
+        expect(TokenType.RightBrace);
+        return new StructLiteral("", fieldNames, fieldValues, startLine, startColumn);
     }
 }

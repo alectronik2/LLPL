@@ -15,6 +15,7 @@ enum NodeType {
     ClassDecl,
     StructDecl,
     UnionDecl,
+    UiDecl,
     LinkDecl,
     FlagsDecl,
     AbiAssertDecl,
@@ -24,6 +25,7 @@ enum NodeType {
     VarDecl,
     IfStmt,
     WhileStmt,
+    DoWhileStmt,
     ForStmt,
     ForeachStmt,
     ReturnStmt,
@@ -309,6 +311,61 @@ class MacroInvocation : ASTNode {
     }
 }
 
+class UiProperty {
+    string name;
+    ASTNode value;
+    Block handlerBody;
+    bool isHandler;
+    int line;
+    int column;
+
+    this(string name, ASTNode value, int line = 0, int column = 0) {
+        this.name = name;
+        this.value = value;
+        this.line = line;
+        this.column = column;
+    }
+
+    this(string name, Block handlerBody, bool isHandler, int line = 0, int column = 0) {
+        this.name = name;
+        this.handlerBody = handlerBody;
+        this.isHandler = isHandler;
+        this.line = line;
+        this.column = column;
+    }
+}
+
+class UiNode {
+    string typeName;
+    UiProperty[] properties;
+    UiNode[] children;
+    int line;
+    int column;
+
+    this(string typeName, UiProperty[] properties, UiNode[] children, int line = 0, int column = 0) {
+        this.typeName = typeName;
+        this.properties = properties;
+        this.children = children;
+        this.line = line;
+        this.column = column;
+    }
+}
+
+// `ui Name: RootType { ... }` - a declarative widget tree. Codegen
+// desugars this into a normal `Name.build() -> RootType` namespaced
+// function before the rest of the compiler registers declarations.
+class UiDecl : ASTNode {
+    string name;
+    UiNode root;
+    string[] namespaceSegments;
+
+    this(string name, UiNode root, int line = 0, int column = 0) {
+        super(NodeType.UiDecl, line, column);
+        this.name = name;
+        this.root = root;
+    }
+}
+
 // `quote(expr)` or `quote { statements }` inside a macro. Quoted syntax is
 // copied literally at expansion time; macro parameters only splice into it
 // through explicit `unquote(...)` nodes.
@@ -342,6 +399,15 @@ class Type {
     int pointerDepth;
     bool isArray;
     int arraySize;
+    // Additional dimensions for a nested fixed array (`T[2][3]` parses to
+    // arraySize=2, extraDims=[3]) - outer to inner, one entry per `[N]`
+    // group after the first. Empty for every ordinary single-dimension
+    // array (isArray true, arraySize alone). Emitted as C's own native
+    // multi-dim array syntax (`T name[2][3];`), which already indexes
+    // correctly with chained `[i][j]` - no special IndexExpr codegen
+    // needed, just carrying the remaining dims through each level's
+    // inferred element type (see codegen.d's IndexExpr inferType).
+    int[] extraDims;
 
     // Read-only on purpose (no setter) - lets every existing simple
     // boolean check ("is this a pointer at all") keep working unchanged,
@@ -578,6 +644,17 @@ class StructDecl : ASTNode {
     string name;
     VarDecl[] fields;
     FunctionDecl[] constructors;
+    // `func`/`func operator...` written directly in the struct body (see
+    // parser.d's structDecl) - always takes `self` *by value*, like a
+    // constructor's own `self`, not by pointer like a class method's.
+    // There's no "struct reference" in this language (a struct is always
+    // copied on assignment/pass, same as a plain C struct), so a mutating
+    // method only ever mutates its own local copy of `self` - fine for a
+    // method that computes/returns something (an operator, an `as_string`-
+    // style helper, a "with_x(...) -> Self" builder returning a modified
+    // copy), not useful for one that tries to mutate the caller's own
+    // variable in place (use a class for that instead).
+    FunctionDecl[] methods;
     bool packed;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     string[] typeParams; // `<T, U>` after the struct name - see FunctionDecl.typeParams
@@ -586,7 +663,7 @@ class StructDecl : ASTNode {
 
     this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0,
          string[] typeParams = [], string[] typeParamBounds = [], VarAttribute[] attributes = [],
-         FunctionDecl[] constructors = []) {
+         FunctionDecl[] constructors = [], FunctionDecl[] methods = []) {
         super(NodeType.StructDecl, line, column);
         this.name = name;
         this.fields = fields;
@@ -595,6 +672,7 @@ class StructDecl : ASTNode {
         this.typeParamBounds = typeParamBounds;
         this.attributes = attributes;
         this.constructors = constructors;
+        this.methods = methods;
     }
 }
 
@@ -1049,6 +1127,20 @@ class WhileStmt : ASTNode {
     }
 }
 
+// `do { ... } while cond` - same as WhileStmt but the condition is
+// checked *after* the body, so it always runs at least once - compiles
+// straight to C's own `do { ... } while (cond);`.
+class DoWhileStmt : ASTNode {
+    Block body_;
+    ASTNode condition;
+
+    this(Block body_, ASTNode condition, int line = 0, int column = 0) {
+        super(NodeType.DoWhileStmt, line, column);
+        this.body_ = body_;
+        this.condition = condition;
+    }
+}
+
 class ForStmt : ASTNode {
     ASTNode initializer;
     ASTNode condition;
@@ -1437,6 +1529,12 @@ struct InterpFormat {
     string radix;
     int width;
     bool zeroPad;
+    // `\(x:.N)` - digits after the point (float's own printf-style
+    // precision, e.g. \(pi:.2) -> "3.14"). -1 (not 0) means "not given",
+    // since `.0` is a real, meaningful precision (no fractional digits at
+    // all), distinct from omitting it entirely (defaults to 6 - see
+    // codegen.d's interpFormatSpecifier).
+    int precision = -1;
 }
 
 // `"literal \(expr) literal \(expr) literal"` - `literalParts` always has
@@ -1528,16 +1626,18 @@ class SizeofExpr : ASTNode {
     }
 }
 
-// `TypeName { field: value, ... }` - constructs a struct value directly
-// (structs only, never a class - see codegen.d's resolveStructLiteralTarget,
-// which rejects a class name with a pointer to `new` instead). `typeName`
-// is always a single, non-namespaced identifier with no `<...>` type
-// arguments of its own (parser.d's structLiteral()) - a generic struct's
-// type arguments, when needed, come entirely from context (the enclosing
-// `let`/return's declared type) rather than being written in the literal
-// itself, the same way `Optional<T>`'s `T` is always fixed by context
-// before any of its methods run. Every field must be given, by name,
-// though not necessarily in declaration order.
+// `TypeName { field: value, ... }` or `{ .field = value, ... }` constructs
+// a struct value directly (structs only, never a class - see codegen.d's
+// resolveStructLiteralTarget, which rejects a class name with a pointer to
+// `new` instead). For the anonymous `{ .field = value }` form, `typeName`
+// is empty and the enclosing expected type supplies the struct. For the
+// named form, `typeName` is a single, non-namespaced identifier with no
+// `<...>` type arguments of its own (parser.d's structLiteral()) - a
+// generic struct's type arguments, when needed, come entirely from context
+// (the enclosing `let`/return's declared type) rather than being written in
+// the literal itself, the same way `Optional<T>`'s `T` is always fixed by
+// context before any of its methods run. Every field must be given, by
+// name, though not necessarily in declaration order.
 class StructLiteral : ASTNode {
     string typeName;
     string[] fieldNames;
