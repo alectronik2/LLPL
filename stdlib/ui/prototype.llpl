@@ -12,6 +12,16 @@ class UiWidget {
     let spacing: i64
     let first_child: UiWidget
     let next_sibling: UiWidget
+    // Event callbacks, mirroring std.ui.sdl's Widget field-for-field so the
+    // same `ui` DSL block works against either backend. Each handler has a
+    // companion `has_` flag because a closure field has no null state to
+    // test - the `ui` desugaring (see desugarUiNode in codegen.d) sets both.
+    let onClick: () -> void
+    let has_onClick: bool
+    let onHover: () -> void
+    let has_onHover: bool
+    let onHoverEnd: () -> void
+    let has_onHoverEnd: bool
 
     constructor(kind: string) {
         self.kind = kind
@@ -22,6 +32,9 @@ class UiWidget {
         self.spacing = 0
         self.first_child = null
         self.next_sibling = null
+        self.has_onClick = false
+        self.has_onHover = false
+        self.has_onHoverEnd = false
     }
 
     func add_child(child: UiWidget) {
@@ -37,6 +50,52 @@ class UiWidget {
         }
         rc_retain(child as char*)
         tail.next_sibling = child
+    }
+
+    // Event entry points. The hosted prototype has no real event loop -
+    // std.ui.sdl drives these from actual SDL mouse events - so callers
+    // invoke them directly to exercise a tree's callbacks deterministically.
+    // Each copies the closure into a local before calling it, since
+    // `self.onClick()` would parse as a method call on self rather than an
+    // invocation of the field's closure value.
+    func click() {
+        if self.has_onClick {
+            let handler: () -> void = self.onClick
+            handler()
+        }
+    }
+
+    func hover_enter() {
+        if self.has_onHover {
+            let handler: () -> void = self.onHover
+            handler()
+        }
+    }
+
+    func hover_leave() {
+        if self.has_onHoverEnd {
+            let handler: () -> void = self.onHoverEnd
+            handler()
+        }
+    }
+
+    // Depth-first search for the first widget whose `text` matches, so a
+    // caller can reach a specific button without hand-walking first_child/
+    // next_sibling. Returns null when nothing matches.
+    func find_by_text(needle: string) -> UiWidget {
+        if llpl_strcmp(self.text, needle) == 0 {
+            return self
+        }
+
+        let child: UiWidget = self.first_child
+        while child != null {
+            let found: UiWidget = child.find_by_text(needle)
+            if found != null {
+                return found
+            }
+            child = child.next_sibling
+        }
+        return null
     }
 
     func render(depth: i64) {
@@ -112,5 +171,22 @@ class App {
         if self.root != null {
             self.root.render(0)
         }
+    }
+
+    // Stands in for "user clicked the widget labelled <text>" - the hosted
+    // backend has no pointer input of its own. Returns false when no widget
+    // carries that text, so a caller can tell "no such widget" apart from
+    // "found it, but it had no onClick handler attached".
+    func click_text(needle: string) -> bool {
+        if self.root == null {
+            return false
+        }
+
+        let target: UiWidget = self.root.find_by_text(needle)
+        if target == null {
+            return false
+        }
+        target.click()
+        return true
     }
 }

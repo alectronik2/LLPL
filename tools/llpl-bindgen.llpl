@@ -396,8 +396,24 @@ func strip_comments_directives_attrs(src: String) -> String {
             out = append_char(out, c)
             i = i + 1
         } else if at_line_start && c == '#' {
+            // A preprocessor directive ending in a backslash continues onto
+            // the next physical line, so the skip has to follow it - dropping
+            // only the first line leaves the continuation behind as stray
+            // code. glibc's dirent.h hits this with a two-line
+            // `# define _D_ALLOC_NAMLEN(d) ... \` / `: _D_EXACT_NAMLEN (d) + 1)`.
+            // A newline is emitted per line consumed so reported line numbers
+            // still line up with the original header.
             while i < n && src.byte_at(i) != '\n' {
-                i = i + 1
+                if src.byte_at(i) == '\\' && i + 1 < n && src.byte_at(i + 1) == '\n' {
+                    out = append_char(out, '\n')
+                    i = i + 2
+                } else if src.byte_at(i) == '\\' && i + 2 < n &&
+                        src.byte_at(i + 1) == '\r' && src.byte_at(i + 2) == '\n' {
+                    out = append_char(out, '\n')
+                    i = i + 3
+                } else {
+                    i = i + 1
+                }
             }
             if i < n {
                 out = append_char(out, '\n')

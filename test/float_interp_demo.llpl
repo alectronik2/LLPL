@@ -1,0 +1,6 @@
+func main() -> i64 {
+    let f: float = 3.12
+    let d: double = 2.71
+    puts("\(f) and \(d)")
+    return 0
+}

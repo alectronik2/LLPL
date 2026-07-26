@@ -2,3 +2,7 @@ Window title="Counter" text="" width=320 height=180 spacing=0
   Column title="" text="" width=0 height=0 spacing=8
     Text title="" text="Count: 0" width=0 height=0 spacing=0
     Button title="" text="Increment" width=0 height=0 spacing=0
+    View title="" text="" width=0 height=0 spacing=0
+Clicked Increment
+Hovering Increment
+No widget labelled 'No Such Widget'

@@ -57,7 +57,8 @@ func main() {
     let ss = new stringstream()
     ss << "Hello" << " World"
 
-    let ss = new stringstream("42 3.14 7")
+    let ss = new stringstream("")
+    ss << "42 3.14 7"
 
     let a: i64 = 0
     let b: f64 = 0.0

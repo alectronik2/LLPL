@@ -1,5 +1,14 @@
 import stdlib.ui.prototype
 
+class View : UiWidget {
+    let url: string
+
+    constructor() {
+        super("View")
+        self.url = ""
+    }
+}
+
 ui DemoWindow: Window {
     title: "Counter"
     width: 320
@@ -14,6 +23,18 @@ ui DemoWindow: Window {
 
         Button {
             text: "Increment"
+
+            onClick: func() {
+                puts("Clicked Increment")
+            }
+
+            onHover: {
+                puts("Hovering Increment")
+            }
+        }
+
+        View {
+            url: "http://www.google.com/"
         }
     }
 }
@@ -22,5 +43,18 @@ func main() -> i64 {
     let window = DemoWindow.build()
     let app = new App("Demo", 640, 480, window)
     app.run()
+
+    // Both callback spellings - `func() { ... }` and the bare block - land
+    // on the same closure field, so both fire here.
+    app.click_text("Increment")
+    let button = window.find_by_text("Increment")
+    button.hover_enter()
+
+    // A widget with no handler attached is silently a no-op, not a crash.
+    app.click_text("Count: 0")
+
+    if !app.click_text("No Such Widget") {
+        puts("No widget labelled 'No Such Widget'")
+    }
     return 0
 }

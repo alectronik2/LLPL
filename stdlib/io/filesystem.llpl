@@ -29,8 +29,8 @@ func path_join(base: string, name: string) -> string {
         buf[i] = base[i]
         i = i + 1
     }
-    if i > 0 && buf[i - 1] != '/' as i64 as char {
-        buf[i] = '/' as i64 as char
+    if i > 0 && buf[i - 1] != '/' {
+        buf[i] = '/'
         i = i + 1
     }
     let j: i64 = 0
@@ -44,11 +44,11 @@ func path_join(base: string, name: string) -> string {
 }
 
 func is_dot_entry(name: string) -> bool {
-    if name[0] == '.' as i64 as char {
+    if name[0] == '.' {
         if name[1] == 0 {
             return true
         }
-        if name[1] == '.' as i64 as char && name[2] == 0 {
+        if name[1] == '.' && name[2] == 0 {
             return true
         }
     }

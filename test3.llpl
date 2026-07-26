@@ -1,0 +1,5 @@
+func main() -> i64 {
+    let f = 3.14
+    puts("\(f)")
+    return 0
+}

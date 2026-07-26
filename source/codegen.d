@@ -235,6 +235,225 @@ class CodeGenerator {
             cast(IndexExpr)expr !is null;
     }
 
+    // --- Owned RC temporaries inside a single expression -----------------
+    //
+    // A call that returns a class type hands back a fresh reference nobody
+    // owns: `if s.byte_substring(0, 5) == "hi"` allocates a String, compares
+    // it, and drops the only pointer to it. rcLocalNames above only covers
+    // values bound to a `let`, so these intermediates used to leak outright -
+    // fatal on the 1MB heap once a loop runs a few thousand times.
+    //
+    // The fix wraps the whole expression in a statement-expression holding
+    // one NULL-initialised slot per temporary. Each producing subexpression
+    // becomes `(__llpl_rctmp0 = <call>)` *in place*, so evaluation order and
+    // `&&`/`||` short-circuiting are untouched - a temp whose branch never
+    // ran simply stays NULL and its guarded release is a no-op.
+    // Whether the expression currently being generated sits in a position
+    // where releasing a temporary is safe. It is *not* safe in an argument
+    // list: `tokens.push(new CToken(...))` looks like a discarded statement,
+    // but push stores the argument, so freeing it afterwards would hand the
+    // vector a dangling element. Since a callee taking ownership can't be
+    // seen from the call site, argument position simply opts out and keeps
+    // the old leak. Comparison operands are the safe, common case worth
+    // capturing - `s.trim() == "x"` compares and drops.
+    private bool rcTempEligible;
+    private bool rcTempActive;
+    private string[] rcTempDecls;
+    private string[] rcTempReleases;
+    private int rcTempCounter;
+    // The one node a scope must *not* capture: when the expression's own
+    // result is being stored (a `let` initialiser, `return`, assignment RHS),
+    // ownership transfers to that slot, so releasing it here would hand the
+    // caller a dangling pointer.
+    private ASTNode rcTempExcludedRoot;
+
+    // C symbols whose LLPL definition provably returns a *fresh* reference.
+    // Built once up front by ownedReturnSymbols below.
+    //
+    // Not every call result is safe to release: a chaining method like
+    // stringstream's `operator<<` hands back `self`, so releasing it would
+    // destroy an object the caller still owns. Since that can't be decided
+    // from the call site, it's decided from the callee - and anything this
+    // table can't account for (extern C, closures, function pointers) is
+    // treated as borrowed, which is the pre-existing leak rather than a new
+    // double-free.
+    private bool[string] rcOwnedReturnSymbols;
+
+    // A function returns a borrowed reference when any `return` hands back
+    // something somebody else already owns - `self` (the chaining pattern),
+    // one of its parameters, a field, or a container element.
+    //
+    // Note this is deliberately narrower than isAliasingRcExpr, which treats
+    // every bare identifier as an alias: returning a *local* is a move (the
+    // local's own release is skipped for exactly that reason - see
+    // releaseRcLocals' exceptName), so `let r = new String(...); return r`
+    // still hands the caller a fresh reference it owns.
+    private bool returnsBorrowedReference(FunctionDecl fn) {
+        if (fn.body_ is null) return true;
+        bool[string] paramNames;
+        foreach (p; fn.params) paramNames[p.name] = true;
+
+        bool borrowed = false;
+        void walk(ASTNode n) {
+            if (n is null || borrowed) return;
+            if (auto ret = cast(ReturnStmt)n) {
+                if (ret.value is null) return;
+                if (auto id = cast(Identifier)ret.value) {
+                    if (id.name == "self" || (id.name in paramNames) !is null) {
+                        borrowed = true;
+                    }
+                } else if (cast(MemberExpr)ret.value !is null ||
+                        cast(IndexExpr)ret.value !is null) {
+                    borrowed = true;
+                }
+                return;
+            }
+            if (auto blk = cast(Block)n) {
+                foreach (s; blk.statements) walk(s);
+            } else if (auto ifs = cast(IfStmt)n) {
+                walk(ifs.thenBlock);
+                walk(ifs.elseBlock);
+            } else if (auto wh = cast(WhileStmt)n) {
+                walk(wh.body_);
+            } else if (auto dw = cast(DoWhileStmt)n) {
+                walk(dw.body_);
+            } else if (auto fs = cast(ForStmt)n) {
+                walk(fs.body_);
+            }
+        }
+        walk(fn.body_);
+        return borrowed;
+    }
+
+    private void buildRcOwnedReturnSymbols() {
+        foreach (mangled, fn; functionRegistry) {
+            if (fn.returnType is null || !isRcManagedType(fn.returnType)) continue;
+            if (!returnsBorrowedReference(fn)) {
+                rcOwnedReturnSymbols[mangled] = true;
+            }
+        }
+        foreach (mangled, cd; classRegistry) {
+            string cName = mangled;
+            foreach (m; cd.methods) {
+                if (m.returnType is null || !isRcManagedType(m.returnType)) continue;
+                if (!returnsBorrowedReference(m)) {
+                    rcOwnedReturnSymbols[mangleMethodName(cd, cName, m)] = true;
+                }
+            }
+        }
+    }
+
+    // Pulls `Foo_bar` out of generated text like `Foo_bar(a, b)`. Returns ""
+    // for anything that isn't a plain direct call.
+    private string leadingCallSymbol(string code) {
+        size_t i = 0;
+        while (i < code.length && (code[i] == '_' ||
+                (code[i] >= 'a' && code[i] <= 'z') ||
+                (code[i] >= 'A' && code[i] <= 'Z') ||
+                (i > 0 && code[i] >= '0' && code[i] <= '9'))) {
+            i++;
+        }
+        if (i == 0 || i >= code.length || code[i] != '(') return "";
+        return code[0 .. i];
+    }
+
+    // Whether `node` hands back a brand-new reference that nothing else will
+    // ever release. `new X(...)` always allocates; a call only counts when
+    // the callee is in rcOwnedReturnSymbols (see above).
+    private bool producesOwnedRcTemp(ASTNode node, string generated) {
+        if (cast(NewExpr)node !is null) return true;
+        if (cast(CallExpr)node is null) return false;
+        string sym = leadingCallSymbol(generated);
+        return sym.length > 0 && (sym in rcOwnedReturnSymbols) !is null;
+    }
+
+    private Type tryInferType(ASTNode node) {
+        try {
+            return inferType(node);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // Runs `gen` with temp collection enabled and wraps the result so every
+    // captured temporary is released once the expression has been consumed.
+    // `resultCType` is the C type of the whole expression, or "" when its
+    // value is discarded (an expression statement) - the discarding form
+    // avoids having to name a type for a `void` call.
+    private string rcTempScope(ASTNode excludedRoot, string resultCType, string delegate() gen) {
+        bool savedActive = rcTempActive;
+        string[] savedDecls = rcTempDecls;
+        string[] savedReleases = rcTempReleases;
+        ASTNode savedExcluded = rcTempExcludedRoot;
+
+        bool savedEligible = rcTempEligible;
+        rcTempActive = true;
+        rcTempDecls = [];
+        rcTempReleases = [];
+        rcTempExcludedRoot = excludedRoot;
+        // The scope root itself is a safe place to release: a condition's
+        // value is tested and dropped, an expression statement's is ignored.
+        rcTempEligible = true;
+
+        string code = gen();
+        rcTempEligible = savedEligible;
+        string decls = rcTempDecls.join(" ");
+        string releases = rcTempReleases.join(" ");
+        bool captured = rcTempDecls.length > 0;
+
+        rcTempActive = savedActive;
+        rcTempDecls = savedDecls;
+        rcTempReleases = savedReleases;
+        rcTempExcludedRoot = savedExcluded;
+
+        if (!captured) {
+            return code;
+        }
+        if (resultCType.length == 0) {
+            return format("({ %s %s; %s })", decls, code, releases);
+        }
+
+        return format("({ %s %s __llpl_rcres%d = %s; %s __llpl_rcres%d; })",
+            decls, resultCType, rcTempCounter, code, releases, rcTempCounter);
+    }
+
+    // Conditions are the common home for a throwaway RC temporary
+    // (`if s.trim() == "x"`), and a `while` condition is re-evaluated every
+    // iteration - exactly the shape that exhausts the heap fastest.
+    private string generateCondition(ASTNode cond) {
+        return rcTempScope(null, "bool", () => generateExpression(cond));
+    }
+
+    // An expression statement discards its value, so nothing here needs a
+    // result type - and the outermost call is itself a temporary to free.
+    // Returns the expression *without* a trailing `;` either way, so the
+    // caller punctuates it the same whether or not a temp was captured.
+    //
+    // The exception is an assignment: `self.field = new String("")` reads as
+    // a discarded statement but its right-hand side is being *stored*, so
+    // that one node is excluded from capture and its reference belongs to the
+    // destination from here on.
+    private string generateDiscardedExpression(ASTNode expr) {
+        ASTNode stored = null;
+        if (auto bin = cast(BinaryExpr)expr) {
+            if (bin.op.length > 0 && bin.op[$ - 1] == '=' &&
+                    bin.op != "==" && bin.op != "!=" && bin.op != "<=" && bin.op != ">=") {
+                stored = bin.right;
+            }
+        }
+        return rcTempScope(stored, "", () => generateExpression(expr));
+    }
+
+    private string captureRcTemp(string generated, Type t) {
+        string name = format("__llpl_rctmp%d", rcTempCounter++);
+        // `0`, not `NULL` - the generated preamble `#undef`s NULL so LLPL's
+        // own `null` keyword owns the spelling.
+        rcTempDecls ~= format("%s %s = 0;", typeToC(t), name);
+        rcTempReleases ~= format("if (%s) rc_release(%s, %s);",
+            name, name, fieldDestructorSymbol(t));
+        return format("(%s = %s)", name, generated);
+    }
+
     private string releaseRcLocals(string exceptName) {
         string code = "";
         foreach_reverse (i, name; rcLocalNames) {
@@ -1722,10 +1941,18 @@ class CodeGenerator {
             ASTNode value = prop.isHandler
                 ? cast(ASTNode)new LambdaExpr([], [], new Type("void"), prop.handlerBody, prop.line, prop.column)
                 : prop.value;
+            // A callback property has two spellings - the shorthand block
+            // (`onClick: { ... }`, which parser.d turns into isHandler with
+            // a bare Block) and an explicit lambda (`onClick: func() { ... }`,
+            // which comes through the ordinary expression path). Both must
+            // set the companion `has_<name>` flag the widget classes test
+            // before invoking a handler, otherwise the lambda spelling
+            // assigns a live closure that nothing ever calls.
+            bool setsHandler = prop.isHandler || cast(LambdaExpr)prop.value !is null;
             stmts ~= new ExprStmt(new BinaryExpr("=",
                 new MemberExpr(new Identifier(varName, prop.line, prop.column), prop.name, prop.line, prop.column),
                 value, prop.line, prop.column));
-            if (prop.isHandler) {
+            if (setsHandler) {
                 stmts ~= new ExprStmt(new BinaryExpr("=",
                     new MemberExpr(new Identifier(varName, prop.line, prop.column),
                         "has_" ~ prop.name, prop.line, prop.column),
@@ -2119,6 +2346,12 @@ class CodeGenerator {
                 }
             }
         }
+
+        // Both registries are fully populated and every return type is
+        // resolved, so the "does this call hand back a fresh reference"
+        // table can be settled before a single expression is emitted (see
+        // rcOwnedReturnSymbols).
+        buildRcOwnedReturnSymbols();
 
         // Every baseClassName is now resolved/canonicalized - build the
         // "has subclasses" set (see hasSubclasses' own comment) and, for
@@ -5463,7 +5696,7 @@ class CodeGenerator {
         } else if (auto destructStmt = cast(DestructuringStmt)node) {
             code ~= generateDestructuringStmt(destructStmt);
         } else if (auto ifStmt = cast(IfStmt)node) {
-            code ~= indent() ~ "if (" ~ generateExpression(ifStmt.condition) ~ ") {\n";
+            code ~= indent() ~ "if (" ~ generateCondition(ifStmt.condition) ~ ") {\n";
             indentLevel++;
             foreach (stmt; ifStmt.thenBlock.statements) {
                 code ~= generateStatement(stmt, isDeferred);
@@ -5479,7 +5712,7 @@ class CodeGenerator {
             }
             code ~= indent() ~ "}\n";
         } else if (auto whileStmt = cast(WhileStmt)node) {
-            code ~= indent() ~ "while (" ~ generateExpression(whileStmt.condition) ~ ") {\n";
+            code ~= indent() ~ "while (" ~ generateCondition(whileStmt.condition) ~ ") {\n";
             indentLevel++;
             foreach (stmt; whileStmt.body_.statements) {
                 code ~= generateStatement(stmt, isDeferred);
@@ -5493,7 +5726,7 @@ class CodeGenerator {
                 code ~= generateStatement(stmt, isDeferred);
             }
             indentLevel--;
-            code ~= indent() ~ "} while (" ~ generateExpression(doWhileStmt.condition) ~ ");\n";
+            code ~= indent() ~ "} while (" ~ generateCondition(doWhileStmt.condition) ~ ");\n";
         } else if (auto forStmt = cast(ForStmt)node) {
             code ~= indent() ~ "{\n";
             indentLevel++;
@@ -5601,7 +5834,7 @@ class CodeGenerator {
             if (arrayAssign.length > 0) {
                 code ~= arrayAssign;
             } else {
-                code ~= indent() ~ generateExpression(exprStmt.expression) ~ ";\n";
+                code ~= indent() ~ generateDiscardedExpression(exprStmt.expression) ~ ";\n";
             }
         } else if (auto asmStmt = cast(AsmStmt)node) {
             code ~= generateAsm(asmStmt);
@@ -9363,7 +9596,44 @@ class CodeGenerator {
         return format("((EmbeddedFile){ .data = (char*)%s, .len = %dULL })", dataName, bytes.length);
     }
 
+    // Thin wrapper over the real dispatcher below: every expression in the
+    // program funnels through here, which is the one place that can spot an
+    // owned RC temporary regardless of what kind of expression contains it.
+    // See rcTempScope for why capturing happens in place rather than by
+    // hoisting the call out of the expression.
     private string generateExpression(ASTNode node) {
+        // Snapshot before descending: generateExpressionInner clears the flag
+        // for a call's own arguments, and this node's eligibility is its
+        // caller's business, not its children's.
+        bool eligible = rcTempEligible;
+        string code = generateExpressionInner(node);
+        rcTempEligible = eligible;
+        if (!rcTempActive || !eligible || node is rcTempExcludedRoot ||
+                !producesOwnedRcTemp(node, code)) {
+            return code;
+        }
+        Type t = tryInferType(node);
+        if (t is null || !isRcManagedType(t)) {
+            return code;
+        }
+        return captureRcTemp(code, t);
+    }
+
+    private string generateExpressionInner(ASTNode node) {
+        // Propagate temp-capture eligibility one level down: a comparison
+        // hands it to both operands (neither is stored anywhere), while a
+        // call or a `new` withholds it from everything it generates, which
+        // is what keeps an argument from being freed out from under a callee
+        // that kept it. See rcTempEligible.
+        if (auto opNode = cast(BinaryExpr)node) {
+            if (opNode.op == "==" || opNode.op == "!=" || opNode.op == "<" ||
+                    opNode.op == ">" || opNode.op == "<=" || opNode.op == ">=") {
+                rcTempEligible = true;
+            }
+        } else if (cast(CallExpr)node !is null || cast(NewExpr)node !is null) {
+            rcTempEligible = false;
+        }
+
         if (auto binExpr = cast(BinaryExpr)node) {
             if (binExpr.op == "=") {
                 checkNotConstAssignment(binExpr.left);

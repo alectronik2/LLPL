@@ -6,6 +6,8 @@ import "../sdl/sdl_core.llpl"
 import "../sdl/sdl_window.llpl"
 import "../sdl/sdl_ttf.llpl"
 
+extern func malloc(size: i64) -> char*
+
 namespace std {
 namespace ui {
 
@@ -208,7 +210,7 @@ func count_list_items(items: string) -> i64 {
         return 0
     }
     while items[i] != 0 {
-        if items[i] == '\n' as i64 as char {
+        if items[i] == '\n' {
             count = count + 1
         }
         i = i + 1
@@ -223,9 +225,9 @@ func get_list_item_at(items: string, index: i64) -> string {
     let len: i64 = text_len(items)
 
     while i <= len {
-        if i == len || items[i] == '\n' as i64 as char {
+        if i == len || items[i] == '\n' {
             if current == index {
-                let buf: char[256]
+                let buf: char* = malloc(256) as char*
                 let j: i64 = 0
                 while start + j < i && j < 255 {
                     buf[j] = items[start + j]
@@ -1000,13 +1002,13 @@ class List : Widget {
         if text_len(self.items_text) == 0 {
             self.items_text = item
         } else {
-            let buf: char[4096]
+            let buf: char* = malloc(4096) as char*
             let i: i64 = 0
             while self.items_text[i] != 0 && i < 4095 {
                 buf[i] = self.items_text[i]
                 i = i + 1
             }
-            buf[i] = '\n' as i64 as char
+            buf[i] = '\n'
             i = i + 1
             let j: i64 = 0
             while item[j] != 0 && i < 4095 {
@@ -1045,13 +1047,13 @@ class TreeView : Widget {
         let prefix: char[256]
         let i: i64 = 0
         while i < indent && i < 250 {
-            prefix[i] = ' ' as i64 as char
-            prefix[i + 1] = ' ' as i64 as char
+            prefix[i] = ' '
+            prefix[i + 1] = ' '
             i = i + 2
         }
         prefix[i] = 0
 
-        let full_item: char[4096]
+        let full_item: char* = malloc(4096) as char*
         let j: i64 = 0
         while prefix[j] != 0 && j < 256 {
             full_item[j] = prefix[j]
@@ -1068,13 +1070,13 @@ class TreeView : Widget {
         if text_len(self.items_text) == 0 {
             self.items_text = full_item as string
         } else {
-            let buf: char[8192]
+            let buf: char* = malloc(8192) as char*
             let idx: i64 = 0
             while self.items_text[idx] != 0 && idx < 8191 {
                 buf[idx] = self.items_text[idx]
                 idx = idx + 1
             }
-            buf[idx] = '\n' as i64 as char
+            buf[idx] = '\n'
             idx = idx + 1
             let m: i64 = 0
             while full_item[m] != 0 && idx < 8191 {

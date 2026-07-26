@@ -611,7 +611,14 @@ class String {
         let joined: char* = llpl_alloc((total + 1) as u64)
         llpl_memcpy(joined, self.buf, self.length as u64)
         llpl_memcpy(joined + self.length, other, (other_len + 1) as u64)
-        return new String(joined)
+        // `joined` is a raw buffer, not reference-counted storage - the
+        // constructor copied it into the String's own `buf`, so nothing
+        // else will ever free this one. Releasing it here is what keeps a
+        // concat loop (`s = s + "x"`) flat instead of leaking the whole
+        // intermediate string every iteration.
+        let result: String = new String(joined)
+        llpl_free(joined)
+        return result
     }
 
     // Clamps byte `start`/`count` into range rather than faulting on an
@@ -634,7 +641,11 @@ class String {
         let piece: char* = llpl_alloc((count + 1) as u64)
         llpl_memcpy(piece, self.buf + start, count as u64)
         piece[count] = 0
-        return new String(piece)
+        // See operator+ above - the constructor copies, so this scratch
+        // buffer is ours to free.
+        let result: String = new String(piece)
+        llpl_free(piece)
+        return result
     }
 
     func substring(start: i64, count: i64) -> String {
@@ -744,7 +755,10 @@ class String {
             i = i + 1
         }
         out[self.length] = 0
-        return new String(out)
+        // See operator+ above - the constructor copies, so free the scratch.
+        let result: String = new String(out)
+        llpl_free(out)
+        return result
     }
 
     func to_lower() -> String {
@@ -760,7 +774,10 @@ class String {
             i = i + 1
         }
         out[self.length] = 0
-        return new String(out)
+        // See operator+ above - the constructor copies, so free the scratch.
+        let result: String = new String(out)
+        llpl_free(out)
+        return result
     }
 
     // Strips leading/trailing space, tab, '\n', and '\r'.

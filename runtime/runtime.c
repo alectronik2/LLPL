@@ -1208,6 +1208,16 @@ static void kfmt_putint(char* buf, size_t size, size_t* pos, int64_t value, int 
     kfmt_putuint(buf, size, pos, (uint64_t)value, 10, 0, width, zero_pad);
 }
 
+// Whether this translation unit can name a `double` at all - i.e. whether
+// %f support below gets compiled in. GCC/Clang predefine __SSE2__ on
+// x86-64 and drop it for -mno-sse2, which is exactly the signal wanted;
+// tcc never defines it yet has no -mno-sse either (it always passes
+// doubles in SSE registers), so a bare __SSE2__ test silently compiles
+// %f out there and interpolating a float prints a literal "%f".
+#if defined(__SSE2__) || defined(__TINYC__)
+#define LLPL_FMT_FLOAT 1
+#endif
+
 // `%f` - fixed-point, `precision` digits after the point (6 if negative
 // ("no .N given" - see kvsnprintf below), C's
 // own default). No libm dependency (this runs on freestanding targets
@@ -1219,10 +1229,9 @@ static void kfmt_putint(char* buf, size_t size, size_t* pos, int64_t value, int 
 // scaled by 10^precision - fine for interpolation's actual use, not a
 // general-purpose float formatter.
 //
-// Guarded by __SSE2__ (GCC predefines this based on -mno-sse2, not
-// something this file has to track itself) - a `double` parameter/return
-// needs an SSE register by the x86-64 ABI regardless of whether this
-// function is ever actually *called*; examples/baremetal_demo's own
+// Guarded by LLPL_FMT_FLOAT (defined just above) - a `double` parameter/
+// return needs an SSE register by the x86-64 ABI regardless of whether
+// this function is ever actually *called*; examples/baremetal_demo's own
 // build.yaml passes -mno-sse -mno-sse2 -mno-80387 for its kernel target
 // (no FPU support at all), so merely having this function's signature in
 // the translation unit is a hard compile error there - "SSE register
@@ -1230,7 +1239,7 @@ static void kfmt_putint(char* buf, size_t size, size_t* pos, int64_t value, int 
 // touches float/f64 anywhere and so never reaches the '%f' case below
 // either. kvsnprintf's own `default:` case (print the specifier
 // literally) covers '%f' there instead.
-#ifdef __SSE2__
+#ifdef LLPL_FMT_FLOAT
 static void kfmt_putfloat(char* buf, size_t size, size_t* pos, double value, int precision) {
     if (precision < 0) precision = 6; // -1 = "no .N given"; 0 is a real, explicit precision
     if (value < 0) {
@@ -1315,7 +1324,7 @@ int64_t kvsnprintf(char* buf, uint64_t size, char* fmt, va_list args) {
             case 'b':
                 kfmt_putuint(buf, size, &pos, va_arg(args, uint64_t), 2, 0, width, zero_pad);
                 break;
-#ifdef __SSE2__
+#ifdef LLPL_FMT_FLOAT
             case 'f':
                 // C's own default argument promotion always widens a
                 // float argument to double in a varargs call, so this is
