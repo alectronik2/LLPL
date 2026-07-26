@@ -83,6 +83,9 @@ func main() -> i64 {
     p.child.describe()
     delete p
 
+    let x = new Parent("dog")
+    delete x
+
     puts("no crash, no leak")
     return 0
 }
