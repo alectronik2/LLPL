@@ -1,6 +1,8 @@
 import stdlib.text.string_utils
 import stdlib.io.file
 
+import "cimport.h" as C
+
 using namespace std.text
 using namespace std.io
 
@@ -22,11 +24,20 @@ class Klass {
     }
 
     func hello( s: string ) {
-
+        puts( "Hello with: \(s)")
+    }
+    
+    func operator++() -> Klass {
+        puts("PLUS PLUS")
+        return self
     }
 }
 
 let pub: Klass
+
+func throwing() {
+    throw "Error"
+}
 
 func main() {
     let x = 128
@@ -73,6 +84,18 @@ func main() {
     let s1: string
     i >> &s1
     puts( s1 )
+
+    try {
+        throwing()
+    } catch e: string  {
+        puts("Got an error: \(e)")
+    }
+
+    ">> Hello world from C \n" |> C.printf
+
+    let rec: C.s = { .foo = 7, .bar = 5 }
+
+    (k++).hello("stre")
 
     //delete k
 }

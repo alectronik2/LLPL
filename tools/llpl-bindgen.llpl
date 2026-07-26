@@ -1,7 +1,9 @@
 // LLPL C header importer.
 //
 // This intentionally handles a narrow, useful C subset: named structs and
-// ordinary function prototypes. It skips macros, variables, typedef bodies,
+// ordinary function prototypes. It also lifts simple object-like `#define`
+// constants into LLPL `const` declarations. It skips function-like macros,
+// variables, typedef bodies,
 // anonymous/nested structs, bit-fields, and function-pointer declarators
 // instead of guessing. The `grammar {}` block below performs the real C token
 // parse; the LLPL code then parses C declarations over that token stream,
@@ -19,12 +21,12 @@ grammar CTokenStream {
     header   : token* <EOF> ;
     token    : IDENT | NUMBER | STRING | CHAR | PUNCT ;
     IDENT    : [A-Za-z_][A-Za-z0-9_]* ;
-    NUMBER   : [0-9]+ ;
+    NUMBER   : [0-9][0-9A-Fa-fxXuUlL]* ;
     STRING   : '"' STRCH* '"' ;
     STRCH    : [^"] ;
     CHAR     : '\'' CHARCH* '\'' ;
     CHARCH   : [^'] ;
-    PUNCT    : [\*\(\),;\[\]\.\{\}:] ;
+    PUNCT    : [\*\(\),;\[\]\.\{\}:=] ;
 }
 
 class CToken {
@@ -103,6 +105,10 @@ func append_char(s: String, c: char) -> String {
     return s + (buf as char*)
 }
 
+func append_text(s: String, t: String) -> String {
+    return s + t.c_str()
+}
+
 func skip_balanced_call(s: String, i: i64) -> i64 {
     let depth: i64 = 0
     let n: i64 = s.byte_len()
@@ -119,6 +125,261 @@ func skip_balanced_call(s: String, i: i64) -> i64 {
         i = i + 1
     }
     return n
+}
+
+func normalize_number(text: String) -> String {
+    let end: i64 = text.byte_len()
+    while end > 0 {
+        let c: char = text.byte_at(end - 1)
+        if c == 'u' || c == 'U' || c == 'l' || c == 'L' {
+            end = end - 1
+        } else {
+            break
+        }
+    }
+    return text.byte_substring(0, end)
+}
+
+func tokenize_c_expr(text: String) -> Vector<CToken> {
+    let root: ParseNode = CTokenStream(text)
+    let tokens: Vector<CToken> = new Vector<CToken>()
+    flatten_tokens(root, tokens)
+    return tokens
+}
+
+func token_is_word(tok: CToken) -> bool {
+    return tok.kind == "IDENT" || tok.kind == "NUMBER" || tok.kind == "STRING" || tok.kind == "CHAR"
+}
+
+func token_text(tok: CToken) -> String {
+    if tok.kind == "NUMBER" {
+        return normalize_number(tok.text)
+    }
+    return tok.text
+}
+
+func tokens_to_expr(tokens: Vector<CToken>) -> String {
+    let out: String = new String("")
+    let i: i64 = 0
+    while i < tokens.len() {
+        let tok: CToken = tokens.get(i)
+        let text: String = token_text(tok)
+        if i > 0 {
+            let prev: CToken = tokens.get(i - 1)
+            let prev_text: String = token_text(prev)
+            let curr_is_word: bool = token_is_word(tok)
+            let prev_is_word: bool = token_is_word(prev)
+            if curr_is_word && prev_is_word {
+                out = append_char(out, ' ')
+            } else if curr_is_word && prev_text != "(" && prev_text != "[" && prev_text != "." &&
+                    prev_text != "," && prev_text != ":" {
+                out = append_char(out, ' ')
+            } else if text != ")" && text != "]" && text != "," && text != ":" && text != "." &&
+                    text != "(" && text != "[" && text != "!" && text != "~" && text != "*" {
+                if prev_text != "(" && prev_text != "[" && prev_text != "." && prev_text != "," &&
+                        prev_text != ":" {
+                    out = append_char(out, ' ')
+                }
+            }
+        }
+        out = append_text(out, text)
+        i = i + 1
+    }
+    return trim(out)
+}
+
+func strip_inline_comments(text: String) -> String {
+    let out: String = new String("")
+    let i: i64 = 0
+    let n: i64 = text.byte_len()
+    let in_string: bool = false
+    let in_char: bool = false
+    let escaped: bool = false
+
+    while i < n {
+        let c: char = text.byte_at(i)
+        let next: char = if i + 1 < n { text.byte_at(i + 1) } else { 0 as char }
+
+        if !in_string && !in_char && c == '/' && next == '/' {
+            break
+        }
+        if !in_string && !in_char && c == '/' && next == '*' {
+            i = i + 2
+            while i + 1 < n && !(text.byte_at(i) == '*' && text.byte_at(i + 1) == '/') {
+                i = i + 1
+            }
+            if i + 1 < n {
+                i = i + 2
+                continue
+            }
+            break
+        }
+
+        out = append_char(out, c)
+        if escaped {
+            escaped = false
+        } else if c == '\\' && (in_string || in_char) {
+            escaped = true
+        } else if c == '"' && !in_char {
+            in_string = !in_string
+        } else if c == '\'' && !in_string {
+            in_char = !in_char
+        }
+        i = i + 1
+    }
+
+    return out
+}
+
+func ltrim(text: String) -> String {
+    let start: i64 = 0
+    let n: i64 = text.byte_len()
+    while start < n && is_space(text.byte_at(start)) {
+        start = start + 1
+    }
+    return text.byte_substring(start, n - start)
+}
+
+func read_logical_define(src: String, start: i64) -> String {
+    let n: i64 = src.byte_len()
+    let pos: i64 = start
+    let logical: String = new String("")
+
+    while pos < n {
+        let line_end: i64 = pos
+        while line_end < n && src.byte_at(line_end) != '\n' {
+            line_end = line_end + 1
+        }
+        let line: String = src.byte_substring(pos, line_end - pos)
+        let trimmed: String = trim(line)
+        let ends_with_backslash: bool = trimmed.byte_len() > 0 && trimmed.byte_at(trimmed.byte_len() - 1) == '\\'
+        let piece: String = if ends_with_backslash {
+            trimmed.byte_substring(0, trimmed.byte_len() - 1)
+        } else {
+            trimmed
+        }
+        if logical.byte_len() > 0 {
+            logical = logical + " "
+        }
+        logical = logical + piece.c_str()
+
+        if !ends_with_backslash {
+            return logical
+        }
+        if line_end < n {
+            pos = line_end + 1
+        } else {
+            pos = line_end
+        }
+    }
+
+    return logical
+}
+
+func skip_logical_define(src: String, start: i64) -> i64 {
+    let n: i64 = src.byte_len()
+    let pos: i64 = start
+
+    while pos < n {
+        let line_end: i64 = pos
+        while line_end < n && src.byte_at(line_end) != '\n' {
+            line_end = line_end + 1
+        }
+        let line: String = src.byte_substring(pos, line_end - pos)
+        let trimmed: String = trim(line)
+        let ends_with_backslash: bool = trimmed.byte_len() > 0 && trimmed.byte_at(trimmed.byte_len() - 1) == '\\'
+        if !ends_with_backslash {
+            if line_end < n {
+            return line_end + 1
+        }
+        return line_end
+        }
+        if line_end < n {
+            pos = line_end + 1
+        } else {
+            pos = line_end
+        }
+    }
+
+    return n
+}
+
+func emit_define_constant(line: String) -> bool {
+    let trimmed: String = trim(line)
+    if !trimmed.starts_with("#define") {
+        return false
+    }
+
+    let i: i64 = 7
+    let n: i64 = trimmed.byte_len()
+    while i < n && is_space(trimmed.byte_at(i)) {
+        i = i + 1
+    }
+    if i >= n || !is_ident_start(trimmed.byte_at(i)) {
+        return false
+    }
+
+    let name_start: i64 = i
+    i = i + 1
+    while i < n && is_ident_part(trimmed.byte_at(i)) {
+        i = i + 1
+    }
+    let name: String = trimmed.byte_substring(name_start, i - name_start)
+    if i < n && trimmed.byte_at(i) == '(' {
+        return false
+    }
+    while i < n && is_space(trimmed.byte_at(i)) {
+        i = i + 1
+    }
+    if i >= n {
+        return false
+    }
+
+    let body: String = trim(strip_inline_comments(trimmed.byte_substring(i, n - i)))
+    if body.byte_len() == 0 {
+        return false
+    }
+
+    let tokens: Vector<CToken> = tokenize_c_expr(body)
+    if tokens.len() == 7 && tokens.get(0).text == "(" && tokens.get(1).text == "(" &&
+            tokens.get(3).text == "*" && tokens.get(4).text == ")" &&
+            tokens.get(5).kind == "NUMBER" && normalize_number(tokens.get(5).text) == "0" &&
+            tokens.get(6).text == ")" {
+        let type_text: String = type_from_tokens(tokens, 2, 4, false, new Vector<String>())
+        if type_text.byte_len() > 0 {
+            printf("const %s: %s = null\n", name.c_str(), type_text.c_str())
+            return true
+        }
+    }
+
+    let expr: String = tokens_to_expr(tokens)
+    if expr.byte_len() == 0 {
+        return false
+    }
+    printf("const %s = %s\n", name.c_str(), expr.c_str())
+    return true
+}
+
+func emit_define_constants(src: String) {
+    let i: i64 = 0
+    let n: i64 = src.byte_len()
+    while i < n {
+        let line_start: i64 = i
+        while i < n && src.byte_at(i) != '\n' {
+            i = i + 1
+        }
+        let line: String = src.byte_substring(line_start, i - line_start)
+        if trim(line).starts_with("#define") {
+            let logical: String = read_logical_define(src, line_start)
+            let next_index: i64 = skip_logical_define(src, line_start)
+            emit_define_constant(logical)
+            i = next_index
+            continue
+        }
+        if i < n && src.byte_at(i) == '\n' {
+            i = i + 1
+        }
+    }
 }
 
 func strip_comments_directives_attrs(src: String) -> String {
@@ -282,7 +543,7 @@ func mapped_type(base: String, pointer_depth: i64, structs: Vector<String>) -> S
     } else if b == "double" || b == "long double" {
         ll = new String("double")
     } else if b == "size_t" {
-        ll = new String("usize")
+        ll = new String("u64")
     } else if b == "ssize_t" {
         ll = new String("i64")
     } else if b == "int8_t" {
@@ -635,10 +896,63 @@ func collect_struct_names(tokens: Vector<CToken>) -> Vector<String> {
             if !is_known_struct(name, structs) {
                 structs.push(name)
             }
+        } else if tokens.get(i).text == "typedef" && i + 3 < tokens.len() &&
+                tokens.get(i + 1).text == "struct" && tokens.get(i + 2).kind == "IDENT" &&
+                (tokens.get(i + 3).text == "{" || tokens.get(i + 3).text == ";") {
+            let name: String = tokens.get(i + 2).text
+            if !is_known_struct(name, structs) {
+                structs.push(name)
+            }
         }
         i = i + 1
     }
     return structs
+}
+
+func find_typedef_struct_start(tokens: Vector<CToken>, start: i64, end: i64) -> i64 {
+    let i: i64 = start
+    while i + 2 < end {
+        if tokens.get(i).text == "typedef" && tokens.get(i + 1).text == "struct" &&
+                tokens.get(i + 2).kind == "IDENT" {
+            return i + 1
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+func emit_typedef_struct_decl(tokens: Vector<CToken>, start: i64, end: i64, structs: Vector<String>) {
+    let struct_start: i64 = find_typedef_struct_start(tokens, start, end)
+    if struct_start < 0 {
+        return
+    }
+
+    let close_idx: i64 = if struct_start + 2 < end && tokens.get(struct_start + 2).text == "{" {
+        find_matching_brace(tokens, struct_start + 2, end)
+    } else {
+        -1
+    }
+
+    let struct_name: String = tokens.get(struct_start + 1).text
+    if close_idx >= 0 {
+        emit_struct_decl(tokens, struct_start, end, structs)
+    } else {
+        emit_struct_forward_decl(tokens, struct_start)
+    }
+
+    let alias_start: i64 = if close_idx >= 0 {
+        close_idx + 1
+    } else {
+        struct_start + 3
+    }
+    let i: i64 = alias_start
+    while i < end {
+        if tokens.get(i).kind == "IDENT" {
+            printf("alias %s = %s\n\n", tokens.get(i).text.c_str(), struct_name.c_str())
+            return
+        }
+        i = i + 1
+    }
 }
 
 func emit_decl(tokens: Vector<CToken>, start: i64, end: i64, structs: Vector<String>, emit_structs: bool) {
@@ -646,6 +960,10 @@ func emit_decl(tokens: Vector<CToken>, start: i64, end: i64, structs: Vector<Str
         return
     }
     if emit_structs {
+        if tokens.get(start).text == "typedef" {
+            emit_typedef_struct_decl(tokens, start, end, structs)
+            return
+        }
         if is_struct_definition(tokens, start, end) {
             emit_struct_decl(tokens, start, end, structs)
         } else if is_struct_forward_decl(tokens, start, end) {
@@ -657,6 +975,9 @@ func emit_decl(tokens: Vector<CToken>, start: i64, end: i64, structs: Vector<Str
         return
     }
     if tokens.get(start).text == "typedef" {
+        if find_typedef_struct_start(tokens, start, end) >= 0 {
+            return
+        }
         return
     }
     if is_function_pointer_decl(tokens, start, end) {
@@ -744,6 +1065,7 @@ func main(args: string[]) -> i64 {
         return 1
     }
 
+    emit_define_constants(raw)
     let cleaned: String = strip_comments_directives_attrs(raw)
     let root: ParseNode = CTokenStream(cleaned)
     let tokens: Vector<CToken> = new Vector<CToken>()

@@ -7,7 +7,7 @@ import std.array;
 import std.algorithm;
 import std.format;
 import std.json;
-import std.process : environment;
+import std.process : environment, execute;
 import ast;
 import lexer;
 import parser;
@@ -52,6 +52,7 @@ class ModuleResolver {
     private string[] importOrder;  // Order in which modules were fully processed
     private bool recoverParseErrors;
     private CompileError[] collectedDiagnostics;
+    private string[string] headerImportCache;
 
     this(string[] searchPaths = [], bool recoverParseErrors = false) {
         this.searchPaths = searchPaths ~ [".", "lib", "modules"];
@@ -135,28 +136,86 @@ class ModuleResolver {
         // If it's a relative path, resolve from the importing file's directory
         string baseDir = dirName(fromFile);
 
-        // Add .llpl extension if not present
+        bool isHeaderImport = modulePath.length >= 2 && modulePath[$ - 2 .. $] == ".h";
         string testPath = modulePath;
-        if (!testPath.endsWith(".llpl")) {
+        if (!isHeaderImport && !testPath.endsWith(".llpl")) {
             testPath ~= ".llpl";
         }
 
         // Try relative to importing file
         string candidatePath = buildNormalizedPath(baseDir, testPath);
         if (exists(candidatePath)) {
-            return absolutePath(candidatePath);
+            return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
         }
 
         // Try each search path
         foreach (searchPath; searchPaths) {
             candidatePath = buildNormalizedPath(searchPath, testPath);
             if (exists(candidatePath)) {
-                return absolutePath(candidatePath);
+                return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
             }
+        }
+
+        if (isHeaderImport) {
+            throw new Exception(format("Could not resolve C header import: %s (from %s)", modulePath, fromFile));
         }
 
         stderr.writefln("Warning: Could not resolve import: %s (from %s)", modulePath, fromFile);
         return "";
+    }
+
+    private string sanitizeForTempName(string text) {
+        string result;
+        foreach (ch; text) {
+            if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') || ch == '_' || ch == '-') {
+                result ~= ch;
+            } else {
+                result ~= '_';
+            }
+        }
+        return result;
+    }
+
+    private string bindgenCommand() {
+        string envCmd = environment.get("LLPL_BINDGEN", "");
+        if (envCmd.length > 0) {
+            return envCmd;
+        }
+
+        string localCmd = buildNormalizedPath(".", "tools/llpl-bindgen");
+        if (exists(localCmd)) {
+            return localCmd;
+        }
+
+        string exeCmd = buildNormalizedPath(dirName(thisExePath()), "../tools/llpl-bindgen");
+        if (exists(exeCmd)) {
+            return exeCmd;
+        }
+
+        return "tools/llpl-bindgen";
+    }
+
+    private string headerImportTempPath(string headerPath) {
+        string baseName = sanitizeForTempName(headerPath);
+        return buildNormalizedPath(tempDir(), "llpl-bindgen-" ~ baseName ~ ".llpl");
+    }
+
+    private string materializeHeaderImport(string headerPath) {
+        if (headerPath in headerImportCache) {
+            return headerImportCache[headerPath];
+        }
+
+        string binder = bindgenCommand();
+        auto result = execute([binder, headerPath]);
+        if (result.status != 0) {
+            throw new Exception(format("llpl-bindgen failed for %s (exit %d)", headerPath, result.status));
+        }
+
+        string tempPath = headerImportTempPath(headerPath);
+        std.file.write(tempPath, result.output);
+        headerImportCache[headerPath] = tempPath;
+        return tempPath;
     }
 
     // Get all modules in dependency order

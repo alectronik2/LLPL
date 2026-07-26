@@ -1,0 +1,25 @@
+import "fixtures/complex_header.h" as C
+
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    if C.SIMPLE_CONST != 42 {
+        puts("bad const")
+        return 1
+    }
+    if C.HEX_CONST != 16 {
+        puts("bad hex")
+        return 2
+    }
+    if C.NULL != null {
+        puts("bad null")
+        return 3
+    }
+    let rec: C.Device = { .id = 7, .name = null, .mac = [1, 2, 3, 4, 5, 6] }
+    if rec.id != 7 || rec.mac[5] != 6 {
+        puts("bad struct")
+        return 4
+    }
+    puts("ok")
+    return 0
+}

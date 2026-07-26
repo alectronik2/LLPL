@@ -1,3 +1,6 @@
+#define SIMPLE_CONST 42
+#define HEX_CONST 0x10u
+#define NULL ((void*)0)
 #define ignored_macro(x) ((x) + 1)
 
 /* block comment with a fake prototype:

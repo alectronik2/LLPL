@@ -55,6 +55,26 @@ class Box {
     }
 }
 
+class Counter {
+    let n: i64
+
+    constructor(n: i64) {
+        self.n = n
+    }
+
+    destructor() {}
+
+    func operator++() -> Counter {
+        self.n = self.n + 1
+        return self
+    }
+
+    func operator--() -> Counter {
+        self.n = self.n - 1
+        return self
+    }
+}
+
 func main() -> i64 {
     print_int("add(5)", add(5))
     print_int("add(5, 6)", add(5, 6))
@@ -73,6 +93,20 @@ func main() -> i64 {
 
     print_int("b1.combine(5)", b1.combine(5))
     print_int("b1.combine(5, 6)", b1.combine(5, 6))
+
+    let c: Counter = new Counter(10)
+    let postInc: Counter = c++
+    print_int("postInc.n", postInc.n)
+    print_int("c.n after c++", c.n)
+    let preInc: Counter = ++c
+    print_int("preInc.n", preInc.n)
+    print_int("c.n after ++c", c.n)
+    let postDec: Counter = c--
+    print_int("postDec.n", postDec.n)
+    print_int("c.n after c--", c.n)
+    let preDec: Counter = --c
+    print_int("preDec.n", preDec.n)
+    print_int("c.n after --c", c.n)
 
     return 0
 }

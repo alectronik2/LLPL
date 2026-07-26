@@ -2205,6 +2205,8 @@ class CodeGenerator {
             }
         }
 
+        code ~= "#undef NULL\n";
+
         code ~= "\n";
 
         // Everything below through the alias #defines used to be appended
@@ -2921,6 +2923,14 @@ class CodeGenerator {
                (name in structRegistry) !is null || (name in globalVarRegistry) !is null;
     }
 
+    // True if `name` already names a concrete type and can be used as the
+    // target of a type alias.
+    private bool isKnownTypeName(string name) {
+        return (name in classRegistry) !is null || (name in structRegistry) !is null ||
+               (name in unionRegistry) !is null || (name in typeAliases) !is null ||
+               (name in genericClassTemplates) !is null || (name in genericStructTemplates) !is null;
+    }
+
     // Namespace aliases (`alias hf = HAL.Foo`) are needed by dead-code
     // reachability, which runs before generateAlias is called. Pre-register
     // them here; generateAlias will re-register them harmlessly when it
@@ -2935,7 +2945,10 @@ class CodeGenerator {
                 string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
 
                 bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
-                    (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
+                    (aliasDecl.targetPath.length == 1 &&
+                        (isPrimitiveTypeName(aliasDecl.targetPath[0]) ||
+                         isKnownTypeName(aliasDecl.targetPath[0]))) ||
+                    isKnownTypeName(aliasDecl.targetPath.join("_"));
                 if (isTypeAlias) continue;
 
                 string flatTarget = aliasDecl.targetPath.join("_");
@@ -2992,7 +3005,10 @@ class CodeGenerator {
         // resolveType() substitutes it correctly regardless of where this
         // declaration sits relative to its uses - nothing left to do here.
         bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
-            (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
+            (aliasDecl.targetPath.length == 1 &&
+                (isPrimitiveTypeName(aliasDecl.targetPath[0]) ||
+                 isKnownTypeName(aliasDecl.targetPath[0]))) ||
+            isKnownTypeName(aliasDecl.targetPath.join("_"));
         if (isTypeAlias) {
             return "";
         }
@@ -3717,7 +3733,7 @@ class CodeGenerator {
         if (classDecl !is null && (classDecl.destructor !is null || isPolymorphic(*classDecl))) {
             return format("%s_destroy", fieldType.name);
         }
-        return "NULL";
+        return "((void*)0)";
     }
 
     // Looks up a field by name anywhere in cd's own fields or its ancestor
@@ -3977,7 +3993,7 @@ class CodeGenerator {
         indentLevel++;
         code ~= indent() ~ format("%s* self = (%s*)rc_alloc(sizeof(%s));\n",
             cName, cName, cName);
-        code ~= indent() ~ "if (!self) return NULL;\n";
+        code ~= indent() ~ "if (!self) return ((void*)0);\n";
         code ~= indent() ~ "rc_init(&self->ref_count);\n\n";
 
         deferredStatements = [];
@@ -4087,7 +4103,7 @@ class CodeGenerator {
         code ~= format("%s* %s(%s) {\n", cName, newName, paramsNoSelf);
         indentLevel++;
         code ~= indent() ~ format("%s* self = (%s*)rc_alloc(sizeof(%s));\n", cName, cName, cName);
-        code ~= indent() ~ "if (!self) return NULL;\n";
+        code ~= indent() ~ "if (!self) return ((void*)0);\n";
         code ~= indent() ~ "rc_init(&self->ref_count);\n";
         // Set once, here, in the outermost concrete class's own `_new` -
         // every ancestor's `_init` below just runs against this same
@@ -4917,8 +4933,8 @@ class CodeGenerator {
 
         string code = "";
         code ~= indent() ~ format("%s.kind = LLPL_EH_FRAME_CLEANUP;\n", frameVar);
-        code ~= indent() ~ format("%s.type_id = NULL;\n", frameVar);
-        code ~= indent() ~ format("%s.error_slot = NULL;\n", frameVar);
+        code ~= indent() ~ format("%s.type_id = ((void*)0);\n", frameVar);
+        code ~= indent() ~ format("%s.error_slot = ((void*)0);\n", frameVar);
         code ~= indent() ~ format("%s.error_size = 0;\n", frameVar);
         code ~= indent() ~ format("llpl_eh_push(&%s);\n", frameVar);
         code ~= indent() ~ format("%s = 1;\n", activeVar);
@@ -5025,8 +5041,8 @@ class CodeGenerator {
         } else if (stmt.finallyBlock !is null) {
             code ~= indent() ~ format("__LLPL_EH_Frame %s;\n", frameVarName);
             code ~= indent() ~ format("%s.kind = LLPL_EH_FRAME_CLEANUP;\n", frameVarName);
-            code ~= indent() ~ format("%s.type_id = NULL;\n", frameVarName);
-            code ~= indent() ~ format("%s.error_slot = NULL;\n", frameVarName);
+            code ~= indent() ~ format("%s.type_id = ((void*)0);\n", frameVarName);
+            code ~= indent() ~ format("%s.error_slot = ((void*)0);\n", frameVarName);
             code ~= indent() ~ format("%s.error_size = 0;\n", frameVarName);
             code ~= indent() ~ format("llpl_eh_push(&%s);\n", frameVarName);
             code ~= indent() ~ format("if (llpl_eh_setjmp(&%s.env) == 0) {\n", frameVarName);
@@ -5707,7 +5723,7 @@ class CodeGenerator {
                 cloneNode(binExpr.right, subs, typeSubs), binExpr.line, binExpr.column);
         } else if (auto unaryExpr = cast(UnaryExpr)node) {
             return new UnaryExpr(unaryExpr.op, cloneNode(unaryExpr.operand, subs, typeSubs),
-                unaryExpr.line, unaryExpr.column);
+                unaryExpr.line, unaryExpr.column, unaryExpr.isPostfix);
         } else if (auto callExpr = cast(CallExpr)node) {
             return new CallExpr(cloneNode(callExpr.callee, subs, typeSubs), cloneNodes(callExpr.args, subs, typeSubs),
                 callExpr.line, callExpr.column, callExpr.argNames.dup);
@@ -5938,7 +5954,7 @@ class CodeGenerator {
                 expandQuotedNode(binExpr.right, subs), binExpr.line, binExpr.column);
         } else if (auto unaryExpr = cast(UnaryExpr)node) {
             return new UnaryExpr(unaryExpr.op, expandQuotedNode(unaryExpr.operand, subs),
-                unaryExpr.line, unaryExpr.column);
+                unaryExpr.line, unaryExpr.column, unaryExpr.isPostfix);
         } else if (auto callExpr = cast(CallExpr)node) {
             return new CallExpr(expandQuotedNode(callExpr.callee, subs),
                 expandQuotedNodes(callExpr.args, subs), callExpr.line, callExpr.column, callExpr.argNames.dup);
@@ -6809,11 +6825,12 @@ class CodeGenerator {
             }
             Type targetType = cloneType(expectedType);
             resolveType(targetType);
-            if (targetType.name in structRegistry) {
-                mangledName = targetType.name;
+            string resolvedName = resolveStructOrClassTypeName(targetType.name);
+            if (resolvedName.length > 0 && resolvedName in structRegistry) {
+                mangledName = resolvedName;
                 return structRegistry[mangledName];
             }
-            if (targetType.name in classRegistry) {
+            if (resolvedName.length > 0 && resolvedName in classRegistry) {
                 throw new CompileError(
                     "Anonymous struct literal target is a class; use 'new' instead",
                     currentModulePath, lit.line, lit.column);
@@ -6823,10 +6840,7 @@ class CodeGenerator {
                 currentModulePath, lit.line, lit.column);
         }
 
-        string aliased = resolveLocalImportAlias(lit.typeName);
-        if (aliased.length > 0) {
-            lit.typeName = aliased;
-        }
+        lit.typeName = resolveStructOrClassTypeName(lit.typeName);
 
         if (lit.typeName in structRegistry) {
             mangledName = lit.typeName;
@@ -7092,6 +7106,33 @@ class CodeGenerator {
             if (auto t = name in variableTypes) savedTypes[name] = *t;
             if (auto c = name in constVariables) savedConst[name] = *c;
         }
+    }
+
+    private string resolveStructOrClassTypeName(string name) {
+        string resolved = resolveLocalImportAlias(name);
+        if (resolved.length > 0) {
+            name = resolved;
+        }
+
+        string aliased = resolveAliasedTypeName(name);
+        if (aliased.length > 0) {
+            name = aliased;
+        }
+
+        string nsResolved = resolveNamespaceAlias(name);
+        if (nsResolved.length > 0) {
+            name = nsResolved;
+        }
+
+        if (name in structRegistry || name in classRegistry) {
+            return name;
+        }
+        foreach (candidate; enclosingQualifications(name)) {
+            if (candidate in structRegistry || candidate in classRegistry) {
+                return candidate;
+            }
+        }
+        return name;
     }
 
     private void restoreBindings(string[] names, Type[string] savedTypes,
@@ -8386,7 +8427,7 @@ class CodeGenerator {
         code ~= indent() ~ format("%s %s = %s;\n",
             typeToC(arrType), arrName, generateExpression(foreachStmt.iterable));
         code ~= indent() ~ format("int64_t %s = 0;\n", idxName);
-        code ~= indent() ~ format("while (%s[%s] != NULL) {\n", arrName, idxName);
+        code ~= indent() ~ format("while (%s[%s] != ((void*)0)) {\n", arrName, idxName);
         indentLevel++;
         code ~= indent() ~ format("%s %s = %s[%s];\n",
             typeToC(elemType), foreachStmt.varName, arrName, idxName);
@@ -9444,6 +9485,16 @@ class CodeGenerator {
             if (overloadCall.length > 0) {
                 return overloadCall;
             }
+            if (unaryExpr.op == "++" || unaryExpr.op == "--") {
+                if (unaryExpr.isPostfix) {
+                    string incDecOp = unaryExpr.op == "++" ? "+" : "-";
+                    ASTNode one = new IntLiteral(1, unaryExpr.line, unaryExpr.column);
+                    ASTNode combined = new BinaryExpr(incDecOp, unaryExpr.operand, one, unaryExpr.line, unaryExpr.column);
+                    return "(" ~ generateExpression(new BinaryExpr("=", unaryExpr.operand, combined,
+                        unaryExpr.line, unaryExpr.column)) ~ ")";
+                }
+                return unaryExpr.op ~ generateExpression(unaryExpr.operand);
+            }
             return unaryExpr.op ~ generateExpression(unaryExpr.operand);
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
             rejectInInterrupt(lambdaExpr, "Lambda allocation");
@@ -9913,7 +9964,8 @@ class CodeGenerator {
             }
             // A namespace-qualified global reference (e.g. Graphics.origin)
             // takes priority over instance field access.
-            string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
+            string qualifiedVar = tryResolveQualifiedPath(memberExpr,
+                (n) => (n in variableTypes) !is null || (n in globalVarRegistry) !is null);
             if (qualifiedVar.length > 0) {
                 recordUsage(qualifiedVar, memberExpr.line, memberExpr.column);
                 return qualifiedVar;
@@ -10037,7 +10089,8 @@ class CodeGenerator {
                 return *cName;
             }
             string resolved = resolveName(ident.name,
-                (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null);
+                (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null ||
+                       (n in globalVarRegistry) !is null);
             recordUsage(resolved, ident.line, ident.column);
             return resolved;
         } else if (auto intLit = cast(IntLiteral)node) {
@@ -10062,7 +10115,7 @@ class CodeGenerator {
         } else if (auto boolLit = cast(BoolLiteral)node) {
             return boolLit.value ? "1" : "0";
         } else if (auto nullLit = cast(NullLiteral)node) {
-            return "NULL";
+            return "((void*)0)";
         } else if (auto newExpr = cast(NewExpr)node) {
             rejectInInterrupt(newExpr, "'new'");
             resolveType(newExpr.type);
@@ -10209,9 +10262,15 @@ class CodeGenerator {
             if (memberExpr.member == "sizeof") {
                 return new Type("u64");
             }
-            string qualifiedVar = tryResolveQualifiedPath(memberExpr, (n) => (n in variableTypes) !is null);
+            string qualifiedVar = tryResolveQualifiedPath(memberExpr,
+                (n) => (n in variableTypes) !is null || (n in globalVarRegistry) !is null);
             if (qualifiedVar.length > 0) {
-                return variableTypes[qualifiedVar];
+                if (auto vt = qualifiedVar in variableTypes) {
+                    return *vt;
+                }
+                if (auto gv = qualifiedVar in globalVarRegistry) {
+                    return gv.type;
+                }
             }
 
             Type objType = inferType(memberExpr.object);
@@ -10330,6 +10389,9 @@ class CodeGenerator {
             FunctionDecl unaryOpMethod = findOperatorMethodDecl(unaryExpr.operand, unaryExpr.op, true);
             if (unaryOpMethod !is null) {
                 return unaryOpMethod.returnType;
+            }
+            if (unaryExpr.op == "++" || unaryExpr.op == "--") {
+                return inferType(unaryExpr.operand);
             }
             if (unaryExpr.op == "!") {
                 return new Type("bool");

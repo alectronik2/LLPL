@@ -24,6 +24,8 @@ const WIDGET_PROGRESS: i64 = 8
 const WIDGET_SLIDER: i64 = 9
 const WIDGET_CHECKBOX: i64 = 10
 const WIDGET_BADGE: i64 = 11
+const WIDGET_LIST: i64 = 12
+const WIDGET_TREEVIEW: i64 = 13
 const DEFAULT_FONT_PATH: string = "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf"
 const FALLBACK_FONT_PATH: string = "/usr/share/fonts/TTF/DejaVuSans.ttf"
 const FALLBACK_FONT_PATH_2: string = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -199,6 +201,47 @@ func draw_text_box(renderer: std.sdl.Renderer, font: TTF_Font*, x: i64, y: i64, 
     draw_text(renderer, font, left, top, text, color)
 }
 
+func count_list_items(items: string) -> i64 {
+    let count: i64 = 0
+    let i: i64 = 0
+    if text_len(items) == 0 {
+        return 0
+    }
+    while items[i] != 0 {
+        if items[i] == '\n' as i64 as char {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count + 1
+}
+
+func get_list_item_at(items: string, index: i64) -> string {
+    let current: i64 = 0
+    let start: i64 = 0
+    let i: i64 = 0
+    let len: i64 = text_len(items)
+
+    while i <= len {
+        if i == len || items[i] == '\n' as i64 as char {
+            if current == index {
+                let buf: char[256]
+                let j: i64 = 0
+                while start + j < i && j < 255 {
+                    buf[j] = items[start + j]
+                    j = j + 1
+                }
+                buf[j] = 0
+                return buf as string
+            }
+            current = current + 1
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return "" as string
+}
+
 class Widget {
     let kind: string
     let kind_id: i64
@@ -239,6 +282,10 @@ class Widget {
     let has_onHover: bool
     let onHoverEnd: () -> void
     let has_onHoverEnd: bool
+    let items_text: string
+    let selected_index: i64
+    let item_height: i64
+    let scroll_offset: i64
 
     constructor(kind: string) {
         self.kind = kind
@@ -277,6 +324,10 @@ class Widget {
         self.has_onClick = false
         self.has_onHover = false
         self.has_onHoverEnd = false
+        self.items_text = ""
+        self.selected_index = 0
+        self.item_height = 24
+        self.scroll_offset = 0
     }
 
     func add_child(child: Widget) {
@@ -352,6 +403,17 @@ class Widget {
             self.selection_start = self.text_index_at(px)
             self.selection_end = self.selection_start
             return true
+        }
+        if self.kind_id == WIDGET_LIST || self.kind_id == WIDGET_TREEVIEW {
+            let rel_y: i64 = py - (self.y + 4)
+            if rel_y >= 0 {
+                let item_index: i64 = rel_y / self.item_height + self.scroll_offset
+                let item_count: i64 = count_list_items(self.items_text)
+                if item_index >= 0 && item_index < item_count {
+                    self.selected_index = item_index
+                    return true
+                }
+            }
         }
         return false
     }
@@ -675,6 +737,29 @@ class Widget {
             return
         }
 
+        if self.kind_id == WIDGET_LIST || self.kind_id == WIDGET_TREEVIEW {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+
+            let item_count: i64 = count_list_items(self.items_text)
+            let item_y: i64 = self.y + 4
+            let item_w: i64 = self.width - 8
+            let i: i64 = self.scroll_offset
+
+            while i < item_count && item_y < self.y + self.height - 4 {
+                let item: string = get_list_item_at(self.items_text, i)
+                let item_bg: u32 = bg
+                if i == self.selected_index {
+                    item_bg = mix_color(bg, self.accent, 30)
+                }
+                draw_rect(renderer, self.x + 4, item_y, item_w, self.item_height, item_bg)
+                draw_text(renderer, font, self.x + 8, item_y + 2, item, fg)
+                item_y = item_y + self.item_height
+                i = i + 1
+            }
+            return
+        }
+
         if visual_hover && self.hover_amount > 0 {
             draw_rect(renderer, self.x + 1, self.y + 2, self.width, self.height, 0x22000000 as u32)
         }
@@ -894,6 +979,119 @@ class Badge : Widget {
         self.hover_border = 0xFF8AB4FF as u32
         self.preferred_height = 28
         self.width = 110
+    }
+}
+
+class List : Widget {
+    constructor() {
+        super("List")
+        self.kind_id = WIDGET_LIST
+        self.background = 0xFFEDEFF5 as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.preferred_height = 150
+        self.item_height = 24
+    }
+
+    func add_item(item: string) {
+        if text_len(self.items_text) == 0 {
+            self.items_text = item
+        } else {
+            let buf: char[4096]
+            let i: i64 = 0
+            while self.items_text[i] != 0 && i < 4095 {
+                buf[i] = self.items_text[i]
+                i = i + 1
+            }
+            buf[i] = '\n' as i64 as char
+            i = i + 1
+            let j: i64 = 0
+            while item[j] != 0 && i < 4095 {
+                buf[i] = item[j]
+                i = i + 1
+                j = j + 1
+            }
+            buf[i] = 0
+            self.items_text = buf as string
+        }
+    }
+
+    func get_selected_item() -> string {
+        if text_len(self.items_text) == 0 {
+            return "" as string
+        }
+        return get_list_item_at(self.items_text, self.selected_index)
+    }
+}
+
+class TreeView : Widget {
+    constructor() {
+        super("TreeView")
+        self.kind_id = WIDGET_TREEVIEW
+        self.background = 0xFFEDEFF5 as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.preferred_height = 200
+        self.item_height = 24
+    }
+
+    func add_item(item: string, indent: i64) {
+        let prefix: char[256]
+        let i: i64 = 0
+        while i < indent && i < 250 {
+            prefix[i] = ' ' as i64 as char
+            prefix[i + 1] = ' ' as i64 as char
+            i = i + 2
+        }
+        prefix[i] = 0
+
+        let full_item: char[4096]
+        let j: i64 = 0
+        while prefix[j] != 0 && j < 256 {
+            full_item[j] = prefix[j]
+            j = j + 1
+        }
+        let k: i64 = 0
+        while item[k] != 0 && j < 4095 {
+            full_item[j] = item[k]
+            j = j + 1
+            k = k + 1
+        }
+        full_item[j] = 0
+
+        if text_len(self.items_text) == 0 {
+            self.items_text = full_item as string
+        } else {
+            let buf: char[8192]
+            let idx: i64 = 0
+            while self.items_text[idx] != 0 && idx < 8191 {
+                buf[idx] = self.items_text[idx]
+                idx = idx + 1
+            }
+            buf[idx] = '\n' as i64 as char
+            idx = idx + 1
+            let m: i64 = 0
+            while full_item[m] != 0 && idx < 8191 {
+                buf[idx] = full_item[m]
+                idx = idx + 1
+                m = m + 1
+            }
+            buf[idx] = 0
+            self.items_text = buf as string
+        }
+    }
+
+    func get_selected_item() -> string {
+        if text_len(self.items_text) == 0 {
+            return "" as string
+        }
+        return get_list_item_at(self.items_text, self.selected_index)
     }
 }
 

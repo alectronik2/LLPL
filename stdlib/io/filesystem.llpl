@@ -1,0 +1,59 @@
+// Filesystem utilities for directory traversal and file listing
+
+extern func opendir(path: char*) -> char*
+extern func readdir(dir: char*) -> char*
+extern func closedir(dir: char*) -> i64
+extern func stat(path: char*, statbuf: char*) -> i64
+extern func S_ISDIR(mode: i64) -> i64
+
+namespace std {
+namespace fs {
+
+const MAX_PATH_LEN: i64 = 1024
+const MAX_FILENAME_LEN: i64 = 256
+
+class DirEntry {
+    let name: string
+    let is_dir: bool
+
+    constructor(name: string, is_dir: bool) {
+        self.name = name
+        self.is_dir = is_dir
+    }
+}
+
+func path_join(base: string, name: string) -> string {
+    let buf: char[1024]
+    let i: i64 = 0
+    while base[i] != 0 && i < 1020 {
+        buf[i] = base[i]
+        i = i + 1
+    }
+    if i > 0 && buf[i - 1] != '/' as i64 as char {
+        buf[i] = '/' as i64 as char
+        i = i + 1
+    }
+    let j: i64 = 0
+    while name[j] != 0 && i < 1023 {
+        buf[i] = name[j]
+        i = i + 1
+        j = j + 1
+    }
+    buf[i] = 0
+    return buf as string
+}
+
+func is_dot_entry(name: string) -> bool {
+    if name[0] == '.' as i64 as char {
+        if name[1] == 0 {
+            return true
+        }
+        if name[1] == '.' as i64 as char && name[2] == 0 {
+            return true
+        }
+    }
+    return false
+}
+
+} // namespace fs
+} // namespace std

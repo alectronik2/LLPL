@@ -1383,11 +1383,13 @@ class BinaryExpr : ASTNode {
 class UnaryExpr : ASTNode {
     string op;
     ASTNode operand;
+    bool isPostfix;
 
-    this(string op, ASTNode operand, int line = 0, int column = 0) {
+    this(string op, ASTNode operand, int line = 0, int column = 0, bool isPostfix = false) {
         super(NodeType.UnaryExpr, line, column);
         this.op = op;
         this.operand = operand;
+        this.isPostfix = isPostfix;
     }
 }
 
@@ -1697,7 +1699,8 @@ class TupleLiteral : ASTNode {
     }
 }
 
-// Maps a raw operator symbol ("+", "-", "==", "!", "[]", ...) plus arity to
+// Maps a raw operator symbol ("+", "-", "==", "!", "[]", "++", "--", ...)
+// plus arity to
 // the C-safe method name a class defines to overload it (`func operator+(other: T)`
 // -> "op_add"). Returns "" for combinations that don't exist (e.g. a unary
 // "+", or a binary "!") - shared by the parser (to validate/name the method
@@ -1725,6 +1728,8 @@ string operatorMethodName(string rawOp, size_t paramCount) {
     }
     if (paramCount == 0) {
         switch (rawOp) {
+            case "++": return "op_inc";
+            case "--": return "op_dec";
             case "-": return "op_neg";
             case "!": return "op_not";
             case "~": return "op_bnot";

@@ -827,6 +827,7 @@ class Parser {
             case TokenType.Greater: case TokenType.LessEqual: case TokenType.GreaterEqual:
             case TokenType.BitwiseAnd: case TokenType.BitwiseOr: case TokenType.BitwiseXor:
             case TokenType.LeftShift: case TokenType.RightShift: case TokenType.Not: case TokenType.BitwiseNot:
+            case TokenType.PlusPlus: case TokenType.MinusMinus:
                 return true;
             default:
                 return false;
@@ -875,20 +876,20 @@ class Parser {
         int operatorLine = current.line;
         int operatorColumn = current.column;
         string rawOp;
-        if (match(TokenType.Operator)) {
-            isOperator = true;
-            if (match(TokenType.LeftBracket)) {
-                // `operator[]` (subscript) - the only overloadable operator
-                // that's a token pair rather than a single token, so it
-                // can't go through isOverloadableOperatorToken.
-                expect(TokenType.RightBracket);
-                rawOp = "[]";
-            } else if (isOverloadableOperatorToken()) {
-                rawOp = current.value;
-                advance();
-            } else {
-                error("Expected an overloadable operator after 'operator'");
-            }
+            if (match(TokenType.Operator)) {
+                isOperator = true;
+                if (match(TokenType.LeftBracket)) {
+                    // `operator[]` (subscript) - the only overloadable operator
+                    // that's a token pair rather than a single token, so it
+                    // can't go through isOverloadableOperatorToken.
+                    expect(TokenType.RightBracket);
+                    rawOp = "[]";
+                } else if (isOverloadableOperatorToken()) {
+                    rawOp = current.value;
+                    advance();
+                } else {
+                    error("Expected an overloadable operator after 'operator'");
+                }
             name = rawOp; // placeholder; resolved to its C-safe name below
         } else {
             name = expectName("Expected function name").value;
@@ -2336,22 +2337,6 @@ class Parser {
             return new BinaryExpr("=", expr, combined, expr.line, expr.column);
         }
 
-        // `i++`/`i--` - desugars to `i = i + 1`/`i = i - 1`, exactly like
-        // `i += 1`/`i -= 1` just above (including that same "evaluates to
-        // the new value, not the old one" simplification - a true C
-        // postfix's old-value capture isn't offered). Only recognized
-        // here (assignment's own precedence level), not at every
-        // expression precedence, so `i++` works as its own statement or
-        // parenthesized, but not spliced into a larger expression like
-        // `i++ + 5` - the same restriction `i += 1` already has.
-        if (check(TokenType.PlusPlus) || check(TokenType.MinusMinus)) {
-            string incDecOp = current.type == TokenType.PlusPlus ? "+" : "-";
-            advance();
-            ASTNode one = new IntLiteral(1, expr.line, expr.column);
-            ASTNode combined = new BinaryExpr(incDecOp, expr, one, expr.line, expr.column);
-            return new BinaryExpr("=", expr, combined, expr.line, expr.column);
-        }
-
         return expr;
     }
 
@@ -2591,6 +2576,13 @@ class Parser {
     }
 
     private ASTNode unary() {
+        if (match(TokenType.PlusPlus, TokenType.MinusMinus)) {
+            int opLine = tokens[pos - 1].line;
+            int opColumn = tokens[pos - 1].column;
+            string op = tokens[pos - 1].value;
+            ASTNode operand = unary();
+            return new UnaryExpr(op, operand, opLine, opColumn, false);
+        }
         if (match(TokenType.Not, TokenType.Minus, TokenType.BitwiseNot, TokenType.Star, TokenType.BitwiseAnd)) {
             int opLine = tokens[pos - 1].line;
             int opColumn = tokens[pos - 1].column;
@@ -2642,6 +2634,12 @@ class Parser {
                 // `expr?` - propagate/unwrap an Optional<T>/Result<T, E> -
                 // see ast.PropagateExpr.
                 expr = new PropagateExpr(expr, startLine, startColumn);
+            } else if ((check(TokenType.PlusPlus) || check(TokenType.MinusMinus)) && !newlineBeforeCurrent()) {
+                int opLine = current.line;
+                int opColumn = current.column;
+                string op = current.value;
+                advance();
+                expr = new UnaryExpr(op, expr, opLine, opColumn, true);
             } else {
                 break;
             }

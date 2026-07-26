@@ -370,7 +370,7 @@ Repo-local tooling lives under `tools/`:
 | `tools/llpl-fuzz [count] [outdir]` | Generate small programs and compile/run them to exercise parser/type/codegen invariants. |
 | `tools/llpl-snapshot <input.llpl> <outdir>` | Capture generated C, provenance, effects, and debug-bundle files for golden snapshot review. |
 | `tools/llpl-replay record|replay ...` | Record and replay a compiled binary run, comparing exit status/stdout/stderr. |
-| `tools/llpl-bindgen <header.h>` | Narrow C header importer written in LLPL with `grammar {}` token parsing, emitting LLPL `extern func` bindings. |
+| `tools/llpl-bindgen <header.h>` | Narrow C header importer written in LLPL with `grammar {}` token parsing, emitting LLPL `const` and `extern func` bindings. |
 | `tools/llpl-pkg init|list|vendor` | Tiny manifest workflow for pinned git dependencies in `llpl.pkg`. |
 
 This targets ordinary hosted programs only - a freestanding/kernel target
@@ -605,9 +605,9 @@ func example() {
 - `=` (assignment)
 - `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` (compound
   assignment - `x += y` desugars to `x = x + y`)
-- `++`, `--` (postfix increment/decrement - `i++` desugars to `i = i + 1`,
-  same as `i += 1`; only recognized as their own statement or
-  parenthesized, not spliced into a larger expression like `i++ + 5`)
+- `++`, `--` (prefix/postfix increment/decrement - overloaded via
+  `operator++`/`operator--`; on plain values, `i++` still lowers to
+  `i = i + 1`, and `++i` emits the native prefix form)
 - `.` (member access)
 - `[]` (array indexing)
 - `->` (function return type)
@@ -744,6 +744,10 @@ The hardware stdlib (`import "stdlib/hw/hw.llpl"`) provides volatile MMIO
 read/write helpers, cache/memory barriers, DMA buffer descriptors with
 CPU/device ownership, typed page-region helpers, and device descriptor
 generation:
+
+C headers can also be imported through bindgen with an alias, e.g.
+`import "foo.h" as foo`, which exposes generated bindings under the `foo.`
+prefix.
 
 ```text
 device E1000

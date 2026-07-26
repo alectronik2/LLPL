@@ -1,9 +1,7 @@
-// `i++`/`i--` desugar to `i = i + 1`/`i = i - 1`, exactly like the
-// existing `i += 1`/`i -= 1` compound assignments - including evaluating
-// to the *new* value, not a true C postfix's captured old one. Only
-// recognized at assignment's own precedence level (same as `+=`), so
-// they work as their own statement or parenthesized, but not spliced
-// into a larger expression like `i++ + 5`.
+// `i++`/`i--` still lower to `i = i + 1`/`i = i - 1` on plain values,
+// and `++i`/`--i` use the native C prefix form. Types can also overload
+// `operator++`/`operator--` now, and the same syntax dispatches to those
+// methods when present.
 
 extern func puts(s: char*) -> i64
 func print_int(label: char*, value: i64) {
