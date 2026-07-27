@@ -1,0 +1,55 @@
+import std.collections.hashmap
+
+extern func puts(s: char*) -> i64
+
+func print_bool(label: char*, value: bool) {
+    let buf: char[80]
+    ksnprintf(buf as char*, 80, "%s = %d", label, value as i64)
+    puts(buf as char*)
+}
+
+struct Window {
+    let low: i64
+    let high: i64
+}
+
+impl Contains<i64> for Window {
+    func contains(value: i64) -> bool {
+        return value >= self.low && value <= self.high
+    }
+}
+
+func main() -> i64 {
+    let nums: i64[4] = [2, 4, 6, 8]
+    print_bool("array hit", 4 in nums)
+    print_bool("array miss", 5 in nums)
+
+    let raw: string = "hello"
+    print_bool("raw char hit", 'e' in raw)
+    print_bool("raw char miss", 'z' in raw)
+
+    let owned: String = new String("world")
+    print_bool("String char hit", 'o' in owned)
+    print_bool("String substring hit", "or" in owned)
+
+    print_bool("range hit", 5 in 0..10)
+    print_bool("range end exclusive", 10 in 0..10)
+
+    let map: HashMap<string, i64> = new HashMap<string, i64>()
+    map.insert("alpha", 1)
+    print_bool("HashMap hit", "alpha" in map)
+    print_bool("HashMap miss", "beta" in map)
+
+    let set: std.collections.HashSet<i64> = new std.collections.HashSet<i64>()
+    set.insert(7)
+    print_bool("HashSet hit", 7 in set)
+    print_bool("HashSet miss", 8 in set)
+
+    let w: Window
+    w.low = 3
+    w.high = 6
+    print_bool("Contains impl hit", 4 in w)
+    print_bool("Contains impl miss", 9 in w)
+
+    return 0
+}

@@ -70,7 +70,7 @@ extern func SDL_BindAudioStream(dev: SDL_AudioDeviceID, stream: SDL_AudioStream*
 extern func SDL_UnbindAudioStream(stream: SDL_AudioStream*)
 
 // Load WAV file
-extern func SDL_LoadWAV(file: char*, spec: SDL_AudioSpec*, audio_buf: char**, audio_len: u32*) -> bool
+extern func SDL_LoadWAV(file: char*, spec: SDL_AudioSpec*, audio_buf: u8**, audio_len: u32*) -> bool
 
 // High-level audio device wrapper
 class AudioDevice {
@@ -162,7 +162,7 @@ class AudioStream {
 // WAV file loader
 class WavFile {
     let spec: SDL_AudioSpec
-    let buffer: char*
+    let buffer: u8*
     let length: u32
 
     constructor(filepath: char*) {
@@ -183,7 +183,7 @@ class WavFile {
         return self.buffer != null
     }
 
-    func get_buffer() -> char* {
+    func get_buffer() -> u8* {
         return self.buffer
     }
 

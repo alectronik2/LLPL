@@ -1,0 +1,14 @@
+array hit = 1
+array miss = 0
+raw char hit = 1
+raw char miss = 0
+String char hit = 1
+String substring hit = 1
+range hit = 1
+range end exclusive = 0
+HashMap hit = 1
+HashMap miss = 0
+HashSet hit = 1
+HashSet miss = 0
+Contains impl hit = 1
+Contains impl miss = 0

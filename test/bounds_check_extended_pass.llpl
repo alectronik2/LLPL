@@ -1,0 +1,36 @@
+// bounds_check_extended_pass: pointer, decayed parameter, and multi-dimensional
+// array access within bounds, compiled with --safe.
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func from_param(values: i64[3]) -> i64 {
+    return values[2]
+}
+
+func main() -> i64 {
+    let arr: i64[3]
+    arr[0] = 11
+    arr[1] = 22
+    arr[2] = 33
+
+    let ptr: i64* = arr
+    print_int("ptr[1]", ptr[1])
+    print_int("param[2]", from_param(arr))
+
+    let matrix: i64[2][3]
+    matrix[0][0] = 1
+    matrix[0][1] = 2
+    matrix[0][2] = 3
+    matrix[1][0] = 4
+    matrix[1][1] = 5
+    matrix[1][2] = 6
+    print_int("matrix[1][2]", matrix[1][2])
+
+    return 0
+}

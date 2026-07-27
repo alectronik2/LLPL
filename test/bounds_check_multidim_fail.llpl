@@ -1,0 +1,6 @@
+// bounds_check_multidim_fail: second-dimension check, compiled with --safe.
+
+func main() -> i64 {
+    let matrix: i64[2][3]
+    return matrix[1][4]
+}

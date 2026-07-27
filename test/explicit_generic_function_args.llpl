@@ -1,0 +1,28 @@
+namespace C {
+    struct s {
+        let foo: i64 = 0
+    }
+}
+
+func typed<T>(arg: T) -> T {
+    return arg
+}
+
+func make_null<T>() -> T* {
+    return 0 as T*
+}
+
+func main() -> i64 {
+    let rec: C.s
+    rec.foo = 42
+
+    let copied: C.s = typed<C.s>(rec)
+    puts("copied.foo=\(copied.foo)")
+
+    let ptr: C.s* = make_null<C.s>()
+    if ptr == null {
+        puts("ptr is null")
+    }
+
+    return 0
+}

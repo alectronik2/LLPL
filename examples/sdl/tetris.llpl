@@ -493,9 +493,7 @@ func main() -> i64 {
         last_time = current_time
 
         while event_handler.poll() {
-            if event_handler.is_quit() {
-                running = false
-            }
+            running = false if event_handler.is_quit() 
 
             if event_handler.is_key_down() {
                 let key_event: SDL_KeyboardEvent* = event_handler.get_key_event()

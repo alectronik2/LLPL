@@ -103,6 +103,10 @@ func main() {
     (k++).hello("stre")
 
     let r = typed<i64>(128)
-    puts("Inferred: \(r)")
+    puts("Typed: \(r)")
+
+    for i in 1..5 {
+        puts("loop: \(i)")
+    }
     //delete k
 }

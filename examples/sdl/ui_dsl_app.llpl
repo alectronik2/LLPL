@@ -213,7 +213,7 @@ ui DemoWindow: Window {
     }
 }
 
-func main() -> i64 {
+func main() -> int {
     let root: Window = DemoWindow.build()
     root.apply_dark_theme()
 
