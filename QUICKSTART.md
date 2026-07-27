@@ -520,10 +520,34 @@ bit size.
 - `[]` Array subscript
 - `as` Type cast
 
+## SDL UI System
+
+Try the interactive UI demo:
+
+```bash
+./llpl -b -o ui_demo examples/sdl/ui_dsl_app.llpl
+./ui_demo
+```
+
+This showcases the declarative UI DSL with widgets like List, TreeView, Button, Text, and more.
+
+## Collections Library
+
+Try the collections demo to see all available data structures:
+
+```bash
+./llpl -b -o collections_demo examples/collections/collections_demo.llpl
+./collections_demo
+```
+
+Includes: LinkedList, Vector, HashMap, RBTree, Heap, Trie, Graph, Stack, Queue, and more.
+
 ## Next Steps
 
 - Read the full [README.md](README.md) for detailed documentation
 - Browse the [full documentation site](https://alectronik2.github.io/LLPL/llpl-docs.html) - compiler CLI, standard library API, and a guided tour of every example
+- Check [WORKING_NOW.md](WORKING_NOW.md) for current feature status
+- Review [TODO.md](TODO.md) for upcoming features (async/concurrency, serialization)
 - Explore [examples/baremetal_demo](examples/baremetal_demo) for a complete kernel with networking and a windowing compositor
 - Check out [OSDev Wiki](https://wiki.osdev.org) for OS development guides
 

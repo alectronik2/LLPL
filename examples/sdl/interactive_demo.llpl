@@ -82,7 +82,7 @@ func main() -> i64 {
     let height = 600
 
     let window = new Window(
-        "Interactive SDL3 Demo - WASD to change color, ESC to quit",
+        new String("Interactive SDL3 Demo - WASD to change color, ESC to quit"),
         width,
         height
     )

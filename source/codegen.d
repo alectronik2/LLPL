@@ -7692,6 +7692,16 @@ class CodeGenerator {
     // failure, since callers here need to distinguish "this is a generic
     // template" from "this name doesn't exist at all".
     private string findGenericTemplateKey(string name, bool delegate(string) exists) {
+        // Check imported namespaces from 'using namespace' first, before bare name
+        if (currentModulePath in moduleUsingNamespaces) {
+            foreach (usingPath; moduleUsingNamespaces[currentModulePath]) {
+                string mangledPrefix = usingPath.replace(".", "_");
+                string candidate = mangledPrefix ~ "_" ~ name;
+                if (exists(candidate)) return candidate;
+            }
+        }
+
+        // Then check bare name and enclosing qualifications
         if (exists(name)) return name;
         foreach (candidate; enclosingQualifications(name)) {
             if (exists(candidate)) return candidate;

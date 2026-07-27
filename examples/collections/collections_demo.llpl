@@ -16,7 +16,7 @@ func demo_linked_lists() {
     // the bare name would otherwise resolve to instead of this file's
     // richer std::collections one, even with `using namespace
     // std.collections` active.
-    let slist: std.collections.LinkedList<i64> = new std.collections.LinkedList<i64>()
+    let slist = new LinkedList<i64>()
     slist.push_back(1)
     slist.push_back(2)
     slist.push_back(3)
