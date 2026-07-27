@@ -2358,7 +2358,7 @@ class Parser {
     // binary expression, so `x |> f + 1` is a parse error rather than the
     // ambiguous-looking `f(x) + 1` vs `f(x + 1)`.
     private ASTNode pipe() {
-        ASTNode expr = rangeExpr();
+        ASTNode expr = logicalOr();
 
         while (match(TokenType.PipeForward)) {
             int opLine = tokens[pos - 1].line;
@@ -2376,20 +2376,6 @@ class Parser {
             }
         }
 
-        return expr;
-    }
-
-    // `start..end` (exclusive of `end`) - only ever meaningful as a `for i
-    // in start..end { ... }` iterable (see ast.RangeExpr's own comment).
-    // Non-associative (no `a..b..c`); binds looser than every ordinary
-    // binary operator but tighter than `|>`/assignment, so `0..n - 1`
-    // means `0..(n - 1)`.
-    private ASTNode rangeExpr() {
-        ASTNode expr = logicalOr();
-        if (match(TokenType.DotDot)) {
-            ASTNode end = logicalOr();
-            expr = new RangeExpr(expr, end, expr.line, expr.column);
-        }
         return expr;
     }
 
@@ -2417,20 +2403,35 @@ class Parser {
         return expr;
     }
 
-    // `value in arr` - true if arr (a fixed-size array) contains value.
+    // `value in arr` - true if arr contains value.
     // Same precedence tier Python gives `in` (binds like a comparison,
-    // looser than bitwise/arithmetic, tighter than &&/||) - reuses plain
-    // BinaryExpr rather than a dedicated node, since codegen.d already
-    // walks BinaryExpr generically everywhere except the one place ("in")
-    // actually needs special handling (generateInExpr).
+    // looser than bitwise/arithmetic and ranges, tighter than &&/||) -
+    // reuses plain BinaryExpr rather than a dedicated node, since
+    // codegen.d already walks BinaryExpr generically everywhere except
+    // the one place ("in") actually needs special handling
+    // (generateInExpr).
     private ASTNode inExpr() {
-        ASTNode expr = bitwiseOr();
+        ASTNode expr = rangeExpr();
 
         while (match(TokenType.In)) {
-            ASTNode right = bitwiseOr();
+            ASTNode right = rangeExpr();
             expr = new BinaryExpr("in", expr, right, expr.line, expr.column);
         }
 
+        return expr;
+    }
+
+    // `start..end` (exclusive of `end`) - meaningful as a `for i in
+    // start..end { ... }` iterable, a match range pattern, and now the
+    // right side of `value in start..end`. Non-associative (no
+    // `a..b..c`); binds tighter than `in` so `5 in 0..10` parses as
+    // `5 in (0..10)`, while `0..n - 1` still means `0..(n - 1)`.
+    private ASTNode rangeExpr() {
+        ASTNode expr = bitwiseOr();
+        if (match(TokenType.DotDot)) {
+            ASTNode end = bitwiseOr();
+            expr = new RangeExpr(expr, end, expr.line, expr.column);
+        }
         return expr;
     }
 

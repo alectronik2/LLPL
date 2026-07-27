@@ -5523,32 +5523,140 @@ class CodeGenerator {
         return indent() ~ format("rc_release(%s, %s);\n", targetCode, fieldDestructorSymbol(t));
     }
 
-    // `value in arr` - true if any element of a fixed-size array equals
-    // value. Desugars to a GCC statement-expression scan loop; only a
-    // fixed-size array (T[N], arraySize known at compile time) is
-    // supported - a dynamic T[]/pointer has no length to scan, so that
-    // throws a clear error instead of reading past whatever memory
-    // happens to follow.
+    private bool isRawStringType(Type t) {
+        return t !is null && t.name == "char" && t.isPointer && !t.isArray;
+    }
+
+    private bool isStringClassType(Type t) {
+        return t !is null && t.name == "String" && !t.isArray;
+    }
+
+    private string tryContainsMethodCall(BinaryExpr binExpr, Type containerType) {
+        string containerKey = mangleTypeArg(containerType);
+        string methodName = "contains";
+        ASTNode[] oneArg = [binExpr.left];
+
+        if (auto classDecl = containerKey in classRegistry) {
+            ClassDecl owner;
+            auto candidates = resolveMethodOnHierarchy(*classDecl, methodName, owner);
+            if (candidates.length > 0) {
+                auto methodDecl = resolveOverload(candidates, oneArg, [""],
+                    format("method '%s.%s'", containerKey, methodName), binExpr.line, binExpr.column);
+                auto resolvedArgs = applyImplicitArgumentConversions(
+                    resolveCallArguments(methodDecl.params, false, oneArg, [""],
+                        format("method '%s.%s'", containerKey, methodName), binExpr.line, binExpr.column),
+                    methodDecl.params);
+                string receiver = generateExpression(binExpr.right);
+                string ownerName = mangledClass(owner);
+                if (ownerName != containerKey) {
+                    receiver = format("((%s*)%s)", ownerName, receiver);
+                }
+                string callArgs = receiver;
+                foreach (arg; resolvedArgs) callArgs ~= ", " ~ generateExpression(arg);
+                recordUsage(containerKey ~ "." ~ methodName, binExpr.line, binExpr.column);
+                return format("%s(%s)", mangleMethodName(owner, ownerName, methodDecl), callArgs);
+            }
+        }
+
+        if (auto structDecl = containerKey in structRegistry) {
+            auto candidates = methodCandidatesNamed(*structDecl, methodName);
+            if (candidates.length > 0) {
+                auto methodDecl = resolveOverload(candidates, oneArg, [""],
+                    format("method '%s.%s'", containerKey, methodName), binExpr.line, binExpr.column);
+                auto resolvedArgs = applyImplicitArgumentConversions(
+                    resolveCallArguments(methodDecl.params, false, oneArg, [""],
+                        format("method '%s.%s'", containerKey, methodName), binExpr.line, binExpr.column),
+                    methodDecl.params);
+                string callArgs = generateExpression(binExpr.right);
+                foreach (arg; resolvedArgs) callArgs ~= ", " ~ generateExpression(arg);
+                recordUsage(containerKey ~ "." ~ methodName, binExpr.line, binExpr.column);
+                return format("%s(%s)", mangleMethodName(*structDecl, containerKey, methodDecl), callArgs);
+            }
+        }
+
+        string implKey = containerKey ~ "_" ~ methodName;
+        if (auto fn = implKey in functionRegistry) {
+            if ((*fn).params.length == 2) {
+                recordUsage(containerKey ~ "." ~ methodName, binExpr.line, binExpr.column);
+                return format("%s(%s, %s)", implKey,
+                    generateExpression(binExpr.right), generateExpression(binExpr.left));
+            }
+        }
+
+        return "";
+    }
+
+    // `value in container` - true if the right side contains value.
+    // Built-ins handle fixed-size arrays, raw char* strings, String, and
+    // exclusive ranges. Everything else falls back to a `contains(value)`
+    // method, including methods supplied by `impl Contains<T> for Type`.
     private string generateInExpr(BinaryExpr binExpr) {
-        Type arrType;
+        if (auto rangeExpr = cast(RangeExpr)binExpr.right) {
+            Type valueType = inferType(binExpr.left);
+            Type startType = inferType(rangeExpr.start);
+            Type endType = inferType(rangeExpr.end);
+            resolveType(valueType);
+            resolveType(startType);
+            resolveType(endType);
+            Type rangeType = numericBinaryResultType(numericBinaryResultType(valueType, startType), endType);
+            if (rangeType is null) {
+                throw new CompileError("'in' range membership needs numeric value/start/end expressions",
+                    currentModulePath, binExpr.line, binExpr.column);
+            }
+            string tmp = format("__in%d", inExprCounter++);
+            return format("({ %s %s_value = %s; %s %s_start = %s; %s %s_end = %s; " ~
+                "(%s_value >= %s_start && %s_value < %s_end); })",
+                typeToC(rangeType), tmp, generateNumericCoercedExpression(binExpr.left, rangeType),
+                typeToC(rangeType), tmp, generateNumericCoercedExpression(rangeExpr.start, rangeType),
+                typeToC(rangeType), tmp, generateNumericCoercedExpression(rangeExpr.end, rangeType),
+                tmp, tmp, tmp, tmp);
+        }
+
+        Type containerType;
         try {
-            arrType = inferType(binExpr.right);
-            resolveType(arrType);
+            containerType = inferType(binExpr.right);
+            resolveType(containerType);
         } catch (Exception e) {
-            throw new CompileError("'in' needs a typed array on its right side",
+            throw new CompileError("'in' needs a typed container on its right side",
                 currentModulePath, binExpr.line, binExpr.column);
         }
-        if (!arrType.isArray || arrType.arraySize <= 0) {
-            throw new CompileError(
-                format("'in' needs a fixed-size array (T[N]) on its right side, not '%s'", arrType.toString()),
-                currentModulePath, binExpr.line, binExpr.column);
+
+        if (containerType.isArray) {
+            if (containerType.arraySize <= 0) {
+                throw new CompileError(
+                    format("'in' needs a fixed-size array (T[N]) on its right side, not '%s'", containerType.toString()),
+                    currentModulePath, binExpr.line, binExpr.column);
+            }
+            string valueCode = generateExpression(binExpr.left);
+            string arrCode = generateExpression(binExpr.right);
+            string tmp = format("__in%d", inExprCounter++);
+            return format("({ bool %s_found = false; for (uint64_t %s_i = 0; %s_i < %d; %s_i++) " ~
+                "{ if (%s[%s_i] == (%s)) { %s_found = true; break; } } %s_found; })",
+                tmp, tmp, tmp, containerType.arraySize, tmp, arrCode, tmp, valueCode, tmp, tmp);
         }
-        string valueCode = generateExpression(binExpr.left);
-        string arrCode = generateExpression(binExpr.right);
-        string tmp = format("__in%d", inExprCounter++);
-        return format("({ bool %s_found = false; for (uint64_t %s_i = 0; %s_i < %d; %s_i++) " ~
-            "{ if (%s[%s_i] == (%s)) { %s_found = true; break; } } %s_found; })",
-            tmp, tmp, tmp, arrType.arraySize, tmp, arrCode, tmp, valueCode, tmp, tmp);
+
+        Type needleType = inferType(binExpr.left);
+        resolveType(needleType);
+        if (isIntegerType(needleType) && (isRawStringType(containerType) || isStringClassType(containerType))) {
+            string tmp = format("__in%d", inExprCounter++);
+            string haystackExpr = isStringClassType(containerType)
+                ? format("(%s)->buf", generateExpression(binExpr.right))
+                : generateExpression(binExpr.right);
+            return format("({ char %s_needle = (char)(%s); char* %s_s = %s; bool %s_found = false; " ~
+                "if (((uint64_t)%s_s) != 0) { for (uint64_t %s_i = 0; %s_s[%s_i] != 0; %s_i++) " ~
+                "{ if (%s_s[%s_i] == %s_needle) { %s_found = true; break; } } } %s_found; })",
+                tmp, generateExpression(binExpr.left), tmp, haystackExpr, tmp,
+                tmp, tmp, tmp, tmp, tmp, tmp, tmp, tmp, tmp, tmp);
+        }
+
+        string containsCall = tryContainsMethodCall(binExpr, containerType);
+        if (containsCall.length > 0) return containsCall;
+
+        throw new CompileError(
+            format("'%s' can't be used on the right side of 'in' - use a fixed-size array, " ~
+                "string, range, or define contains(value) / impl Contains<T> for this type",
+                containerType.toString()),
+            currentModulePath, binExpr.line, binExpr.column);
     }
 
     private string generateAssertStmt(AssertStmt stmt) {

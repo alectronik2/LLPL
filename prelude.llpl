@@ -1550,6 +1550,15 @@ trait Iterator<T> {
     func iter_next() -> T
 }
 
+// A trait a container can implement to opt into `needle in container`.
+// The compiler lowers `in` to a normal contains(needle) method call after
+// checking built-in arrays, strings, and ranges, so user types can either
+// define this method directly or provide it through `impl Contains<T> for
+// Type`.
+trait Contains<T> {
+    func contains(value: T) -> bool
+}
+
 // A trait a type implements to provide its own hash/equality for use as a
 // HashMap key - see HashMap<K: Hashable, V> below. `Self` inside a trait's
 // signatures and inside a matching `impl` block's bodies refers to whatever
@@ -1858,6 +1867,18 @@ class HashMap<K: Hashable, V> {
             entry = entry.next
         }
         return result
+    }
+
+    func contains(key: K) -> bool {
+        let idx: i64 = (key.hash() % (self.bucket_count as u64)) as i64
+        let entry: HashEntry<K, V>* = self.buckets[idx].head
+        while entry != null {
+            if entry.key.equals(key) {
+                return true
+            }
+            entry = entry.next
+        }
+        return false
     }
 
     func remove(key: K) -> bool {
