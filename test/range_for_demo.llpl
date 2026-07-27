@@ -1,5 +1,4 @@
-// `for i in start..end { ... }` - sugar for `foreach let i in ... { ... }`,
-// spelled without `let` and using `for` instead of `foreach`. `start..end`
+// `for i in start..end { ... }` counts from start up to end. `start..end`
 // is exclusive of `end` (like Rust) and is only ever meaningful as this
 // loop's iterable - it isn't a first-class value.
 

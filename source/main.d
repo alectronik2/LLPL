@@ -52,7 +52,7 @@ void main(string[] args) {
         "keep-c", "Keep the intermediate .c file in --binary mode even on a successful build",
             &keepC,
         "v|verbose", "Verbose output", &verbose,
-        "safe", "Enable runtime safety checks (currently: bounds-check fixed-size array indexing)",
+        "safe", "Enable runtime safety checks (bounds-check fixed arrays, decayed array parameters, and bounded pointers)",
             &safeMode,
         "target", "Target profile: hosted, freestanding, or kernel (default: hosted)",
             &targetProfile,

@@ -24,7 +24,7 @@ func main() -> i64 {
 
     let key_sum: i64 = 0
     let value_sum: i64 = 0
-    foreach let entry in map {
+    for entry in map {
         key_sum = key_sum + entry.key
         value_sum = value_sum + entry.value
     }
@@ -37,7 +37,7 @@ func main() -> i64 {
 
     let after_key_sum: i64 = 0
     let after_value_sum: i64 = 0
-    foreach let entry in map {
+    for entry in map {
         after_key_sum = after_key_sum + entry.key
         after_value_sum = after_value_sum + entry.value
     }

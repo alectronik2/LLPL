@@ -157,6 +157,7 @@ class CodeGenerator {
     // resolve exactly as before.
     private string[string] variableCNames;
     private int shadowRenameCounter;
+    private int[string] pointerIndexBounds;
     // RAII tracking for the function/method/constructor body currently
     // being generated - see generateStatement's VarDecl case (registers +
     // retains-on-alias), generateReturnStmt (releases everything except a
@@ -1334,6 +1335,26 @@ class CodeGenerator {
         if (currentScopeName.length == 0) return;
         localRecords ~= LocalInfo(name, type !is null ? type.toString() : "?",
             currentModulePath, line, column, currentScopeName, kind);
+    }
+
+    private void recordPointerBound(string emittedName, Type type) {
+        if (type !is null && type.isArray && type.arraySize > 0) {
+            pointerIndexBounds[emittedName] = type.arraySize;
+        }
+    }
+
+    private int knownBoundFromInitializer(ASTNode initializer) {
+        if (initializer is null) return 0;
+        try {
+            Type initType = inferType(initializer);
+            resolveType(initType);
+            if (initType.isArray && initType.arraySize > 0) return initType.arraySize;
+            string initCode = generateExpression(initializer);
+            if (auto bound = initCode in pointerIndexBounds) return *bound;
+        } catch (Exception e) {
+            return 0;
+        }
+        return 0;
     }
 
     private string functionSignature(FunctionDecl fn, string displayName) {
@@ -2603,7 +2624,7 @@ class CodeGenerator {
                             string params = "";
                             foreach (i, param; funcDecl.params) {
                                 if (i > 0) params ~= ", ";
-                                params ~= format("%s %s", typeToC(param.type), param.name);
+                                params ~= parameterDeclaration(param);
                             }
                             if (funcDecl.isVariadic) params ~= ", ...";
                             earlyDeclCode ~= format("extern %s %s(%s);\n",
@@ -2632,7 +2653,7 @@ class CodeGenerator {
                         foreach (i, param; funcDecl.params) {
                             resolveType(param.type);
                             if (i > 0) params ~= ", ";
-                            params ~= format("%s %s", typeToC(param.type), param.name);
+                            params ~= parameterDeclaration(param);
                         }
                         if (funcDecl.isVariadic) params ~= ", ...";
                         earlyDeclCode ~= format("%s %s(%s);\n",
@@ -2653,7 +2674,7 @@ class CodeGenerator {
                         foreach (i, param; ctor.params) {
                             resolveType(param.type);
                             if (i > 0) params ~= ", ";
-                            params ~= format("%s %s", typeToC(param.type), param.name);
+                            params ~= parameterDeclaration(param);
                         }
                         earlyDeclCode ~= format("%s* %s(%s);\n", cName, mangleConstructorName(classDecl, cName, ctor), params);
                         // A polymorphic class's constructor also has an
@@ -2751,7 +2772,7 @@ class CodeGenerator {
                         foreach (i, param; method.params) {
                             resolveType(param.type);
                             if (!method.isStatic || i > 0) params ~= ", ";
-                            params ~= format("%s %s", typeToC(param.type), param.name);
+                            params ~= parameterDeclaration(param);
                         }
                         earlyDeclCode ~= format("%s %s(%s);\n",
                             typeToC(returnTypeForFwd), mangleMethodName(classDecl, cName, method), params);
@@ -2772,7 +2793,7 @@ class CodeGenerator {
                             foreach (i, param; ctor.params) {
                                 resolveType(param.type);
                                 if (i > 0) params ~= ", ";
-                                params ~= format("%s %s", typeToC(param.type), param.name);
+                                params ~= parameterDeclaration(param);
                             }
                             earlyDeclCode ~= format("%s %s(%s);\n", sName, mangleConstructorName(structDecl, sName, ctor), params);
                         }
@@ -2796,7 +2817,7 @@ class CodeGenerator {
                             string params = format("%s self", sName);
                             foreach (param; method.params) {
                                 resolveType(param.type);
-                                params ~= format(", %s %s", typeToC(param.type), param.name);
+                                params ~= ", " ~ parameterDeclaration(param);
                             }
                             earlyDeclCode ~= format("%s %s(%s);\n",
                                 typeToC(returnTypeForFwd), mangleMethodName(structDecl, sName, method), params);
@@ -2814,7 +2835,7 @@ class CodeGenerator {
                             foreach (i, param; ctor.params) {
                                 resolveType(param.type);
                                 if (i > 0) params ~= ", ";
-                                params ~= format("%s %s", typeToC(param.type), param.name);
+                                params ~= parameterDeclaration(param);
                             }
                             earlyDeclCode ~= format("%s %s(%s);\n", uName, mangleConstructorName(unionDecl, uName, ctor), params);
                         }
@@ -3603,14 +3624,16 @@ class CodeGenerator {
         // independent body, the same "own params, own scope" boundary
         // variableTypes itself already treats params/self as being.
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         foreach (i, param; constructor.params) {
             resolveType(param.type);
             if (i > 0) params ~= ", ";
-            params ~= format("%s %s", typeToC(param.type), param.name);
+            params ~= parameterDeclaration(param);
             variableTypes[param.name] = param.type;
             recordLocal(param.name, param.type, constructor.line, constructor.column, "parameter");
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -3678,13 +3701,15 @@ class CodeGenerator {
         variableTypes["self"] = new Type(sName);
         recordLocal("self", variableTypes["self"], method.line, method.column, "self");
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         foreach (param; method.params) {
             resolveType(param.type);
-            params ~= format(", %s %s", typeToC(param.type), param.name);
+            params ~= ", " ~ parameterDeclaration(param);
             variableTypes[param.name] = param.type;
             recordLocal(param.name, param.type, method.line, method.column, "parameter");
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -3780,14 +3805,16 @@ class CodeGenerator {
         recordLocal("self", variableTypes["self"], constructor.line, constructor.column, "self");
         // See generateStructConstructor's matching comment.
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         foreach (i, param; constructor.params) {
             resolveType(param.type);
             if (i > 0) params ~= ", ";
-            params ~= format("%s %s", typeToC(param.type), param.name);
+            params ~= parameterDeclaration(param);
             variableTypes[param.name] = param.type;
             recordLocal(param.name, param.type, constructor.line, constructor.column, "parameter");
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -4205,6 +4232,7 @@ class CodeGenerator {
         currentScopeName = cName ~ ".constructor";
         recordLocal("self", variableTypes["self"], classDecl.line, classDecl.column, "self");
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         code ~= format("%s* %s_new() {\n", cName, cName);
@@ -4309,14 +4337,16 @@ class CodeGenerator {
         recordLocal("self", variableTypes["self"], constructor.line, constructor.column, "self");
         // See generateStructConstructor's matching comment.
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         foreach (i, param; constructor.params) {
             resolveType(param.type);
             if (i > 0) params ~= ", ";
-            params ~= format("%s %s", typeToC(param.type), param.name);
+            params ~= parameterDeclaration(param);
             variableTypes[param.name] = param.type;
             recordLocal(param.name, param.type, constructor.line, constructor.column, "parameter");
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -4416,6 +4446,7 @@ class CodeGenerator {
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         string paramsNoSelf = "";
@@ -4423,9 +4454,10 @@ class CodeGenerator {
         foreach (i, param; constructor.params) {
             resolveType(param.type);
             if (i > 0) { paramsNoSelf ~= ", "; forwardArgs ~= ", "; }
-            paramsNoSelf ~= format("%s %s", typeToC(param.type), param.name);
+            paramsNoSelf ~= parameterDeclaration(param);
             forwardArgs ~= param.name;
             variableTypes[param.name] = param.type;
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
         string initParams = format("%s* self%s", cName, paramsNoSelf.length > 0 ? ", " ~ paramsNoSelf : "");
@@ -4534,6 +4566,7 @@ class CodeGenerator {
         variableTypes["self"] = new Type(cName);
         // See generateStructConstructor's matching comment.
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         code ~= format("void %s_destroy(void* ptr) {\n", cName);
@@ -4618,6 +4651,7 @@ class CodeGenerator {
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         string rootName = mangledClass(hierarchyRoot(classDecl));
@@ -4702,6 +4736,7 @@ class CodeGenerator {
         }
         // See generateStructConstructor's matching comment.
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
@@ -4712,9 +4747,10 @@ class CodeGenerator {
         foreach (i, param; method.params) {
             resolveType(param.type);
             if (!method.isStatic || i > 0) params ~= ", ";
-            params ~= format("%s %s", typeToC(param.type), param.name);
+            params ~= parameterDeclaration(param);
             variableTypes[param.name] = param.type;
             recordLocal(param.name, param.type, method.line, method.column, "parameter");
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -4772,7 +4808,7 @@ class CodeGenerator {
             string params = "";
             foreach (i, param; funcDecl.params) {
                 if (i > 0) params ~= ", ";
-                params ~= format("%s %s", typeToC(param.type), param.name);
+                params ~= parameterDeclaration(param);
             }
             if (funcDecl.isVariadic) params ~= ", ...";
             return format("extern %s %s(%s);\n",
@@ -4797,14 +4833,16 @@ class CodeGenerator {
         bool[string] savedFunctionConstVariables = constVariables.dup;
         // See generateStructConstructor's matching comment.
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         foreach (i, param; funcDecl.params) {
             resolveType(param.type);
             if (i > 0) params ~= ", ";
-            params ~= format("%s %s", typeToC(param.type), param.name);
+            params ~= parameterDeclaration(param);
             variableTypes[param.name] = param.type;
             recordLocal(param.name, param.type, funcDecl.line, funcDecl.column, "parameter");
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
         if (funcDecl.isVariadic) params ~= ", ...";
@@ -4912,6 +4950,7 @@ class CodeGenerator {
         currentFunctionIsInterrupt = true;
         // See generateStructConstructor's matching comment.
         variableCNames = null;
+        pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
         string params = "void* __frame";
@@ -4919,8 +4958,9 @@ class CodeGenerator {
         if (funcDecl.params.length == 1) {
             Parameter param = funcDecl.params[0];
             resolveType(param.type);
-            params ~= format(", %s %s", typeToC(param.type), param.name);
+            params ~= ", " ~ parameterDeclaration(param);
             variableTypes[param.name] = param.type;
+            recordPointerBound(param.name, param.type);
             if (param.isConst) constVariables[param.name] = true;
         }
 
@@ -5783,6 +5823,11 @@ class CodeGenerator {
                 code ~= " = " ~ format("%s_new()", varDecl.type.name);
             }
             code ~= ";\n";
+
+            if (varDecl.type.pointerDepth > 0 && varDecl.initializer !is null) {
+                int bound = knownBoundFromInitializer(varDecl.initializer);
+                if (bound > 0) pointerIndexBounds[emitName] = bound;
+            }
 
             // RAII: a class-typed local is now this function's
             // responsibility to release at scope exit (see rcLocalNames'
@@ -7647,7 +7692,7 @@ class CodeGenerator {
             foreach (i, p; asFunction.params) {
                 resolveType(p.type);
                 if (i > 0) fwdParams ~= ", ";
-                fwdParams ~= format("%s %s", typeToC(p.type), p.name);
+                fwdParams ~= parameterDeclaration(p);
             }
             if (targetNeedsTypedef) {
                 genericForwardDecls ~= format("typedef struct %s %s;\n", impl.targetType.name, impl.targetType.name);
@@ -7843,7 +7888,7 @@ class CodeGenerator {
                     foreach (i, param; ctor.params) {
                         resolveType(param.type);
                         if (i > 0) ctorParams ~= ", ";
-                        ctorParams ~= format("%s %s", typeToC(param.type), param.name);
+                        ctorParams ~= parameterDeclaration(param);
                     }
                     genericForwardDecls ~= format("%s* %s(%s);\n",
                         mangledName, mangleConstructorName(clone, mangledName, ctor), ctorParams);
@@ -7867,7 +7912,7 @@ class CodeGenerator {
                     string methodParams = format("%s* self", mangledName);
                     foreach (param; method.params) {
                         resolveType(param.type);
-                        methodParams ~= format(", %s %s", typeToC(param.type), param.name);
+                        methodParams ~= ", " ~ parameterDeclaration(param);
                     }
                     genericForwardDecls ~= format("%s %s(%s);\n",
                         typeToC(returnTypeForFwd), mangleMethodName(clone, mangledName, method), methodParams);
@@ -8045,7 +8090,7 @@ class CodeGenerator {
             foreach (i, p; clone.params) {
                 resolveType(p.type);
                 if (i > 0) protoParams ~= ", ";
-                protoParams ~= format("%s %s", typeToC(p.type), p.name);
+                protoParams ~= parameterDeclaration(p);
             }
             // Resolve a *clone*, not clone.returnType itself (yes, "clone"
             // here already means the monomorphized FunctionDecl - this is
@@ -8650,7 +8695,7 @@ class CodeGenerator {
         return plain ~ overloadSuffix(fn.params);
     }
 
-    // The iterator protocol a class opts into to support `foreach let x in
+    // The iterator protocol a class opts into to support `for x in
     // instance { ... }` - mirrors operatorMethodName's op_* naming (ast.d):
     // a fixed method name codegen looks up by string, not a language-level
     // interface/trait mechanism. ITER_HAS_NEXT/ITER_NEXT are mandatory (a
@@ -8685,7 +8730,7 @@ class CodeGenerator {
         return null;
     }
 
-    // `foreach let x in iterable { ... }` desugars to either a counted
+    // `for x in iterable { ... }` desugars to either a counted
     // index loop (iterable is a fixed-size array) or a has_next/next loop
     // (iterable is a class implementing the iterator protocol above) -
     // whichever matches is decided purely from iterable's inferred type,
@@ -9325,27 +9370,62 @@ class CodeGenerator {
         try {
             Type arrType = inferType(indexExpr.array);
             resolveType(arrType);
-            if (!arrType.isArray || arrType.arraySize <= 0) {
+            string arrCode = generateExpression(indexExpr.array);
+            int bound = knownIndexBound(indexExpr.array, arrType, arrCode);
+            if (bound <= 0) {
                 // Fall back to raw indexing if the array isn't a fixed-size array
-                // (e.g. a pointer or dynamic array).
-                return format("%s[%s]", generateExpression(indexExpr.array),
-                    generateExpression(indexExpr.index));
+                // and the pointer has no tracked bound.
+                return format("%s[%s]", arrCode, generateExpression(indexExpr.index));
             }
 
             Type elemType = inferType(indexExpr);
             resolveType(elemType);
-            string elemTypeC = typeToC(elemType);
-            string arrCode = generateExpression(indexExpr.array);
             string idxCode = generateExpression(indexExpr.index);
+            string elemValueTypeC = valueTypeForSizeof(elemType);
+            string checked = format("__llpl_check_index(%s, %s, %d, sizeof(%s))",
+                arrCode, idxCode, bound, elemValueTypeC);
 
-            return format("*(%s*)__llpl_check_index(%s, %s, %d, sizeof(%s))",
-                elemTypeC, arrCode, idxCode, arrType.arraySize, elemTypeC);
+            if (elemType.isArray && elemType.arraySize > 0) {
+                return format("*(%s)%s", pointerToValueCastType(elemType), checked);
+            }
+            string elemTypeC = typeToC(elemType);
+            return format("*(%s*)%s", elemTypeC, checked);
         } catch (Exception e) {
             // If we can't infer the array type (e.g. a global array), fall back
             // to raw indexing rather than failing compilation.
             return format("%s[%s]", generateExpression(indexExpr.array),
                 generateExpression(indexExpr.index));
         }
+    }
+
+    private int knownIndexBound(ASTNode arrayExpr, Type arrType, string arrCode) {
+        if (arrType.isArray && arrType.arraySize > 0) {
+            return arrType.arraySize;
+        }
+        if (arrType.pointerDepth > 0) {
+            if (auto bound = arrCode in pointerIndexBounds) {
+                return *bound;
+            }
+        }
+        return 0;
+    }
+
+    private string valueTypeForSizeof(Type type) {
+        if (type.isArray && type.arraySize > 0) {
+            string baseType = primitiveToC(type.name);
+            baseType ~= pointerStars(type);
+            return format("%s[%d]%s", baseType, type.arraySize, extraDimsSuffix(type));
+        }
+        return typeToC(type);
+    }
+
+    private string pointerToValueCastType(Type type) {
+        string baseType = primitiveToC(type.name);
+        baseType ~= pointerStars(type);
+        if (type.isArray && type.arraySize > 0) {
+            return format("%s (*)[%d]%s", baseType, type.arraySize, extraDimsSuffix(type));
+        }
+        return typeToC(type) ~ "*";
     }
 
     // Tries to resolve a dotted chain as a namespace-qualified reference
@@ -9644,7 +9724,7 @@ class CodeGenerator {
 
         string trampolineParams = "void* __env_raw";
         foreach (p; lambdaExpr.params) {
-            trampolineParams ~= format(", %s %s", typeToC(p.type), p.name);
+            trampolineParams ~= ", " ~ parameterDeclaration(p);
         }
 
         string trampolineProto = format("%s %s(%s);\n", typeToC(lambdaExpr.returnType),
@@ -10034,7 +10114,7 @@ class CodeGenerator {
             if (genericTemplateKey.length > 0) {
                 auto resolution = resolveGenericFunctionCall(genericTemplateKey, callExpr.args,
                     callExpr.argNames, callExpr.typeArgs);
-                recordUsage(resolution.mangledName, callExpr.line, callExpr.column);
+                recordUsage(genericTemplateKey, callExpr.line, callExpr.column);
                 string gargs = "";
                 foreach (i, arg; resolution.resolvedArgs) {
                     if (i > 0) gargs ~= ", ";
@@ -10882,7 +10962,7 @@ class CodeGenerator {
             // (int*[5] indexed gives int*, not int); a pointer's pointee
             // drops one level (int** indexed/dereferenced gives int*).
             if (arrType.isArray) {
-                return new Type(arrType.name, arrType.pointerDepth, false, 0);
+                return arrayElementType(arrType);
             }
             if (arrType.pointerDepth > 0) {
                 return new Type(arrType.name, arrType.pointerDepth - 1, false, 0);
@@ -10930,6 +11010,29 @@ class CodeGenerator {
         string s = "";
         foreach (dim; t.extraDims) s ~= format("[%d]", dim);
         return s;
+    }
+
+    private Type arrayElementType(Type arrType) {
+        auto elemType = new Type(arrType.name, arrType.pointerDepth, false, 0);
+        if (arrType.extraDims.length > 0) {
+            elemType.isArray = true;
+            elemType.arraySize = arrType.extraDims[0];
+            elemType.extraDims = arrType.extraDims[1 .. $].dup;
+        }
+        return elemType;
+    }
+
+    private string typedParameterDeclaration(Type type, string name) {
+        if (type.isArray && type.arraySize > 0) {
+            string baseType = primitiveToC(type.name);
+            baseType ~= pointerStars(type);
+            return format("%s %s[%d]%s", baseType, name, type.arraySize, extraDimsSuffix(type));
+        }
+        return format("%s %s", typeToC(type), name);
+    }
+
+    private string parameterDeclaration(Parameter param) {
+        return typedParameterDeclaration(param.type, param.name);
     }
 
     private string primitiveToC(string name) {

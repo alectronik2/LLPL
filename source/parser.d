@@ -2119,9 +2119,8 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.For);
 
-        // `for i in <range-or-iterable> { ... }` - sugar for `foreach let
-        // i in ... { ... }` (see ForeachStmt), spelled without `let` and
-        // using `for` instead of `foreach`. Unambiguous via one token of
+        // `for i in <range-or-iterable> { ... }` - a counted/ranged or
+        // iterator loop over a fresh per-iteration binding. Unambiguous via one token of
         // lookahead: the ordinary C-style for's own initializer can also
         // start with a bare identifier (`for i = 0, i < 5, i = i + 1 {
         // }`), but never one immediately followed by `in`.
@@ -2163,21 +2162,15 @@ class Parser {
         return new ForStmt(initializer, condition, update, body_);
     }
 
-    // `foreach let x in iterable { ... }` - always `let` (no `const` form;
-    // the loop variable is a fresh binding each iteration, not something
-    // there's a meaningful "don't reassign" guarantee for) and never an
-    // explicit type annotation - see ForeachStmt's doc comment for how
-    // codegen infers it.
+    // The old `foreach let x in iterable { ... }` spelling has been removed;
+    // use `for x in iterable { ... }`.
     private ForeachStmt foreachStmt() {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.Foreach);
-        expect(TokenType.Let);
-        string varName = expect(TokenType.Identifier).value;
-        expect(TokenType.In);
-        ASTNode iterable = expressionNoStructLiteral();
-        Block body_ = block();
-        return new ForeachStmt(varName, iterable, body_, startLine, startColumn);
+        errorAt(startLine, startColumn,
+            "The old 'foreach let' syntax has been removed; use 'for x in iterable { ... }'");
+        assert(false);
     }
 
     private ReturnStmt returnStmt() {

@@ -1167,7 +1167,7 @@ class ForStmt : ASTNode {
     }
 }
 
-// `foreach let varName in iterable { body }` - iterable is either a
+// `for varName in iterable { body }` - iterable is either a
 // fixed-size array (`T[N]`, N known at compile time) or a class instance
 // implementing the iterator protocol (see codegen.d's ITER_HAS_NEXT/
 // ITER_NEXT/ITER_RESET method names). varName's type is inferred, never

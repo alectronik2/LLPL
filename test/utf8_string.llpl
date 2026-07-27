@@ -30,7 +30,7 @@ func main() -> i64 {
     print_int("cp 2", s.codepoint_at(2) as i64)
 
     let sum: u64 = 0
-    foreach let cp in s {
+    for cp in s {
         sum = sum + cp
     }
     print_int("foreach sum", sum as i64)

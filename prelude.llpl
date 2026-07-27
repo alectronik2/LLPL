@@ -303,7 +303,7 @@ class RegexMatch {
 
 // Walks every non-overlapping match of `pattern` in `text`, left to
 // right - implements the `foreach` iterator protocol (see codegen.d's
-// ITER_HAS_NEXT et al.), so `foreach let m in re.find_all(text) { ... }`
+// ITER_HAS_NEXT et al.), so `for m in re.find_all(text) { ... }`
 // works directly. Searches one suffix of `text` at a time (there's no
 // "search starting at an offset" primitive at the C level, only "search
 // from the start of this string") - each yielded RegexMatch is
@@ -404,7 +404,7 @@ class Regex {
         return new RegexMatch(self.pattern, text)
     }
 
-    // All non-overlapping matches, left to right - `foreach let m in
+    // All non-overlapping matches, left to right - `for m in
     // re.find_all(text) { ... }`.
     func find_all(text: string) -> RegexMatchIterator {
         return new RegexMatchIterator(self.pattern, text)
@@ -467,7 +467,7 @@ class Regex {
 // (`byte_len`, `byte_at`, `byte_set`, `byte_substring`, `byte_find`) remain
 // available for code that needs raw UTF-8 storage. It also implements the
 // `foreach` iterator protocol (iter_has_next/iter_next/iter_reset - see
-// codegen.d's ITER_HAS_NEXT et al.), so `foreach let c in s { ... }` walks
+// codegen.d's ITER_HAS_NEXT et al.), so `for c in s { ... }` walks
 // Unicode codepoints.
 //
 // Every method that takes another string takes it as `string` (`char*`),
@@ -1526,7 +1526,7 @@ struct HashEntry<K, V> {
     let next: HashEntry<K, V>*
 }
 
-// Public value yielded by `foreach let entry in map`. It deliberately
+// Public value yielded by `for entry in map`. It deliberately
 // copies key/value out of the internal chain node so callers cannot mutate
 // HashMap internals while iterating.
 struct HashMapEntry<K, V> {
@@ -1535,7 +1535,7 @@ struct HashMapEntry<K, V> {
 }
 
 // Documents the method-name convention `for x in instance { ... }` and
-// `foreach let x in instance { ... }` dispatch on (see codegen.d's
+// `for x in instance { ... }` dispatches on (see codegen.d's
 // ITER_HAS_NEXT/ITER_NEXT/ITER_RESET, and generateForeachStmt/
 // generateClassForeach) - a class is foreach-able once it defines
 // iter_has_next()/iter_next() with matching arity, whether written
@@ -1746,7 +1746,7 @@ trait Mul {
 
 // A basic hash table using separate chaining. It grows automatically once
 // the load factor reaches roughly 75%, and implements the iterator protocol
-// so `foreach let entry in map { ... }` yields HashMapEntry<K, V> values.
+// so `for entry in map { ... }` yields HashMapEntry<K, V> values.
 //
 // Keys hash/compare via K's own Hashable impl (key.hash()/key.equals(other))
 // rather than raw bytes, so a `char*` key now hashes/compares by string
