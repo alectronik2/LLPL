@@ -16,7 +16,7 @@ class Klass {
     }
 
     destructor() {
-        puts("Klass::destructo()r")
+        puts("Klass::destructor()")
     }
     
     func to_string() -> string {
@@ -37,6 +37,10 @@ let pub: Klass
 
 func throwing() {
     throw "Error"
+}
+
+func typed<T>( arg: T ) -> T {
+    return arg
 }
 
 func main() {
@@ -98,5 +102,7 @@ func main() {
 
     (k++).hello("stre")
 
+    let r = typed<i64>(128)
+    puts("Inferred: \(r)")
     //delete k
 }

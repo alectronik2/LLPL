@@ -1412,12 +1412,15 @@ class CallExpr : ASTNode {
     // resolveCallArguments. Empty (never indexed) when every argument is
     // positional, the only shape this had before named arguments existed.
     string[] argNames;
+    Type[] typeArgs;
 
-    this(ASTNode callee, ASTNode[] args, int line = 0, int column = 0, string[] argNames = null) {
+    this(ASTNode callee, ASTNode[] args, int line = 0, int column = 0,
+            string[] argNames = null, Type[] typeArgs = null) {
         super(NodeType.CallExpr, line, column);
         this.callee = callee;
         this.args = args;
         this.argNames = argNames;
+        this.typeArgs = typeArgs;
     }
 }
 

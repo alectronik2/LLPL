@@ -6063,7 +6063,8 @@ class CodeGenerator {
                 unaryExpr.line, unaryExpr.column, unaryExpr.isPostfix);
         } else if (auto callExpr = cast(CallExpr)node) {
             return new CallExpr(cloneNode(callExpr.callee, subs, typeSubs), cloneNodes(callExpr.args, subs, typeSubs),
-                callExpr.line, callExpr.column, callExpr.argNames.dup);
+                callExpr.line, callExpr.column, callExpr.argNames.dup,
+                callExpr.typeArgs.map!(a => cloneType(a, typeSubs)).array);
         } else if (auto memberExpr = cast(MemberExpr)node) {
             return new MemberExpr(cloneNode(memberExpr.object, subs, typeSubs), memberExpr.member,
                 memberExpr.line, memberExpr.column);
@@ -6296,7 +6297,8 @@ class CodeGenerator {
                 unaryExpr.line, unaryExpr.column, unaryExpr.isPostfix);
         } else if (auto callExpr = cast(CallExpr)node) {
             return new CallExpr(expandQuotedNode(callExpr.callee, subs),
-                expandQuotedNodes(callExpr.args, subs), callExpr.line, callExpr.column, callExpr.argNames.dup);
+                expandQuotedNodes(callExpr.args, subs), callExpr.line, callExpr.column,
+                callExpr.argNames.dup, callExpr.typeArgs.map!(a => cloneType(a)).array);
         } else if (auto memberExpr = cast(MemberExpr)node) {
             return new MemberExpr(expandQuotedNode(memberExpr.object, subs), memberExpr.member,
                 memberExpr.line, memberExpr.column);
@@ -7107,6 +7109,24 @@ class CodeGenerator {
         }
     }
 
+    private void checkNotGenericFunctionConstruction(NewExpr newExpr) {
+        if (newExpr.type.typeArgs.length == 0) return;
+        string classKey = findGenericTemplateKey(newExpr.type.name,
+            (n) => (n in genericClassTemplates) !is null);
+        string structKey = findGenericTemplateKey(newExpr.type.name,
+            (n) => (n in genericStructTemplates) !is null);
+        string functionKey = findGenericTemplateKey(newExpr.type.name,
+            (n) => (n in genericFunctionTemplates) !is null);
+        if (classKey.length == 0 && structKey.length == 0 && functionKey.length > 0) {
+            throw new CompileError(format(
+                "'%s' is a generic function, not a generic type; " ~
+                "`new %s<...>(...)` is invalid. Call `%s(...)` with arguments " ~
+                "so its type parameters can be inferred.",
+                newExpr.type.name, newExpr.type.name, newExpr.type.name),
+                currentModulePath, newExpr.line, newExpr.column);
+        }
+    }
+
     // Rejects `x = ...` when `x` (a plain or namespace-qualified variable
     // reference) was declared `const`. Only the variable being assigned is
     // checked - field/index assignment through it (x.field = ...) is fine,
@@ -7682,6 +7702,12 @@ class CodeGenerator {
         string classKey = findGenericTemplateKey(name, (k) => (k in genericClassTemplates) !is null);
         string structKey = findGenericTemplateKey(name, (k) => (k in genericStructTemplates) !is null);
         if (classKey.length == 0 && structKey.length == 0) {
+            string functionKey = findGenericTemplateKey(name, (k) => (k in genericFunctionTemplates) !is null);
+            if (functionKey.length > 0) {
+                throw new CompileError(format(
+                    "'%s' is a generic function, not a generic type", name),
+                    currentModulePath, 0, 0);
+            }
             throw new CompileError(format("'%s' is not a generic type", name), currentModulePath, 0, 0);
         }
         bool isClass = classKey.length > 0;
@@ -7896,60 +7922,71 @@ class CodeGenerator {
     }
 
     // Monomorphizes (on first use) or looks up the already-monomorphized
-    // mangled name for a call to a generic function template. Generic
-    // function calls never write explicit `<...>` type arguments (that
-    // syntax only exists in type positions - see typeParamList's comment
-    // on why generic operators/calls stay unambiguous), so every type
-    // parameter is instead inferred from whichever parameter position(s)
-    // mention it, using the argument expressions actually passed here.
+    // mangled name for a call to a generic function template. A caller can
+    // either write explicit type arguments (`malloc<T>()`) or omit them and
+    // let the resolver infer each type parameter from value arguments.
     private GenericCallResolution resolveGenericFunctionCall(string templateKey, ASTNode[] args,
-            string[] argNames) {
+            string[] argNames, Type[] explicitTypeArgs = null) {
         FunctionDecl tmpl = genericFunctionTemplates[templateKey];
         args = resolveCallArguments(tmpl.params, false, args, argNames,
             format("generic function '%s'", templateKey), 0, 0);
 
         Type[string] bindings;
-        foreach (i, param; tmpl.params) {
-            if (i >= args.length) continue;
-            if (tmpl.typeParams.canFind(param.type.name) && (param.type.name in bindings) is null) {
-                Type argType = inferType(args[i]);
-                // `param.type` may itself be `T*` and/or `T[]` (pointerDepth
-                // > 0 / isArray true), not just a bare `T` - e.g. `func
-                // swap<T>(a: T*, b: T*)` called as `swap(&x, &y)`, or `func
-                // first<T>(arr: T[]) -> T` called with an `i64[]` argument.
-                // The binding recorded for T needs whichever of those the
-                // parameter's own declared type already accounts for
-                // *removed* from the argument's inferred type, or the
-                // monomorphized clone doubles them - a `T*` parameter making
-                // `i64*` become `i64**` (this file's own cloneType already
-                // adds pointerDepth back on top of a binding that has its
-                // own, deliberately - see its comment - so a binding that
-                // hasn't first had the parameter's own depth subtracted
-                // ends up double-counted), and a bare `T` return type
-                // wrongly inheriting `isArray` from a `T[]` parameter's
-                // argument, turning a plain `i64` return into an `int64_t*`
-                // one instead.
-                int depthAdjust = param.type.pointerDepth;
-                bool bindingIsArray = param.type.isArray ? false : argType.isArray;
-                bindings[param.type.name] = new Type(argType.name, argType.pointerDepth - depthAdjust,
-                    bindingIsArray, argType.arraySize);
-                continue;
+        if (explicitTypeArgs.length > 0) {
+            if (explicitTypeArgs.length != tmpl.typeParams.length) {
+                throw new CompileError(format(
+                    "Generic function '%s' expects %d type argument(s), got %d",
+                    templateKey, tmpl.typeParams.length, explicitTypeArgs.length),
+                    currentModulePath, 0, 0);
             }
-            // A param shaped like `Slice<T>` (T nested inside another
-            // generic type, not the param's own bare type) - recover T
-            // from the argument's own type via the reverse mapping
-            // instantiateGenericTypeArgs records (see
-            // monomorphizedTypeArgs's own comment for why this indirection
-            // is needed at all: by the time we get here, the argument's
-            // type has already been resolved down to a flat mangled name).
-            if (param.type.typeArgs.length > 0) {
-                Type argType = inferType(args[i]);
-                resolveType(argType);
-                if (auto recorded = argType.name in monomorphizedTypeArgs) {
-                    foreach (j, ta; param.type.typeArgs) {
-                        if (j < recorded.length && tmpl.typeParams.canFind(ta.name)
-                                && (ta.name in bindings) is null) {
-                            bindings[ta.name] = (*recorded)[j];
+            foreach (i, tp; tmpl.typeParams) {
+                Type explicitType = cloneType(explicitTypeArgs[i]);
+                resolveType(explicitType);
+                bindings[tp] = explicitType;
+            }
+        } else {
+            foreach (i, param; tmpl.params) {
+                if (i >= args.length) continue;
+                if (tmpl.typeParams.canFind(param.type.name) && (param.type.name in bindings) is null) {
+                    Type argType = inferType(args[i]);
+                    // `param.type` may itself be `T*` and/or `T[]` (pointerDepth
+                    // > 0 / isArray true), not just a bare `T` - e.g. `func
+                    // swap<T>(a: T*, b: T*)` called as `swap(&x, &y)`, or `func
+                    // first<T>(arr: T[]) -> T` called with an `i64[]` argument.
+                    // The binding recorded for T needs whichever of those the
+                    // parameter's own declared type already accounts for
+                    // *removed* from the argument's inferred type, or the
+                    // monomorphized clone doubles them - a `T*` parameter making
+                    // `i64*` become `i64**` (this file's own cloneType already
+                    // adds pointerDepth back on top of a binding that has its
+                    // own, deliberately - see its comment - so a binding that
+                    // hasn't first had the parameter's own depth subtracted
+                    // ends up double-counted), and a bare `T` return type
+                    // wrongly inheriting `isArray` from a `T[]` parameter's
+                    // argument, turning a plain `i64` return into an `int64_t*`
+                    // one instead.
+                    int depthAdjust = param.type.pointerDepth;
+                    bool bindingIsArray = param.type.isArray ? false : argType.isArray;
+                    bindings[param.type.name] = new Type(argType.name, argType.pointerDepth - depthAdjust,
+                        bindingIsArray, argType.arraySize);
+                    continue;
+                }
+                // A param shaped like `Slice<T>` (T nested inside another
+                // generic type, not the param's own bare type) - recover T
+                // from the argument's own type via the reverse mapping
+                // instantiateGenericTypeArgs records (see
+                // monomorphizedTypeArgs's own comment for why this indirection
+                // is needed at all: by the time we get here, the argument's
+                // type has already been resolved down to a flat mangled name).
+                if (param.type.typeArgs.length > 0) {
+                    Type argType = inferType(args[i]);
+                    resolveType(argType);
+                    if (auto recorded = argType.name in monomorphizedTypeArgs) {
+                        foreach (j, ta; param.type.typeArgs) {
+                            if (j < recorded.length && tmpl.typeParams.canFind(ta.name)
+                                    && (ta.name in bindings) is null) {
+                                bindings[ta.name] = (*recorded)[j];
+                            }
                         }
                     }
                 }
@@ -7999,6 +8036,11 @@ class CodeGenerator {
             // recursion between two different generic function
             // instantiations (see the module-level comment on
             // genericForwardDecls).
+            foreach (typeArg; typeArgs) {
+                if ((typeArg.name in classRegistry) !is null || (typeArg.name in structRegistry) !is null) {
+                    genericForwardDecls ~= format("typedef struct %s %s;\n", typeArg.name, typeArg.name);
+                }
+            }
             string protoParams = "";
             foreach (i, p; clone.params) {
                 resolveType(p.type);
@@ -9990,7 +10032,8 @@ class CodeGenerator {
                     (n) => (n in genericFunctionTemplates) !is null);
             }
             if (genericTemplateKey.length > 0) {
-                auto resolution = resolveGenericFunctionCall(genericTemplateKey, callExpr.args, callExpr.argNames);
+                auto resolution = resolveGenericFunctionCall(genericTemplateKey, callExpr.args,
+                    callExpr.argNames, callExpr.typeArgs);
                 recordUsage(resolution.mangledName, callExpr.line, callExpr.column);
                 string gargs = "";
                 foreach (i, arg; resolution.resolvedArgs) {
@@ -9998,6 +10041,11 @@ class CodeGenerator {
                     gargs ~= generateExpression(arg);
                 }
                 return format("%s(%s)", resolution.mangledName, gargs);
+            }
+            if (callExpr.typeArgs.length > 0) {
+                throw new CompileError(
+                    "Explicit type arguments can only be used when calling a generic function",
+                    currentModulePath, callExpr.line, callExpr.column);
             }
             // Check if this is a method call
             if (auto memberExpr = cast(MemberExpr)callExpr.callee) {
@@ -10523,6 +10571,7 @@ class CodeGenerator {
             return "((void*)0)";
         } else if (auto newExpr = cast(NewExpr)node) {
             rejectInInterrupt(newExpr, "'new'");
+            checkNotGenericFunctionConstruction(newExpr);
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
             recordUsage(newExpr.type.name, newExpr.line, newExpr.column);
@@ -10619,6 +10668,7 @@ class CodeGenerator {
                 "Cannot infer type of an array literal; declare an explicit array type " ~
                 "(e.g. 'let arr: u8[3] = [1, 2, 3]')");
         } else if (auto newExpr = cast(NewExpr)expr) {
+            checkNotGenericFunctionConstruction(newExpr);
             resolveType(newExpr.type);
             checkNotStruct(newExpr);
             return new Type(newExpr.type.name);
@@ -10704,6 +10754,18 @@ class CodeGenerator {
                 return new Type("EmbeddedFile");
             }
             if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
+                string genericKey = tryResolveQualifiedPath(memberCallee,
+                    (n) => (n in genericFunctionTemplates) !is null);
+                if (genericKey.length > 0) {
+                    auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args,
+                        callExpr.argNames, callExpr.typeArgs);
+                    return functionRegistry[resolution.mangledName].returnType;
+                }
+                if (callExpr.typeArgs.length > 0) {
+                    throw inferError(expr,
+                        "Explicit type arguments can only be used when calling a generic function");
+                }
+
                 string qualifiedName = tryResolveQualifiedPath(memberCallee, (n) => (n in functionCandidates) !is null);
                 if (qualifiedName.length > 0) {
                     auto candidates = functionCandidates[qualifiedName];
@@ -10714,13 +10776,6 @@ class CodeGenerator {
                 string qualifiedFunc = tryResolveExternFunctionMember(memberCallee);
                 if (qualifiedFunc.length > 0) {
                     return functionRegistry[qualifiedFunc].returnType;
-                }
-
-                string genericKey = tryResolveQualifiedPath(memberCallee,
-                    (n) => (n in genericFunctionTemplates) !is null);
-                if (genericKey.length > 0) {
-                    auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args, callExpr.argNames);
-                    return functionRegistry[resolution.mangledName].returnType;
                 }
 
                 Type objType = inferType(memberCallee.object);
@@ -10750,6 +10805,18 @@ class CodeGenerator {
                 if (resolvedVar in variableTypes && variableTypes[resolvedVar].closureReturnType !is null) {
                     return variableTypes[resolvedVar].closureReturnType;
                 }
+                string genericKey = findGenericTemplateKey(calleeIdent.name,
+                    (n) => (n in genericFunctionTemplates) !is null);
+                if (genericKey.length > 0) {
+                    auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args,
+                        callExpr.argNames, callExpr.typeArgs);
+                    return functionRegistry[resolution.mangledName].returnType;
+                }
+                if (callExpr.typeArgs.length > 0) {
+                    throw inferError(expr,
+                        "Explicit type arguments can only be used when calling a generic function");
+                }
+
                 string resolved = resolveName(calleeIdent.name, (n) => (n in functionCandidates) !is null);
                 if (auto candidates = resolved in functionCandidates) {
                     auto decl = resolveOverload(*candidates, callExpr.args, callExpr.argNames,
@@ -10762,12 +10829,6 @@ class CodeGenerator {
                 string externResolved = resolveName(calleeIdent.name, (n) => (n in functionRegistry) !is null);
                 if (auto funcDecl = externResolved in functionRegistry) {
                     return funcDecl.returnType;
-                }
-                string genericKey = findGenericTemplateKey(calleeIdent.name,
-                    (n) => (n in genericFunctionTemplates) !is null);
-                if (genericKey.length > 0) {
-                    auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args, callExpr.argNames);
-                    return functionRegistry[resolution.mangledName].returnType;
                 }
                 throw inferError(expr, format("Cannot infer type: unknown function '%s'", calleeIdent.name));
             }

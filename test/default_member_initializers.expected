@@ -1,0 +1,13 @@
+bar.foo = 7
+bar
+explicit.x = 10
+explicit.y = 99
+point.x = 1
+point.y = 8
+point.z = 3
+with_ctor.a = 4
+with_ctor.b = 12
+generic_box.marker = 77
+generic_box.value = 5
+generic_pair.marker = 88
+generic_pair.value = 6

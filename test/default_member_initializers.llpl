@@ -1,0 +1,79 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Bar {
+    let foo: int = 7
+    let label: char* = "bar"
+}
+
+class ExplicitDefaults {
+    let x: i64 = 10
+    let y: i64 = 20
+
+    constructor(y: i64) {
+        self.y = y
+    }
+}
+
+struct Point {
+    let x: i64 = 1
+    let y: i64 = 2
+    let z: i64 = 3
+}
+
+struct WithConstructor {
+    let a: i64 = 4
+    let b: i64
+
+    constructor(b: i64) {
+        self.b = b
+    }
+}
+
+class GenericBox<T> {
+    let marker: i64 = 77
+    let value: T
+
+    constructor(value: T) {
+        self.value = value
+    }
+}
+
+struct GenericPair<T> {
+    let marker: i64 = 88
+    let value: T
+}
+
+func main() -> i64 {
+    let bar: Bar = new Bar()
+    print_int("bar.foo", bar.foo)
+    puts(bar.label)
+
+    let explicit: ExplicitDefaults = new ExplicitDefaults(99)
+    print_int("explicit.x", explicit.x)
+    print_int("explicit.y", explicit.y)
+
+    let point: Point = Point { y: 8 }
+    print_int("point.x", point.x)
+    print_int("point.y", point.y)
+    print_int("point.z", point.z)
+
+    let with_ctor: WithConstructor = new WithConstructor(12)
+    print_int("with_ctor.a", with_ctor.a)
+    print_int("with_ctor.b", with_ctor.b)
+
+    let generic_box: GenericBox<i64> = new GenericBox<i64>(5)
+    print_int("generic_box.marker", generic_box.marker)
+    print_int("generic_box.value", generic_box.value)
+
+    let generic_pair: GenericPair<i64> = GenericPair { value: 6 }
+    print_int("generic_pair.marker", generic_pair.marker)
+    print_int("generic_pair.value", generic_pair.value)
+
+    return 0
+}

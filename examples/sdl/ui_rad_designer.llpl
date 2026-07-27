@@ -1,0 +1,1616 @@
+// LLPL UI RAD designer.
+//
+// Run it, click a widget type in the left palette, then click in the design
+// surface to place it. Select controls to drag, resize, edit caption/color,
+// delete, or export generated `ui` DSL to stdout.
+
+import stdlib.ui.sdl
+
+using namespace std.ui
+
+const DESIGNER_W: i64 = 1200
+const DESIGNER_H: i64 = 760
+const PALETTE_W: i64 = 210
+const INSPECTOR_W: i64 = 280
+const TOP_BAR_H: i64 = 44
+const DESIGN_TITLEBAR_H: i64 = 28
+const SURFACE_MARGIN: i64 = 18
+const HANDLE_SIZE: i64 = 10
+const SNAP_DISTANCE: i64 = 10
+const SNAP_GUIDE_COLOR: u32 = 0xFF00A3FF as u32
+const INSPECTOR_BUTTON_X_PAD: i64 = 16
+const INSPECTOR_BUTTON_W_PAD: i64 = 32
+const INSPECTOR_BUTTON_H: i64 = 32
+const INSPECTOR_ACTION_Y: i64 = 262
+const INSPECTOR_ACTION_STEP: i64 = 40
+const PALETTE_ITEM_STEP: i64 = 32
+const CONTEXT_MENU_W: i64 = 190
+const CONTEXT_MENU_ROW_H: i64 = 30
+const CONTEXT_MENU_ROWS: i64 = 5
+
+enum InspectorAction {
+    Caption,
+    Color,
+    Delete,
+    Export,
+    None
+}
+
+enum ContextAction {
+    Front,
+    Forward,
+    Backward,
+    Back,
+    Delete,
+    None
+}
+
+enum ToolKind {
+    Select,
+    Button,
+    Text,
+    TextBox,
+    ComboBox,
+    Checkbox,
+    Slider,
+    ProgressBar,
+    Spinner,
+    List,
+    TreeView,
+    GroupBox,
+    Picture,
+    Canvas,
+    Panel,
+    MsgBox,
+    InputBox,
+    Terminal,
+    TabContainer,
+    MenuBar,
+    StatusBar,
+    Unknown
+}
+
+enum DragMode {
+    None,
+    Move,
+    Resize,
+    WindowResize
+}
+
+func hit(px: i64, py: i64, x: i64, y: i64, w: i64, h: i64) -> bool {
+    return px >= x && py >= y && px < x + w && py < y + h
+}
+
+func near_snap(value: i64, target: i64) -> bool {
+    let delta: i64 = value - target
+    if delta < 0 {
+        delta = 0 - delta
+    }
+    return delta <= SNAP_DISTANCE
+}
+
+func tool_from_index(index: i64) -> i64 {
+    match index {
+        case 0 => { return ToolKind.Select }
+        case 1 => { return ToolKind.Button }
+        case 2 => { return ToolKind.Text }
+        case 3 => { return ToolKind.TextBox }
+        case 4 => { return ToolKind.ComboBox }
+        case 5 => { return ToolKind.Checkbox }
+        case 6 => { return ToolKind.Slider }
+        case 7 => { return ToolKind.ProgressBar }
+        case 8 => { return ToolKind.Spinner }
+        case 9 => { return ToolKind.List }
+        case 10 => { return ToolKind.TreeView }
+        case 11 => { return ToolKind.GroupBox }
+        case 12 => { return ToolKind.Picture }
+        case 13 => { return ToolKind.Canvas }
+        case 14 => { return ToolKind.Panel }
+        case 15 => { return ToolKind.MsgBox }
+        case 16 => { return ToolKind.InputBox }
+        case 17 => { return ToolKind.Terminal }
+        case 18 => { return ToolKind.TabContainer }
+        case 19 => { return ToolKind.MenuBar }
+        case 20 => { return ToolKind.StatusBar }
+        default => { return ToolKind.Unknown }
+    }
+}
+
+func tool_count() -> i64 {
+    return 21
+}
+
+func tool_index(kind: i64) -> i64 {
+    match kind {
+        case ToolKind.Select => { return 0 }
+        case ToolKind.Button => { return 1 }
+        case ToolKind.Text => { return 2 }
+        case ToolKind.TextBox => { return 3 }
+        case ToolKind.ComboBox => { return 4 }
+        case ToolKind.Checkbox => { return 5 }
+        case ToolKind.Slider => { return 6 }
+        case ToolKind.ProgressBar => { return 7 }
+        case ToolKind.Spinner => { return 8 }
+        case ToolKind.List => { return 9 }
+        case ToolKind.TreeView => { return 10 }
+        case ToolKind.GroupBox => { return 11 }
+        case ToolKind.Picture => { return 12 }
+        case ToolKind.Canvas => { return 13 }
+        case ToolKind.Panel => { return 14 }
+        case ToolKind.MsgBox => { return 15 }
+        case ToolKind.InputBox => { return 16 }
+        case ToolKind.Terminal => { return 17 }
+        case ToolKind.TabContainer => { return 18 }
+        case ToolKind.MenuBar => { return 19 }
+        case ToolKind.StatusBar => { return 20 }
+        default => { return -1 }
+    }
+}
+
+func inspector_action_index(action: i64) -> i64 {
+    match action {
+        case InspectorAction.Caption => { return 0 }
+        case InspectorAction.Color => { return 1 }
+        case InspectorAction.Delete => { return 2 }
+        case InspectorAction.Export => { return 3 }
+        default => { return -1 }
+    }
+}
+
+func inspector_action_from_row(row: i64) -> i64 {
+    match row {
+        case 0 => { return InspectorAction.Caption }
+        case 1 => { return InspectorAction.Color }
+        case 2 => { return InspectorAction.Delete }
+        default => { return InspectorAction.None }
+    }
+}
+
+func context_action_from_index(index: i64) -> i64 {
+    match index {
+        case 0 => { return ContextAction.Front }
+        case 1 => { return ContextAction.Forward }
+        case 2 => { return ContextAction.Backward }
+        case 3 => { return ContextAction.Back }
+        case 4 => { return ContextAction.Delete }
+        default => { return ContextAction.None }
+    }
+}
+
+func tool_label(kind: i64) -> string {
+    match kind {
+        case ToolKind.Select => { return "Select" }
+        case ToolKind.Button => { return "Button" }
+        case ToolKind.Text => { return "Text" }
+        case ToolKind.TextBox => { return "TextBox" }
+        case ToolKind.ComboBox => { return "ComboBox" }
+        case ToolKind.Checkbox => { return "Checkbox" }
+        case ToolKind.Slider => { return "Slider" }
+        case ToolKind.ProgressBar => { return "ProgressBar" }
+        case ToolKind.Spinner => { return "Spinner" }
+        case ToolKind.List => { return "List" }
+        case ToolKind.TreeView => { return "TreeView" }
+        case ToolKind.GroupBox => { return "GroupBox" }
+        case ToolKind.Picture => { return "Picture" }
+        case ToolKind.Canvas => { return "Canvas" }
+        case ToolKind.Panel => { return "Panel" }
+        case ToolKind.MsgBox => { return "MsgBox" }
+        case ToolKind.InputBox => { return "InputBox" }
+        case ToolKind.Terminal => { return "Terminal" }
+        case ToolKind.TabContainer => { return "TabContainer" }
+        case ToolKind.MenuBar => { return "MenuBar" }
+        case ToolKind.StatusBar => { return "StatusBar" }
+        default => { return "Widget" }
+    }
+}
+
+func default_caption(kind: i64) -> string {
+    match kind {
+        case ToolKind.Button => { return "Button" }
+        case ToolKind.Text => { return "Text label" }
+        case ToolKind.TextBox => { return "Enter text" }
+        case ToolKind.ComboBox => { return "Choice" }
+        case ToolKind.Checkbox => { return "Check option" }
+        case ToolKind.ProgressBar, ToolKind.Spinner => { return "Loading" }
+        case ToolKind.GroupBox => { return "Group" }
+        case ToolKind.Picture => { return "image.png" }
+        case ToolKind.MsgBox => { return "Message" }
+        case ToolKind.InputBox => { return "Input" }
+        case ToolKind.Terminal => { return "Terminal" }
+        case ToolKind.TabContainer => { return "Tabs" }
+        case ToolKind.MenuBar => { return "Menu" }
+        case ToolKind.StatusBar => { return "Ready" }
+        default => { return "" }
+    }
+}
+
+func default_w(kind: i64) -> i64 {
+    match kind {
+        case ToolKind.Text => { return 150 }
+        case ToolKind.Checkbox => { return 160 }
+        case ToolKind.Slider, ToolKind.ProgressBar, ToolKind.Picture => { return 180 }
+        case ToolKind.Spinner => { return 110 }
+        case ToolKind.List => { return 190 }
+        case ToolKind.TreeView => { return 210 }
+        case ToolKind.GroupBox => { return 230 }
+        case ToolKind.Canvas => { return 190 }
+        case ToolKind.Panel => { return 220 }
+        case ToolKind.MsgBox, ToolKind.InputBox => { return 170 }
+        case ToolKind.Terminal, ToolKind.TabContainer => { return 280 }
+        case ToolKind.MenuBar, ToolKind.StatusBar => { return 420 }
+        default => { return 130 }
+    }
+}
+
+func default_h(kind: i64) -> i64 {
+    match kind {
+        case ToolKind.Text, ToolKind.Checkbox => { return 28 }
+        case ToolKind.TextBox, ToolKind.ComboBox => { return 34 }
+        case ToolKind.Slider, ToolKind.StatusBar => { return 28 }
+        case ToolKind.ProgressBar, ToolKind.MenuBar => { return 30 }
+        case ToolKind.Spinner => { return 42 }
+        case ToolKind.List, ToolKind.GroupBox => { return 150 }
+        case ToolKind.TreeView => { return 160 }
+        case ToolKind.Picture => { return 110 }
+        case ToolKind.Canvas => { return 120 }
+        case ToolKind.Panel => { return 140 }
+        case ToolKind.MsgBox, ToolKind.InputBox => { return 58 }
+        case ToolKind.Terminal, ToolKind.TabContainer => { return 170 }
+        default => { return 36 }
+    }
+}
+
+func color_value(index: i64) -> u32 {
+    match index {
+        case 1 => { return 0xFF2F7CF6 as u32 }
+        case 2 => { return 0xFF2BA84A as u32 }
+        case 3 => { return 0xFFF2994A as u32 }
+        case 4 => { return 0xFFE05D5D as u32 }
+        case 5 => { return 0xFF8E59D1 as u32 }
+        default => { return 0xFFE8EDF4 as u32 }
+    }
+}
+
+func color_literal(index: i64) -> string {
+    match index {
+        case 1 => { return "0xFF2F7CF6 as u32" }
+        case 2 => { return "0xFF2BA84A as u32" }
+        case 3 => { return "0xFFF2994A as u32" }
+        case 4 => { return "0xFFE05D5D as u32" }
+        case 5 => { return "0xFF8E59D1 as u32" }
+        default => { return "0xFFE8EDF4 as u32" }
+    }
+}
+
+func cycle_caption(kind: i64, current: string) -> string {
+    match kind {
+        case ToolKind.Button => {
+            if current[0] == 'B' { return "Submit" }
+            if current[0] == 'S' { return "Cancel" }
+            return "Button"
+        }
+        case ToolKind.Text => {
+            if current[0] == 'T' { return "Status ready" }
+            if current[0] == 'S' { return "Details" }
+            return "Text label"
+        }
+        case ToolKind.Checkbox => {
+            if current[0] == 'C' { return "Enabled" }
+            if current[0] == 'E' { return "Remember me" }
+            return "Check option"
+        }
+        case ToolKind.GroupBox => {
+            if current[0] == 'G' { return "Settings" }
+            if current[0] == 'S' { return "Options" }
+            return "Group"
+        }
+        case ToolKind.Picture => {
+            if current[0] == 'i' { return "examples/baremetal_demo/media/llpl-logo.png" }
+            return "image.png"
+        }
+        default => {}
+    }
+    if current[0] == 0 { return default_caption(kind) }
+    return default_caption(kind)
+}
+
+func is_dialog_anchor(kind: i64) -> bool {
+    return kind == ToolKind.MsgBox || kind == ToolKind.InputBox
+}
+
+class DesignControl {
+    let kind: i64
+    let x: i64
+    let y: i64
+    let w: i64
+    let h: i64
+    let color_index: i64
+    let caption: string
+    let next: DesignControl
+
+    constructor(kind: i64, x: i64, y: i64) {
+        self.kind = kind
+        self.x = x
+        self.y = y
+        self.w = default_w(kind)
+        self.h = default_h(kind)
+        self.color_index = 0
+        self.caption = default_caption(kind)
+        self.next = null
+    }
+
+    func contains(px: i64, py: i64) -> bool {
+        return hit(px, py, self.x, self.y, self.w, self.h)
+    }
+
+    func handle_contains(px: i64, py: i64) -> bool {
+        return hit(px, py, self.x + self.w - HANDLE_SIZE, self.y + self.h - HANDLE_SIZE, HANDLE_SIZE + 3, HANDLE_SIZE + 3)
+    }
+
+    func draw_preview(renderer: std.sdl.Renderer, font: TTF_Font*, selected: bool) {
+        let bg: u32 = color_value(self.color_index)
+        let border: u32 = 0xFF718096 as u32
+        let text_color: u32 = 0xFF111827 as u32
+
+        match self.kind {
+        case ToolKind.Text => {
+            draw_text_box(renderer, font, self.x, self.y, self.w, self.h, self.caption, 0xFF111827 as u32)
+        }
+        case ToolKind.Button => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, bg)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, 0xFF1E3A5F as u32)
+            draw_text_box(renderer, font, self.x, self.y, self.w, self.h, self.caption, text_color)
+        }
+        case ToolKind.TextBox => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_text_box(renderer, font, self.x, self.y, self.w, self.h, self.caption, 0xFF6B7280 as u32)
+        }
+        case ToolKind.ComboBox => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_text_box(renderer, font, self.x, self.y, self.w - 28, self.h, self.caption, text_color)
+            draw_rect(renderer, self.x + self.w - 26, self.y + 1, 25, self.h - 2, 0xFFE5E7EB as u32)
+            draw_disclosure(renderer, self.x + self.w - 20, self.y + 10, true, 0xFF374151 as u32)
+        }
+        case ToolKind.Checkbox => {
+            draw_rect(renderer, self.x, self.y + 5, 18, 18, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x, self.y + 5, 18, 18, border)
+            draw_check_icon(renderer, self.x, self.y + 5, 0xFF2BA84A as u32)
+            draw_text_box(renderer, font, self.x + 24, self.y, self.w - 24, self.h, self.caption, text_color)
+        }
+        case ToolKind.Slider => {
+            draw_rect(renderer, self.x, self.y + self.h / 2 - 3, self.w, 6, 0xFFCBD5E1 as u32)
+            draw_rect(renderer, self.x + self.w / 2 - 6, self.y + self.h / 2 - 10, 12, 20, bg)
+            draw_outline(renderer, self.x + self.w / 2 - 6, self.y + self.h / 2 - 10, 12, 20, border)
+        }
+        case ToolKind.ProgressBar => {
+            let bar_y: i64 = self.y + self.h / 2 - 6
+            draw_rect(renderer, self.x, bar_y, self.w, 12, 0xFFE2E8F0 as u32)
+            draw_rect(renderer, self.x, bar_y, (self.w * 45) / 100, 12, bg)
+            draw_outline(renderer, self.x, bar_y, self.w, 12, border)
+            draw_text_box(renderer, font, self.x, self.y, self.w, self.h, "45%", text_color)
+        }
+        case ToolKind.Spinner => {
+            let cx: i64 = self.x + self.w / 2
+            let cy: i64 = self.y + self.h / 2
+            draw_rect(renderer, cx - 2, cy - 18, 5, 8, 0xFF2F7CF6 as u32)
+            draw_rect(renderer, cx + 11, cy - 12, 5, 8, 0xFF65A3FF as u32)
+            draw_rect(renderer, cx + 16, cy - 2, 8, 5, 0xFF93C5FD as u32)
+            draw_rect(renderer, cx + 10, cy + 11, 5, 8, 0xFFBFDBFE as u32)
+            draw_rect(renderer, cx - 2, cy + 16, 5, 8, 0xFFD7E9FF as u32)
+            draw_rect(renderer, cx - 18, cy - 2, 8, 5, 0xFFE2E8F0 as u32)
+            if self.w > 86 {
+                draw_text_box(renderer, font, self.x + 54, self.y, self.w - 54, self.h, self.caption, text_color)
+            }
+        }
+        case ToolKind.List => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_widget_icon(renderer, LIST_ICON_FILE, self.x + 8, self.y + 10, 0xFFCBD5E1 as u32, 0xFF64748B as u32)
+            draw_text_box(renderer, font, self.x + 24, self.y + 4, self.w - 28, 28, "Item one", text_color)
+            draw_rect(renderer, self.x + 5, self.y + 36, self.w - 10, 1, 0xFFE5E7EB as u32)
+            draw_text_box(renderer, font, self.x + 24, self.y + 40, self.w - 28, 28, "Item two", text_color)
+        }
+        case ToolKind.TreeView => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_disclosure(renderer, self.x + 8, self.y + 12, true, 0xFF334155 as u32)
+            draw_widget_icon(renderer, LIST_ICON_FOLDER, self.x + 25, self.y + 8, 0xFFF2994A as u32, 0xFF92400E as u32)
+            draw_text_box(renderer, font, self.x + 44, self.y + 4, self.w - 48, 28, "Folder", text_color)
+            draw_widget_icon(renderer, LIST_ICON_FILE, self.x + 38, self.y + 40, 0xFFCBD5E1 as u32, 0xFF64748B as u32)
+            draw_text_box(renderer, font, self.x + 58, self.y + 35, self.w - 62, 28, "File", text_color)
+        }
+        case ToolKind.GroupBox => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0x00FFFFFF as u32)
+            draw_outline(renderer, self.x, self.y + 10, self.w, self.h - 10, border)
+            draw_rect(renderer, self.x + 10, self.y, 90, 22, 0xFFF8FAFC as u32)
+            draw_text_box(renderer, font, self.x + 8, self.y, 120, 22, self.caption, text_color)
+        }
+        case ToolKind.Picture => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFE2E8F0 as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_image_icon(renderer, self.x + self.w / 2 - 10, self.y + self.h / 2 - 18, 0xFFFFFFFF as u32, 0xFF64748B as u32)
+            draw_text_box(renderer, font, self.x, self.y + self.h - 28, self.w, 24, "Picture", 0xFF334155 as u32)
+        }
+        case ToolKind.Canvas => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFF8FAFC as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_rect(renderer, self.x + 20, self.y + 20, 42, 32, bg)
+            draw_rect(renderer, self.x + 70, self.y + 44, 55, 18, 0xFF2BA84A as u32)
+        }
+        case ToolKind.Panel => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, bg)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_text_box(renderer, font, self.x, self.y, self.w, 28, "Panel", text_color)
+        }
+        case ToolKind.MsgBox, ToolKind.InputBox => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFFFFBEB as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, 0xFFF59E0B as u32)
+            draw_msgbox_icon(renderer, MSGBOX_ICON_INFO, self.x + 10, self.y + 12, 0xFFFFFBEB as u32, 0xFFF59E0B as u32)
+            draw_text_box(renderer, font, self.x + 42, self.y + 4, self.w - 48, 26, tool_label(self.kind), text_color)
+            draw_text_box(renderer, font, self.x + 42, self.y + 28, self.w - 48, 24, "dialog anchor", 0xFF64748B as u32)
+        }
+        case ToolKind.Terminal => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFF0F1720 as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, 0xFF2D3748 as u32)
+            draw_text(renderer, font, self.x + 10, self.y + 10, "$ llpl run", 0xFFB7F7C5 as u32)
+            draw_text(renderer, font, self.x + 10, self.y + 32, "ready", 0xFFE6F4EA as u32)
+            draw_rect(renderer, self.x + 10, self.y + self.h - 34, self.w - 20, 24, 0xFF111827 as u32)
+            draw_text_box(renderer, font, self.x + 10, self.y + self.h - 34, self.w - 20, 24, "> ", 0xFFB7F7C5 as u32)
+        }
+        case ToolKind.TabContainer => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFEDEFF5 as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_rect(renderer, self.x + 6, self.y + 4, 82, 28, 0xFFE0EEFF as u32)
+            draw_outline(renderer, self.x + 6, self.y + 4, 82, 28, border)
+            draw_text_box(renderer, font, self.x + 6, self.y + 4, 82, 28, "Tab 1", text_color)
+            draw_rect(renderer, self.x + 90, self.y + 4, 82, 28, 0xFFF8FAFC as u32)
+            draw_outline(renderer, self.x + 90, self.y + 4, 82, 28, border)
+            draw_text_box(renderer, font, self.x + 90, self.y + 4, 82, 28, "Tab 2", text_color)
+            draw_rect(renderer, self.x + 10, self.y + 42, self.w - 20, self.h - 52, 0xFFF8FAFC as u32)
+            draw_outline(renderer, self.x + 10, self.y + 42, self.w - 20, self.h - 52, border)
+        }
+        case ToolKind.MenuBar => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x, self.y + self.h - 1, self.w, 1, border)
+            draw_text_box(renderer, font, self.x + 8, self.y, 48, self.h, "File", text_color)
+            draw_text_box(renderer, font, self.x + 58, self.y, 48, self.h, "Edit", text_color)
+            draw_text_box(renderer, font, self.x + 108, self.y, 52, self.h, "View", text_color)
+            draw_rect(renderer, self.x + 8, self.y + self.h, 150, 86, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x + 8, self.y + self.h, 150, 86, border)
+            draw_widget_icon(renderer, LIST_ICON_FILE, self.x + 16, self.y + self.h + 8, 0xFFE2E8F0 as u32, 0xFF64748B as u32)
+            draw_text_box(renderer, font, self.x + 40, self.y + self.h + 4, 92, 26, "New", text_color)
+            draw_widget_icon(renderer, LIST_ICON_FOLDER, self.x + 16, self.y + self.h + 36, 0xFFF2994A as u32, 0xFF92400E as u32)
+            draw_text_box(renderer, font, self.x + 40, self.y + self.h + 32, 92, 26, "Open", text_color)
+            draw_text_box(renderer, font, self.x + 40, self.y + self.h + 60, 92, 22, "Recent", text_color)
+            draw_disclosure(renderer, self.x + 132, self.y + self.h + 64, false, text_color)
+        }
+        case ToolKind.StatusBar => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, 0xFFFFFFFF as u32)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_widget_icon(renderer, LIST_ICON_CHECK, self.x + 8, self.y + 5, 0xFFE2E8F0 as u32, 0xFF2BA84A as u32)
+            draw_text_box(renderer, font, self.x + 32, self.y, self.w - 62, self.h, self.caption, text_color)
+            draw_rect(renderer, self.x + self.w - 16, self.y + self.h - 5, 11, 1, 0xFF94A3B8 as u32)
+            draw_rect(renderer, self.x + self.w - 12, self.y + self.h - 9, 7, 1, 0xFF94A3B8 as u32)
+            draw_rect(renderer, self.x + self.w - 8, self.y + self.h - 13, 3, 1, 0xFF94A3B8 as u32)
+        }
+        default => {
+            draw_rect(renderer, self.x, self.y, self.w, self.h, bg)
+            draw_outline(renderer, self.x, self.y, self.w, self.h, border)
+            draw_text_box(renderer, font, self.x, self.y, self.w, self.h, tool_label(self.kind), text_color)
+        }
+        }
+
+        if selected {
+            draw_outline(renderer, self.x - 2, self.y - 2, self.w + 4, self.h + 4, 0xFF006ADC as u32)
+            draw_rect(renderer, self.x + self.w - HANDLE_SIZE, self.y + self.h - HANDLE_SIZE, HANDLE_SIZE, HANDLE_SIZE, 0xFF006ADC as u32)
+        }
+    }
+
+    func emit(msg_index: i64, input_index: i64) {
+        let line: char[256]
+        match self.kind {
+            case ToolKind.MsgBox => {
+                ksnprintf(line as char*, 256, "    msgBox%d: MsgBox {", msg_index)
+            }
+            case ToolKind.InputBox => {
+                ksnprintf(line as char*, 256, "    inputBox%d: InputBox {", input_index)
+            }
+            default => {
+                ksnprintf(line as char*, 256, "    %s {", tool_label(self.kind))
+            }
+        }
+        puts(line as string)
+
+        match self.kind {
+            case ToolKind.GroupBox => {
+                ksnprintf(line as char*, 256, "        title: \"%s\"", self.caption)
+                puts(line as string)
+            }
+            case ToolKind.Picture => {
+                ksnprintf(line as char*, 256, "        image_path: \"%s\"", self.caption)
+                puts(line as string)
+            }
+            case ToolKind.MsgBox, ToolKind.InputBox => {
+                ksnprintf(line as char*, 256, "        title: \"%s\"", self.caption)
+                puts(line as string)
+                ksnprintf(line as char*, 256, "        message: \"%s\"", self.caption)
+                puts(line as string)
+                puts("        icon: MSGBOX_ICON_INFO")
+                puts("        button_mode: MSGBOX_BUTTONS_OK")
+                puts("        visible: false")
+            }
+            case ToolKind.StatusBar => {
+                ksnprintf(line as char*, 256, "        text: \"%s\"", self.caption)
+                puts(line as string)
+                puts("        icon: LIST_ICON_CHECK")
+            }
+            case ToolKind.Slider, ToolKind.Canvas, ToolKind.Panel, ToolKind.ProgressBar, ToolKind.Spinner,
+                    ToolKind.Terminal, ToolKind.TabContainer, ToolKind.MenuBar => {}
+            default => {
+                ksnprintf(line as char*, 256, "        text: \"%s\"", self.caption)
+                puts(line as string)
+            }
+        }
+
+        if !is_dialog_anchor(self.kind) {
+            ksnprintf(line as char*, 256, "        x: %d", self.x)
+            puts(line as string)
+            ksnprintf(line as char*, 256, "        y: %d", self.y)
+            puts(line as string)
+            ksnprintf(line as char*, 256, "        width: %d", self.w)
+            puts(line as string)
+            ksnprintf(line as char*, 256, "        height: %d", self.h)
+            puts(line as string)
+        }
+        if self.color_index != 0 {
+            ksnprintf(line as char*, 256, "        background: %s", color_literal(self.color_index))
+            puts(line as string)
+        }
+        match self.kind {
+            case ToolKind.ProgressBar => {
+                puts("        value: 45")
+                puts("        min_value: 0")
+                puts("        max_value: 100")
+            }
+            case ToolKind.Spinner => {
+                ksnprintf(line as char*, 256, "        text: \"%s\"", self.caption)
+                puts(line as string)
+            }
+            case ToolKind.Terminal => {
+                puts("        terminal_prompt: \"> \"")
+                puts("        items_text: \"LLPL terminal ready\"")
+            }
+            case ToolKind.TabContainer => {
+                puts("        TabPage {")
+                puts("            title: \"Tab 1\"")
+                puts("        }")
+                puts("        TabPage {")
+                puts("            title: \"Tab 2\"")
+                puts("        }")
+            }
+            case ToolKind.MenuBar => {
+                puts("        Menu {")
+                puts("            text: \"File\"")
+                puts("            MenuItem {")
+                puts("                text: \"New\"")
+                puts("                icon: LIST_ICON_FILE")
+                puts("            }")
+                puts("            MenuItem {")
+                puts("                text: \"Open\"")
+                puts("                icon: LIST_ICON_FOLDER")
+                puts("            }")
+                puts("            Menu {")
+                puts("                text: \"Recent\"")
+                puts("                icon: LIST_ICON_FOLDER")
+                puts("                MenuItem {")
+                puts("                    text: \"demo.llpl\"")
+                puts("                    icon: LIST_ICON_FILE")
+                puts("                }")
+                puts("            }")
+                puts("        }")
+                puts("        Menu {")
+                puts("            text: \"Edit\"")
+                puts("            MenuItem {")
+                puts("                text: \"Cut\"")
+                puts("                icon: LIST_ICON_FILE")
+                puts("            }")
+                puts("            MenuItem {")
+                puts("                text: \"Copy\"")
+                puts("                icon: LIST_ICON_FILE")
+                puts("            }")
+                puts("        }")
+            }
+            default => {}
+        }
+        puts("    }")
+    }
+}
+
+class Designer {
+    let head: DesignControl
+    let selected: DesignControl
+    let active_tool: i64
+    let drag_mode: i64
+    let drag_dx: i64
+    let drag_dy: i64
+    let window_w: i64
+    let window_h: i64
+    let design_w: i64
+    let design_h: i64
+    let window_selected: bool
+    let snap_guide_x: i64
+    let snap_guide_y: i64
+    let context_open: bool
+    let context_x: i64
+    let context_y: i64
+
+    constructor(w: i64, h: i64) {
+        self.head = null
+        self.selected = null
+        self.active_tool = ToolKind.Select
+        self.drag_mode = DragMode.None
+        self.drag_dx = 0
+        self.drag_dy = 0
+        self.window_w = w
+        self.window_h = h
+        self.design_w = 800
+        self.design_h = 520
+        self.window_selected = true
+        self.snap_guide_x = -1
+        self.snap_guide_y = -1
+        self.context_open = false
+        self.context_x = 0
+        self.context_y = 0
+    }
+
+    func surface_x() -> i64 {
+        return PALETTE_W + SURFACE_MARGIN
+    }
+
+    func surface_y() -> i64 {
+        return TOP_BAR_H + SURFACE_MARGIN
+    }
+
+    func surface_w() -> i64 {
+        return self.design_w
+    }
+
+    func surface_h() -> i64 {
+        return self.design_h
+    }
+
+    func workbench_w() -> i64 {
+        return self.window_w - PALETTE_W - INSPECTOR_W - SURFACE_MARGIN * 2
+    }
+
+    func workbench_h() -> i64 {
+        return self.window_h - TOP_BAR_H - SURFACE_MARGIN * 2
+    }
+
+    func clamp_design_window() {
+        if self.design_w < 320 { self.design_w = 320 }
+        if self.design_h < 220 { self.design_h = 220 }
+        if self.design_w > self.workbench_w() { self.design_w = self.workbench_w() }
+        if self.design_h > self.workbench_h() { self.design_h = self.workbench_h() }
+        if self.design_w < 320 { self.design_w = 320 }
+        if self.design_h < 220 { self.design_h = 220 }
+    }
+
+    func clear_snap_guides() {
+        self.snap_guide_x = -1
+        self.snap_guide_y = -1
+    }
+
+    func clamp_control(control: DesignControl) {
+        if control.w > self.surface_w() {
+            control.w = self.surface_w()
+        }
+        if control.h > self.surface_h() {
+            control.h = self.surface_h()
+        }
+        if control.x < 0 { control.x = 0 }
+        if control.y < DESIGN_TITLEBAR_H { control.y = DESIGN_TITLEBAR_H }
+        if control.x + control.w > self.surface_w() { control.x = self.surface_w() - control.w }
+        if control.y + control.h > self.surface_h() { control.y = self.surface_h() - control.h }
+        if control.x < 0 { control.x = 0 }
+        if control.y < DESIGN_TITLEBAR_H { control.y = DESIGN_TITLEBAR_H }
+    }
+
+    func snap_control_to_window(control: DesignControl, resizing: bool) {
+        let sw: i64 = self.surface_w()
+        let sh: i64 = self.surface_h()
+        let cx: i64 = control.x + control.w / 2
+        let cy: i64 = control.y + control.h / 2
+        let window_cx: i64 = sw / 2
+        let window_cy: i64 = sh / 2
+
+        if resizing {
+            let right: i64 = control.x + control.w
+            let bottom: i64 = control.y + control.h
+            if near_snap(right, sw) {
+                control.w = sw - control.x
+            }
+            if near_snap(bottom, sh) {
+                control.h = sh - control.y
+            }
+            if near_snap(right, window_cx) && window_cx > control.x {
+                control.w = window_cx - control.x
+            }
+            if near_snap(bottom, window_cy) && window_cy > control.y {
+                control.h = window_cy - control.y
+            }
+            return
+        }
+
+        if near_snap(control.x, 0) {
+            control.x = 0
+        }
+        if near_snap(control.y, DESIGN_TITLEBAR_H) {
+            control.y = DESIGN_TITLEBAR_H
+        }
+        if near_snap(control.x + control.w, sw) {
+            control.x = sw - control.w
+        }
+        if near_snap(control.y + control.h, sh) {
+            control.y = sh - control.h
+        }
+        if near_snap(cx, window_cx) {
+            control.x = window_cx - control.w / 2
+        }
+        if near_snap(cy, window_cy) {
+            control.y = window_cy - control.h / 2
+        }
+        self.clamp_control(control)
+    }
+
+    func snap_control_to_objects(control: DesignControl, resizing: bool) {
+        let item: DesignControl = self.head
+        while item != null {
+            if item != control {
+                let other_left: i64 = item.x
+                let other_top: i64 = item.y
+                let other_right: i64 = item.x + item.w
+                let other_bottom: i64 = item.y + item.h
+                let other_cx: i64 = item.x + item.w / 2
+                let other_cy: i64 = item.y + item.h / 2
+
+                if resizing {
+                    let right: i64 = control.x + control.w
+                    let bottom: i64 = control.y + control.h
+                    if near_snap(right, other_left) && other_left > control.x + 32 {
+                        control.w = other_left - control.x
+                        self.snap_guide_x = other_left
+                    } else if near_snap(right, other_right) && other_right > control.x + 32 {
+                        control.w = other_right - control.x
+                        self.snap_guide_x = other_right
+                    } else if near_snap(right, other_cx) && other_cx > control.x + 32 {
+                        control.w = other_cx - control.x
+                        self.snap_guide_x = other_cx
+                    }
+
+                    if near_snap(bottom, other_top) && other_top > control.y + 22 {
+                        control.h = other_top - control.y
+                        self.snap_guide_y = other_top
+                    } else if near_snap(bottom, other_bottom) && other_bottom > control.y + 22 {
+                        control.h = other_bottom - control.y
+                        self.snap_guide_y = other_bottom
+                    } else if near_snap(bottom, other_cy) && other_cy > control.y + 22 {
+                        control.h = other_cy - control.y
+                        self.snap_guide_y = other_cy
+                    }
+                } else {
+                    let left: i64 = control.x
+                    let top: i64 = control.y
+                    let right: i64 = control.x + control.w
+                    let bottom: i64 = control.y + control.h
+                    let cx: i64 = control.x + control.w / 2
+                    let cy: i64 = control.y + control.h / 2
+
+                    if near_snap(left, other_left) {
+                        control.x = other_left
+                        self.snap_guide_x = other_left
+                    } else if near_snap(left, other_right) {
+                        control.x = other_right
+                        self.snap_guide_x = other_right
+                    } else if near_snap(right, other_left) {
+                        control.x = other_left - control.w
+                        self.snap_guide_x = other_left
+                    } else if near_snap(right, other_right) {
+                        control.x = other_right - control.w
+                        self.snap_guide_x = other_right
+                    } else if near_snap(cx, other_cx) {
+                        control.x = other_cx - control.w / 2
+                        self.snap_guide_x = other_cx
+                    }
+
+                    if near_snap(top, other_top) {
+                        control.y = other_top
+                        self.snap_guide_y = other_top
+                    } else if near_snap(top, other_bottom) {
+                        control.y = other_bottom
+                        self.snap_guide_y = other_bottom
+                    } else if near_snap(bottom, other_top) {
+                        control.y = other_top - control.h
+                        self.snap_guide_y = other_top
+                    } else if near_snap(bottom, other_bottom) {
+                        control.y = other_bottom - control.h
+                        self.snap_guide_y = other_bottom
+                    } else if near_snap(cy, other_cy) {
+                        control.y = other_cy - control.h / 2
+                        self.snap_guide_y = other_cy
+                    }
+                }
+            }
+            item = item.next
+        }
+        self.clamp_control(control)
+    }
+
+    func snap_control(control: DesignControl, resizing: bool) {
+        self.clear_snap_guides()
+        self.snap_control_to_window(control, resizing)
+        self.snap_control_to_objects(control, resizing)
+    }
+
+    func control_at(px: i64, py: i64) -> DesignControl {
+        let found: DesignControl = null
+        let item: DesignControl = self.head
+        while item != null {
+            if item.contains(px, py) {
+                found = item
+            }
+            item = item.next
+        }
+        return found
+    }
+
+    func close_context_menu() {
+        self.context_open = false
+    }
+
+    func open_context_menu(px: i64, py: i64) {
+        self.context_open = true
+        self.context_x = px
+        self.context_y = py
+        if self.context_x + CONTEXT_MENU_W > self.window_w {
+            self.context_x = self.window_w - CONTEXT_MENU_W - 4
+        }
+        let menu_h: i64 = CONTEXT_MENU_ROWS * CONTEXT_MENU_ROW_H
+        if self.context_y + menu_h > self.window_h {
+            self.context_y = self.window_h - menu_h - 4
+        }
+        if self.context_x < 4 { self.context_x = 4 }
+        if self.context_y < TOP_BAR_H + 4 { self.context_y = TOP_BAR_H + 4 }
+    }
+
+    func context_action_at(px: i64, py: i64) -> i64 {
+        if !self.context_open {
+            return ContextAction.None
+        }
+        if !hit(px, py, self.context_x, self.context_y, CONTEXT_MENU_W, CONTEXT_MENU_ROWS * CONTEXT_MENU_ROW_H) {
+            return ContextAction.None
+        }
+        return context_action_from_index((py - self.context_y) / CONTEXT_MENU_ROW_H)
+    }
+
+    func detach_selected() -> DesignControl {
+        if self.selected == null {
+            return null
+        }
+        let prev: DesignControl = null
+        let item: DesignControl = self.head
+        while item != null {
+            if item == self.selected {
+                let next_item: DesignControl = item.next
+                if next_item != null {
+                    rc_retain(next_item as char*)
+                }
+                if prev == null {
+                    self.head = next_item
+                } else {
+                    prev.next = next_item
+                }
+                item.next = null
+                return item
+            }
+            prev = item
+            item = item.next
+        }
+        return null
+    }
+
+    func append_control(control: DesignControl) {
+        if control == null {
+            return
+        }
+        control.next = null
+        if self.head == null {
+            rc_retain(control as char*)
+            self.head = control
+            return
+        }
+        let tail: DesignControl = self.head
+        while tail.next != null {
+            tail = tail.next
+        }
+        rc_retain(control as char*)
+        tail.next = control
+    }
+
+    func bring_selected_to_front() {
+        let control: DesignControl = self.detach_selected()
+        self.append_control(control)
+        self.selected = control
+        self.window_selected = false
+    }
+
+    func send_selected_to_back() {
+        let control: DesignControl = self.detach_selected()
+        if control == null {
+            return
+        }
+        if self.head != null {
+            rc_retain(self.head as char*)
+        }
+        control.next = self.head
+        rc_retain(control as char*)
+        self.head = control
+        self.selected = control
+        self.window_selected = false
+    }
+
+    func bring_selected_forward() {
+        if self.selected == null {
+            return
+        }
+        let prev: DesignControl = null
+        let item: DesignControl = self.head
+        while item != null {
+            if item == self.selected {
+                let next_item: DesignControl = item.next
+                if next_item == null {
+                    return
+                }
+                let after: DesignControl = next_item.next
+                if after != null {
+                    rc_retain(after as char*)
+                }
+                item.next = after
+                rc_retain(item as char*)
+                next_item.next = item
+                if prev == null {
+                    rc_retain(next_item as char*)
+                    self.head = next_item
+                } else {
+                    rc_retain(next_item as char*)
+                    prev.next = next_item
+                }
+                self.window_selected = false
+                return
+            }
+            prev = item
+            item = item.next
+        }
+    }
+
+    func send_selected_backward() {
+        if self.selected == null {
+            return
+        }
+        let prev_prev: DesignControl = null
+        let prev: DesignControl = null
+        let item: DesignControl = self.head
+        while item != null {
+            if item == self.selected {
+                if prev == null {
+                    return
+                }
+                let next_item: DesignControl = item.next
+                if next_item != null {
+                    rc_retain(next_item as char*)
+                }
+                prev.next = next_item
+                rc_retain(prev as char*)
+                item.next = prev
+                if prev_prev == null {
+                    rc_retain(item as char*)
+                    self.head = item
+                } else {
+                    rc_retain(item as char*)
+                    prev_prev.next = item
+                }
+                self.window_selected = false
+                return
+            }
+            prev_prev = prev
+            prev = item
+            item = item.next
+        }
+    }
+
+    func add_control(kind: i64, px: i64, py: i64) {
+        let sx: i64 = self.surface_x()
+        let sy: i64 = self.surface_y()
+        let control: DesignControl = new DesignControl(kind, px - sx, py - sy)
+        self.clamp_control(control)
+        self.snap_control(control, false)
+        self.window_selected = false
+
+        if self.head == null {
+            rc_retain(control as char*)
+            self.head = control
+        } else {
+            let tail: DesignControl = self.head
+            while tail.next != null {
+                tail = tail.next
+            }
+            rc_retain(control as char*)
+            tail.next = control
+        }
+        rc_retain(control as char*)
+        self.selected = control
+        self.active_tool = ToolKind.Select
+    }
+
+    func remove_selected() {
+        if self.selected == null {
+            return
+        }
+        let prev: DesignControl = null
+        let item: DesignControl = self.head
+        while item != null {
+            if item == self.selected {
+                let next_item: DesignControl = item.next
+                if next_item != null {
+                    rc_retain(next_item as char*)
+                }
+                if prev == null {
+                    self.head = next_item
+                } else {
+                    prev.next = next_item
+                }
+                self.selected = null
+                self.window_selected = true
+                return
+            }
+            prev = item
+            item = item.next
+        }
+    }
+
+    func palette_pick(px: i64, py: i64) -> i64 {
+        if px >= PALETTE_W {
+            return ToolKind.Unknown
+        }
+        if py < TOP_BAR_H + 16 {
+            return ToolKind.Unknown
+        }
+        let idx: i64 = (py - TOP_BAR_H - 16) / PALETTE_ITEM_STEP
+        if idx >= 0 && idx < tool_count() {
+            return tool_from_index(idx)
+        }
+        return ToolKind.Unknown
+    }
+
+    func draw_palette_item(renderer: std.sdl.Renderer, font: TTF_Font*, kind: i64, y: i64) {
+        let selected: bool = self.active_tool == kind
+        let bg: u32 = 0xFFF8FAFC as u32
+        if selected {
+            bg = 0xFFE0EEFF as u32
+        }
+        draw_rect(renderer, 12, y, PALETTE_W - 24, 30, bg)
+        draw_outline(renderer, 12, y, PALETTE_W - 24, 30, 0xFFCBD5E1 as u32)
+        draw_rect(renderer, 22, y + 8, 14, 14, color_value(tool_index(kind) % 6))
+        draw_text_box(renderer, font, 42, y, PALETTE_W - 54, 30, tool_label(kind), 0xFF111827 as u32)
+    }
+
+    func draw_palette(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        draw_rect(renderer, 0, TOP_BAR_H, PALETTE_W, self.window_h - TOP_BAR_H, 0xFFEFF3F8 as u32)
+        draw_text_box(renderer, font, 8, TOP_BAR_H + 6, PALETTE_W - 16, 30, "Widgets", 0xFF111827 as u32)
+        let idx: i64 = 0
+        let y: i64 = TOP_BAR_H + 48
+        while idx < tool_count() {
+            self.draw_palette_item(renderer, font, tool_from_index(idx), y)
+            idx = idx + 1
+            y = y + PALETTE_ITEM_STEP
+        }
+    }
+
+    func draw_surface(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        let sx: i64 = self.surface_x()
+        let sy: i64 = self.surface_y()
+        let sw: i64 = self.workbench_w()
+        let sh: i64 = self.workbench_h()
+
+        self.clamp_design_window()
+        draw_rect(renderer, sx, sy, sw, sh, 0xFFE9EEF5 as u32)
+
+        let dw: i64 = self.surface_w()
+        let dh: i64 = self.surface_h()
+        draw_rect(renderer, sx, sy, dw, dh, 0xFFF8FAFC as u32)
+        draw_outline(renderer, sx, sy, dw, dh, 0xFF94A3B8 as u32)
+
+        let gx: i64 = sx
+        while gx < sx + dw {
+            draw_rect(renderer, gx, sy, 1, dh, 0xFFE2E8F0 as u32)
+            gx = gx + 20
+        }
+        let gy: i64 = sy
+        while gy < sy + dh {
+            draw_rect(renderer, sx, gy, dw, 1, 0xFFE2E8F0 as u32)
+            gy = gy + 20
+        }
+
+        draw_rect(renderer, sx, sy, dw, DESIGN_TITLEBAR_H, 0xFFE5E7EB as u32)
+        draw_text_box(renderer, font, sx + 8, sy, dw - 16, DESIGN_TITLEBAR_H, "DesignedWindow", 0xFF111827 as u32)
+        if self.window_selected {
+            draw_outline(renderer, sx - 2, sy - 2, dw + 4, dh + 4, 0xFF006ADC as u32)
+            draw_rect(renderer, sx + dw - HANDLE_SIZE, sy + dh - HANDLE_SIZE, HANDLE_SIZE, HANDLE_SIZE, 0xFF006ADC as u32)
+        }
+
+        if self.snap_guide_x >= 0 {
+            draw_rect(renderer, sx + self.snap_guide_x, sy, 1, dh, SNAP_GUIDE_COLOR)
+        }
+        if self.snap_guide_y >= 0 {
+            draw_rect(renderer, sx, sy + self.snap_guide_y, dw, 1, SNAP_GUIDE_COLOR)
+        }
+
+        let item: DesignControl = self.head
+        while item != null {
+            let old_x: i64 = item.x
+            let old_y: i64 = item.y
+            item.x = sx + item.x
+            item.y = sy + item.y
+            item.draw_preview(renderer, font, item == self.selected)
+            item.x = old_x
+            item.y = old_y
+            item = item.next
+        }
+    }
+
+    func draw_inspector_button(renderer: std.sdl.Renderer, font: TTF_Font*, y: i64, label: string) {
+        let x: i64 = self.window_w - INSPECTOR_W + INSPECTOR_BUTTON_X_PAD
+        draw_rect(renderer, x, y, INSPECTOR_W - INSPECTOR_BUTTON_W_PAD, INSPECTOR_BUTTON_H, 0xFFFFFFFF as u32)
+        draw_outline(renderer, x, y, INSPECTOR_W - INSPECTOR_BUTTON_W_PAD, INSPECTOR_BUTTON_H, 0xFFCBD5E1 as u32)
+        draw_text_box(renderer, font, x, y, INSPECTOR_W - INSPECTOR_BUTTON_W_PAD, INSPECTOR_BUTTON_H, label, 0xFF111827 as u32)
+    }
+
+    func inspector_action_y(action: i64) -> i64 {
+        if action == InspectorAction.Export {
+            return self.window_h - 96
+        }
+        return INSPECTOR_ACTION_Y + inspector_action_index(action) * INSPECTOR_ACTION_STEP
+    }
+
+    func inspector_action_at(px: i64, py: i64) -> i64 {
+        let ix: i64 = self.window_w - INSPECTOR_W
+        let bx: i64 = ix + INSPECTOR_BUTTON_X_PAD
+        let bw: i64 = INSPECTOR_W - INSPECTOR_BUTTON_W_PAD
+        if px < bx || px >= bx + bw {
+            return InspectorAction.None
+        }
+
+        let export_y: i64 = self.inspector_action_y(InspectorAction.Export)
+        if py >= export_y && py < export_y + INSPECTOR_BUTTON_H {
+            return InspectorAction.Export
+        }
+
+        if self.selected == null {
+            return InspectorAction.None
+        }
+
+        let row: i64 = (py - INSPECTOR_ACTION_Y) / INSPECTOR_ACTION_STEP
+        let action: i64 = inspector_action_from_row(row)
+        if action == InspectorAction.None {
+            return InspectorAction.None
+        }
+        let y: i64 = self.inspector_action_y(action)
+        if py >= y && py < y + INSPECTOR_ACTION_STEP {
+            return action
+        }
+        return InspectorAction.None
+    }
+
+    func draw_inspector(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        let ix: i64 = self.window_w - INSPECTOR_W
+        draw_rect(renderer, ix, TOP_BAR_H, INSPECTOR_W, self.window_h - TOP_BAR_H, 0xFFEFF3F8 as u32)
+        draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 6, INSPECTOR_W - 16, 30, "Properties", 0xFF111827 as u32)
+
+        if self.selected == null && !self.window_selected {
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 48, INSPECTOR_W - 16, 28, "No selection", 0xFF64748B as u32)
+        } else if self.window_selected {
+            let line: char[256]
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 48, INSPECTOR_W - 16, 28, "Type: Window", 0xFF111827 as u32)
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 78, INSPECTOR_W - 16, 28, "Caption: Designed UI", 0xFF111827 as u32)
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 108, INSPECTOR_W - 16, 28, "X/Y: 0, 0", 0xFF111827 as u32)
+            ksnprintf(line as char*, 256, "Size: %d x %d", self.design_w, self.design_h)
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 138, INSPECTOR_W - 16, 28, line as string, 0xFF111827 as u32)
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 168, INSPECTOR_W - 16, 28, "Color: 0xFFF8FAFC as u32", 0xFF111827 as u32)
+        } else {
+            let line: char[256]
+            ksnprintf(line as char*, 256, "Type: %s", tool_label(self.selected.kind))
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 48, INSPECTOR_W - 16, 28, line as string, 0xFF111827 as u32)
+            ksnprintf(line as char*, 256, "Caption: %s", self.selected.caption)
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 78, INSPECTOR_W - 16, 28, line as string, 0xFF111827 as u32)
+            ksnprintf(line as char*, 256, "X/Y: %d, %d", self.selected.x, self.selected.y)
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 108, INSPECTOR_W - 16, 28, line as string, 0xFF111827 as u32)
+            ksnprintf(line as char*, 256, "Size: %d x %d", self.selected.w, self.selected.h)
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 138, INSPECTOR_W - 16, 28, line as string, 0xFF111827 as u32)
+            ksnprintf(line as char*, 256, "Color: %s", color_literal(self.selected.color_index))
+            draw_text_box(renderer, font, ix + 8, TOP_BAR_H + 168, INSPECTOR_W - 16, 28, line as string, 0xFF111827 as u32)
+
+            self.draw_inspector_button(renderer, font, self.inspector_action_y(InspectorAction.Caption), "Caption")
+            self.draw_inspector_button(renderer, font, self.inspector_action_y(InspectorAction.Color), "Color")
+            self.draw_inspector_button(renderer, font, self.inspector_action_y(InspectorAction.Delete), "Delete")
+        }
+
+        self.draw_inspector_button(renderer, font, self.inspector_action_y(InspectorAction.Export), "Export")
+        draw_text_box(renderer, font, ix + 8, self.window_h - 56, INSPECTOR_W - 16, 24, "S export, C color, B caption", 0xFF64748B as u32)
+        draw_text_box(renderer, font, ix + 8, self.window_h - 34, INSPECTOR_W - 16, 24, "Backspace delete, Esc quit", 0xFF64748B as u32)
+    }
+
+    func context_label(action: i64) -> string {
+        match action {
+            case ContextAction.Front => { return "Bring to Front" }
+            case ContextAction.Forward => { return "Bring Forward" }
+            case ContextAction.Backward => { return "Send Backward" }
+            case ContextAction.Back => { return "Send to Back" }
+            case ContextAction.Delete => { return "Delete" }
+            default => { return "" }
+        }
+    }
+
+    func draw_context_icon(renderer: std.sdl.Renderer, action: i64, x: i64, y: i64, color: u32) {
+        match action {
+            case ContextAction.Delete => {
+                draw_rect(renderer, x + 4, y + 5, 13, 2, color)
+                draw_rect(renderer, x + 7, y + 8, 8, 10, color)
+                draw_rect(renderer, x + 9, y + 2, 4, 3, color)
+            }
+            case ContextAction.Front, ContextAction.Forward => {
+                draw_rect(renderer, x + 6, y + 5, 8, 9, color)
+                renderer.draw_line((x + 10) as float, (y + 1) as float, (x + 4) as float, (y + 7) as float)
+                renderer.draw_line((x + 10) as float, (y + 1) as float, (x + 16) as float, (y + 7) as float)
+            }
+            default => {
+                draw_rect(renderer, x + 6, y + 5, 8, 9, color)
+                renderer.draw_line((x + 10) as float, (y + 19) as float, (x + 4) as float, (y + 13) as float)
+                renderer.draw_line((x + 10) as float, (y + 19) as float, (x + 16) as float, (y + 13) as float)
+            }
+        }
+    }
+
+    func draw_context_menu(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        if !self.context_open {
+            return
+        }
+        let menu_h: i64 = CONTEXT_MENU_ROWS * CONTEXT_MENU_ROW_H
+        draw_rect(renderer, self.context_x + 3, self.context_y + 3, CONTEXT_MENU_W, menu_h, 0x33000000 as u32)
+        draw_rect(renderer, self.context_x, self.context_y, CONTEXT_MENU_W, menu_h, 0xFFFFFFFF as u32)
+        draw_outline(renderer, self.context_x, self.context_y, CONTEXT_MENU_W, menu_h, 0xFF94A3B8 as u32)
+
+        let action: i64 = 0
+        while action < CONTEXT_MENU_ROWS {
+            let row_y: i64 = self.context_y + action * CONTEXT_MENU_ROW_H
+            let context_action: i64 = context_action_from_index(action)
+            if context_action == ContextAction.Delete {
+                draw_rect(renderer, self.context_x + 8, row_y, CONTEXT_MENU_W - 16, 1, 0xFFE2E8F0 as u32)
+            }
+            let color: u32 = 0xFF334155 as u32
+            if context_action == ContextAction.Delete {
+                color = 0xFFB42318 as u32
+            }
+            self.draw_context_icon(renderer, context_action, self.context_x + 10, row_y + 5, color)
+            draw_text_box(renderer, font, self.context_x + 36, row_y, CONTEXT_MENU_W - 44, CONTEXT_MENU_ROW_H, self.context_label(context_action), color)
+            action = action + 1
+        }
+    }
+
+    func draw(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        draw_rect(renderer, 0, 0, self.window_w, self.window_h, 0xFFD8DEE8 as u32)
+        draw_rect(renderer, 0, 0, self.window_w, TOP_BAR_H, 0xFF111827 as u32)
+        draw_text_box(renderer, font, 8, 0, 360, TOP_BAR_H, "LLPL UI RAD Designer", 0xFFFFFFFF as u32)
+        draw_text_box(renderer, font, self.window_w - 560, 0, 550, TOP_BAR_H, "Click palette, place on canvas, drag to move, grab corner to resize", 0xFFE5E7EB as u32)
+        self.draw_palette(renderer, font)
+        self.draw_surface(renderer, font)
+        self.draw_inspector(renderer, font)
+        self.draw_context_menu(renderer, font)
+    }
+
+    func run_context_action(action: i64) {
+        if self.selected == null {
+            self.close_context_menu()
+            return
+        }
+        match action {
+            case ContextAction.Front => { self.bring_selected_to_front() }
+            case ContextAction.Forward => { self.bring_selected_forward() }
+            case ContextAction.Backward => { self.send_selected_backward() }
+            case ContextAction.Back => { self.send_selected_to_back() }
+            case ContextAction.Delete => { self.remove_selected() }
+            default => {}
+        }
+        self.close_context_menu()
+    }
+
+    func begin_mouse(px: i64, py: i64) {
+        if self.context_open {
+            let context_action: i64 = self.context_action_at(px, py)
+            if context_action != ContextAction.None {
+                self.run_context_action(context_action)
+                self.drag_mode = DragMode.None
+                return
+            }
+            self.close_context_menu()
+        }
+
+        let picked: i64 = self.palette_pick(px, py)
+        if picked != ToolKind.Unknown {
+            self.active_tool = picked
+            self.drag_mode = DragMode.None
+            return
+        }
+
+        let ix: i64 = self.window_w - INSPECTOR_W
+        if px >= ix {
+            let action: i64 = self.inspector_action_at(px, py)
+            if action == InspectorAction.Export {
+                self.export_ui()
+                return
+            }
+            if self.selected != null {
+                if action == InspectorAction.Caption {
+                    self.selected.caption = cycle_caption(self.selected.kind, self.selected.caption)
+                } else if action == InspectorAction.Color {
+                    self.selected.color_index = (self.selected.color_index + 1) % 6
+                } else if action == InspectorAction.Delete {
+                    self.remove_selected()
+                }
+            }
+            return
+        }
+
+        let sx: i64 = self.surface_x()
+        let sy: i64 = self.surface_y()
+        let sw: i64 = self.surface_w()
+        let sh: i64 = self.surface_h()
+        if !hit(px, py, sx, sy, sw, sh) {
+            self.selected = null
+            self.window_selected = false
+            self.drag_mode = DragMode.None
+            return
+        }
+
+        if self.active_tool != ToolKind.Select {
+            self.add_control(self.active_tool, px, py)
+            return
+        }
+
+        let local_x: i64 = px - sx
+        let local_y: i64 = py - sy
+        let control: DesignControl = self.control_at(local_x, local_y)
+        self.selected = control
+        if control != null {
+            self.window_selected = false
+            if control.handle_contains(local_x, local_y) {
+                self.drag_mode = DragMode.Resize
+                self.drag_dx = control.w - local_x + control.x
+                self.drag_dy = control.h - local_y + control.y
+            } else {
+                self.drag_mode = DragMode.Move
+                self.drag_dx = local_x - control.x
+                self.drag_dy = local_y - control.y
+            }
+        } else {
+            self.window_selected = true
+            if hit(local_x, local_y, sw - HANDLE_SIZE, sh - HANDLE_SIZE, HANDLE_SIZE + 3, HANDLE_SIZE + 3) {
+                self.drag_mode = DragMode.WindowResize
+                self.drag_dx = sw - local_x
+                self.drag_dy = sh - local_y
+            } else {
+                self.drag_mode = DragMode.None
+            }
+        }
+    }
+
+    func context_mouse(px: i64, py: i64) {
+        self.drag_mode = DragMode.None
+        if self.context_open {
+            self.close_context_menu()
+        }
+
+        let sx: i64 = self.surface_x()
+        let sy: i64 = self.surface_y()
+        let sw: i64 = self.surface_w()
+        let sh: i64 = self.surface_h()
+        if !hit(px, py, sx, sy, sw, sh) {
+            return
+        }
+
+        let local_x: i64 = px - sx
+        let local_y: i64 = py - sy
+        let control: DesignControl = self.control_at(local_x, local_y)
+        if control == null {
+            self.selected = null
+            self.window_selected = true
+            return
+        }
+        self.selected = control
+        self.window_selected = false
+        self.open_context_menu(px, py)
+    }
+
+    func move_mouse(px: i64, py: i64) {
+        if self.drag_mode == DragMode.None {
+            return
+        }
+        let local_x: i64 = px - self.surface_x()
+        let local_y: i64 = py - self.surface_y()
+        if self.drag_mode == DragMode.WindowResize {
+            self.design_w = local_x + self.drag_dx
+            self.design_h = local_y + self.drag_dy
+            self.clamp_design_window()
+            let item: DesignControl = self.head
+            while item != null {
+                self.clamp_control(item)
+                item = item.next
+            }
+        } else if self.selected == null {
+            return
+        } else if self.drag_mode == DragMode.Move {
+            self.selected.x = local_x - self.drag_dx
+            self.selected.y = local_y - self.drag_dy
+            self.clamp_control(self.selected)
+            self.snap_control(self.selected, false)
+        } else if self.drag_mode == DragMode.Resize {
+            self.selected.w = local_x - self.selected.x + self.drag_dx
+            self.selected.h = local_y - self.selected.y + self.drag_dy
+            if self.selected.w < 32 { self.selected.w = 32 }
+            if self.selected.h < 22 { self.selected.h = 22 }
+            self.clamp_control(self.selected)
+            self.snap_control(self.selected, true)
+        }
+    }
+
+    func end_mouse() {
+        self.drag_mode = DragMode.None
+        self.clear_snap_guides()
+    }
+
+    func key(key: u32) -> bool {
+        if key == std.sdl.SDLK_ESCAPE {
+            if self.context_open {
+                self.close_context_menu()
+                return true
+            }
+            return false
+        }
+        if key == std.sdl.SDLK_s {
+            self.export_ui()
+        }
+        if key == std.sdl.SDLK_c && self.selected != null {
+            self.selected.color_index = (self.selected.color_index + 1) % 6
+        }
+        if key == std.sdl.SDLK_b && self.selected != null {
+            self.selected.caption = cycle_caption(self.selected.kind, self.selected.caption)
+        }
+        if key == std.sdl.SDLK_BACKSPACE {
+            self.remove_selected()
+        }
+        return true
+    }
+
+    func export_ui() {
+        puts("")
+        puts("// Generated by examples/sdl/ui_rad_designer.llpl")
+        puts("ui DesignedWindow: Window {")
+        puts("    title: \"Designed UI\"")
+        let line: char[256]
+        ksnprintf(line as char*, 256, "    width: %d", self.design_w)
+        puts(line as string)
+        ksnprintf(line as char*, 256, "    height: %d", self.design_h)
+        puts(line as string)
+        puts("    layout: LAYOUT_NONE")
+        puts("")
+        let item: DesignControl = self.head
+        let msg_index: i64 = 1
+        let input_index: i64 = 1
+        while item != null {
+            item.emit(msg_index, input_index)
+            if item.kind == ToolKind.MsgBox {
+                msg_index = msg_index + 1
+            }
+            if item.kind == ToolKind.InputBox {
+                input_index = input_index + 1
+            }
+            item = item.next
+        }
+        puts("}")
+        puts("")
+    }
+}
+
+func main() -> i64 {
+    let init_result = std.sdl.SDL.init(std.sdl.SDL_INIT_VIDEO | std.sdl.SDL_INIT_EVENTS)
+    if !init_result.is_ok() {
+        return 1
+    }
+
+    let window: std.sdl.Window = new std.sdl.Window(
+        new String("LLPL UI RAD Designer"),
+        DESIGNER_W,
+        DESIGNER_H,
+        std.sdl.SDL_WINDOW_RESIZABLE
+    )
+    if !window.is_valid() {
+        std.sdl.SDL.quit()
+        return 1
+    }
+
+    let renderer: std.sdl.Renderer = new std.sdl.Renderer(window)
+    if !renderer.is_valid() {
+        std.sdl.SDL.quit()
+        return 1
+    }
+
+    std.sdl.TTF_Init()
+    let font: TTF_Font* = std.sdl.TTF_OpenFont(DEFAULT_FONT_PATH, 15.0)
+    if font == null {
+        font = std.sdl.TTF_OpenFont(FALLBACK_FONT_PATH, 15.0)
+    }
+    if font == null {
+        font = std.sdl.TTF_OpenFont(FALLBACK_FONT_PATH_2, 15.0)
+    }
+
+    let events: std.sdl.EventHandler = new std.sdl.EventHandler()
+    let designer: Designer = new Designer(DESIGNER_W, DESIGNER_H)
+    let running: bool = true
+
+    while running {
+        while events.poll() {
+            if events.is_quit() {
+                running = false
+            }
+            if events.is_window_resized() {
+                let win_event: SDL_WindowEvent* = events.get_window_event()
+                designer.window_w = (*win_event).data1 as i64
+                designer.window_h = (*win_event).data2 as i64
+            }
+            if events.is_key_down() {
+                let key_event: SDL_KeyboardEvent* = events.get_key_event()
+                running = designer.key((*key_event).key)
+            }
+            if events.is_mouse_button_down() {
+                let btn: SDL_MouseButtonEvent* = events.get_mouse_button_event()
+                if (*btn).button == std.sdl.SDL_BUTTON_LEFT {
+                    designer.begin_mouse((*btn).x as i64, (*btn).y as i64)
+                } else if (*btn).button == std.sdl.SDL_BUTTON_RIGHT {
+                    designer.context_mouse((*btn).x as i64, (*btn).y as i64)
+                }
+            }
+            if events.is_mouse_motion() {
+                let motion: SDL_MouseMotionEvent* = events.get_mouse_motion_event()
+                designer.move_mouse((*motion).x as i64, (*motion).y as i64)
+            }
+            if events.is_mouse_button_up() {
+                let btn_up: SDL_MouseButtonEvent* = events.get_mouse_button_event()
+                if (*btn_up).button == std.sdl.SDL_BUTTON_LEFT {
+                    designer.end_mouse()
+                }
+            }
+        }
+
+        designer.draw(renderer, font)
+        renderer.present()
+        std.sdl.SDL.delay(16)
+    }
+
+    if font != null {
+        std.sdl.TTF_CloseFont(font)
+    }
+    std.sdl.TTF_Quit()
+    std.sdl.SDL.quit()
+    return 0
+}

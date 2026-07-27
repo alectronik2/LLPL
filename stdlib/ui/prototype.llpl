@@ -25,78 +25,47 @@ const MSGBOX_RESULT_NO: i64 = 4
 
 class UiWidget {
     let kind: string
-    let title: string
-    let text: string
-    let width: i64
-    let height: i64
-    let width_percent: i64
-    let height_percent: i64
-    let min_width: i64
-    let min_height: i64
-    let max_width: i64
-    let max_height: i64
-    let margin: i64
-    let margin_left: i64
-    let margin_right: i64
-    let margin_top: i64
-    let margin_bottom: i64
-    let padding: i64
-    let flex_grow: i64
-    let spacing: i64
-    let value: i64
-    let min_value: i64
-    let max_value: i64
-    let icon: i64
-    let message: string
-    let button_mode: i64
-    let result: i64
-    let visible: bool
-    let first_child: UiWidget
-    let next_sibling: UiWidget
+    let title: string = ""
+    let text: string = ""
+    let width: i64 = 0
+    let height: i64 = 0
+    let width_percent: i64 = 0
+    let height_percent: i64 = 0
+    let min_width: i64 = 0
+    let min_height: i64 = 0
+    let max_width: i64 = 0
+    let max_height: i64 = 0
+    let margin: i64 = 0
+    let margin_left: i64 = 0
+    let margin_right: i64 = 0
+    let margin_top: i64 = 0
+    let margin_bottom: i64 = 0
+    let padding: i64 = 0
+    let flex_grow: i64 = 0
+    let spacing: i64 = 0
+    let value: i64 = 0
+    let min_value: i64 = 0
+    let max_value: i64 = 100
+    let icon: i64 = 0
+    let message: string = ""
+    let button_mode: i64 = MSGBOX_BUTTONS_OK
+    let result: i64 = MSGBOX_RESULT_NONE
+    let visible: bool = true
+    let first_child: UiWidget = null
+    let next_sibling: UiWidget = null
     // Event callbacks, mirroring std.ui.sdl's Widget field-for-field so the
     // same `ui` DSL block works against either backend. Each handler has a
     // companion `has_` flag because a closure field has no null state to
     // test - the `ui` desugaring (see desugarUiNode in codegen.d) sets both.
     let onClick: () -> void
-    let has_onClick: bool
+    let has_onClick: bool = false
     let onHover: () -> void
-    let has_onHover: bool
+    let has_onHover: bool = false
     let onHoverEnd: () -> void
-    let has_onHoverEnd: bool
+    let has_onHoverEnd: bool = false
 
     constructor(kind: string) {
         self.kind = kind
-        self.title = ""
-        self.text = ""
-        self.width = 0
-        self.height = 0
-        self.width_percent = 0
-        self.height_percent = 0
-        self.min_width = 0
-        self.min_height = 0
-        self.max_width = 0
-        self.max_height = 0
-        self.margin = 0
-        self.margin_left = 0
-        self.margin_right = 0
-        self.margin_top = 0
-        self.margin_bottom = 0
-        self.padding = 0
-        self.flex_grow = 0
-        self.spacing = 0
-        self.value = 0
-        self.min_value = 0
-        self.max_value = 100
-        self.icon = 0
-        self.message = ""
-        self.button_mode = MSGBOX_BUTTONS_OK
-        self.result = MSGBOX_RESULT_NONE
-        self.visible = true
-        self.first_child = null
-        self.next_sibling = null
-        self.has_onClick = false
-        self.has_onHover = false
-        self.has_onHoverEnd = false
     }
 
     func add_child(child: UiWidget) {
@@ -268,11 +237,10 @@ class MenuItem : UiWidget {
 }
 
 class TabContainer : UiWidget {
-    let selected_index: i64
+    let selected_index: i64 = 0
 
     constructor() {
         super("TabContainer")
-        self.selected_index = 0
     }
 
     func select(index: i64) {
@@ -306,8 +274,6 @@ class ProgressBar : UiWidget {
     constructor() {
         super("ProgressBar")
         self.value = 40
-        self.min_value = 0
-        self.max_value = 100
     }
 }
 
@@ -316,18 +282,15 @@ class Spinner : UiWidget {
         super("Spinner")
         self.width = 42
         self.height = 42
-        self.value = 0
-        self.min_value = 0
         self.max_value = 7
     }
 }
 
 class TextBox : UiWidget {
-    let placeholder: string
+    let placeholder: string = ""
 
     constructor() {
         super("TextBox")
-        self.placeholder = ""
     }
 }
 
@@ -381,18 +344,14 @@ class ScrollBar : UiWidget {
         super("ScrollBar")
         self.width = 18
         self.height = 160
-        self.value = 0
-        self.min_value = 0
-        self.max_value = 100
     }
 }
 
 class Picture : UiWidget {
-    let image_path: string
+    let image_path: string = ""
 
     constructor() {
         super("Picture")
-        self.image_path = ""
     }
 
     func set_path(path: string) {
@@ -401,11 +360,10 @@ class Picture : UiWidget {
 }
 
 class Terminal : UiWidget {
-    let terminal_prompt: string
+    let terminal_prompt: string = "> "
 
     constructor() {
         super("Terminal")
-        self.terminal_prompt = "> "
     }
 
     func append_line(line: string) {
@@ -431,8 +389,6 @@ class MsgBox : UiWidget {
         super("MsgBox")
         self.width = 360
         self.height = 160
-        self.button_mode = MSGBOX_BUTTONS_OK
-        self.result = MSGBOX_RESULT_NONE
         self.visible = false
     }
 
@@ -460,13 +416,12 @@ class MsgBox : UiWidget {
 }
 
 class InputBox : MsgBox {
-    let placeholder: string
+    let placeholder: string = ""
 
     constructor() {
         super()
         self.kind = "InputBox"
         self.height = 200
-        self.placeholder = ""
     }
 
     func ask(message: string, placeholder: string, buttons: i64) {

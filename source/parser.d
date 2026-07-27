@@ -2377,7 +2377,7 @@ class Parser {
                 // regardless of whether the callee's own trailing args used
                 // any names.
                 expr = new CallExpr(callExpr.callee, expr ~ callExpr.args, opLine, opColumn,
-                    [""] ~ callExpr.argNames);
+                    [""] ~ callExpr.argNames, callExpr.typeArgs.dup);
             } else {
                 expr = new CallExpr(callee, [expr], opLine, opColumn, [""]);
             }
@@ -2614,7 +2614,19 @@ class Parser {
         ASTNode expr = primary();
 
         while (true) {
-            if (check(TokenType.LeftParen) && !newlineBeforeCurrent()) {
+            Type[] explicitTypeArgs;
+            bool hasExplicitTypeArgs = false;
+            if ((cast(Identifier)expr !is null || cast(MemberExpr)expr !is null) &&
+                    explicitGenericCallTypeArgsAhead()) {
+                hasExplicitTypeArgs = true;
+                expect(TokenType.Less);
+                do {
+                    explicitTypeArgs ~= parseType();
+                } while (match(TokenType.Comma));
+                expectGreaterOrSplit();
+            }
+
+            if ((hasExplicitTypeArgs || check(TokenType.LeftParen)) && !newlineBeforeCurrent()) {
                 // Function call - see argumentList()'s own comment for the
                 // named-argument/struct-literal-inside-suppressed-context
                 // reasoning. Guarded by newlineBeforeCurrent() the same way
@@ -2628,7 +2640,7 @@ class Parser {
                 advance();
                 string[] argNames;
                 ASTNode[] args = argumentList(argNames);
-                expr = new CallExpr(expr, args, startLine, startColumn, argNames);
+                expr = new CallExpr(expr, args, startLine, startColumn, argNames, explicitTypeArgs);
             } else if (match(TokenType.Dot)) {
                 // Member access
                 int memberLine = current.line;
@@ -2660,6 +2672,47 @@ class Parser {
         }
 
         return expr;
+    }
+
+    private bool explicitGenericCallTypeArgsAhead() {
+        if (!check(TokenType.Less) || newlineBeforeCurrent()) return false;
+
+        int depth = 0;
+        int offset = 0;
+        int startLine = current.line;
+        while (true) {
+            Token tok = peek(offset);
+            if (tok.line != startLine) return false;
+            switch (tok.type) {
+                case TokenType.Less:
+                    depth++;
+                    break;
+                case TokenType.LeftParen:
+                    return false;
+                case TokenType.Greater:
+                    depth--;
+                    if (depth == 0) {
+                        return peek(offset + 1).type == TokenType.LeftParen;
+                    }
+                    if (depth < 0) return false;
+                    break;
+                case TokenType.RightShift:
+                    if (depth >= 2) {
+                        depth -= 2;
+                        if (depth == 0) {
+                            return peek(offset + 1).type == TokenType.LeftParen;
+                        }
+                    } else {
+                        return false;
+                    }
+                    break;
+                case TokenType.EOF:
+                    return false;
+                default:
+                    break;
+            }
+            offset++;
+        }
     }
 
     // `func[cap1, &cap2](params) -> T { ... }` - a lambda literal. The

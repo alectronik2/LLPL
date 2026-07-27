@@ -1,0 +1,77 @@
+// MsgBox/InputBox UI DSL demo. ESC or the window close button exits.
+
+import stdlib.ui.sdl
+
+using namespace std.ui
+
+ui DialogDemo: Window {
+    title: "Dialog Demo"
+    width: 1024
+    height: 768
+    padding: 24
+    spacing: 14
+
+    Text {
+        text: "MsgBox and InputBox"
+        preferred_height: 34
+    }
+
+    Text {
+        text: "Use the buttons below to show a message dialog or an input prompt."
+        preferred_height: 30
+    }
+
+    msg: MsgBox {
+        title: "Saved"
+        message: "Ready"
+        icon: MSGBOX_ICON_INFO
+        button_mode: MSGBOX_BUTTONS_OK
+        visible: false
+    }
+
+    prompt: InputBox {
+        title: "Rename"
+        message: "Enter a new name"
+        placeholder: "untitled.llpl"
+        button_mode: MSGBOX_BUTTONS_OK_CANCEL
+        visible: false
+    }
+
+    Row {
+        spacing: 12
+        preferred_height: 48
+
+        Button {
+            text: "Show Message"
+            width: 150
+            onClick: {
+                msg.show("The operation completed successfully.", MSGBOX_ICON_INFO, MSGBOX_BUTTONS_OK)
+            }
+        }
+
+        Button {
+            text: "Ask Name"
+            width: 150
+            onClick: {
+                prompt.ask("What should this item be called?", "untitled.llpl", MSGBOX_BUTTONS_OK_CANCEL)
+            }
+        }
+    }
+
+    Text {
+        text: "Dialog results are stored in each widget's result field."
+        preferred_height: 30
+    }
+}
+
+func main() -> i64 {
+    let root: Window = DialogDemo.build()
+    root.apply_dark_theme()
+
+    let app: App = new App("LLPL Dialog Demo", 560, 420, root)
+    if !app.is_valid() {
+        return 1
+    }
+    app.run()
+    return 0
+}
