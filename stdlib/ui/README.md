@@ -8,7 +8,7 @@ method.
 ## Minimal App
 
 ```llpl
-import stdlib.ui.sdl
+import std.ui.sdl
 
 using namespace std.ui
 

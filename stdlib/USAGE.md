@@ -7,7 +7,7 @@
 Add this to the top of your LLPL file:
 
 ```swift
-import "stdlib/stdlib.llpl"
+import std.stdlib
 ```
 
 ### Basic File Operations

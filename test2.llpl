@@ -1,5 +1,5 @@
-import stdlib.text.string_utils
-import stdlib.io.file
+import std.text.string_utils
+import std.io.file
 
 import "cimport.h" as C
 

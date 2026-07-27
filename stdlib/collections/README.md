@@ -20,7 +20,7 @@ Comprehensive data structures for the LLPL standard library.
 Singly linked list with O(1) insertions at head/tail.
 
 ```swift
-import "stdlib/collections/collections.llpl"
+import std.collections.collections
 
 let list: std::LinkedList<int> = new std::LinkedList<int>()
 

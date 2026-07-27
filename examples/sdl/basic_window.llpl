@@ -1,6 +1,6 @@
 // Example: Basic SDL3 window with rendering
 
-import "stdlib/sdl/sdl.llpl"
+import std.sdl.sdl
 
 #link "SDL3"
 

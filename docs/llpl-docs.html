@@ -1231,20 +1231,20 @@ puts(<span class="str">"interpolated: \(p)"</span>) <span class="cm">// implicit
       <p><strong>Search order</strong> (exact):</p>
       <ol>
         <li>Relative to the importing file itself.</li>
-        <li><code>$LLPL_HOME</code>, if set — e.g. <code>import stdlib.io.file</code> checks <code>$LLPL_HOME/stdlib/io/file.llpl</code>.</li>
+        <li><code>$LLPL_HOME</code>, if set — e.g. <code>import std.io.file</code> checks <code>$LLPL_HOME/stdlib/io/file.llpl</code>.</li>
         <li>Current directory.</li>
         <li><code>lib/</code> directory.</li>
         <li><code>modules/</code> directory.</li>
       </ol>
       <p>
         <code>$LLPL_HOME</code> is what lets stdlib modules write
-        <code>import stdlib....</code> instead of a relative path whose
+        <code>import std.*</code> instead of a relative path whose
         correctness would otherwise depend on the importing file's nesting
         depth. Compiling from inside the repo's own root works even without
         <code>LLPL_HOME</code> (current-directory search covers it); a
         project living elsewhere needs it set, including transitively —
-        e.g. <code>stdlib/yaml/yaml_parser.llpl</code> imports
-        <code>stdlib/text/string_utils.llpl</code> the same way.
+        e.g. <code>std.yaml.yaml_parser</code> imports
+        <code>std.text.string_utils</code> the same way.
       </p>
       <p>
         <strong>Circular imports are fully supported</strong>: dependency
@@ -1563,10 +1563,10 @@ pair.replace(<span class="str">"id-42!"</span>, <span class="str">"$2:$1"</span>
       <p>
         RAII-based file handling with automatic resource cleanup, plus
         free-function convenience wrappers. Import the whole standard
-        library with <code>import stdlib.stdlib</code>, or just this
-        module with <code>import stdlib.io.file</code>.
+        library with <code>import std.stdlib</code>, or just this
+        module with <code>import std.io.file</code>.
         (<code>$LLPL_HOME</code> must point at the repo root for
-        <code>stdlib/...</code> imports to resolve outside the repo — see
+        <code>std.*</code> imports to resolve outside the repo — see
         <a href="#lang-modules">Modules</a>.)
       </p>
 
@@ -1645,7 +1645,7 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
       <p>
         TCP/UDP sockets — a raw BSD-socket-style <code>Socket</code> class,
         plus high-level <code>TcpServer</code>/<code>TcpClient</code>/<code>UdpSocket</code>
-        wrappers. Import: <code>import stdlib.net.socket</code>.
+        wrappers. Import: <code>import std.net.socket</code>.
       </p>
 
       <h4><code>class std.net.Socket</code> <span class="pill ghost">alias std.Socket</span> — low-level</h4>
@@ -1681,7 +1681,7 @@ std.io.append_file(<span class="str">"log.txt"</span>, <span class="kw">new</spa
 
       <div class="code-card">
         <div class="titlebar"><span>examples/stdlib/tcp_server.llpl</span></div>
-        <pre><span class="kw">import</span> stdlib.net.socket
+        <pre><span class="kw">import</span> std.net.socket
 <span class="kw">using</span> <span class="kw">namespace</span> std.net
 
 <span class="kw">func</span> handle_client(client: Socket) {
@@ -1743,7 +1743,7 @@ SHUT_RD=<span class="num">0</span>  SHUT_WR=<span class="num">1</span>  SHUT_RDW
         <code>StringBuilder</code> for efficient concatenation, a
         <code>{}</code>-placeholder <code>Format.format</code>, and
         byte-level character classification via <code>CharUtils</code>. Import:
-        <code>import stdlib.text.string_utils</code>.
+        <code>import std.text.string_utils</code>.
       </p>
 
       <h4><code>class std.text.StringUtils</code> <span class="pill ghost">alias std.StringUtils</span> — all static</h4>
@@ -1801,7 +1801,7 @@ to_upper(c) / to_lower(c) -&gt; <span class="ty">char</span></pre></div>
         Linked lists, stack/queue/deque/circular buffer, a red-black tree,
         heaps/priority queue, hash map/set, a trie, and graphs (list and
         matrix representations). Import:
-        <code>import stdlib.collections.collections</code>.
+        <code>import std.collections.collections</code>.
       </p>
 
       <h4>Linear — <code>LinkedList&lt;T&gt;</code>, <code>DoublyLinkedList&lt;T&gt;</code>, <code>Stack&lt;T&gt;</code>, <code>Queue&lt;T&gt;</code>, <code>Deque&lt;T&gt;</code>, <code>CircularBuffer&lt;T&gt;</code></h4>
@@ -1878,7 +1878,7 @@ has_cycle_directed() -&gt; <span class="ty">bool</span>
 
       <div class="code-card">
         <div class="titlebar"><span>overview example</span></div>
-        <pre><span class="kw">import</span> stdlib.collections.collections
+        <pre><span class="kw">import</span> std.collections.collections
 
 <span class="kw">let</span> rbtree: std.RBTree&lt;<span class="ty">i64</span>, String&gt; = <span class="kw">new</span> std.RBTree&lt;<span class="ty">i64</span>, String&gt;()
 rbtree.insert(<span class="num">10</span>, <span class="kw">new</span> String(<span class="str">"value"</span>))
@@ -1909,7 +1909,7 @@ graph.add_edge(<span class="num">0</span>, <span class="num">1</span>, <span cla
       <p>
         SDL3 bindings — window management, 2D rendering, textures,
         keyboard/mouse input, and audio playback. Import:
-        <code>import stdlib.sdl.sdl</code>. Requires SDL3 installed
+        <code>import std.sdl.sdl</code>. Requires SDL3 installed
         and linking with <code>-lSDL3</code>.
       </p>
 
@@ -1943,7 +1943,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
 
       <div class="code-card">
         <div class="titlebar"><span>quick start</span></div>
-        <pre><span class="kw">import</span> stdlib.sdl.sdl
+        <pre><span class="kw">import</span> std.sdl.sdl
 
 <span class="kw">func</span> main() -&gt; <span class="ty">i64</span> {
     std.sdl.SDL.init(std.sdl.SDL_INIT_VIDEO)
@@ -1997,7 +1997,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
         <code>--name value</code> / <code>-n value</code> flag parsing,
         positional arguments, required options, and a lone <code>--</code>
         to force everything after it to be treated as positional. Import:
-        <code>import stdlib.args.args_parser</code>.
+        <code>import std.args.args_parser</code>.
       </p>
       <p>
         Two supported <code>main</code> shapes: <code>func main(args:
@@ -2023,7 +2023,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
 }</pre></div>
       <div class="code-card">
         <div class="titlebar"><span>example</span></div>
-        <pre><span class="kw">import</span> stdlib.args.args_parser
+        <pre><span class="kw">import</span> std.args.args_parser
 <span class="kw">using</span> <span class="kw">namespace</span> std.args
 
 <span class="kw">func</span> main(args: <span class="ty">string</span>[]) -&gt; <span class="ty">i64</span> {
@@ -2049,7 +2049,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
       <h2>std.yaml</h2>
       <p>
         A pragmatic, read-only subset of YAML 1.x for config files. Import:
-        <code>import stdlib.yaml.yaml_parser</code>.
+        <code>import std.yaml.yaml_parser</code>.
       </p>
       <p>
         <strong>Supported:</strong> block-style mappings and sequences
@@ -2073,8 +2073,8 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
 <span class="kw">func</span> parse(text: String) -&gt; YamlValue   <span class="cm">// std.yaml.parse</span></pre></div>
       <div class="code-card">
         <div class="titlebar"><span>example</span></div>
-        <pre><span class="kw">import</span> stdlib.yaml.yaml_parser
-<span class="kw">import</span> stdlib.io.file
+        <pre><span class="kw">import</span> std.yaml.yaml_parser
+<span class="kw">import</span> std.io.file
 <span class="kw">using</span> <span class="kw">namespace</span> std.yaml
 <span class="kw">using</span> <span class="kw">namespace</span> std.io
 
@@ -2096,7 +2096,7 @@ get_mouse_button_event() -&gt; <span class="ty">SDL_MouseButtonEvent</span>*</pr
       <p>
         RFC 8259-compliant JSON — parse <em>and</em> stringify
         (bidirectional, unlike the read-only <code>std.yaml</code>).
-        Import: <code>import stdlib.json.json_parser</code>.
+        Import: <code>import std.json.json_parser</code>.
       </p>
       <p>
         Supports objects, arrays, strings (backslash escapes including

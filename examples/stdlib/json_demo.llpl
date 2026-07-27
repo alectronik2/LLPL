@@ -1,7 +1,7 @@
 // Example: JSON parsing and serialization using the standard library
 
-import stdlib.json.json_parser
-import stdlib.io.file
+import std.json.json_parser
+import std.io.file
 
 using namespace std.json
 using namespace std.io

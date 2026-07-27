@@ -1,7 +1,7 @@
 // Real SDL-backed UI DSL demo. ESC or the window close button exits.
 
-import stdlib.ui.sdl
-import stdlib.io.filesystem
+import std.ui.sdl
+import std.io.filesystem
 
 using namespace std.ui
 using namespace std.fs

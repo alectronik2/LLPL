@@ -4,7 +4,7 @@
 // This example prints the tree; run examples/sdl/ui_dsl_app.llpl for a
 // graphical SDL window.
 
-import stdlib.ui.prototype
+import std.ui.prototype
 
 ui DemoWindow: Window {
     title: "Counter"

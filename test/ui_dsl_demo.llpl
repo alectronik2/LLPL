@@ -1,4 +1,4 @@
-import stdlib.ui.prototype
+import std.ui.prototype
 
 class View : UiWidget {
     let url: string

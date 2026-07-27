@@ -326,7 +326,7 @@
     "UI App": {
         "prefix": "uiapp",
         "body": [
-            "import stdlib.ui.sdl",
+            "import std.ui.sdl",
             "",
             "using namespace std.ui",
             "",

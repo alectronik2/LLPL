@@ -142,17 +142,27 @@ class ModuleResolver {
             testPath ~= ".llpl";
         }
 
+        string[] testPaths;
+        if (!isHeaderImport && testPath.startsWith("std/")) {
+            testPaths ~= "stdlib/" ~ testPath[4 .. $];
+        }
+        testPaths ~= testPath;
+
         // Try relative to importing file
-        string candidatePath = buildNormalizedPath(baseDir, testPath);
-        if (exists(candidatePath)) {
-            return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
+        foreach (path; testPaths) {
+            string candidatePath = buildNormalizedPath(baseDir, path);
+            if (exists(candidatePath)) {
+                return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
+            }
         }
 
         // Try each search path
         foreach (searchPath; searchPaths) {
-            candidatePath = buildNormalizedPath(searchPath, testPath);
-            if (exists(candidatePath)) {
-                return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
+            foreach (path; testPaths) {
+                string candidatePath = buildNormalizedPath(searchPath, path);
+                if (exists(candidatePath)) {
+                    return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
+                }
             }
         }
 
@@ -283,7 +293,7 @@ ProjectConfig findProjectConfig(string entryPath) {
 // the entry file, or anything it imports, ever mentions it.
 //
 // Also adds $LLPL_HOME (if set) as a module search path, so a stdlib
-// import like `import "stdlib/yaml/yaml_parser.llpl"` resolves the same
+// import like `import std.yaml.yaml_parser` resolves the same
 // way from any file, at any depth, instead of needing a "../../stdlib/..."
 // relative path that depends on how deeply nested the importing file
 // happens to be. Read here (not threaded in from main.d/lspquery.d

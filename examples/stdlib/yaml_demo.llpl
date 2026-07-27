@@ -1,7 +1,7 @@
 // Example: YAML configuration parsing using the standard library
 
-import "stdlib/yaml/yaml_parser.llpl"
-import "stdlib/io/file.llpl"
+import std.yaml.yaml_parser
+import std.io.file
 
 using namespace std.yaml
 using namespace std.io

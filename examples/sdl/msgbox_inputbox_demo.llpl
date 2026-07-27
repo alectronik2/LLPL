@@ -1,6 +1,6 @@
 // MsgBox/InputBox UI DSL demo. ESC or the window close button exits.
 
-import stdlib.ui.sdl
+import std.ui.sdl
 
 using namespace std.ui
 

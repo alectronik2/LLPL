@@ -1,6 +1,6 @@
 // Minimal SDL3 test - just init and quit
 
-import "stdlib/sdl/sdl.llpl"
+import std.sdl.sdl
 
 using namespace std.sdl
 

@@ -1,12 +1,12 @@
 // Example: Comprehensive demonstration of stdlib collections
 
-import "stdlib/collections/linked_list.llpl"
-import "stdlib/collections/stack_queue.llpl"
-import "stdlib/collections/heap.llpl"
-import "stdlib/collections/hashmap.llpl"
-import "stdlib/collections/rbtree.llpl"
-import "stdlib/collections/trie.llpl"
-import "stdlib/collections/graph.llpl"
+import std.collections.linked_list
+import std.collections.stack_queue
+import std.collections.heap
+import std.collections.hashmap
+import std.collections.rbtree
+import std.collections.trie
+import std.collections.graph
 
 using namespace std.collections
 

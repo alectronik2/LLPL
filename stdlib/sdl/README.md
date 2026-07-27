@@ -34,7 +34,7 @@ sudo pacman -S sdl3
 Import the SDL3 module:
 
 ```swift
-import "stdlib/sdl/sdl.llpl"
+import std.sdl.sdl
 ```
 
 Compile with SDL3 linking:
@@ -49,7 +49,7 @@ gcc your_program.c runtime/runtime.c -lSDL3 -o your_program
 ### Minimal Window
 
 ```swift
-import "stdlib/sdl/sdl.llpl"
+import std.sdl.sdl
 
 func main() -> int {
     // Initialize SDL

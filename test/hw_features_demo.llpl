@@ -1,4 +1,4 @@
-import stdlib.hw.hw
+import std.hw.hw
 
 #device "fixtures/e1000.lldev"
 

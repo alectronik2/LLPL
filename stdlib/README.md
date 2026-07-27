@@ -36,7 +36,7 @@ A comprehensive standard library for LLPL featuring file I/O, network I/O, and a
 ## Installation
 
 Set `LLPL_HOME` to the directory containing this repository's `stdlib/`
-folder (its own checkout root), so `stdlib/...` imports resolve the same
+folder (its own checkout root), so `std.*` imports resolve the same
 way regardless of where the importing file lives - no relative `../../`
 path needed:
 
@@ -47,16 +47,16 @@ export LLPL_HOME=/path/to/LLPL
 Then import the entire standard library:
 
 ```swift
-import "stdlib/stdlib.llpl"
+import std.stdlib
 ```
 
 Or import specific modules:
 
 ```swift
-import "stdlib/io/file.llpl"
-import "stdlib/net/socket.llpl"
-import "stdlib/text/string_utils.llpl"
-import "stdlib/hw/hw.llpl"
+import std.io.file
+import std.net.socket
+import std.text.string_utils
+import std.hw.hw
 ```
 
 (Compiling from within the repo's own root directory works even without
@@ -70,7 +70,7 @@ The hardware layer is imported separately so hosted programs do not pull in
 kernel-oriented inline assembly unless they need it:
 
 ```swift
-import "stdlib/hw/hw.llpl"
+import std.hw.hw
 ```
 
 It provides plain struct descriptors and namespace functions for:
@@ -494,7 +494,7 @@ The collections module provides a comprehensive set of efficient data structures
 ### Quick Overview
 
 ```swift
-import "stdlib/collections/collections.llpl"
+import std.collections.collections
 
 // Linked Lists
 let list: std::LinkedList<int> = new std::LinkedList<int>()
@@ -564,7 +564,7 @@ SDL3 (Simple DirectMedia Layer 3) bindings for 2D graphics, audio, and input han
 ### Quick Start
 
 ```swift
-import "stdlib/sdl/sdl.llpl"
+import std.sdl.sdl
 
 func main() -> int {
     std::sdl::SDL.init(std::sdl::SDL_INIT_VIDEO)
@@ -704,7 +704,7 @@ supports:
   ABI mismatch here) already just works. Pair it with `parse()`.
 
 ```swift
-import "stdlib/args/args_parser.llpl"
+import std.args.args_parser
 using namespace std.args
 
 func main(args: string[]) -> int {
@@ -747,8 +747,8 @@ and multiple documents in one text - none of these are common in the
 config-file use case this exists for.
 
 ```swift
-import "stdlib/yaml/yaml_parser.llpl"
-import "stdlib/io/file.llpl"
+import std.yaml.yaml_parser
+import std.io.file
 using namespace std.yaml
 using namespace std.io
 
@@ -798,8 +798,8 @@ literal has a `.`/`e`/`E`), booleans, and null - in both directions,
 unlike `std::yaml`, which is read-only.
 
 ```swift
-import "stdlib/json/json_parser.llpl"
-import "stdlib/io/file.llpl"
+import std.json.json_parser
+import std.io.file
 using namespace std.json
 using namespace std.io
 

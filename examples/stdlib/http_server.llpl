@@ -1,9 +1,9 @@
 // Example: Simple HTTP server using the standard library
 // Demonstrates integration of file I/O, networking, and string utilities
 
-import "stdlib/text/string_utils.llpl"
-import "stdlib/io/file.llpl"
-import "stdlib/net/socket.llpl"
+import std.text.string_utils
+import std.io.file
+import std.net.socket
 
 using namespace std.text
 using namespace std.io

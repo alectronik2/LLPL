@@ -3,7 +3,7 @@
 Import the hardware layer directly:
 
 ```swift
-import "stdlib/hw/hw.llpl"
+import std.hw.hw
 ```
 
 This module is intended for freestanding/kernel code. It avoids classes and

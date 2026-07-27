@@ -4,7 +4,7 @@
 // surface to place it. Select controls to drag, resize, edit caption/color,
 // delete, or export generated `ui` DSL to stdout.
 
-import stdlib.ui.sdl
+import std.ui.sdl
 
 using namespace std.ui
 

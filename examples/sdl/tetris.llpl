@@ -10,7 +10,7 @@
 //     while the cleared row(s) flash, then Game.finish_clear() compacts
 //     the board - see Game.update's `self.clearing` branch.
 
-import stdlib.sdl.sdl
+import std.sdl.sdl
 
 using namespace std.sdl
 

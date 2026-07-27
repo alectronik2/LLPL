@@ -1,6 +1,6 @@
 // Example: Interactive SDL3 demo with keyboard and mouse input
 
-import stdlib.sdl.sdl
+import std.sdl.sdl
 
 using namespace std.sdl
 

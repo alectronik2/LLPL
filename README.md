@@ -294,7 +294,7 @@ dub build
 
 This creates the `llpl` compiler executable.
 
-If your code imports the standard library (`import stdlib..."`), set
+If your code imports the standard library (`import std.*`), set
 `LLPL_HOME` to this repo's root first, so those imports resolve regardless
 of where the importing file lives - see `MODULE_SYSTEM.md`'s "Module
 Search Paths" section for details:
@@ -504,7 +504,7 @@ LLPL/
 │   ├── runtime.h       # Runtime header
 │   └── runtime.c       # Reference counting, memory management, YAML/JSON parsers
 ├── prelude.llpl         # Auto-imported: Result<T,E>, Hashable, Comparable, ...
-├── stdlib/              # import stdlib.* - collections, io, json, yaml, net, text, args, sdl
+├── stdlib/              # import std.* - collections, io, json, yaml, net, text, args, sdl
 ├── tools/llplbuild/     # YAML-driven build tool used by both example kernels
 ├── examples/
 │   ├── baremetal_demo/         # Flagship demo: GRUB/Multiboot2 kernel (see below)
@@ -740,7 +740,7 @@ struct Pair {
 `interrupt func` bodies reject hidden runtime paths such as `new`, `defer`,
 `try`, `throw`, class-typed locals, and direct allocator/refcount calls.
 
-The hardware stdlib (`import "stdlib/hw/hw.llpl"`) provides volatile MMIO
+The hardware stdlib (`import std.hw.hw`) provides volatile MMIO
 read/write helpers, cache/memory barriers, DMA buffer descriptors with
 CPU/device ownership, typed page-region helpers, and device descriptor
 generation:

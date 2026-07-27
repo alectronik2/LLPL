@@ -12,7 +12,7 @@
 //
 // Usage:
 //
-//   import "stdlib/json/json_parser.llpl"
+//   import std.json.json_parser
 //   using namespace std.json
 //
 //   let doc: JsonValue = parse(new String("{\"name\": \"demo\", \"port\": 8080}"))
@@ -21,7 +21,7 @@
 //
 //   let out: String = stringify(doc)
 
-import "stdlib/text/string_utils.llpl"
+import std.text.string_utils
 
 using namespace std.text
 

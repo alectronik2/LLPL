@@ -1,6 +1,6 @@
 // Example: String manipulation using the standard library
 
-import stdlib.text.string_utils
+import std.text.string_utils
 
 using namespace std.text
 

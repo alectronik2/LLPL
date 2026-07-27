@@ -10,7 +10,7 @@
 // same technique abi_assert_align_demo.llpl already uses for ABI layout,
 // applied here to a register map instead.
 
-import stdlib.hw.hw
+import std.hw.hw
 
 extern func puts(s: char*) -> i64
 

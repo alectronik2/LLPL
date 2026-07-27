@@ -15,7 +15,7 @@
 //
 // Usage:
 //
-//   import "stdlib/yaml/yaml_parser.llpl"
+//   import std.yaml.yaml_parser
 //   using namespace std.yaml
 //
 //   let text: String = new String(
@@ -31,7 +31,7 @@
 //   let port: i64 = doc.get_or(new String("server"), YamlValue.make_mapping())
 //       .get_or(new String("port"), YamlValue.make_int(0)).as_int()
 
-import "stdlib/text/string_utils.llpl"
+import std.text.string_utils
 
 using namespace std.text
 

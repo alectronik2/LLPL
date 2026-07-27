@@ -409,7 +409,7 @@ puts(<span class="str">"hello, \(name) — \(queued) items queued"</span>)
       <div class="sample">
         <div class="cap"><h3>Stdlib &amp; generics</h3><span>built-in JSON parser</span></div>
         <div class="code-card">
-          <pre><span class="kw">import</span> stdlib.json.json_parser
+          <pre><span class="kw">import</span> std.json.json_parser
 <span class="kw">using</span> <span class="kw">namespace</span> std.json
 
 <span class="kw">let</span> doc: JsonValue = parse(<span class="kw">new</span> String(<span class="str">"{\"port\": 8080}"</span>))
@@ -650,9 +650,9 @@ puts(<span class="str">"hello, \(name) — \(queued) items queued"</span>)
 
         <div class="doc-group" id="doc-modules">
           <div class="gh"><h3>Modules &amp; namespaces</h3><span>import · using · alias</span></div>
-          <p>A bare, dotted import resolves to a file path (<code>drivers.serial</code> → <code>drivers/serial.llpl</code>); a quoted one is for paths that aren't valid identifiers. <code>using namespace</code> brings a namespace's names into scope unqualified; <code>$LLPL_HOME</code> lets <code>stdlib/...</code> imports resolve the same way regardless of where the importing file lives.</p>
+          <p>A bare, dotted import resolves to a file path (<code>drivers.serial</code> → <code>drivers/serial.llpl</code>); a quoted one is for paths that aren't valid identifiers. <code>using namespace</code> brings a namespace's names into scope unqualified; <code>$LLPL_HOME</code> lets <code>std.*</code> imports resolve the same way regardless of where the importing file lives.</p>
           <div class="code-card">
-            <pre><span class="kw">import</span> stdlib.collections.hashmap
+            <pre><span class="kw">import</span> std.collections.hashmap
 <span class="kw">import</span> <span class="str">"weird-path.llpl"</span>          <span class="cm">// quoted, for names that aren't valid identifiers</span>
 
 <span class="kw">using</span> <span class="kw">namespace</span> std.collections

@@ -18,7 +18,7 @@
 //
 // Usage:
 //
-//   import "stdlib/args/args_parser.llpl"
+//   import std.args.args_parser
 //   using namespace std.args
 //
 //   func main(args: string[]) -> i64 {
