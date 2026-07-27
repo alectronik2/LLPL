@@ -17,6 +17,35 @@ ui DemoWindow: Window {
     Column {
         spacing: 8
 
+        menu1: MenuBar {
+            Menu {
+                text: "File"
+
+                MenuItem {
+                    text: "Open"
+                    icon: LIST_ICON_FOLDER
+                    onClick: {
+                        DemoWindow.title = "Clicked"
+                    }
+                }
+
+                Menu {
+                    text: "Recent"
+                    icon: LIST_ICON_FOLDER
+
+                    MenuItem {
+                        text: "demo.llpl"
+                        icon: LIST_ICON_FILE
+                    }
+                }
+            }
+        }
+
+        StatusBar {
+            text: "Ready"
+            icon: LIST_ICON_CHECK
+        }
+
         Text {
             text: "Count: 0"
         }
@@ -36,6 +65,80 @@ ui DemoWindow: Window {
         View {
             url: "http://www.google.com/"
         }
+
+        Canvas {
+            width: 128
+            height: 64
+        }
+
+        ScrollBar {
+            width: 18
+            height: 90
+            value: 40
+        }
+
+        ProgressBar {
+            width: 128
+            height: 24
+            value: 55
+        }
+
+        Spinner {
+            width: 42
+            height: 42
+            text: "Loading"
+        }
+
+        Picture {
+            image_path: "examples/baremetal_demo/media/llpl-logo.png"
+            width: 128
+            height: 72
+        }
+
+        Box {
+            padding: 4
+            flex_grow: 1
+
+            FlowBox {
+                spacing: 6
+
+                Button {
+                    text: "A"
+                    margin: 2
+                }
+
+                Button {
+                    text: "B"
+                    margin: 2
+                }
+            }
+        }
+
+        GroupBox {
+            title: "Settings"
+
+            TextBox {
+                placeholder: "Name"
+            }
+
+            ComboBox {
+                text: "One"
+            }
+
+            MsgBox {
+                title: "Notice"
+                message: "Saved"
+                icon: MSGBOX_ICON_INFO
+                button_mode: MSGBOX_BUTTONS_OK_CANCEL
+            }
+
+            InputBox {
+                title: "Name"
+                message: "Enter your name"
+                placeholder: "Ada"
+                button_mode: MSGBOX_BUTTONS_OK_CANCEL
+            }
+        }
     }
 }
 
@@ -46,6 +149,8 @@ func main() -> i64 {
 
     // Both callback spellings - `func() { ... }` and the bare block - land
     // on the same closure field, so both fire here.
+    app.click_text("Open")
+    puts(window.title)
     app.click_text("Increment")
     let button = window.find_by_text("Increment")
     button.hover_enter()

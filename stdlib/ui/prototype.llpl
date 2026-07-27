@@ -3,13 +3,54 @@
 // compiler feature testable while leaving real backends free to provide the
 // same class/field/add_child surface later.
 
+const LIST_ICON_NONE: i64 = 0
+const LIST_ICON_FILE: i64 = 1
+const LIST_ICON_FOLDER: i64 = 2
+const LIST_ICON_IMAGE: i64 = 3
+const LIST_ICON_CHECK: i64 = 4
+const MSGBOX_ICON_NONE: i64 = 0
+const MSGBOX_ICON_INFO: i64 = 1
+const MSGBOX_ICON_WARNING: i64 = 2
+const MSGBOX_ICON_ERROR: i64 = 3
+const MSGBOX_ICON_QUESTION: i64 = 4
+const MSGBOX_BUTTONS_OK: i64 = 1
+const MSGBOX_BUTTONS_OK_CANCEL: i64 = 2
+const MSGBOX_BUTTONS_YES_NO: i64 = 3
+const MSGBOX_BUTTONS_YES_NO_CANCEL: i64 = 4
+const MSGBOX_RESULT_NONE: i64 = 0
+const MSGBOX_RESULT_OK: i64 = 1
+const MSGBOX_RESULT_CANCEL: i64 = 2
+const MSGBOX_RESULT_YES: i64 = 3
+const MSGBOX_RESULT_NO: i64 = 4
+
 class UiWidget {
     let kind: string
     let title: string
     let text: string
     let width: i64
     let height: i64
+    let width_percent: i64
+    let height_percent: i64
+    let min_width: i64
+    let min_height: i64
+    let max_width: i64
+    let max_height: i64
+    let margin: i64
+    let margin_left: i64
+    let margin_right: i64
+    let margin_top: i64
+    let margin_bottom: i64
+    let padding: i64
+    let flex_grow: i64
     let spacing: i64
+    let value: i64
+    let min_value: i64
+    let max_value: i64
+    let icon: i64
+    let message: string
+    let button_mode: i64
+    let result: i64
+    let visible: bool
     let first_child: UiWidget
     let next_sibling: UiWidget
     // Event callbacks, mirroring std.ui.sdl's Widget field-for-field so the
@@ -29,7 +70,28 @@ class UiWidget {
         self.text = ""
         self.width = 0
         self.height = 0
+        self.width_percent = 0
+        self.height_percent = 0
+        self.min_width = 0
+        self.min_height = 0
+        self.max_width = 0
+        self.max_height = 0
+        self.margin = 0
+        self.margin_left = 0
+        self.margin_right = 0
+        self.margin_top = 0
+        self.margin_bottom = 0
+        self.padding = 0
+        self.flex_grow = 0
         self.spacing = 0
+        self.value = 0
+        self.min_value = 0
+        self.max_value = 100
+        self.icon = 0
+        self.message = ""
+        self.button_mode = MSGBOX_BUTTONS_OK
+        self.result = MSGBOX_RESULT_NONE
+        self.visible = true
         self.first_child = null
         self.next_sibling = null
         self.has_onClick = false
@@ -99,6 +161,9 @@ class UiWidget {
     }
 
     func render(depth: i64) {
+        if !self.visible {
+            return
+        }
         let indent: char[64]
         let i: i64 = 0
         while i < depth * 2 && i < 63 {
@@ -138,6 +203,93 @@ class Row : UiWidget {
     }
 }
 
+class AbsolutePanel : UiWidget {
+    constructor() {
+        super("AbsolutePanel")
+    }
+}
+
+class Box : UiWidget {
+    constructor() {
+        super("Box")
+        self.flex_grow = 1
+    }
+}
+
+class FlowBox : UiWidget {
+    constructor() {
+        super("FlowBox")
+    }
+}
+
+class MenuBar : UiWidget {
+    constructor() {
+        super("MenuBar")
+        self.height = 30
+    }
+}
+
+class StatusBar : UiWidget {
+    constructor() {
+        super("StatusBar")
+        self.height = 28
+        self.text = "Ready"
+        self.icon = LIST_ICON_CHECK
+    }
+
+    func set_status(text: string, icon: i64) {
+        self.text = text
+        self.icon = icon
+    }
+}
+
+class Menu : UiWidget {
+    constructor() {
+        super("Menu")
+    }
+
+    func add_item(item: MenuItem) {
+        self.add_child(item)
+    }
+
+    func add_menu(menu: Menu) {
+        self.add_child(menu)
+    }
+}
+
+class MenuItem : UiWidget {
+    constructor() {
+        super("MenuItem")
+    }
+
+    func set_icon(value: i64) {
+        self.icon = value
+    }
+}
+
+class TabContainer : UiWidget {
+    let selected_index: i64
+
+    constructor() {
+        super("TabContainer")
+        self.selected_index = 0
+    }
+
+    func select(index: i64) {
+        self.selected_index = index
+    }
+
+    func add_page(page: TabPage) {
+        self.add_child(page)
+    }
+}
+
+class TabPage : UiWidget {
+    constructor() {
+        super("TabPage")
+    }
+}
+
 class Text : UiWidget {
     constructor() {
         super("Text")
@@ -147,6 +299,187 @@ class Text : UiWidget {
 class Button : UiWidget {
     constructor() {
         super("Button")
+    }
+}
+
+class ProgressBar : UiWidget {
+    constructor() {
+        super("ProgressBar")
+        self.value = 40
+        self.min_value = 0
+        self.max_value = 100
+    }
+}
+
+class Spinner : UiWidget {
+    constructor() {
+        super("Spinner")
+        self.width = 42
+        self.height = 42
+        self.value = 0
+        self.min_value = 0
+        self.max_value = 7
+    }
+}
+
+class TextBox : UiWidget {
+    let placeholder: string
+
+    constructor() {
+        super("TextBox")
+        self.placeholder = ""
+    }
+}
+
+class ComboBox : UiWidget {
+    constructor() {
+        super("ComboBox")
+    }
+
+    func add_option(option: string) {
+        if self.text == "" {
+            self.text = option
+        }
+    }
+}
+
+class GroupBox : UiWidget {
+    constructor() {
+        super("GroupBox")
+    }
+}
+
+class Canvas : UiWidget {
+    constructor() {
+        super("Canvas")
+    }
+
+    func clear(color: u32) {
+    }
+
+    func set_stroke(color: u32) {
+    }
+
+    func set_fill(color: u32) {
+    }
+
+    func point(x: i64, y: i64) {
+    }
+
+    func line(x1: i64, y1: i64, x2: i64, y2: i64) {
+    }
+
+    func rect(x: i64, y: i64, w: i64, h: i64) {
+    }
+
+    func fill_rect(x: i64, y: i64, w: i64, h: i64) {
+    }
+}
+
+class ScrollBar : UiWidget {
+    constructor() {
+        super("ScrollBar")
+        self.width = 18
+        self.height = 160
+        self.value = 0
+        self.min_value = 0
+        self.max_value = 100
+    }
+}
+
+class Picture : UiWidget {
+    let image_path: string
+
+    constructor() {
+        super("Picture")
+        self.image_path = ""
+    }
+
+    func set_path(path: string) {
+        self.image_path = path
+    }
+}
+
+class Terminal : UiWidget {
+    let terminal_prompt: string
+
+    constructor() {
+        super("Terminal")
+        self.terminal_prompt = "> "
+    }
+
+    func append_line(line: string) {
+        if self.text == "" {
+            self.text = line
+        }
+    }
+
+    func clear() {
+        self.text = ""
+    }
+
+    func submit() {
+    }
+
+    func set_prompt(prompt: string) {
+        self.terminal_prompt = prompt
+    }
+}
+
+class MsgBox : UiWidget {
+    constructor() {
+        super("MsgBox")
+        self.width = 360
+        self.height = 160
+        self.button_mode = MSGBOX_BUTTONS_OK
+        self.result = MSGBOX_RESULT_NONE
+        self.visible = false
+    }
+
+    func show(message: string, icon: i64, buttons: i64) {
+        self.message = message
+        self.icon = icon
+        self.button_mode = buttons
+        self.result = MSGBOX_RESULT_NONE
+        self.visible = true
+    }
+
+    func hide() {
+        self.visible = false
+    }
+
+    func accept() {
+        self.result = MSGBOX_RESULT_OK
+        self.visible = false
+    }
+
+    func cancel() {
+        self.result = MSGBOX_RESULT_CANCEL
+        self.visible = false
+    }
+}
+
+class InputBox : MsgBox {
+    let placeholder: string
+
+    constructor() {
+        super()
+        self.kind = "InputBox"
+        self.height = 200
+        self.placeholder = ""
+    }
+
+    func ask(message: string, placeholder: string, buttons: i64) {
+        self.message = message
+        self.placeholder = placeholder
+        self.button_mode = buttons
+        self.result = MSGBOX_RESULT_NONE
+        self.text = ""
+        self.visible = true
+    }
+
+    func value() -> string {
+        return self.text
     }
 }
 

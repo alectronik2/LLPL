@@ -279,6 +279,10 @@ class EventHandler {
         return self.event.type == SDL_EVENT_KEY_UP
     }
 
+    func is_text_input() -> bool {
+        return self.event.type == SDL_EVENT_TEXT_INPUT
+    }
+
     func is_mouse_button_down() -> bool {
         return self.event.type == SDL_EVENT_MOUSE_BUTTON_DOWN
     }
@@ -312,6 +316,10 @@ class EventHandler {
 
     func get_window_event() -> SDL_WindowEvent* {
         return &self.event as SDL_WindowEvent*
+    }
+
+    func get_text_input_event() -> SDL_TextInputEvent* {
+        return &self.event as SDL_TextInputEvent*
     }
 }
 

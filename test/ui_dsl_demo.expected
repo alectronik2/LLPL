@@ -1,8 +1,27 @@
 Window title="Counter" text="" width=320 height=180 spacing=0
   Column title="" text="" width=0 height=0 spacing=8
+    MenuBar title="" text="" width=0 height=30 spacing=0
+      Menu title="" text="File" width=0 height=0 spacing=0
+        MenuItem title="" text="Open" width=0 height=0 spacing=0
+        Menu title="" text="Recent" width=0 height=0 spacing=0
+          MenuItem title="" text="demo.llpl" width=0 height=0 spacing=0
+    StatusBar title="" text="Ready" width=0 height=28 spacing=0
     Text title="" text="Count: 0" width=0 height=0 spacing=0
     Button title="" text="Increment" width=0 height=0 spacing=0
     View title="" text="" width=0 height=0 spacing=0
+    Canvas title="" text="" width=128 height=64 spacing=0
+    ScrollBar title="" text="" width=18 height=90 spacing=0
+    ProgressBar title="" text="" width=128 height=24 spacing=0
+    Spinner title="" text="Loading" width=42 height=42 spacing=0
+    Picture title="" text="" width=128 height=72 spacing=0
+    Box title="" text="" width=0 height=0 spacing=0
+      FlowBox title="" text="" width=0 height=0 spacing=6
+        Button title="" text="A" width=0 height=0 spacing=0
+        Button title="" text="B" width=0 height=0 spacing=0
+    GroupBox title="Settings" text="" width=0 height=0 spacing=0
+      TextBox title="" text="" width=0 height=0 spacing=0
+      ComboBox title="" text="One" width=0 height=0 spacing=0
+Clicked
 Clicked Increment
 Hovering Increment
 No widget labelled 'No Such Widget'

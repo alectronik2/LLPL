@@ -16,6 +16,58 @@ ui DemoWindow: Window {
     padding: 24
     spacing: 14
 
+    MenuBar {
+        Menu {
+            text: "File"
+
+            MenuItem {
+                text: "New"
+                icon: LIST_ICON_FILE
+                onClick: {
+                    DemoWindow.title = "Clicked"
+                    puts("new file")
+                }
+            }
+
+            MenuItem {
+                text: "Open"
+                icon: LIST_ICON_FOLDER
+                onClick: {
+                    puts("open file")
+                }
+            }
+
+            Menu {
+                text: "Recent"
+                icon: LIST_ICON_FOLDER
+
+                MenuItem {
+                    text: "notes.llpl"
+                    icon: LIST_ICON_FILE
+                }
+
+                MenuItem {
+                    text: "photo.png"
+                    icon: LIST_ICON_IMAGE
+                }
+            }
+        }
+
+        Menu {
+            text: "View"
+
+            MenuItem {
+                text: "Dark mode"
+                icon: LIST_ICON_CHECK
+            }
+
+            MenuItem {
+                text: "Images"
+                icon: LIST_ICON_IMAGE
+            }
+        }
+    }
+
     Text {
         text: "LLPL UI DSL"
         preferred_height: 32
@@ -23,11 +75,12 @@ ui DemoWindow: Window {
 
     Row {
         spacing: 12
-        preferred_height: 300
+        height: 44%
 
         Column {
             spacing: 10
             padding: 0
+            width: 48%
             preferred_height: 300
 
             Text {
@@ -43,6 +96,7 @@ ui DemoWindow: Window {
         Column {
             spacing: 10
             padding: 0
+            width: 48%
             preferred_height: 300
 
             Text {
@@ -51,19 +105,52 @@ ui DemoWindow: Window {
             }
 
             TreeView {
+                width: 400
                 preferred_height: 250
             }
         }
     }
 
-    Panel {
+    gbGroup: GroupBox {
+        title: "Controls"
         spacing: 10
         padding: 16
-        preferred_height: 120
+        height: 26%
 
-        Text {
-            text: "Controls"
+        txtText: Text {
+            text: "Editor"
             preferred_height: 28
+        }
+
+        TextBox {
+            placeholder: "Filter files"
+            width: 60%
+        }
+
+        ComboBox {
+            width: 180
+        }
+
+        ProgressBar {
+            width: 220
+            preferred_height: 30
+            value: 45
+        }
+
+        Row {
+            spacing: 10
+            preferred_height: 44
+
+            Spinner {
+                width: 42
+                height: 42
+                text: "Loading"
+            }
+
+            Text {
+                text: "Background task"
+                preferred_height: 32
+            }
         }
 
         Button {
@@ -74,6 +161,55 @@ ui DemoWindow: Window {
                 puts("button clicked")
             }
         }
+
+        ScrollBar {
+            width: 18
+            height: 120
+            value: 36
+        }
+    }
+
+    FlowBox {
+        flex_grow: 1
+
+        Picture {
+            image_path: "examples/baremetal_demo/media/llpl-logo.png"
+            width: 46%
+            preferred_height: 120
+        }
+
+        Canvas {
+            width: 46%
+            preferred_height: 120
+        }
+    }
+
+    TabContainer {
+        preferred_height: 150
+
+        TabPage {
+            title: "Terminal"
+
+            Terminal {
+                terminal_prompt: "$ "
+                items_text: "LLPL terminal ready"
+                flex_grow: 1
+            }
+        }
+
+        TabPage {
+            title: "Notes"
+
+            Text {
+                text: "Tabbed content"
+                preferred_height: 28
+            }
+        }
+    }
+
+    StatusBar {
+        text: "Ready"
+        icon: LIST_ICON_CHECK
     }
 }
 
@@ -83,6 +219,8 @@ func main() -> i64 {
 
     let list: List = null
     let tree: TreeView = null
+    let canvas: Canvas = null
+    let combo: ComboBox = null
 
     let child: Widget = root.first_child
     while child != null {
@@ -104,26 +242,64 @@ func main() -> i64 {
                 col = col.next_sibling
             }
         }
+        if child.kind_id == WIDGET_CANVAS {
+            canvas = child as Canvas
+        }
+        if child.kind_id == WIDGET_FLOWBOX {
+            let flow_child: Widget = child.first_child
+            while flow_child != null {
+                if flow_child.kind_id == WIDGET_CANVAS {
+                    canvas = flow_child as Canvas
+                }
+                flow_child = flow_child.next_sibling
+            }
+        }
+        if child.kind_id == WIDGET_GROUPBOX {
+            let control: Widget = child.first_child
+            while control != null {
+                if control.kind_id == WIDGET_COMBOBOX {
+                    combo = control as ComboBox
+                }
+                control = control.next_sibling
+            }
+        }
         child = child.next_sibling
     }
 
     if list != null {
-        list.add_item("Apple")
-        list.add_item("Banana")
-        list.add_item("Cherry")
-        list.add_item("Date")
-        list.add_item("Elderberry")
+        list.add_folder("Documents")
+        list.add_item("notes.llpl")
+        list.add_image("screenshot.bmp")
+        list.add_item("README.md")
+        list.add_folder("Downloads")
     }
 
     if tree != null {
-        tree.add_item("Documents", 0)
+        tree.add_folder("Documents", 0)
         tree.add_item("file1.txt", 1)
         tree.add_item("file2.txt", 1)
-        tree.add_item("Downloads", 0)
+        tree.add_folder("Downloads", 0)
         tree.add_item("app.exe", 1)
         tree.add_item("library.dll", 1)
-        tree.add_item("Pictures", 0)
+        tree.add_folder("Pictures", 0)
         tree.add_item("photo.png", 1)
+        tree.collapse_all()
+    }
+
+    if combo != null {
+        combo.add_option("All files")
+        combo.add_option("Source")
+        combo.add_option("Images")
+    }
+
+    if canvas != null {
+        canvas.set_stroke(0xFFE9EEF6 as u32)
+        canvas.line(16, 16, 260, 84)
+        canvas.rect(300, 18, 120, 72)
+        canvas.set_fill(0xFF26A890 as u32)
+        canvas.fill_rect(40, 54, 96, 42)
+        canvas.set_fill(0xFF7C5CFF as u32)
+        canvas.fill_rect(160, 34, 80, 58)
     }
 
     let app: App = new App("LLPL UI DSL", 800, 600, root)

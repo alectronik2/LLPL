@@ -775,12 +775,16 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.Ui);
         string name = expect(TokenType.Identifier).value;
-        expect(TokenType.Colon, "Expected ':' and a root widget type after ui name");
-        Type rootType = parseType();
-        if (rootType.typeArgs.length > 0 || rootType.pointerDepth > 0 || rootType.isArray) {
-            errorAt(startLine, startColumn, "A ui root type must be a plain widget class name");
+        string rootName = "";
+        string rootTypeName = "Window";
+        if (match(TokenType.Colon)) {
+            Type rootType = parseType();
+            if (rootType.typeArgs.length > 0 || rootType.pointerDepth > 0 || rootType.isArray) {
+                errorAt(startLine, startColumn, "A ui root type must be a plain widget class name");
+            }
+            rootTypeName = rootType.name;
         }
-        UiNode root = uiNodeBody(rootType.name, startLine, startColumn);
+        UiNode root = uiNodeBody(rootTypeName, rootName, startLine, startColumn);
         return new UiDecl(name, root, startLine, startColumn);
     }
 
@@ -788,10 +792,10 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
         string typeName = expect(TokenType.Identifier, "Expected widget type name").value;
-        return uiNodeBody(typeName, startLine, startColumn);
+        return uiNodeBody(typeName, "", startLine, startColumn);
     }
 
-    private UiNode uiNodeBody(string typeName, int startLine, int startColumn) {
+    private UiNode uiNodeBody(string typeName, string instanceName, int startLine, int startColumn) {
         expect(TokenType.LeftBrace);
         UiProperty[] properties;
         UiNode[] children;
@@ -805,15 +809,25 @@ class Parser {
             int propColumn = current.column;
             string propName = expect(TokenType.Identifier, "Expected property name or child widget").value;
             expect(TokenType.Colon, "Expected ':' after ui property name");
-            if (propName.startsWith("on") && check(TokenType.LeftBrace)) {
+            if (check(TokenType.Identifier) && peek(1).type == TokenType.LeftBrace) {
+                string childTypeName = expect(TokenType.Identifier, "Expected widget type name after named ui child ':'").value;
+                children ~= uiNodeBody(childTypeName, propName, propLine, propColumn);
+            } else if (propName.startsWith("on") && check(TokenType.LeftBrace)) {
                 properties ~= new UiProperty(propName, block(), true, propLine, propColumn);
+            } else if ((propName == "width" || propName == "height") &&
+                    check(TokenType.Integer) && peek(1).type == TokenType.Percent) {
+                Token percentValue = expect(TokenType.Integer);
+                expect(TokenType.Percent);
+                properties ~= new UiProperty(propName ~ "_percent",
+                    new IntLiteral(parseIntegerValue(percentValue.value), propLine, propColumn),
+                    propLine, propColumn);
             } else {
                 properties ~= new UiProperty(propName, expression(), propLine, propColumn);
             }
             match(TokenType.Comma);
         }
         expect(TokenType.RightBrace);
-        return new UiNode(typeName, properties, children, startLine, startColumn);
+        return new UiNode(typeName, instanceName, properties, children, startLine, startColumn);
     }
 
     // Operator tokens that can appear after `operator` in a method

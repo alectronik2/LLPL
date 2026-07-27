@@ -337,6 +337,7 @@ class UiProperty {
 
 class UiNode {
     string typeName;
+    string instanceName;
     UiProperty[] properties;
     UiNode[] children;
     int line;
@@ -344,6 +345,16 @@ class UiNode {
 
     this(string typeName, UiProperty[] properties, UiNode[] children, int line = 0, int column = 0) {
         this.typeName = typeName;
+        this.instanceName = "";
+        this.properties = properties;
+        this.children = children;
+        this.line = line;
+        this.column = column;
+    }
+
+    this(string typeName, string instanceName, UiProperty[] properties, UiNode[] children, int line = 0, int column = 0) {
+        this.typeName = typeName;
+        this.instanceName = instanceName;
         this.properties = properties;
         this.children = children;
         this.line = line;

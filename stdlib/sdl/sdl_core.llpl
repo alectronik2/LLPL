@@ -247,6 +247,14 @@ struct SDL_WindowEvent {
     let data2: i32
 }
 
+struct SDL_TextInputEvent {
+    let type: u32
+    let reserved: u32
+    let timestamp: u64
+    let windowID: u32
+    let text: char*
+}
+
 // SDL3's own SDL_Event is a real C union (`Uint32 type` shared with
 // every event's own leading field, plus one member per event kind, all
 // overlapping the same storage, padded to a fixed 128-byte ABI-stable
@@ -293,6 +301,8 @@ extern func SDL_GetWindowSize(window: SDL_Window*, w: i32*, h: i32*) -> bool
 extern func SDL_SetWindowSize(window: SDL_Window*, w: i32, h: i32) -> bool
 extern func SDL_ShowWindow(window: SDL_Window*) -> bool
 extern func SDL_HideWindow(window: SDL_Window*) -> bool
+extern func SDL_StartTextInput(window: SDL_Window*) -> bool
+extern func SDL_StopTextInput(window: SDL_Window*) -> bool
 
 // Renderer Management
 extern func SDL_CreateRenderer(window: SDL_Window*, name: char*) -> SDL_Renderer*
@@ -325,6 +335,7 @@ extern func SDL_SetTextureColorMod(texture: SDL_Texture*, r: char, g: char, b: c
 
 // Surface Management
 extern func SDL_LoadBMP(file: char*) -> SDL_Surface*
+extern func SDL_LoadPNG(file: char*) -> SDL_Surface*
 extern func SDL_DestroySurface(surface: SDL_Surface*)
 
 // Event Handling

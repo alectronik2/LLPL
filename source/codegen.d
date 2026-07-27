@@ -543,7 +543,8 @@ class CodeGenerator {
     private string[] interpBufferDecls; // `static char __llpl_interpN[SIZE];` decls, emitted up front
     private enum interpBufferSize = 256; // Scratch buffer size for one interpolated string's result
     private int lambdaCounter; // Numbers each lambda literal's env struct/trampoline function uniquely
-    private string[] lambdaDecls; // Per-lambda `struct __LambdaEnvN {...};` + trampoline function decls, emitted up front
+    private string[] lambdaForwardDecls; // Per-lambda env typedef + trampoline prototype, emitted before closure creation sites
+    private string[] lambdaBodyDecls; // Per-lambda trampoline bodies, emitted after class/struct layouts exist
     private int embeddedFileCounter; // Numbers each embed("path") static blob uniquely
     private string[] embeddedFileDecls; // Static byte arrays emitted before function bodies
     private bool[string] emittedBoundsCheckHelpers; // Set of C element-type signatures already emitted
@@ -1931,16 +1932,43 @@ class CodeGenerator {
         return result;
     }
 
-    private string desugarUiNode(UiNode node, string parentVar, ref ASTNode[] stmts, ref int counter) {
-        string varName = format("__ui%d", counter++);
+    private bool uiCaptureExists(Capture[] captures, string name) {
+        foreach (cap; captures) {
+            if (cap.name == name) return true;
+        }
+        return false;
+    }
+
+    private Capture[] uiCallbackCaptures(Capture[] existing, string[] namedUiVars) {
+        Capture[] captures = existing.dup;
+        foreach (name; namedUiVars) {
+            if (!uiCaptureExists(captures, name)) {
+                captures ~= new Capture(name, false);
+            }
+        }
+        return captures;
+    }
+
+    private string desugarUiNode(UiNode node, string parentVar, ref ASTNode[] stmts, ref int counter, ref string[] namedUiVars) {
+        string varName = node.instanceName.length > 0 ? node.instanceName : format("__ui%d", counter++);
         stmts ~= new VarDecl(varName, new Type(node.typeName),
             new NewExpr(new Type(node.typeName), [], node.line, node.column),
             false, node.line, node.column);
+        if (node.instanceName.length > 0 && !namedUiVars.canFind(node.instanceName)) {
+            namedUiVars ~= node.instanceName;
+        }
 
         foreach (prop; node.properties) {
-            ASTNode value = prop.isHandler
-                ? cast(ASTNode)new LambdaExpr([], [], new Type("void"), prop.handlerBody, prop.line, prop.column)
-                : prop.value;
+            ASTNode value;
+            if (prop.isHandler) {
+                value = cast(ASTNode)new LambdaExpr(uiCallbackCaptures([], namedUiVars), [],
+                    new Type("void"), prop.handlerBody, prop.line, prop.column);
+            } else if (auto lambda = cast(LambdaExpr)prop.value) {
+                value = cast(ASTNode)new LambdaExpr(uiCallbackCaptures(lambda.captures, namedUiVars),
+                    lambda.params, lambda.returnType, lambda.body_, lambda.line, lambda.column);
+            } else {
+                value = prop.value;
+            }
             // A callback property has two spellings - the shorthand block
             // (`onClick: { ... }`, which parser.d turns into isHandler with
             // a bare Block) and an explicit lambda (`onClick: func() { ... }`,
@@ -1967,7 +1995,7 @@ class CodeGenerator {
         }
 
         foreach (child; node.children) {
-            desugarUiNode(child, varName, stmts, counter);
+            desugarUiNode(child, varName, stmts, counter, namedUiVars);
         }
 
         return varName;
@@ -1976,7 +2004,9 @@ class CodeGenerator {
     private FunctionDecl desugarUiDecl(UiDecl decl) {
         ASTNode[] stmts;
         int counter = 0;
-        string rootVar = desugarUiNode(decl.root, "", stmts, counter);
+        string[] namedUiVars;
+        decl.root.instanceName = decl.name;
+        string rootVar = desugarUiNode(decl.root, "", stmts, counter, namedUiVars);
         stmts ~= new ReturnStmt(new Identifier(rootVar, decl.line, decl.column), decl.line, decl.column);
 
         auto fn = new FunctionDecl("build", [], new Type(decl.root.typeName),
@@ -2615,6 +2645,9 @@ class CodeGenerator {
                     checkNoDuplicateSignatures(classDecl.constructors, format("constructor of '%s'", cName),
                         classDecl.line, classDecl.column);
                     bool classIsPolymorphic = isPolymorphic(classDecl);
+                    if (classDecl.constructors.length == 0) {
+                        earlyDeclCode ~= format("%s* %s_new();\n", cName, cName);
+                    }
                     foreach (ctor; classDecl.constructors) {
                         string params = "";
                         foreach (i, param; ctor.params) {
@@ -3002,9 +3035,9 @@ class CodeGenerator {
             code ~= "\n";
         }
 
-        if (lambdaDecls.length > 0) {
-            code ~= "// Lambda literal environment structs + trampoline functions\n";
-            foreach (lambdaDecl; lambdaDecls) {
+        if (lambdaForwardDecls.length > 0) {
+            code ~= "// Lambda literal environment structs + trampoline prototypes\n";
+            foreach (lambdaDecl; lambdaForwardDecls) {
                 code ~= lambdaDecl;
             }
             code ~= "\n";
@@ -3066,6 +3099,14 @@ class CodeGenerator {
             code ~= "// Function bodies deferred until after plain class/struct definitions exist\n";
             foreach (b; deferredFunctionBodies) {
                 code ~= b;
+            }
+            code ~= "\n";
+        }
+
+        if (lambdaBodyDecls.length > 0) {
+            code ~= "// Lambda literal trampoline functions\n";
+            foreach (lambdaDecl; lambdaBodyDecls) {
+                code ~= lambdaDecl;
             }
             code ~= "\n";
         }
@@ -3582,6 +3623,7 @@ class CodeGenerator {
         rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
+        bodyCode ~= generateFieldDefaultInitializers(structDecl.fields);
         if (constructor.body_) {
             foreach (stmt; constructor.body_.statements) {
                 bodyCode ~= generateBodyStatement(stmt, false);
@@ -4125,6 +4167,9 @@ class CodeGenerator {
         string code = "";
 
         bool polymorphic = isPolymorphic(classDecl);
+        if (classDecl.constructors.length == 0) {
+            code ~= generateDefaultConstructor(classDecl);
+        }
         foreach (ctor; classDecl.constructors) {
             code ~= polymorphic ? generatePolymorphicConstructor(classDecl, ctor)
                                  : generateConstructor(classDecl, ctor);
@@ -4146,6 +4191,47 @@ class CodeGenerator {
 
     private string generateClass(ClassDecl classDecl) {
         return generateClassLayout(classDecl) ~ generateClassMethods(classDecl);
+    }
+
+    private string generateDefaultConstructor(ClassDecl classDecl) {
+        string cName = mangledClass(classDecl);
+        string code = "";
+
+        string prevClassName = currentClassName;
+        currentClassName = cName;
+        currentNamespaceSegments = classDecl.namespaceSegments;
+        variableTypes["self"] = new Type(cName);
+        string prevScopeName = currentScopeName;
+        currentScopeName = cName ~ ".constructor";
+        recordLocal("self", variableTypes["self"], classDecl.line, classDecl.column, "self");
+        variableCNames = null;
+        shadowRenameCounter = 0;
+
+        code ~= format("%s* %s_new() {\n", cName, cName);
+        indentLevel++;
+        code ~= indent() ~ format("%s* self = (%s*)rc_alloc(sizeof(%s));\n",
+            cName, cName, cName);
+        code ~= indent() ~ "if (!self) return ((void*)0);\n";
+        code ~= indent() ~ "rc_init(&self->ref_count);\n\n";
+
+        deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
+
+        string bodyCode = generateFieldDefaultInitializers(classDecl.fields);
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
+        code ~= indent() ~ "return self;\n";
+        indentLevel--;
+        code ~= "}\n\n";
+
+        currentClassName = prevClassName;
+        currentScopeName = prevScopeName;
+        variableTypes.remove("self");
+
+        return code;
     }
 
     // Generates one *top-level* statement of a function/method/constructor/
@@ -4172,6 +4258,18 @@ class CodeGenerator {
             collectedErrors ~= e;
             return "";
         }
+    }
+
+    private string generateFieldDefaultInitializers(VarDecl[] fields) {
+        string code = "";
+        foreach (field; fields) {
+            if (field.initializer is null) continue;
+            auto lhs = new MemberExpr(new Identifier("self", field.line, field.column),
+                field.name, field.line, field.column);
+            auto assign = new BinaryExpr("=", lhs, field.initializer, field.line, field.column);
+            code ~= generateBodyStatement(new ExprStmt(assign), false);
+        }
+        return code;
     }
 
     // If a function/method/lambda body's last statement is a bare
@@ -4235,6 +4333,7 @@ class CodeGenerator {
 
         // Generate constructor body
         string bodyCode = "";
+        bodyCode ~= generateFieldDefaultInitializers(classDecl.fields);
         if (constructor.body_) {
             foreach (stmt; constructor.body_.statements) {
                 bodyCode ~= generateBodyStatement(stmt, false);
@@ -4393,6 +4492,7 @@ class CodeGenerator {
         }
 
         string bodyCode = "";
+        bodyCode ~= generateFieldDefaultInitializers(classDecl.fields);
         foreach (stmt; statements[bodyStart .. $]) {
             bodyCode ~= generateBodyStatement(stmt, false);
         }
@@ -4693,6 +4793,8 @@ class CodeGenerator {
         resolveType(funcDecl.returnType);
         Type prevReturnType = currentReturnType;
         currentReturnType = funcDecl.returnType;
+        Type[string] savedFunctionVariableTypes = variableTypes.dup;
+        bool[string] savedFunctionConstVariables = constVariables.dup;
         // See generateStructConstructor's matching comment.
         variableCNames = null;
         shadowRenameCounter = 0;
@@ -4760,6 +4862,8 @@ class CodeGenerator {
             variableTypes.remove(param.name);
             constVariables.remove(param.name);
         }
+        variableTypes = savedFunctionVariableTypes;
+        constVariables = savedFunctionConstVariables;
 
         if (isMainArgsFunction(funcDecl)) {
             code ~= generateMainWrapper(funcDecl);
@@ -6102,7 +6206,8 @@ class CodeGenerator {
     private ClassDecl cloneClassDeclWithTypeSubs(ClassDecl cls, Type[string] typeSubs, string newName) {
         VarDecl[] fields;
         foreach (f; cls.fields) {
-            auto field = new VarDecl(f.name, cloneType(f.type, typeSubs), null, f.isConst,
+            auto field = new VarDecl(f.name, cloneType(f.type, typeSubs),
+                cloneNode(f.initializer, null, typeSubs), f.isConst,
                 f.line, f.column, f.bitWidth, f.isVolatile);
             fields ~= field;
         }
@@ -6120,7 +6225,8 @@ class CodeGenerator {
     private StructDecl cloneStructDeclWithTypeSubs(StructDecl st, Type[string] typeSubs, string newName) {
         VarDecl[] fields;
         foreach (f; st.fields) {
-            fields ~= new VarDecl(f.name, cloneType(f.type, typeSubs), null, f.isConst,
+            fields ~= new VarDecl(f.name, cloneType(f.type, typeSubs),
+                cloneNode(f.initializer, null, typeSubs), f.isConst,
                 f.line, f.column, f.bitWidth, f.isVolatile);
         }
         FunctionDecl[] ctors;
@@ -7147,16 +7253,16 @@ class CodeGenerator {
         string mangledName;
         StructDecl decl = resolveStructLiteralTarget(lit, expectedType, mangledName);
 
-        if (lit.fieldNames.length != decl.fields.length) {
+        if (lit.fieldNames.length > decl.fields.length) {
             string displayName = lit.typeName.length > 0 ? lit.typeName : mangledName;
             throw new CompileError(format(
-                "Struct literal for '%s' has %d field(s), but '%s' declares %d",
+                "Struct literal for '%s' has %d field(s), but '%s' declares only %d",
                 displayName, lit.fieldNames.length, mangledName, decl.fields.length),
                 currentModulePath, lit.line, lit.column);
         }
 
-        string result = format("(%s){ ", mangledName);
         bool[string] seen;
+        int[string] valueIndexByField;
         foreach (i, fieldName; lit.fieldNames) {
             if (fieldName in seen) {
                 string displayName = lit.typeName.length > 0 ? lit.typeName : mangledName;
@@ -7173,10 +7279,35 @@ class CodeGenerator {
                 throw new CompileError(format("'%s' has no field named '%s'", mangledName, fieldName),
                     currentModulePath, lit.line, lit.column);
             }
+            valueIndexByField[fieldName] = cast(int)i;
+        }
 
+        string result = format("(%s){ ", mangledName);
+        foreach (i, field; decl.fields) {
+            ASTNode value = null;
+            if (auto valueIndex = field.name in valueIndexByField) {
+                value = lit.fieldValues[*valueIndex];
+            } else {
+                value = field.initializer;
+                if (value is null) {
+                    string displayName = lit.typeName.length > 0 ? lit.typeName : mangledName;
+                    throw new CompileError(format(
+                        "Struct literal for '%s' omits field '%s', which has no default initializer",
+                        displayName, field.name), currentModulePath, lit.line, lit.column);
+                }
+            }
             if (i > 0) result ~= ", ";
-            lit.fieldValues[i] = expandArrayAliasesShallow(lit.fieldValues[i]);
-            result ~= format(".%s = %s", fieldName, generateExpression(lit.fieldValues[i]));
+            value = expandArrayAliasesShallow(value);
+            Type fieldTypeAsWritten = cloneType(field.type);
+            result ~= format(".%s = ", field.name);
+            if (auto structLit = cast(StructLiteral)value) {
+                result ~= generateStructLiteralValue(structLit, fieldTypeAsWritten);
+            } else if (auto tupleLit = cast(TupleLiteral)value) {
+                result ~= generateTupleLiteral(tupleLit, fieldTypeAsWritten);
+            } else {
+                ASTNode coerced = insertNumericCoercionIfNeeded(value, field.type);
+                result ~= generateExpression(coerced);
+            }
         }
         result ~= " }";
         return result;
@@ -9474,6 +9605,8 @@ class CodeGenerator {
             trampolineParams ~= format(", %s %s", typeToC(p.type), p.name);
         }
 
+        string trampolineProto = format("%s %s(%s);\n", typeToC(lambdaExpr.returnType),
+            trampolineName, trampolineParams);
         string trampolineCode = format("%s %s(%s) {\n", typeToC(lambdaExpr.returnType), trampolineName, trampolineParams);
         trampolineCode ~= format("    %s* __env = (%s*)__env_raw;\n", envType, envType);
 
@@ -9537,9 +9670,11 @@ class CodeGenerator {
 
         trampolineCode ~= "}\n";
 
-        lambdaDecls ~= envDecl;
-        lambdaDecls ~= trampolineCode;
-        lambdaDecls ~= "\n";
+        lambdaForwardDecls ~= envDecl;
+        lambdaForwardDecls ~= trampolineProto;
+        lambdaForwardDecls ~= "\n";
+        lambdaBodyDecls ~= trampolineCode;
+        lambdaBodyDecls ~= "\n";
 
         string envInit = format("({ %s* __e = (%s*)rc_alloc(sizeof(%s)); ", envType, envType, envType);
         foreach (i, cap; lambdaExpr.captures) {

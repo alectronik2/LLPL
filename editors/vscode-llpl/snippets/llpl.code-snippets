@@ -435,6 +435,68 @@
         ],
         "description": "UI checkbox"
     },
+    "UI TextBox": {
+        "prefix": "uitextbox",
+        "body": [
+            "TextBox {",
+            "\tplaceholder: \"${1:Search}\"",
+            "\ttext: \"${2}\"",
+            "}"
+        ],
+        "description": "UI text input field"
+    },
+    "UI ComboBox": {
+        "prefix": "uicombo",
+        "body": [
+            "ComboBox {",
+            "\ttext: \"${1:Option}\"",
+            "\twidth: ${2:180}",
+            "}"
+        ],
+        "description": "UI combo box selector"
+    },
+    "UI GroupBox": {
+        "prefix": "uigroup",
+        "body": [
+            "GroupBox {",
+            "\ttitle: \"${1:Group}\"",
+            "\tspacing: 10",
+            "\tpadding: 16",
+            "\t$0",
+            "}"
+        ],
+        "description": "Titled UI grouping panel"
+    },
+    "UI List": {
+        "prefix": "uilist",
+        "body": [
+            "List {",
+            "\tpreferred_height: ${1:180}",
+            "\t$0",
+            "}"
+        ],
+        "description": "UI list with selectable icon rows"
+    },
+    "UI TreeView": {
+        "prefix": "uitree",
+        "body": [
+            "TreeView {",
+            "\tpreferred_height: ${1:220}",
+            "\t$0",
+            "}"
+        ],
+        "description": "UI tree view with expandable folders"
+    },
+    "UI Canvas": {
+        "prefix": "uicanvas",
+        "body": [
+            "Canvas {",
+            "\tpreferred_height: ${1:180}",
+            "\t$0",
+            "}"
+        ],
+        "description": "UI canvas drawing surface"
+    },
     "UI Hover Handler": {
         "prefix": "uihover",
         "body": [

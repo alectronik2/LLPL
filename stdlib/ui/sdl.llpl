@@ -14,6 +14,7 @@ namespace ui {
 const LAYOUT_NONE: i64 = 0
 const LAYOUT_COLUMN: i64 = 1
 const LAYOUT_ROW: i64 = 2
+const LAYOUT_WRAP: i64 = 3
 const WIDGET_GENERIC: i64 = 0
 const WIDGET_WINDOW: i64 = 1
 const WIDGET_COLUMN: i64 = 2
@@ -28,6 +29,49 @@ const WIDGET_CHECKBOX: i64 = 10
 const WIDGET_BADGE: i64 = 11
 const WIDGET_LIST: i64 = 12
 const WIDGET_TREEVIEW: i64 = 13
+const WIDGET_CANVAS: i64 = 14
+const WIDGET_TEXTBOX: i64 = 15
+const WIDGET_COMBOBOX: i64 = 16
+const WIDGET_GROUPBOX: i64 = 17
+const WIDGET_SCROLLBAR: i64 = 18
+const WIDGET_PICTURE: i64 = 19
+const WIDGET_BOX: i64 = 20
+const WIDGET_FLOWBOX: i64 = 21
+const WIDGET_MENUBAR: i64 = 22
+const WIDGET_MENU: i64 = 23
+const WIDGET_MENUITEM: i64 = 24
+const WIDGET_MSGBOX: i64 = 25
+const WIDGET_INPUTBOX: i64 = 26
+const WIDGET_ABSOLUTEPANEL: i64 = 27
+const WIDGET_TERMINAL: i64 = 28
+const WIDGET_TABCONTAINER: i64 = 29
+const WIDGET_TABPAGE: i64 = 30
+const WIDGET_SPINNER: i64 = 31
+const WIDGET_STATUSBAR: i64 = 32
+const LIST_ICON_NONE: i64 = 0
+const LIST_ICON_FILE: i64 = 1
+const LIST_ICON_FOLDER: i64 = 2
+const LIST_ICON_IMAGE: i64 = 3
+const LIST_ICON_CHECK: i64 = 4
+const MSGBOX_ICON_NONE: i64 = 0
+const MSGBOX_ICON_INFO: i64 = 1
+const MSGBOX_ICON_WARNING: i64 = 2
+const MSGBOX_ICON_ERROR: i64 = 3
+const MSGBOX_ICON_QUESTION: i64 = 4
+const MSGBOX_BUTTONS_OK: i64 = 1
+const MSGBOX_BUTTONS_OK_CANCEL: i64 = 2
+const MSGBOX_BUTTONS_YES_NO: i64 = 3
+const MSGBOX_BUTTONS_YES_NO_CANCEL: i64 = 4
+const MSGBOX_RESULT_NONE: i64 = 0
+const MSGBOX_RESULT_OK: i64 = 1
+const MSGBOX_RESULT_CANCEL: i64 = 2
+const MSGBOX_RESULT_YES: i64 = 3
+const MSGBOX_RESULT_NO: i64 = 4
+const CANVAS_OP_POINT: i64 = 1
+const CANVAS_OP_LINE: i64 = 2
+const CANVAS_OP_RECT: i64 = 3
+const CANVAS_OP_FILL_RECT: i64 = 4
+const CANVAS_OP_CLEAR: i64 = 5
 const DEFAULT_FONT_PATH: string = "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf"
 const FALLBACK_FONT_PATH: string = "/usr/share/fonts/TTF/DejaVuSans.ttf"
 const FALLBACK_FONT_PATH_2: string = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -119,6 +163,76 @@ func draw_outline(renderer: std.sdl.Renderer, x: i64, y: i64, w: i64, h: i64, co
     set_color(renderer, color)
     let rect: SDL_Rect = new SDL_Rect(x as i32, y as i32, w as i32, h as i32)
     renderer.draw_rect(rect)
+}
+
+func draw_file_icon(renderer: std.sdl.Renderer, x: i64, y: i64, color: u32, accent: u32) {
+    draw_rect(renderer, x + 3, y + 2, 12, 15, color)
+    draw_rect(renderer, x + 11, y + 2, 4, 4, accent)
+    draw_outline(renderer, x + 3, y + 2, 12, 15, accent)
+}
+
+func draw_folder_icon(renderer: std.sdl.Renderer, x: i64, y: i64, color: u32, accent: u32) {
+    draw_rect(renderer, x + 2, y + 6, 17, 11, color)
+    draw_rect(renderer, x + 4, y + 3, 7, 5, color)
+    draw_outline(renderer, x + 2, y + 6, 17, 11, accent)
+}
+
+func draw_image_icon(renderer: std.sdl.Renderer, x: i64, y: i64, color: u32, accent: u32) {
+    draw_rect(renderer, x + 2, y + 3, 16, 14, color)
+    draw_rect(renderer, x + 5, y + 6, 3, 3, accent)
+    draw_rect(renderer, x + 9, y + 11, 7, 4, accent)
+    draw_outline(renderer, x + 2, y + 3, 16, 14, accent)
+}
+
+func draw_check_icon(renderer: std.sdl.Renderer, x: i64, y: i64, color: u32) {
+    draw_rect(renderer, x + 4, y + 10, 4, 4, color)
+    draw_rect(renderer, x + 8, y + 7, 4, 4, color)
+    draw_rect(renderer, x + 12, y + 4, 4, 4, color)
+}
+
+func draw_widget_icon(renderer: std.sdl.Renderer, icon: i64, x: i64, y: i64, color: u32, accent: u32) {
+    if icon == LIST_ICON_FOLDER {
+        draw_folder_icon(renderer, x, y, color, accent)
+    } else if icon == LIST_ICON_IMAGE {
+        draw_image_icon(renderer, x, y, color, accent)
+    } else if icon == LIST_ICON_CHECK {
+        draw_check_icon(renderer, x, y, accent)
+    } else if icon != LIST_ICON_NONE {
+        draw_file_icon(renderer, x, y, color, accent)
+    }
+}
+
+func draw_msgbox_icon(renderer: std.sdl.Renderer, icon: i64, x: i64, y: i64, color: u32, accent: u32) {
+    if icon == MSGBOX_ICON_WARNING {
+        draw_rect(renderer, x + 10, y + 2, 12, 20, accent)
+        draw_rect(renderer, x + 8, y + 22, 16, 4, accent)
+        draw_rect(renderer, x + 14, y + 8, 4, 9, color)
+        draw_rect(renderer, x + 14, y + 20, 4, 3, color)
+    } else if icon == MSGBOX_ICON_ERROR {
+        draw_rect(renderer, x + 5, y + 5, 22, 22, accent)
+        draw_rect(renderer, x + 10, y + 13, 12, 4, color)
+        draw_rect(renderer, x + 14, y + 9, 4, 12, color)
+    } else if icon == MSGBOX_ICON_QUESTION {
+        draw_rect(renderer, x + 5, y + 5, 22, 22, accent)
+        draw_rect(renderer, x + 13, y + 10, 6, 4, color)
+        draw_rect(renderer, x + 17, y + 14, 4, 5, color)
+        draw_rect(renderer, x + 13, y + 20, 4, 3, color)
+    } else if icon != MSGBOX_ICON_NONE {
+        draw_rect(renderer, x + 5, y + 5, 22, 22, accent)
+        draw_rect(renderer, x + 14, y + 12, 4, 11, color)
+        draw_rect(renderer, x + 14, y + 8, 4, 3, color)
+    }
+}
+
+func draw_disclosure(renderer: std.sdl.Renderer, x: i64, y: i64, expanded: bool, color: u32) {
+    set_color(renderer, color)
+    if expanded {
+        renderer.draw_line((x + 3) as float, (y + 6) as float, (x + 8) as float, (y + 11) as float)
+        renderer.draw_line((x + 8) as float, (y + 11) as float, (x + 13) as float, (y + 6) as float)
+    } else {
+        renderer.draw_line((x + 5) as float, (y + 4) as float, (x + 10) as float, (y + 9) as float)
+        renderer.draw_line((x + 10) as float, (y + 9) as float, (x + 5) as float, (y + 14) as float)
+    }
 }
 
 // Lightweight placeholder text renderer. Each character is represented as
@@ -244,6 +358,54 @@ func get_list_item_at(items: string, index: i64) -> string {
     return "" as string
 }
 
+class CanvasCommand {
+    let op: i64
+    let x1: i64
+    let y1: i64
+    let x2: i64
+    let y2: i64
+    let color: u32
+    let next: CanvasCommand
+
+    constructor(op: i64, x1: i64, y1: i64, x2: i64, y2: i64, color: u32) {
+        self.op = op
+        self.x1 = x1
+        self.y1 = y1
+        self.x2 = x2
+        self.y2 = y2
+        self.color = color
+        self.next = null
+    }
+}
+
+class ListItem {
+    let text: string
+    let icon: i64
+    let next: ListItem
+
+    constructor(text: string, icon: i64) {
+        self.text = text
+        self.icon = icon
+        self.next = null
+    }
+}
+
+class TreeItem {
+    let text: string
+    let indent: i64
+    let is_folder: bool
+    let expanded: bool
+    let next: TreeItem
+
+    constructor(text: string, indent: i64, is_folder: bool) {
+        self.text = text
+        self.indent = indent
+        self.is_folder = is_folder
+        self.expanded = true
+        self.next = null
+    }
+}
+
 class Widget {
     let kind: string
     let kind_id: i64
@@ -253,6 +415,20 @@ class Widget {
     let y: i64
     let width: i64
     let height: i64
+    let width_percent: i64
+    let height_percent: i64
+    let min_width: i64
+    let min_height: i64
+    let max_width: i64
+    let max_height: i64
+    let margin: i64
+    let margin_left: i64
+    let margin_right: i64
+    let margin_top: i64
+    let margin_bottom: i64
+    let flex_grow: i64
+    let layout_width_owned: bool
+    let layout_height_owned: bool
     let padding: i64
     let spacing: i64
     let preferred_height: i64
@@ -270,6 +446,16 @@ class Widget {
     let min_value: i64
     let max_value: i64
     let checked: bool
+    let focused: bool
+    let caret_index: i64
+    let combo_open: bool
+    let menu_open: bool
+    let icon: i64
+    let message: string
+    let button_mode: i64
+    let result: i64
+    let visible: bool
+    let placeholder: string
     let selectable: bool
     let selecting: bool
     let selection_start: i64
@@ -288,6 +474,20 @@ class Widget {
     let selected_index: i64
     let item_height: i64
     let scroll_offset: i64
+    let first_list_item: ListItem
+    let last_list_item: ListItem
+    let first_tree_item: TreeItem
+    let last_tree_item: TreeItem
+    let canvas_background: u32
+    let canvas_stroke: u32
+    let canvas_fill: u32
+    let first_canvas_command: CanvasCommand
+    let last_canvas_command: CanvasCommand
+    let image_path: string
+    let image_texture: SDL_Texture*
+    let image_loaded: bool
+    let image_failed: bool
+    let terminal_prompt: string
 
     constructor(kind: string) {
         self.kind = kind
@@ -298,6 +498,20 @@ class Widget {
         self.y = 0
         self.width = 0
         self.height = 0
+        self.width_percent = 0
+        self.height_percent = 0
+        self.min_width = 0
+        self.min_height = 0
+        self.max_width = 0
+        self.max_height = 0
+        self.margin = 0
+        self.margin_left = 0
+        self.margin_right = 0
+        self.margin_top = 0
+        self.margin_bottom = 0
+        self.flex_grow = 0
+        self.layout_width_owned = false
+        self.layout_height_owned = false
         self.padding = 12
         self.spacing = 8
         self.preferred_height = 32
@@ -315,6 +529,16 @@ class Widget {
         self.min_value = 0
         self.max_value = 100
         self.checked = false
+        self.focused = false
+        self.caret_index = 0
+        self.combo_open = false
+        self.menu_open = false
+        self.icon = LIST_ICON_NONE
+        self.message = ""
+        self.button_mode = MSGBOX_BUTTONS_OK
+        self.result = MSGBOX_RESULT_NONE
+        self.visible = true
+        self.placeholder = ""
         self.selectable = false
         self.selecting = false
         self.selection_start = 0
@@ -330,6 +554,20 @@ class Widget {
         self.selected_index = 0
         self.item_height = 24
         self.scroll_offset = 0
+        self.first_list_item = null
+        self.last_list_item = null
+        self.first_tree_item = null
+        self.last_tree_item = null
+        self.canvas_background = 0xFFFFFFFF as u32
+        self.canvas_stroke = 0xFF151A22 as u32
+        self.canvas_fill = 0xFF2F7CF6 as u32
+        self.first_canvas_command = null
+        self.last_canvas_command = null
+        self.image_path = ""
+        self.image_texture = null
+        self.image_loaded = false
+        self.image_failed = false
+        self.terminal_prompt = "> "
     }
 
     func add_child(child: Widget) {
@@ -360,13 +598,73 @@ class Widget {
         return ((clamped - self.min_value) * 100) / span
     }
 
+    func box_margin_left() -> i64 {
+        if self.margin_left > 0 {
+            return self.margin_left
+        }
+        return self.margin
+    }
+
+    func box_margin_right() -> i64 {
+        if self.margin_right > 0 {
+            return self.margin_right
+        }
+        return self.margin
+    }
+
+    func box_margin_top() -> i64 {
+        if self.margin_top > 0 {
+            return self.margin_top
+        }
+        return self.margin
+    }
+
+    func box_margin_bottom() -> i64 {
+        if self.margin_bottom > 0 {
+            return self.margin_bottom
+        }
+        return self.margin
+    }
+
+    func constrain_width(value: i64) -> i64 {
+        let result: i64 = value
+        if result < self.min_width {
+            result = self.min_width
+        }
+        if self.max_width > 0 && result > self.max_width {
+            result = self.max_width
+        }
+        if result < 0 {
+            result = 0
+        }
+        return result
+    }
+
+    func constrain_height(value: i64) -> i64 {
+        let result: i64 = value
+        if result < self.min_height {
+            result = self.min_height
+        }
+        if self.max_height > 0 && result > self.max_height {
+            result = self.max_height
+        }
+        if result < 0 {
+            result = 0
+        }
+        return result
+    }
+
     func text_index_at(px: i64) -> i64 {
         let len: i64 = text_len(self.text)
         let rel: i64 = px - (self.x + 10)
         if rel <= 0 {
             return 0
         }
-        return clamp_i64(rel / 7, 0, len)
+        return clamp_i64((rel + 3) / 7, 0, len)
+    }
+
+    func clamp_caret() {
+        self.caret_index = clamp_i64(self.caret_index, 0, text_len(self.text))
     }
 
     func set_value_from_x(px: i64) {
@@ -378,16 +676,646 @@ class Widget {
         self.value = self.min_value + ((self.max_value - self.min_value) * rel) / usable
     }
 
-    func begin_pointer(px: i64, py: i64) -> bool {
+    func set_value_from_y(py: i64) {
+        let usable: i64 = self.height - self.padding * 2
+        if usable <= 0 {
+            return
+        }
+        let rel: i64 = clamp_i64(py - (self.y + self.padding), 0, usable)
+        self.value = self.min_value + ((self.max_value - self.min_value) * rel) / usable
+    }
+
+    func combo_menu_contains(px: i64, py: i64) -> bool {
+        if self.kind_id != WIDGET_COMBOBOX || !self.combo_open {
+            return false
+        }
+        let count: i64 = self.list_item_count()
+        return px >= self.x && px < self.x + self.width &&
+            py >= self.y && py < self.y + self.height + count * self.item_height
+    }
+
+    func menu_label_width() -> i64 {
+        return text_len(self.text) * 8 + 26
+    }
+
+    func menu_popup_width() -> i64 {
+        let result: i64 = self.width
+        if result < 160 {
+            result = 160
+        }
         let child: Widget = self.first_child
         while child != null {
-            if child.begin_pointer(px, py) {
+            let label_w: i64 = text_len(child.text) * 8 + 54
+            if child.first_child != null {
+                label_w = label_w + 18
+            }
+            if label_w > result {
+                result = label_w
+            }
+            child = child.next_sibling
+        }
+        return result
+    }
+
+    func menu_item_count() -> i64 {
+        let count: i64 = 0
+        let child: Widget = self.first_child
+        while child != null {
+            count = count + 1
+            child = child.next_sibling
+        }
+        return count
+    }
+
+    func menu_item_at(index: i64) -> Widget {
+        let current: i64 = 0
+        let child: Widget = self.first_child
+        while child != null {
+            if current == index {
+                return child
+            }
+            current = current + 1
+            child = child.next_sibling
+        }
+        return null
+    }
+
+    func dialog_button_count() -> i64 {
+        if self.button_mode == MSGBOX_BUTTONS_OK {
+            return 1
+        }
+        if self.button_mode == MSGBOX_BUTTONS_OK_CANCEL {
+            return 2
+        }
+        if self.button_mode == MSGBOX_BUTTONS_YES_NO {
+            return 2
+        }
+        if self.button_mode == MSGBOX_BUTTONS_YES_NO_CANCEL {
+            return 3
+        }
+        return 1
+    }
+
+    func dialog_button_label(index: i64) -> string {
+        if self.button_mode == MSGBOX_BUTTONS_OK {
+            return "OK" as string
+        }
+        if self.button_mode == MSGBOX_BUTTONS_OK_CANCEL {
+            if index == 0 {
+                return "OK" as string
+            }
+            return "Cancel" as string
+        }
+        if self.button_mode == MSGBOX_BUTTONS_YES_NO {
+            if index == 0 {
+                return "Yes" as string
+            }
+            return "No" as string
+        }
+        if self.button_mode == MSGBOX_BUTTONS_YES_NO_CANCEL {
+            if index == 0 {
+                return "Yes" as string
+            }
+            if index == 1 {
+                return "No" as string
+            }
+            return "Cancel" as string
+        }
+        return "OK" as string
+    }
+
+    func dialog_button_result(index: i64) -> i64 {
+        if self.button_mode == MSGBOX_BUTTONS_OK {
+            return MSGBOX_RESULT_OK
+        }
+        if self.button_mode == MSGBOX_BUTTONS_OK_CANCEL {
+            if index == 0 {
+                return MSGBOX_RESULT_OK
+            }
+            return MSGBOX_RESULT_CANCEL
+        }
+        if self.button_mode == MSGBOX_BUTTONS_YES_NO {
+            if index == 0 {
+                return MSGBOX_RESULT_YES
+            }
+            return MSGBOX_RESULT_NO
+        }
+        if self.button_mode == MSGBOX_BUTTONS_YES_NO_CANCEL {
+            if index == 0 {
+                return MSGBOX_RESULT_YES
+            }
+            if index == 1 {
+                return MSGBOX_RESULT_NO
+            }
+            return MSGBOX_RESULT_CANCEL
+        }
+        return MSGBOX_RESULT_OK
+    }
+
+    func dialog_button_at(px: i64, py: i64) -> i64 {
+        let count: i64 = self.dialog_button_count()
+        let button_w: i64 = 88
+        let button_h: i64 = 32
+        let gap: i64 = 10
+        let total_w: i64 = count * button_w + (count - 1) * gap
+        let start_x: i64 = self.x + self.width - total_w - 20
+        let button_y: i64 = self.y + self.height - button_h - 18
+        let i: i64 = 0
+        while i < count {
+            let button_x: i64 = start_x + i * (button_w + gap)
+            if px >= button_x && px < button_x + button_w && py >= button_y && py < button_y + button_h {
+                return i
+            }
+            i = i + 1
+        }
+        return -1
+    }
+
+    func dialog_input_contains(px: i64, py: i64) -> bool {
+        if self.kind_id != WIDGET_INPUTBOX {
+            return false
+        }
+        let input_x: i64 = self.x + 52
+        let input_y: i64 = self.y + 92
+        let input_w: i64 = self.width - 72
+        let input_h: i64 = 36
+        return px >= input_x && px < input_x + input_w && py >= input_y && py < input_y + input_h
+    }
+
+    func close_dialog(result: i64) {
+        self.result = result
+        self.visible = false
+        self.focused = false
+    }
+
+    func close_menus() {
+        if self.kind_id == WIDGET_MENU {
+            self.menu_open = false
+        }
+        let child: Widget = self.first_child
+        while child != null {
+            child.close_menus()
+            child = child.next_sibling
+        }
+    }
+
+    func menu_popup_contains(px: i64, py: i64) -> bool {
+        if self.kind_id != WIDGET_MENU || !self.menu_open {
+            return false
+        }
+        let popup_w: i64 = self.menu_popup_width()
+        let popup_h: i64 = self.menu_item_count() * self.item_height
+        if px >= self.x && px < self.x + popup_w && py >= self.y + self.height && py < self.y + self.height + popup_h {
+            return true
+        }
+        let item: Widget = self.first_child
+        while item != null {
+            if item.menu_popup_contains(px, py) {
+                return true
+            }
+            item = item.next_sibling
+        }
+        return false
+    }
+
+    func any_menu_popup_contains(px: i64, py: i64) -> bool {
+        if self.menu_popup_contains(px, py) {
+            return true
+        }
+        let child: Widget = self.first_child
+        while child != null {
+            if child.any_menu_popup_contains(px, py) {
                 return true
             }
             child = child.next_sibling
         }
+        return false
+    }
 
-        if !self.contains(px, py) {
+    func begin_menu_pointer(px: i64, py: i64) -> bool {
+        let cursor_x: i64 = self.x + 4
+        let child: Widget = self.first_child
+        while child != null {
+            let item_w: i64 = child.menu_label_width()
+            if py >= self.y && py < self.y + self.height && px >= cursor_x && px < cursor_x + item_w {
+                self.close_menus()
+                child.x = cursor_x
+                child.y = self.y
+                child.width = item_w
+                child.height = self.height
+                child.menu_open = true
+                return true
+            }
+            cursor_x = cursor_x + item_w
+            child = child.next_sibling
+        }
+
+        child = self.first_child
+        while child != null {
+            if child.begin_menu_popup_pointer(px, py) {
+                return true
+            }
+            child = child.next_sibling
+        }
+        return false
+    }
+
+    func begin_menu_popup_pointer(px: i64, py: i64) -> bool {
+        if self.kind_id != WIDGET_MENU || !self.menu_open {
+            return false
+        }
+        let popup_w: i64 = self.menu_popup_width()
+        let rel_y: i64 = py - (self.y + self.height)
+        if px >= self.x && px < self.x + popup_w && rel_y >= 0 {
+            let index: i64 = rel_y / self.item_height
+            let item: Widget = self.menu_item_at(index)
+            if item != null {
+                if item.first_child != null {
+                    let sibling: Widget = self.first_child
+                    while sibling != null {
+                        if sibling != item {
+                            sibling.close_menus()
+                        }
+                        sibling = sibling.next_sibling
+                    }
+                    item.x = self.x + popup_w
+                    item.y = self.y + self.height + index * self.item_height - self.item_height
+                    item.width = popup_w
+                    item.height = self.item_height
+                    item.menu_open = true
+                    return true
+                }
+                if item.has_onClick {
+                    let handler: () -> void = item.onClick
+                    handler()
+                }
+                self.close_menus()
+                return true
+            }
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            if child.begin_menu_popup_pointer(px, py) {
+                return true
+            }
+            child = child.next_sibling
+        }
+        return false
+    }
+
+    func clear_interaction_focus() {
+        if self.kind_id == WIDGET_TEXTBOX {
+            self.focused = false
+        }
+        if self.kind_id == WIDGET_INPUTBOX {
+            self.focused = false
+        }
+        if self.kind_id == WIDGET_TERMINAL {
+            self.focused = false
+        }
+        if self.kind_id == WIDGET_COMBOBOX {
+            self.combo_open = false
+        }
+        if self.kind_id == WIDGET_MENU {
+            self.menu_open = false
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.clear_interaction_focus()
+            child = child.next_sibling
+        }
+    }
+
+    func clear_text_focus() {
+        if self.kind_id == WIDGET_TEXTBOX {
+            self.focused = false
+        }
+        if self.kind_id == WIDGET_INPUTBOX {
+            self.focused = false
+        }
+        if self.kind_id == WIDGET_TERMINAL {
+            self.focused = false
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            child.clear_text_focus()
+            child = child.next_sibling
+        }
+    }
+
+    func focused_textbox() -> Widget {
+        if self.kind_id == WIDGET_TEXTBOX && self.focused {
+            return self
+        }
+        if self.kind_id == WIDGET_INPUTBOX && self.focused {
+            return self
+        }
+        if self.kind_id == WIDGET_TERMINAL && self.focused {
+            return self
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            let found: Widget = child.focused_textbox()
+            if found != null {
+                return found
+            }
+            child = child.next_sibling
+        }
+        return null
+    }
+
+    func append_text(value: string) {
+        self.clamp_caret()
+        let left_len: i64 = self.caret_index
+        let old_len: i64 = text_len(self.text)
+        let insert_len: i64 = text_len(value)
+        let buf: char* = malloc(old_len + insert_len + 1) as char*
+        let i: i64 = 0
+        while i < left_len {
+            buf[i] = self.text[i]
+            i = i + 1
+        }
+        let j: i64 = 0
+        while j < insert_len {
+            buf[i + j] = value[j]
+            j = j + 1
+        }
+        let k: i64 = left_len
+        while k < old_len {
+            buf[insert_len + k] = self.text[k]
+            k = k + 1
+        }
+        buf[old_len + insert_len] = 0
+        self.text = buf as string
+        self.caret_index = left_len + insert_len
+    }
+
+    func backspace_text() {
+        let len: i64 = text_len(self.text)
+        self.clamp_caret()
+        if len <= 0 || self.caret_index <= 0 {
+            return
+        }
+        let buf: char* = malloc(len) as char*
+        let i: i64 = 0
+        while i < self.caret_index - 1 {
+            buf[i] = self.text[i]
+            i = i + 1
+        }
+        let j: i64 = self.caret_index
+        while j < len {
+            buf[i] = self.text[j]
+            i = i + 1
+            j = j + 1
+        }
+        buf[len - 1] = 0
+        self.text = buf as string
+        self.caret_index = self.caret_index - 1
+    }
+
+    func set_caret_from_x(px: i64) {
+        self.caret_index = self.text_index_at(px)
+    }
+
+    func move_caret_left() {
+        self.clamp_caret()
+        if self.caret_index > 0 {
+            self.caret_index = self.caret_index - 1
+        }
+    }
+
+    func move_caret_right() {
+        self.clamp_caret()
+        let len: i64 = text_len(self.text)
+        if self.caret_index < len {
+            self.caret_index = self.caret_index + 1
+        }
+    }
+
+    func list_item_count() -> i64 {
+        if self.kind_id != WIDGET_LIST && self.kind_id != WIDGET_COMBOBOX {
+            return count_list_items(self.items_text)
+        }
+        let count: i64 = 0
+        let item: ListItem = self.first_list_item
+        while item != null {
+            count = count + 1
+            item = item.next
+        }
+        return count
+    }
+
+    func list_item_at(index: i64) -> ListItem {
+        let current: i64 = 0
+        let item: ListItem = self.first_list_item
+        while item != null {
+            if current == index {
+                return item
+            }
+            current = current + 1
+            item = item.next
+        }
+        return null
+    }
+
+    func tree_item_visible(target: TreeItem) -> bool {
+        let hidden_indent: i64 = -1
+        let item: TreeItem = self.first_tree_item
+        while item != null {
+            if hidden_indent >= 0 {
+                if item.indent > hidden_indent {
+                    if item == target {
+                        return false
+                    }
+                    item = item.next
+                    continue
+                }
+                hidden_indent = -1
+            }
+
+            if item == target {
+                return true
+            }
+            if item.is_folder && !item.expanded {
+                hidden_indent = item.indent
+            }
+            item = item.next
+        }
+        return false
+    }
+
+    func tree_visible_count() -> i64 {
+        let count: i64 = 0
+        let item: TreeItem = self.first_tree_item
+        while item != null {
+            if self.tree_item_visible(item) {
+                count = count + 1
+            }
+            item = item.next
+        }
+        return count
+    }
+
+    func tree_item_at_visible(index: i64) -> TreeItem {
+        let current: i64 = 0
+        let item: TreeItem = self.first_tree_item
+        while item != null {
+            if self.tree_item_visible(item) {
+                if current == index {
+                    return item
+                }
+                current = current + 1
+            }
+            item = item.next
+        }
+        return null
+    }
+
+    func tab_count() -> i64 {
+        let count: i64 = 0
+        let child: Widget = self.first_child
+        while child != null {
+            if child.visible && child.kind_id == WIDGET_TABPAGE {
+                count = count + 1
+            }
+            child = child.next_sibling
+        }
+        return count
+    }
+
+    func active_tab_page() -> Widget {
+        let index: i64 = 0
+        let child: Widget = self.first_child
+        while child != null {
+            if child.visible && child.kind_id == WIDGET_TABPAGE {
+                if index == self.selected_index {
+                    return child
+                }
+                index = index + 1
+            }
+            child = child.next_sibling
+        }
+        return null
+    }
+
+    func child_active_for_traversal(child: Widget) -> bool {
+        if self.kind_id != WIDGET_TABCONTAINER {
+            return true
+        }
+        return child == self.active_tab_page()
+    }
+
+    func terminal_append_line(line: string) {
+        if text_len(self.items_text) == 0 {
+            self.items_text = line
+            return
+        }
+        let old_len: i64 = text_len(self.items_text)
+        let line_len: i64 = text_len(line)
+        let buf: char* = malloc(old_len + line_len + 2) as char*
+        let i: i64 = 0
+        while i < old_len {
+            buf[i] = self.items_text[i]
+            i = i + 1
+        }
+        buf[i] = '\n'
+        i = i + 1
+        let j: i64 = 0
+        while j < line_len {
+            buf[i + j] = line[j]
+            j = j + 1
+        }
+        buf[i + line_len] = 0
+        self.items_text = buf as string
+    }
+
+    func terminal_clear() {
+        self.items_text = ""
+        self.text = ""
+        self.caret_index = 0
+    }
+
+    func terminal_submit() {
+        if text_len(self.text) > 0 {
+            let old_prompt: string = self.terminal_prompt
+            let command: string = self.text
+            let total: i64 = text_len(old_prompt) + text_len(command)
+            let buf: char* = malloc(total + 1) as char*
+            let i: i64 = 0
+            while old_prompt[i] != 0 {
+                buf[i] = old_prompt[i]
+                i = i + 1
+            }
+            let j: i64 = 0
+            while command[j] != 0 {
+                buf[i + j] = command[j]
+                j = j + 1
+            }
+            buf[total] = 0
+            self.terminal_append_line(buf as string)
+            self.text = ""
+            self.caret_index = 0
+        }
+    }
+
+    func begin_pointer(px: i64, py: i64) -> bool {
+        if !self.visible {
+            return false
+        }
+
+        if self.kind_id == WIDGET_MSGBOX || self.kind_id == WIDGET_INPUTBOX {
+            if !self.contains(px, py) {
+                return false
+            }
+            if self.dialog_input_contains(px, py) {
+                self.focused = true
+                let rel: i64 = px - (self.x + 62)
+                if rel <= 0 {
+                    self.caret_index = 0
+                } else {
+                    self.caret_index = clamp_i64((rel + 3) / 7, 0, text_len(self.text))
+                }
+                return true
+            }
+            self.focused = false
+            let button_index: i64 = self.dialog_button_at(px, py)
+            if button_index >= 0 {
+                self.close_dialog(self.dialog_button_result(button_index))
+                return true
+            }
+            return true
+        }
+
+        if self.kind_id == WIDGET_MENUBAR {
+            return self.begin_menu_pointer(px, py)
+        }
+
+        if self.kind_id == WIDGET_TABCONTAINER {
+            if self.contains(px, py) && py >= self.y && py < self.y + self.item_height {
+                let rel_x: i64 = px - self.x
+                let index: i64 = rel_x / 120
+                if index >= 0 && index < self.tab_count() {
+                    self.selected_index = index
+                    return true
+                }
+            }
+        }
+
+        let child: Widget = self.first_child
+        while child != null {
+            if self.child_active_for_traversal(child) {
+                if child.begin_pointer(px, py) {
+                    return true
+                }
+            }
+            child = child.next_sibling
+        }
+
+        if !self.contains(px, py) && !self.combo_menu_contains(px, py) && !self.any_menu_popup_contains(px, py) {
             return false
         }
 
@@ -395,9 +1323,38 @@ class Widget {
             self.checked = !self.checked
             return true
         }
+        if self.kind_id == WIDGET_TEXTBOX {
+            self.focused = true
+            self.set_caret_from_x(px)
+            return true
+        }
+        if self.kind_id == WIDGET_TERMINAL {
+            self.focused = true
+            self.caret_index = text_len(self.text)
+            return true
+        }
+        if self.kind_id == WIDGET_COMBOBOX {
+            if self.combo_open && py >= self.y + self.height {
+                let option_index: i64 = (py - (self.y + self.height)) / self.item_height
+                let selected: ListItem = self.list_item_at(option_index)
+                if selected != null {
+                    self.selected_index = option_index
+                    self.text = selected.text
+                    self.combo_open = false
+                    return true
+                }
+            }
+            self.combo_open = !self.combo_open
+            return true
+        }
         if self.kind_id == WIDGET_SLIDER {
             self.selecting = true
             self.set_value_from_x(px)
+            return true
+        }
+        if self.kind_id == WIDGET_SCROLLBAR {
+            self.selecting = true
+            self.set_value_from_y(py)
             return true
         }
         if self.selectable {
@@ -406,13 +1363,27 @@ class Widget {
             self.selection_end = self.selection_start
             return true
         }
-        if self.kind_id == WIDGET_LIST || self.kind_id == WIDGET_TREEVIEW {
+        if self.kind_id == WIDGET_LIST {
             let rel_y: i64 = py - (self.y + 4)
             if rel_y >= 0 {
                 let item_index: i64 = rel_y / self.item_height + self.scroll_offset
-                let item_count: i64 = count_list_items(self.items_text)
+                let item_count: i64 = self.list_item_count()
                 if item_index >= 0 && item_index < item_count {
                     self.selected_index = item_index
+                    return true
+                }
+            }
+        }
+        if self.kind_id == WIDGET_TREEVIEW {
+            let rel_tree_y: i64 = py - (self.y + 4)
+            if rel_tree_y >= 0 {
+                let visible_index: i64 = rel_tree_y / self.item_height + self.scroll_offset
+                let tree_item: TreeItem = self.tree_item_at_visible(visible_index)
+                if tree_item != null {
+                    self.selected_index = visible_index
+                    if tree_item.is_folder {
+                        tree_item.expanded = !tree_item.expanded
+                    }
                     return true
                 }
             }
@@ -421,9 +1392,14 @@ class Widget {
     }
 
     func drag_pointer(px: i64, py: i64) {
+        if !self.visible {
+            return
+        }
         if self.selecting {
             if self.kind_id == WIDGET_SLIDER {
                 self.set_value_from_x(px)
+            } else if self.kind_id == WIDGET_SCROLLBAR {
+                self.set_value_from_y(py)
             } else if self.selectable {
                 self.selection_end = self.text_index_at(px)
             }
@@ -431,17 +1407,24 @@ class Widget {
 
         let child: Widget = self.first_child
         while child != null {
-            child.drag_pointer(px, py)
+            if self.child_active_for_traversal(child) {
+                child.drag_pointer(px, py)
+            }
             child = child.next_sibling
         }
     }
 
     func end_pointer(px: i64, py: i64) {
+        if !self.visible {
+            return
+        }
         self.selecting = false
 
         let child: Widget = self.first_child
         while child != null {
-            child.end_pointer(px, py)
+            if self.child_active_for_traversal(child) {
+                child.end_pointer(px, py)
+            }
             child = child.next_sibling
         }
     }
@@ -454,7 +1437,9 @@ class Widget {
             self.hover_foreground = self.foreground
             self.border = 0xFF3B4250 as u32
             self.hover_border = self.border
-        } else if self.kind_id == WIDGET_PANEL || self.kind_id == WIDGET_CARD {
+        } else if self.kind_id == WIDGET_PANEL || self.kind_id == WIDGET_CARD ||
+                self.kind_id == WIDGET_GROUPBOX || self.kind_id == WIDGET_MSGBOX || self.kind_id == WIDGET_INPUTBOX ||
+                self.kind_id == WIDGET_TABCONTAINER || self.kind_id == WIDGET_TABPAGE {
             self.background = LIGHT_PANEL_BG
             self.hover_background = 0xFFF5F7FC as u32
             self.foreground = LIGHT_TEXT
@@ -471,7 +1456,8 @@ class Widget {
             self.accent = LIGHT_BUTTON_BG
             self.track = LIGHT_TRACK
             self.selection = LIGHT_SELECTION
-        } else if self.kind_id == WIDGET_PROGRESS || self.kind_id == WIDGET_SLIDER {
+        } else if self.kind_id == WIDGET_PROGRESS || self.kind_id == WIDGET_SLIDER ||
+                self.kind_id == WIDGET_SCROLLBAR || self.kind_id == WIDGET_SPINNER {
             self.background = 0x00FFFFFF as u32
             self.hover_background = self.background
             self.foreground = LIGHT_TEXT
@@ -491,6 +1477,34 @@ class Widget {
             self.accent = LIGHT_BUTTON_BG
             self.track = LIGHT_TRACK
             self.selection = LIGHT_SELECTION
+        } else if self.kind_id == WIDGET_TEXTBOX || self.kind_id == WIDGET_COMBOBOX {
+            self.background = 0xFFFFFFFF as u32
+            self.hover_background = 0xFFF5F7FC as u32
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+            self.accent = LIGHT_BUTTON_BG
+            self.selection = LIGHT_SELECTION
+        } else if self.kind_id == WIDGET_MENUBAR || self.kind_id == WIDGET_MENU ||
+                self.kind_id == WIDGET_MENUITEM || self.kind_id == WIDGET_STATUSBAR {
+            self.background = 0xFFFFFFFF as u32
+            self.hover_background = 0xFFF5F7FC as u32
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = 0xFF99A5B8 as u32
+            self.accent = LIGHT_BUTTON_BG
+            self.selection = LIGHT_SELECTION
+        } else if self.kind_id == WIDGET_LIST || self.kind_id == WIDGET_TREEVIEW {
+            self.background = 0xFFFFFFFF as u32
+            self.hover_background = 0xFFF5F7FC as u32
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = 0xFF99A5B8 as u32
+            self.accent = LIGHT_BUTTON_BG
+            self.selection = LIGHT_SELECTION
         } else if self.kind_id == WIDGET_TEXT {
             self.background = 0x00FFFFFF as u32
             self.hover_background = self.background
@@ -498,6 +1512,34 @@ class Widget {
             self.hover_foreground = self.foreground
             self.border = 0x00FFFFFF as u32
             self.hover_border = self.border
+            self.selection = LIGHT_SELECTION
+        } else if self.kind_id == WIDGET_CANVAS {
+            self.background = 0xFFFFFFFF as u32
+            self.hover_background = self.background
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = 0xFF99A5B8 as u32
+            self.accent = LIGHT_BUTTON_BG
+            self.canvas_background = self.background
+            self.canvas_stroke = LIGHT_TEXT
+            self.canvas_fill = LIGHT_BUTTON_BG
+        } else if self.kind_id == WIDGET_PICTURE {
+            self.background = 0xFFFFFFFF as u32
+            self.hover_background = self.background
+            self.foreground = LIGHT_TEXT
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = 0xFF99A5B8 as u32
+            self.accent = LIGHT_BUTTON_BG
+        } else if self.kind_id == WIDGET_TERMINAL {
+            self.background = 0xFF0F1720 as u32
+            self.hover_background = self.background
+            self.foreground = 0xFFE6F4EA as u32
+            self.hover_foreground = self.foreground
+            self.border = LIGHT_BORDER
+            self.hover_border = 0xFF99A5B8 as u32
+            self.accent = 0xFF26A890 as u32
             self.selection = LIGHT_SELECTION
         } else {
             self.background = 0x00FFFFFF as u32
@@ -526,7 +1568,9 @@ class Widget {
             self.hover_foreground = self.foreground
             self.border = DARK_BORDER
             self.hover_border = DARK_HOVER_BORDER
-        } else if self.kind_id == WIDGET_PANEL || self.kind_id == WIDGET_CARD {
+        } else if self.kind_id == WIDGET_PANEL || self.kind_id == WIDGET_CARD ||
+                self.kind_id == WIDGET_GROUPBOX || self.kind_id == WIDGET_MSGBOX || self.kind_id == WIDGET_INPUTBOX ||
+                self.kind_id == WIDGET_TABCONTAINER || self.kind_id == WIDGET_TABPAGE {
             self.background = DARK_PANEL_BG
             self.hover_background = DARK_PANEL_HOVER_BG
             self.foreground = DARK_TEXT
@@ -543,7 +1587,8 @@ class Widget {
             self.accent = DARK_BUTTON_BG
             self.track = DARK_TRACK
             self.selection = DARK_SELECTION
-        } else if self.kind_id == WIDGET_PROGRESS || self.kind_id == WIDGET_SLIDER {
+        } else if self.kind_id == WIDGET_PROGRESS || self.kind_id == WIDGET_SLIDER ||
+                self.kind_id == WIDGET_SCROLLBAR || self.kind_id == WIDGET_SPINNER {
             self.background = 0x00000000 as u32
             self.hover_background = self.background
             self.foreground = DARK_TEXT
@@ -563,6 +1608,34 @@ class Widget {
             self.accent = DARK_BUTTON_BG
             self.track = DARK_TRACK
             self.selection = DARK_SELECTION
+        } else if self.kind_id == WIDGET_TEXTBOX || self.kind_id == WIDGET_COMBOBOX {
+            self.background = 0xFF151A20 as u32
+            self.hover_background = 0xFF1D242D as u32
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_BUTTON_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+            self.selection = DARK_SELECTION
+        } else if self.kind_id == WIDGET_MENUBAR || self.kind_id == WIDGET_MENU ||
+                self.kind_id == WIDGET_MENUITEM || self.kind_id == WIDGET_STATUSBAR {
+            self.background = 0xFF151A20 as u32
+            self.hover_background = 0xFF1D242D as u32
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+            self.selection = DARK_SELECTION
+        } else if self.kind_id == WIDGET_LIST || self.kind_id == WIDGET_TREEVIEW {
+            self.background = 0xFF151A20 as u32
+            self.hover_background = 0xFF1D242D as u32
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+            self.selection = DARK_SELECTION
         } else if self.kind_id == WIDGET_TEXT {
             self.background = 0x00000000 as u32
             self.hover_background = self.background
@@ -570,6 +1643,34 @@ class Widget {
             self.hover_foreground = DARK_TEXT
             self.border = 0x00000000 as u32
             self.hover_border = self.border
+            self.selection = DARK_SELECTION
+        } else if self.kind_id == WIDGET_CANVAS {
+            self.background = 0xFF0F1318 as u32
+            self.hover_background = self.background
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+            self.canvas_background = self.background
+            self.canvas_stroke = DARK_TEXT
+            self.canvas_fill = DARK_BUTTON_BG
+        } else if self.kind_id == WIDGET_PICTURE {
+            self.background = 0xFF151A20 as u32
+            self.hover_background = self.background
+            self.foreground = DARK_TEXT
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_HOVER_BORDER
+            self.accent = DARK_BUTTON_BG
+        } else if self.kind_id == WIDGET_TERMINAL {
+            self.background = 0xFF070B10 as u32
+            self.hover_background = self.background
+            self.foreground = 0xFFB7F7C5 as u32
+            self.hover_foreground = self.foreground
+            self.border = DARK_BORDER
+            self.hover_border = DARK_HOVER_BORDER
+            self.accent = 0xFF26A890 as u32
             self.selection = DARK_SELECTION
         } else {
             self.background = 0x00000000 as u32
@@ -591,6 +1692,10 @@ class Widget {
     }
 
     func update_hover(px: i64, py: i64) {
+        if !self.visible {
+            self.hovered = false
+            return
+        }
         let was_hovered: bool = self.hovered
         self.hovered = self.contains(px, py)
 
@@ -605,12 +1710,19 @@ class Widget {
 
         let child: Widget = self.first_child
         while child != null {
-            child.update_hover(px, py)
+            if self.child_active_for_traversal(child) {
+                child.update_hover(px, py)
+            } else {
+                child.hovered = false
+            }
             child = child.next_sibling
         }
     }
 
     func animate() {
+        if !self.visible {
+            return
+        }
         let visual_hover: bool = self.hover_background != self.background ||
             self.hover_foreground != self.foreground || self.hover_border != self.border
         if self.hovered && visual_hover {
@@ -629,30 +1741,117 @@ class Widget {
             }
         }
 
+        if self.kind_id == WIDGET_SPINNER {
+            self.value = self.value + 1
+            if self.value > 7 {
+                self.value = 0
+            }
+        }
+
         let child: Widget = self.first_child
         while child != null {
-            child.animate()
+            if self.child_active_for_traversal(child) {
+                child.animate()
+            }
             child = child.next_sibling
         }
     }
 
     func layout_tree() {
+        if !self.visible {
+            return
+        }
         let child: Widget = self.first_child
         if child == null {
             return
         }
 
+        if self.kind_id == WIDGET_TABCONTAINER {
+            let page: Widget = self.active_tab_page()
+            if page != null {
+                page.x = self.x + self.padding
+                page.y = self.y + self.item_height + self.padding
+                page.width = page.constrain_width(self.width - self.padding * 2)
+                page.height = page.constrain_height(self.height - self.item_height - self.padding * 2)
+                page.layout_width_owned = true
+                page.layout_height_owned = true
+                page.layout_tree()
+            }
+            return
+        }
+
         if self.layout == LAYOUT_COLUMN {
             let cy: i64 = self.y + self.padding
+            let content_w: i64 = self.width - self.padding * 2
+            let content_h: i64 = self.height - self.padding * 2
+            let count: i64 = 0
+            let fixed_h: i64 = 0
+            let flex_total: i64 = 0
+            let scan: Widget = self.first_child
+            while scan != null {
+                if scan.visible {
+                    count = count + 1
+                    fixed_h = fixed_h + scan.box_margin_top() + scan.box_margin_bottom()
+                    if scan.height_percent > 0 {
+                        fixed_h = fixed_h + (content_h * scan.height_percent) / 100
+                    } else if scan.flex_grow > 0 {
+                        flex_total = flex_total + scan.flex_grow
+                    } else if scan.height > 0 && !scan.layout_height_owned {
+                        fixed_h = fixed_h + scan.height
+                    } else {
+                        fixed_h = fixed_h + scan.preferred_height
+                    }
+                }
+                scan = scan.next_sibling
+            }
+            if count > 1 {
+                fixed_h = fixed_h + (count - 1) * self.spacing
+            }
+            let remaining_h: i64 = content_h - fixed_h
             while child != null {
-                child.x = self.x + self.padding
-                child.y = cy
-                child.width = self.width - self.padding * 2
-                if child.height == 0 {
-                    child.height = child.preferred_height
+                if !child.visible {
+                    child = child.next_sibling
+                    continue
+                }
+                let ml: i64 = child.box_margin_left()
+                let mr: i64 = child.box_margin_right()
+                let mt: i64 = child.box_margin_top()
+                let mb: i64 = child.box_margin_bottom()
+                child.x = self.x + self.padding + ml
+                child.y = cy + mt
+                if child.width_percent > 0 {
+                    child.width = child.constrain_width(((content_w - ml - mr) * child.width_percent) / 100)
+                    child.layout_width_owned = true
+                } else if child.width == 0 || child.layout_width_owned {
+                    child.width = child.constrain_width(content_w - ml - mr)
+                    child.layout_width_owned = true
+                } else {
+                    child.width = child.constrain_width(child.width)
+                    child.layout_width_owned = false
+                }
+                if child.height_percent > 0 {
+                    child.height = child.constrain_height((content_h * child.height_percent) / 100)
+                    child.layout_height_owned = true
+                } else if child.flex_grow > 0 && flex_total > 0 {
+                    let extra: i64 = 0
+                    if remaining_h > 0 {
+                        extra = (remaining_h * child.flex_grow) / flex_total
+                    }
+                    let base_h: i64 = child.preferred_height
+                    child.height = child.constrain_height(base_h + extra)
+                    child.layout_height_owned = true
+                } else if child.width == 0 {
+                    child.height = child.constrain_height(child.preferred_height)
+                    child.layout_height_owned = true
+                } else if child.height == 0 || child.layout_height_owned {
+                    child.height = child.constrain_height(child.preferred_height)
+                    child.layout_height_owned = true
+                } else {
+                    child.height = child.constrain_height(child.height)
+                    child.layout_height_owned = false
                 }
                 child.layout_tree()
-                cy = cy + child.height + self.spacing
+                cy = cy + mt + child.height + mb + self.spacing
                 child = child.next_sibling
             }
             return
@@ -660,15 +1859,134 @@ class Widget {
 
         if self.layout == LAYOUT_ROW {
             let cx: i64 = self.x + self.padding
-            while child != null {
-                child.x = cx
-                child.y = self.y + self.padding
-                if child.width == 0 {
-                    child.width = 96
+            let content_w: i64 = self.width - self.padding * 2
+            let content_h: i64 = self.height - self.padding * 2
+            let count: i64 = 0
+            let fixed_w: i64 = 0
+            let flex_total: i64 = 0
+            let scan: Widget = self.first_child
+            while scan != null {
+                if scan.visible {
+                    count = count + 1
+                    fixed_w = fixed_w + scan.box_margin_left() + scan.box_margin_right()
+                    if scan.width_percent > 0 {
+                        fixed_w = fixed_w + (content_w * scan.width_percent) / 100
+                    } else if scan.flex_grow > 0 {
+                        flex_total = flex_total + scan.flex_grow
+                    } else if scan.width > 0 && !scan.layout_width_owned {
+                        fixed_w = fixed_w + scan.width
+                    } else {
+                        fixed_w = fixed_w + 96
+                    }
                 }
-                child.height = self.height - self.padding * 2
+                scan = scan.next_sibling
+            }
+            if count > 1 {
+                fixed_w = fixed_w + (count - 1) * self.spacing
+            }
+            let remaining_w: i64 = content_w - fixed_w
+            while child != null {
+                if !child.visible {
+                    child = child.next_sibling
+                    continue
+                }
+                let ml: i64 = child.box_margin_left()
+                let mr: i64 = child.box_margin_right()
+                let mt: i64 = child.box_margin_top()
+                let mb: i64 = child.box_margin_bottom()
+                child.x = cx + ml
+                child.y = self.y + self.padding + mt
+                if child.width_percent > 0 {
+                    child.width = child.constrain_width((content_w * child.width_percent) / 100)
+                    child.layout_width_owned = true
+                } else if child.flex_grow > 0 && flex_total > 0 {
+                    let extra: i64 = 0
+                    if remaining_w > 0 {
+                        extra = (remaining_w * child.flex_grow) / flex_total
+                    }
+                    let base_w: i64 = 96
+                    if child.width > 0 && !child.layout_width_owned {
+                        base_w = child.width
+                    }
+                    child.width = child.constrain_width(base_w + extra)
+                    child.layout_width_owned = true
+                } else if child.width == 0 {
+                    child.width = child.constrain_width(96)
+                    child.layout_width_owned = true
+                } else {
+                    child.width = child.constrain_width(child.width)
+                    child.layout_width_owned = false
+                }
+                if child.height_percent > 0 {
+                    child.height = child.constrain_height(((content_h - mt - mb) * child.height_percent) / 100)
+                    child.layout_height_owned = true
+                } else if child.height == 0 {
+                    child.height = child.constrain_height(content_h - mt - mb)
+                    child.layout_height_owned = true
+                } else if child.layout_height_owned {
+                    child.height = child.constrain_height(content_h - mt - mb)
+                    child.layout_height_owned = true
+                } else {
+                    child.height = child.constrain_height(child.height)
+                    child.layout_height_owned = false
+                }
                 child.layout_tree()
-                cx = cx + child.width + self.spacing
+                cx = cx + ml + child.width + mr + self.spacing
+                child = child.next_sibling
+            }
+            return
+        }
+
+        if self.layout == LAYOUT_WRAP {
+            let content_w: i64 = self.width - self.padding * 2
+            let content_h: i64 = self.height - self.padding * 2
+            let cx: i64 = self.x + self.padding
+            let cy: i64 = self.y + self.padding
+            let row_h: i64 = 0
+            while child != null {
+                if !child.visible {
+                    child = child.next_sibling
+                    continue
+                }
+                let ml: i64 = child.box_margin_left()
+                let mr: i64 = child.box_margin_right()
+                let mt: i64 = child.box_margin_top()
+                let mb: i64 = child.box_margin_bottom()
+                let child_w: i64 = child.width
+                if child.width_percent > 0 {
+                    child_w = (content_w * child.width_percent) / 100
+                    child.layout_width_owned = true
+                } else if child_w == 0 || child.layout_width_owned {
+                    child_w = child.preferred_height * 2
+                    child.layout_width_owned = true
+                }
+                child_w = child.constrain_width(child_w)
+                let child_h: i64 = child.height
+                if child.height_percent > 0 {
+                    child_h = (content_h * child.height_percent) / 100
+                    child.layout_height_owned = true
+                } else if child_h == 0 || child.layout_height_owned {
+                    child_h = child.preferred_height
+                    child.layout_height_owned = true
+                }
+                child_h = child.constrain_height(child_h)
+
+                if cx > self.x + self.padding && cx + ml + child_w + mr > self.x + self.padding + content_w {
+                    cx = self.x + self.padding
+                    cy = cy + row_h + self.spacing
+                    row_h = 0
+                }
+
+                child.x = cx + ml
+                child.y = cy + mt
+                child.width = child_w
+                child.height = child_h
+                child.layout_tree()
+                let occupied_h: i64 = mt + child_h + mb
+                if occupied_h > row_h {
+                    row_h = occupied_h
+                }
+                cx = cx + ml + child_w + mr + self.spacing
                 child = child.next_sibling
             }
             return
@@ -689,6 +2007,80 @@ class Widget {
         let lift: i64 = self.hover_amount / 35
         let draw_y: i64 = self.y - lift
 
+        if self.kind_id == WIDGET_MENUBAR {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y + self.height - 1, self.width, 1, bd)
+            let cursor_x: i64 = self.x + 4
+            let menu: Widget = self.first_child
+            while menu != null {
+                let item_w: i64 = menu.menu_label_width()
+                menu.x = cursor_x
+                menu.y = self.y
+                menu.width = item_w
+                menu.height = self.height
+                if menu.menu_open {
+                    draw_rect(renderer, cursor_x, self.y + 3, item_w, self.height - 6, mix_color(bg, self.accent, 22))
+                }
+                draw_text_box(renderer, font, cursor_x + 4, self.y, item_w - 8, self.height, menu.text, fg)
+                cursor_x = cursor_x + item_w
+                menu = menu.next_sibling
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_STATUSBAR {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, 1, bd)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+            let text_x: i64 = self.x + self.padding
+            if self.icon != LIST_ICON_NONE {
+                draw_widget_icon(renderer, self.icon, self.x + self.padding, self.y + (self.height - 18) / 2, mix_color(fg, bg, 45), bd)
+                text_x = text_x + 24
+            }
+            if text_len(self.text) > 0 {
+                draw_text_box(renderer, font, text_x, self.y, self.width - (text_x - self.x) - 32, self.height, self.text, fg)
+            }
+            let gx: i64 = self.x + self.width - 18
+            let gy: i64 = self.y + self.height - 6
+            draw_rect(renderer, gx + 10, gy, 5, 1, mix_color(fg, bg, 45))
+            draw_rect(renderer, gx + 6, gy - 4, 9, 1, mix_color(fg, bg, 55))
+            draw_rect(renderer, gx + 2, gy - 8, 13, 1, mix_color(fg, bg, 65))
+            return
+        }
+
+        if self.kind_id == WIDGET_TABCONTAINER {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+            let tab_x: i64 = self.x + 4
+            let tab_index: i64 = 0
+            let page: Widget = self.first_child
+            while page != null {
+                if page.visible && page.kind_id == WIDGET_TABPAGE {
+                    let tab_w: i64 = 120
+                    let tab_bg: u32 = mix_color(bg, fg, 8)
+                    if tab_index == self.selected_index {
+                        tab_bg = mix_color(bg, self.accent, 22)
+                    }
+                    draw_rect(renderer, tab_x, self.y + 3, tab_w - 4, self.item_height - 3, tab_bg)
+                    draw_outline(renderer, tab_x, self.y + 3, tab_w - 4, self.item_height - 3, bd)
+                    let label: string = page.title
+                    if text_len(label) == 0 {
+                        label = page.text
+                    }
+                    if text_len(label) == 0 {
+                        label = "Tab"
+                    }
+                    draw_text_box(renderer, font, tab_x, self.y + 3, tab_w - 4, self.item_height - 3, label, fg)
+                    tab_x = tab_x + tab_w
+                    tab_index = tab_index + 1
+                }
+                page = page.next_sibling
+            }
+            draw_outline(renderer, self.x + self.padding, self.y + self.item_height + self.padding,
+                self.width - self.padding * 2, self.height - self.item_height - self.padding * 2, bd)
+            return
+        }
+
         if self.kind_id == WIDGET_PROGRESS {
             let bar_x: i64 = self.x
             let bar_y: i64 = self.y + (self.height - 12) / 2
@@ -698,6 +2090,60 @@ class Widget {
             draw_outline(renderer, bar_x, bar_y, self.width, 12, bd)
             if text_len(self.text) > 0 {
                 draw_text_box(renderer, font, self.x, self.y, self.width, self.height, self.text, fg)
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_SPINNER {
+            let size: i64 = self.width
+            if self.height < size {
+                size = self.height
+            }
+            if size < 20 {
+                size = 20
+            }
+            let cx: i64 = self.x + self.width / 2
+            let cy: i64 = self.y + self.height / 2
+            let r: i64 = size / 2 - 5
+            let tick: i64 = size / 8
+            if tick < 3 {
+                tick = 3
+            }
+            let active: i64 = self.value % 8
+            let i: i64 = 0
+            while i < 8 {
+                let tone: i64 = 22
+                if i == active {
+                    tone = 0
+                } else if i == (active + 7) % 8 {
+                    tone = 20
+                } else if i == (active + 6) % 8 {
+                    tone = 40
+                } else {
+                    tone = 66
+                }
+                let c: u32 = mix_color(self.accent, self.track, tone)
+                if i == 0 {
+                    draw_rect(renderer, cx - tick / 2, cy - r, tick, tick, c)
+                } else if i == 1 {
+                    draw_rect(renderer, cx + r / 2, cy - r / 2, tick, tick, c)
+                } else if i == 2 {
+                    draw_rect(renderer, cx + r, cy - tick / 2, tick, tick, c)
+                } else if i == 3 {
+                    draw_rect(renderer, cx + r / 2, cy + r / 2, tick, tick, c)
+                } else if i == 4 {
+                    draw_rect(renderer, cx - tick / 2, cy + r, tick, tick, c)
+                } else if i == 5 {
+                    draw_rect(renderer, cx - r / 2, cy + r / 2, tick, tick, c)
+                } else if i == 6 {
+                    draw_rect(renderer, cx - r, cy - tick / 2, tick, tick, c)
+                } else {
+                    draw_rect(renderer, cx - r / 2, cy - r / 2, tick, tick, c)
+                }
+                i = i + 1
+            }
+            if text_len(self.text) > 0 {
+                draw_text_box(renderer, font, self.x + size + 6, self.y, self.width - size - 6, self.height, self.text, fg)
             }
             return
         }
@@ -712,6 +2158,31 @@ class Widget {
             draw_rect(renderer, self.x + self.padding, track_y, fill_w, 6, self.accent)
             draw_rect(renderer, thumb_x, track_y - 5, 12, 16, mix_color(self.accent, self.hover_border, self.hover_amount))
             draw_outline(renderer, thumb_x, track_y - 5, 12, 16, bd)
+            return
+        }
+
+        if self.kind_id == WIDGET_SCROLLBAR {
+            let track_x: i64 = self.x + self.width / 2 - 4
+            let usable: i64 = self.height - self.padding * 2
+            if usable <= 0 {
+                draw_rect(renderer, self.x, self.y, self.width, self.height, self.track)
+                draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+                return
+            }
+            let pct: i64 = self.value_percent()
+            let thumb_h: i64 = self.height / 4
+            if thumb_h < 24 {
+                thumb_h = 24
+            }
+            if thumb_h > usable {
+                thumb_h = usable
+            }
+            let travel: i64 = usable - thumb_h
+            let thumb_y: i64 = self.y + self.padding + (travel * pct) / 100
+            draw_rect(renderer, track_x, self.y + self.padding, 8, usable, self.track)
+            draw_rect(renderer, track_x, self.y + self.padding, 8, thumb_y - (self.y + self.padding), mix_color(self.track, self.accent, 28))
+            draw_rect(renderer, self.x + 2, thumb_y, self.width - 4, thumb_h, mix_color(self.accent, self.hover_border, self.hover_amount))
+            draw_outline(renderer, self.x + 2, thumb_y, self.width - 4, thumb_h, bd)
             return
         }
 
@@ -739,25 +2210,296 @@ class Widget {
             return
         }
 
-        if self.kind_id == WIDGET_LIST || self.kind_id == WIDGET_TREEVIEW {
+        if self.kind_id == WIDGET_TEXTBOX {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+            if self.focused {
+                draw_outline(renderer, self.x + 1, self.y + 1, self.width - 2, self.height - 2, self.accent)
+            }
+            let display_text: string = self.text
+            let display_color: u32 = fg
+            if text_len(display_text) == 0 {
+                display_text = self.placeholder
+                display_color = mix_color(fg, bg, 45)
+            }
+            draw_text_box(renderer, font, self.x, self.y, self.width, self.height, display_text, display_color)
+            if self.focused {
+                self.clamp_caret()
+                let caret_x: i64 = self.x + 10 + self.caret_index * 7
+                draw_rect(renderer, caret_x, self.y + 8, 2, self.height - 16, self.accent)
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_COMBOBOX {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+            draw_rect(renderer, self.x + self.width - 34, self.y + 1, 33, self.height - 2, mix_color(bg, self.accent, 14))
+            draw_disclosure(renderer, self.x + self.width - 26, self.y + (self.height - 18) / 2, true, fg)
+            draw_text_box(renderer, font, self.x, self.y, self.width - 34, self.height, self.text, fg)
+            return
+        }
+
+        if self.kind_id == WIDGET_TERMINAL {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+            if self.focused {
+                draw_outline(renderer, self.x + 1, self.y + 1, self.width - 2, self.height - 2, self.accent)
+            }
+
+            let line_h: i64 = 18
+            let input_h: i64 = 26
+            let area_h: i64 = self.height - self.padding * 2 - input_h
+            let visible_lines: i64 = area_h / line_h
+            let count: i64 = count_list_items(self.items_text)
+            let start: i64 = 0
+            if count > visible_lines {
+                start = count - visible_lines
+            }
+            let i: i64 = start
+            let y: i64 = self.y + self.padding
+            while i < count && y < self.y + self.height - self.padding - input_h {
+                draw_text(renderer, font, self.x + self.padding, y, get_list_item_at(self.items_text, i), fg)
+                y = y + line_h
+                i = i + 1
+            }
+
+            let input_y: i64 = self.y + self.height - self.padding - input_h
+            draw_rect(renderer, self.x + self.padding, input_y, self.width - self.padding * 2, input_h, mix_color(bg, fg, 7))
+            draw_outline(renderer, self.x + self.padding, input_y, self.width - self.padding * 2, input_h, mix_color(bd, self.accent, 25))
+            let prompt_len: i64 = text_len(self.terminal_prompt)
+            let cmd_len: i64 = text_len(self.text)
+            let buf: char* = malloc(prompt_len + cmd_len + 1) as char*
+            let p: i64 = 0
+            while p < prompt_len {
+                buf[p] = self.terminal_prompt[p]
+                p = p + 1
+            }
+            let c: i64 = 0
+            while c < cmd_len {
+                buf[p + c] = self.text[c]
+                c = c + 1
+            }
+            buf[p + cmd_len] = 0
+            draw_text_box(renderer, font, self.x + self.padding, input_y, self.width - self.padding * 2, input_h, buf as string, fg)
+            if self.focused {
+                self.clamp_caret()
+                let caret_x: i64 = self.x + self.padding + 10 + (prompt_len + self.caret_index) * 7
+                draw_rect(renderer, caret_x, input_y + 6, 2, input_h - 12, self.accent)
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_MSGBOX || self.kind_id == WIDGET_INPUTBOX {
+            draw_rect(renderer, self.x + 3, self.y + 5, self.width, self.height, 0x44000000 as u32)
             draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
             draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
 
-            let item_count: i64 = count_list_items(self.items_text)
+            if text_len(self.title) > 0 {
+                draw_text_box(renderer, font, self.x + 18, self.y + 12, self.width - 36, 28, self.title, fg)
+            }
+            draw_msgbox_icon(renderer, self.icon, self.x + 18, self.y + 48, bg, self.accent)
+            draw_text_box(renderer, font, self.x + 56, self.y + 46, self.width - 76, 42, self.message, fg)
+
+            if self.kind_id == WIDGET_INPUTBOX {
+                let input_x: i64 = self.x + 52
+                let input_y: i64 = self.y + 92
+                let input_w: i64 = self.width - 72
+                let input_h: i64 = 36
+                draw_rect(renderer, input_x, input_y, input_w, input_h, mix_color(bg, fg, 6))
+                draw_outline(renderer, input_x, input_y, input_w, input_h, bd)
+                if self.focused {
+                    draw_outline(renderer, input_x + 1, input_y + 1, input_w - 2, input_h - 2, self.accent)
+                }
+                let input_text: string = self.text
+                let input_color: u32 = fg
+                if text_len(input_text) == 0 {
+                    input_text = self.placeholder
+                    input_color = mix_color(fg, bg, 45)
+                }
+                draw_text_box(renderer, font, input_x, input_y, input_w, input_h, input_text, input_color)
+                if self.focused {
+                    self.clamp_caret()
+                    let caret_x: i64 = input_x + 10 + self.caret_index * 7
+                    draw_rect(renderer, caret_x, input_y + 8, 2, input_h - 16, self.accent)
+                }
+            }
+
+            let count: i64 = self.dialog_button_count()
+            let button_w: i64 = 88
+            let button_h: i64 = 32
+            let gap: i64 = 10
+            let total_w: i64 = count * button_w + (count - 1) * gap
+            let start_x: i64 = self.x + self.width - total_w - 20
+            let button_y: i64 = self.y + self.height - button_h - 18
+            let i: i64 = 0
+            while i < count {
+                let button_x: i64 = start_x + i * (button_w + gap)
+                let button_bg: u32 = self.accent
+                if i > 0 {
+                    button_bg = mix_color(bg, fg, 10)
+                }
+                draw_rect(renderer, button_x, button_y, button_w, button_h, button_bg)
+                draw_outline(renderer, button_x, button_y, button_w, button_h, bd)
+                draw_text_box(renderer, font, button_x, button_y, button_w, button_h, self.dialog_button_label(i), fg)
+                i = i + 1
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_GROUPBOX {
+            draw_rect(renderer, self.x, self.y + 8, self.width, self.height - 8, bg)
+            draw_outline(renderer, self.x, self.y + 8, self.width, self.height - 8, bd)
+            if text_len(self.title) > 0 {
+                draw_rect(renderer, self.x + 10, self.y, text_len(self.title) * 8 + 16, 20, bg)
+                draw_text(renderer, font, self.x + 18, self.y + 1, self.title, fg)
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_LIST {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+
             let item_y: i64 = self.y + 4
             let item_w: i64 = self.width - 8
             let i: i64 = self.scroll_offset
+            let item_count: i64 = self.list_item_count()
 
             while i < item_count && item_y < self.y + self.height - 4 {
+                let list_item: ListItem = self.list_item_at(i)
                 let item: string = get_list_item_at(self.items_text, i)
+                let icon: i64 = LIST_ICON_NONE
+                if list_item != null {
+                    item = list_item.text
+                    icon = list_item.icon
+                }
                 let item_bg: u32 = bg
                 if i == self.selected_index {
-                    item_bg = mix_color(bg, self.accent, 30)
+                    item_bg = mix_color(bg, self.accent, 26)
+                } else if (i % 2) == 1 {
+                    item_bg = mix_color(bg, fg, 5)
                 }
                 draw_rect(renderer, self.x + 4, item_y, item_w, self.item_height, item_bg)
-                draw_text(renderer, font, self.x + 8, item_y + 2, item, fg)
+                if i == self.selected_index {
+                    draw_rect(renderer, self.x + 4, item_y, 3, self.item_height, self.accent)
+                }
+                if icon == LIST_ICON_FOLDER {
+                    draw_folder_icon(renderer, self.x + 12, item_y + 3, mix_color(self.accent, bg, 15), bd)
+                } else if icon == LIST_ICON_IMAGE {
+                    draw_image_icon(renderer, self.x + 12, item_y + 3, mix_color(self.accent, fg, 35), bd)
+                } else {
+                    draw_file_icon(renderer, self.x + 12, item_y + 3, mix_color(fg, bg, 55), bd)
+                }
+                draw_text(renderer, font, self.x + 38, item_y + 2, item, fg)
                 item_y = item_y + self.item_height
                 i = i + 1
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_TREEVIEW {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+
+            let item_y: i64 = self.y + 4
+            let item_w: i64 = self.width - 8
+            let visible_index: i64 = 0
+            let drawn_index: i64 = 0
+            let tree_item: TreeItem = self.first_tree_item
+
+            while tree_item != null && item_y < self.y + self.height - 4 {
+                if self.tree_item_visible(tree_item) {
+                    if visible_index >= self.scroll_offset {
+                        let item_bg: u32 = bg
+                        if visible_index == self.selected_index {
+                            item_bg = mix_color(bg, self.accent, 26)
+                        } else if (drawn_index % 2) == 1 {
+                            item_bg = mix_color(bg, fg, 5)
+                        }
+                        draw_rect(renderer, self.x + 4, item_y, item_w, self.item_height, item_bg)
+                        if visible_index == self.selected_index {
+                            draw_rect(renderer, self.x + 4, item_y, 3, self.item_height, self.accent)
+                        }
+
+                        let indent_x: i64 = self.x + 10 + tree_item.indent * 18
+                        if tree_item.is_folder {
+                            draw_disclosure(renderer, indent_x, item_y + 5, tree_item.expanded, fg)
+                            draw_folder_icon(renderer, indent_x + 18, item_y + 3, mix_color(self.accent, bg, 10), bd)
+                            draw_text(renderer, font, indent_x + 44, item_y + 2, tree_item.text, fg)
+                        } else {
+                            draw_file_icon(renderer, indent_x + 18, item_y + 3, mix_color(fg, bg, 55), bd)
+                            draw_text(renderer, font, indent_x + 44, item_y + 2, tree_item.text, fg)
+                        }
+                        item_y = item_y + self.item_height
+                        drawn_index = drawn_index + 1
+                    }
+                    visible_index = visible_index + 1
+                }
+                tree_item = tree_item.next
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_CANVAS {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, self.canvas_background)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+
+            let cmd: CanvasCommand = self.first_canvas_command
+            while cmd != null {
+                set_color(renderer, cmd.color)
+                if cmd.op == CANVAS_OP_POINT {
+                    renderer.draw_point((self.x + cmd.x1) as float, (self.y + cmd.y1) as float)
+                } else if cmd.op == CANVAS_OP_LINE {
+                    renderer.draw_line((self.x + cmd.x1) as float, (self.y + cmd.y1) as float,
+                        (self.x + cmd.x2) as float, (self.y + cmd.y2) as float)
+                } else if cmd.op == CANVAS_OP_RECT {
+                    let rect_cmd: SDL_Rect = new SDL_Rect((self.x + cmd.x1) as i32, (self.y + cmd.y1) as i32,
+                        cmd.x2 as i32, cmd.y2 as i32)
+                    renderer.draw_rect(rect_cmd)
+                } else if cmd.op == CANVAS_OP_FILL_RECT {
+                    let fill_cmd: SDL_Rect = new SDL_Rect((self.x + cmd.x1) as i32, (self.y + cmd.y1) as i32,
+                        cmd.x2 as i32, cmd.y2 as i32)
+                    renderer.fill_rect(fill_cmd)
+                } else if cmd.op == CANVAS_OP_CLEAR {
+                    draw_rect(renderer, self.x, self.y, self.width, self.height, cmd.color)
+                }
+                cmd = cmd.next
+            }
+            return
+        }
+
+        if self.kind_id == WIDGET_PICTURE {
+            draw_rect(renderer, self.x, self.y, self.width, self.height, bg)
+            draw_outline(renderer, self.x, self.y, self.width, self.height, bd)
+
+            if !self.image_loaded && !self.image_failed && text_len(self.image_path) > 0 {
+                let surface: SDL_Surface* = std.sdl.SDL_LoadPNG(self.image_path as char*)
+                if surface != null {
+                    let loaded_texture: SDL_Texture* = std.sdl.SDL_CreateTextureFromSurface(renderer.get_handle(), surface)
+                    std.sdl.SDL_DestroySurface(surface)
+                    if loaded_texture != null {
+                        self.image_texture = loaded_texture
+                        self.image_loaded = true
+                    } else {
+                        self.image_failed = true
+                    }
+                } else {
+                    self.image_failed = true
+                }
+            }
+
+            if self.image_texture != null {
+                let dst: SDL_FRect = new SDL_FRect((self.x + 1) as float, (self.y + 1) as float,
+                    (self.width - 2) as float, (self.height - 2) as float)
+                std.sdl.SDL_RenderTexture(renderer.get_handle(), self.image_texture, null, &dst)
+            } else {
+                draw_image_icon(renderer, self.x + self.width / 2 - 10, self.y + self.height / 2 - 10, mix_color(fg, bg, 45), bd)
+                if self.image_failed {
+                    draw_text_box(renderer, font, self.x, self.y + self.height - 28, self.width, 24, "image failed", mix_color(fg, bg, 30))
+                } else if text_len(self.image_path) == 0 {
+                    draw_text_box(renderer, font, self.x, self.y + self.height - 28, self.width, 24, "no image", mix_color(fg, bg, 30))
+                }
             }
             return
         }
@@ -781,7 +2523,7 @@ class Widget {
             draw_rect(renderer, sel_x, draw_y + 5, sel_w, self.height - 10, self.selection)
         }
 
-        if text_len(self.title) > 0 {
+        if self.kind_id != WIDGET_WINDOW && text_len(self.title) > 0 {
             draw_text_box(renderer, font, self.x, draw_y, self.width, self.height, self.title, fg)
         }
         if text_len(self.text) > 0 {
@@ -789,21 +2531,125 @@ class Widget {
         }
     }
 
-    func render(renderer: std.sdl.Renderer, font: TTF_Font*) {
-        self.draw_self(renderer, font)
+    func draw_combo_popup(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        if self.kind_id == WIDGET_COMBOBOX && self.combo_open {
+            let bg: u32 = mix_color(self.background, self.hover_background, self.hover_amount)
+            let fg: u32 = mix_color(self.foreground, self.hover_foreground, self.hover_amount)
+            let bd: u32 = mix_color(self.border, self.hover_border, self.hover_amount)
+            if self.combo_open {
+                let count: i64 = self.list_item_count()
+                let option_y: i64 = self.y + self.height
+                let i: i64 = 0
+                while i < count {
+                    let option: ListItem = self.list_item_at(i)
+                    let option_bg: u32 = bg
+                    if i == self.selected_index {
+                        option_bg = mix_color(bg, self.accent, 26)
+                    } else if (i % 2) == 1 {
+                        option_bg = mix_color(bg, fg, 5)
+                    }
+                    draw_rect(renderer, self.x, option_y, self.width, self.item_height, option_bg)
+                    draw_outline(renderer, self.x, option_y, self.width, self.item_height, bd)
+                    if option != null {
+                        draw_text(renderer, font, self.x + 10, option_y + 3, option.text, fg)
+                    }
+                    option_y = option_y + self.item_height
+                    i = i + 1
+                }
+            }
+        }
+    }
+
+    func draw_menu_popup(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        if self.kind_id == WIDGET_MENU && self.menu_open {
+            let bg: u32 = self.background
+            let fg: u32 = self.foreground
+            let bd: u32 = self.border
+            let popup_w: i64 = self.menu_popup_width()
+            let popup_h: i64 = self.menu_item_count() * self.item_height
+            let popup_x: i64 = self.x
+            let popup_y: i64 = self.y + self.height
+            draw_rect(renderer, popup_x, popup_y, popup_w, popup_h, bg)
+            draw_outline(renderer, popup_x, popup_y, popup_w, popup_h, bd)
+
+            let item_y: i64 = popup_y
+            let item: Widget = self.first_child
+            while item != null {
+                let item_bg: u32 = bg
+                if item.menu_open {
+                    item_bg = mix_color(bg, self.accent, 22)
+                }
+                draw_rect(renderer, popup_x + 2, item_y + 1, popup_w - 4, self.item_height - 2, item_bg)
+                draw_widget_icon(renderer, item.icon, popup_x + 8, item_y + 4, mix_color(fg, bg, 55), bd)
+                draw_text(renderer, font, popup_x + 34, item_y + 3, item.text, fg)
+                if item.first_child != null {
+                    draw_disclosure(renderer, popup_x + popup_w - 20, item_y + 5, false, fg)
+                }
+                if item.menu_open && item.first_child != null {
+                    item.x = popup_x + popup_w
+                    item.y = item_y - self.item_height
+                } else {
+                    item.x = popup_x
+                    item.y = item_y
+                }
+                item.width = popup_w
+                item.height = self.item_height
+                item_y = item_y + self.item_height
+                item = item.next_sibling
+            }
+        }
 
         let child: Widget = self.first_child
         while child != null {
-            child.render(renderer, font)
+            child.draw_menu_popup(renderer, font)
             child = child.next_sibling
         }
     }
 
-    func dispatch_click(px: i64, py: i64) -> bool {
+    func render(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        if !self.visible {
+            return
+        }
+        self.draw_self(renderer, font)
+
+        if self.kind_id == WIDGET_MENUBAR || self.kind_id == WIDGET_MENU {
+            return
+        }
+
         let child: Widget = self.first_child
         while child != null {
-            if child.dispatch_click(px, py) {
-                return true
+            if self.child_active_for_traversal(child) {
+                child.render(renderer, font)
+            }
+            child = child.next_sibling
+        }
+    }
+
+    func render_popups(renderer: std.sdl.Renderer, font: TTF_Font*) {
+        if !self.visible {
+            return
+        }
+        let child: Widget = self.first_child
+        while child != null {
+            if self.child_active_for_traversal(child) {
+                child.render_popups(renderer, font)
+            }
+            child = child.next_sibling
+        }
+        self.draw_combo_popup(renderer, font)
+        self.draw_menu_popup(renderer, font)
+    }
+
+    func dispatch_click(px: i64, py: i64) -> bool {
+        if !self.visible {
+            return false
+        }
+        let child: Widget = self.first_child
+        while child != null {
+            if self.child_active_for_traversal(child) {
+                if child.dispatch_click(px, py) {
+                    return true
+                }
             }
             child = child.next_sibling
         }
@@ -857,6 +2703,165 @@ class Row : Widget {
     }
 }
 
+class Box : Widget {
+    constructor() {
+        super("Box")
+        self.kind_id = WIDGET_BOX
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = 0x00FFFFFF as u32
+        self.hover_border = self.border
+        self.layout = LAYOUT_COLUMN
+        self.preferred_height = 160
+        self.flex_grow = 1
+    }
+}
+
+class FlowBox : Widget {
+    constructor() {
+        super("FlowBox")
+        self.kind_id = WIDGET_FLOWBOX
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = 0x00FFFFFF as u32
+        self.hover_border = self.border
+        self.layout = LAYOUT_WRAP
+        self.preferred_height = 160
+        self.spacing = 10
+    }
+}
+
+class MenuBar : Widget {
+    constructor() {
+        super("MenuBar")
+        self.kind_id = WIDGET_MENUBAR
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BORDER
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.layout = LAYOUT_NONE
+        self.padding = 0
+        self.spacing = 0
+        self.preferred_height = 30
+        self.height = 30
+    }
+}
+
+class StatusBar : Widget {
+    constructor() {
+        super("StatusBar")
+        self.kind_id = WIDGET_STATUSBAR
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BORDER
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.layout = LAYOUT_NONE
+        self.padding = 8
+        self.preferred_height = 28
+        self.height = 28
+        self.text = "Ready"
+        self.icon = LIST_ICON_CHECK
+    }
+
+    func set_status(text: string, icon: i64) {
+        self.text = text
+        self.icon = icon
+    }
+}
+
+class Menu : Widget {
+    constructor() {
+        super("Menu")
+        self.kind_id = WIDGET_MENU
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.item_height = 28
+        self.width = 180
+        self.height = 28
+    }
+
+    func add_item(item: MenuItem) {
+        self.add_child(item)
+    }
+
+    func add_menu(menu: Menu) {
+        self.add_child(menu)
+    }
+}
+
+class MenuItem : Widget {
+    constructor() {
+        super("MenuItem")
+        self.kind_id = WIDGET_MENUITEM
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.item_height = 28
+        self.preferred_height = 28
+    }
+
+    func set_icon(value: i64) {
+        self.icon = value
+    }
+}
+
+class TabContainer : Widget {
+    constructor() {
+        super("TabContainer")
+        self.kind_id = WIDGET_TABCONTAINER
+        self.background = 0xFFEDEFF5 as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.accent = LIGHT_BUTTON_BG
+        self.layout = LAYOUT_NONE
+        self.padding = 8
+        self.item_height = 32
+        self.preferred_height = 220
+        self.selected_index = 0
+    }
+
+    func select(index: i64) {
+        if index >= 0 && index < self.tab_count() {
+            self.selected_index = index
+        }
+    }
+
+    func add_page(page: TabPage) {
+        self.add_child(page)
+    }
+}
+
+class TabPage : Widget {
+    constructor() {
+        super("TabPage")
+        self.kind_id = WIDGET_TABPAGE
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = 0x00FFFFFF as u32
+        self.hover_border = self.border
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.layout = LAYOUT_COLUMN
+        self.padding = 12
+        self.spacing = 8
+        self.preferred_height = 160
+    }
+}
+
 class Panel : Widget {
     constructor() {
         super("Panel")
@@ -867,6 +2872,19 @@ class Panel : Widget {
         self.hover_border = 0xFF99A5B8 as u32
         self.layout = LAYOUT_COLUMN
         self.preferred_height = 120
+    }
+}
+
+class AbsolutePanel : Widget {
+    constructor() {
+        super("AbsolutePanel")
+        self.kind_id = WIDGET_ABSOLUTEPANEL
+        self.background = 0x00000000 as u32
+        self.hover_background = self.background
+        self.border = 0x00000000 as u32
+        self.hover_border = self.border
+        self.layout = LAYOUT_NONE
+        self.preferred_height = 240
     }
 }
 
@@ -938,6 +2956,25 @@ class ProgressBar : Widget {
     }
 }
 
+class Spinner : Widget {
+    constructor() {
+        super("Spinner")
+        self.kind_id = WIDGET_SPINNER
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = 0x00FFFFFF as u32
+        self.hover_border = self.border
+        self.track = LIGHT_TRACK
+        self.accent = LIGHT_BUTTON_BG
+        self.width = 42
+        self.height = 42
+        self.preferred_height = 42
+        self.value = 0
+        self.min_value = 0
+        self.max_value = 7
+    }
+}
+
 class Slider : Widget {
     constructor() {
         super("Slider")
@@ -953,6 +2990,24 @@ class Slider : Widget {
         self.value = 50
         self.min_value = 0
         self.max_value = 100
+    }
+}
+
+class ScrollBar : Widget {
+    constructor() {
+        super("ScrollBar")
+        self.kind_id = WIDGET_SCROLLBAR
+        self.background = 0x00FFFFFF as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.accent = LIGHT_BUTTON_BG
+        self.track = LIGHT_TRACK
+        self.width = 18
+        self.preferred_height = 160
+        self.padding = 8
     }
 }
 
@@ -984,6 +3039,90 @@ class Badge : Widget {
     }
 }
 
+class TextBox : Widget {
+    constructor() {
+        super("TextBox")
+        self.kind_id = WIDGET_TEXTBOX
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.preferred_height = 38
+        self.placeholder = ""
+    }
+
+    func set_placeholder(value: string) {
+        self.placeholder = value
+    }
+}
+
+class ComboBox : Widget {
+    constructor() {
+        super("ComboBox")
+        self.kind_id = WIDGET_COMBOBOX
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = LIGHT_BUTTON_HOVER_BORDER
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.preferred_height = 38
+        self.width = 180
+    }
+
+    func add_option(option: string) {
+        let entry: ListItem = new ListItem(option, LIST_ICON_NONE)
+        if self.first_list_item == null {
+            rc_retain(entry as char*)
+            self.first_list_item = entry
+            self.last_list_item = entry
+            self.text = option
+        } else {
+            rc_retain(entry as char*)
+            self.last_list_item.next = entry
+            self.last_list_item = entry
+        }
+
+        if text_len(self.items_text) == 0 {
+            self.items_text = option
+        } else {
+            let buf: char* = malloc(4096) as char*
+            let i: i64 = 0
+            while self.items_text[i] != 0 && i < 4095 {
+                buf[i] = self.items_text[i]
+                i = i + 1
+            }
+            buf[i] = '\n'
+            i = i + 1
+            let j: i64 = 0
+            while option[j] != 0 && i < 4095 {
+                buf[i] = option[j]
+                i = i + 1
+                j = j + 1
+            }
+            buf[i] = 0
+            self.items_text = buf as string
+        }
+    }
+}
+
+class GroupBox : Widget {
+    constructor() {
+        super("GroupBox")
+        self.kind_id = WIDGET_GROUPBOX
+        self.background = 0xFFEDEFF5 as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.layout = LAYOUT_COLUMN
+        self.padding = 18
+        self.spacing = 10
+        self.preferred_height = 150
+    }
+}
+
 class List : Widget {
     constructor() {
         super("List")
@@ -994,11 +3133,35 @@ class List : Widget {
         self.hover_border = 0xFF99A5B8 as u32
         self.foreground = LIGHT_TEXT
         self.hover_foreground = self.foreground
+        self.width = 280
         self.preferred_height = 150
         self.item_height = 24
     }
 
     func add_item(item: string) {
+        self.add_item_icon(item, LIST_ICON_FILE)
+    }
+
+    func add_folder(item: string) {
+        self.add_item_icon(item, LIST_ICON_FOLDER)
+    }
+
+    func add_image(item: string) {
+        self.add_item_icon(item, LIST_ICON_IMAGE)
+    }
+
+    func add_item_icon(item: string, icon: i64) {
+        let entry: ListItem = new ListItem(item, icon)
+        if self.first_list_item == null {
+            rc_retain(entry as char*)
+            self.first_list_item = entry
+            self.last_list_item = entry
+        } else {
+            rc_retain(entry as char*)
+            self.last_list_item.next = entry
+            self.last_list_item = entry
+        }
+
         if text_len(self.items_text) == 0 {
             self.items_text = item
         } else {
@@ -1022,6 +3185,10 @@ class List : Widget {
     }
 
     func get_selected_item() -> string {
+        let selected: ListItem = self.list_item_at(self.selected_index)
+        if selected != null {
+            return selected.text
+        }
         if text_len(self.items_text) == 0 {
             return "" as string
         }
@@ -1039,11 +3206,31 @@ class TreeView : Widget {
         self.hover_border = 0xFF99A5B8 as u32
         self.foreground = LIGHT_TEXT
         self.hover_foreground = self.foreground
+        self.width = 320
         self.preferred_height = 200
         self.item_height = 24
     }
 
     func add_item(item: string, indent: i64) {
+        self.add_node(item, indent, false)
+    }
+
+    func add_folder(item: string, indent: i64) {
+        self.add_node(item, indent, true)
+    }
+
+    func add_node(item: string, indent: i64, is_folder: bool) {
+        let node: TreeItem = new TreeItem(item, indent, is_folder)
+        if self.first_tree_item == null {
+            rc_retain(node as char*)
+            self.first_tree_item = node
+            self.last_tree_item = node
+        } else {
+            rc_retain(node as char*)
+            self.last_tree_item.next = node
+            self.last_tree_item = node
+        }
+
         let prefix: char[256]
         let i: i64 = 0
         while i < indent && i < 250 {
@@ -1090,10 +3277,222 @@ class TreeView : Widget {
     }
 
     func get_selected_item() -> string {
+        let selected: TreeItem = self.tree_item_at_visible(self.selected_index)
+        if selected != null {
+            return selected.text
+        }
         if text_len(self.items_text) == 0 {
             return "" as string
         }
         return get_list_item_at(self.items_text, self.selected_index)
+    }
+
+    func collapse_all() {
+        let item: TreeItem = self.first_tree_item
+        while item != null {
+            if item.is_folder {
+                item.expanded = false
+            }
+            item = item.next
+        }
+        self.selected_index = 0
+    }
+
+    func expand_all() {
+        let item: TreeItem = self.first_tree_item
+        while item != null {
+            if item.is_folder {
+                item.expanded = true
+            }
+            item = item.next
+        }
+    }
+}
+
+class Canvas : Widget {
+    constructor() {
+        super("Canvas")
+        self.kind_id = WIDGET_CANVAS
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.canvas_background = self.background
+        self.canvas_stroke = LIGHT_TEXT
+        self.canvas_fill = LIGHT_BUTTON_BG
+        self.preferred_height = 180
+    }
+
+    func append_command(op: i64, x1: i64, y1: i64, x2: i64, y2: i64, color: u32) {
+        let cmd: CanvasCommand = new CanvasCommand(op, x1, y1, x2, y2, color)
+        if self.first_canvas_command == null {
+            rc_retain(cmd as char*)
+            self.first_canvas_command = cmd
+            self.last_canvas_command = cmd
+            return
+        }
+        rc_retain(cmd as char*)
+        self.last_canvas_command.next = cmd
+        self.last_canvas_command = cmd
+    }
+
+    func clear_commands() {
+        self.first_canvas_command = null
+        self.last_canvas_command = null
+    }
+
+    func clear(color: u32) {
+        self.canvas_background = color
+        self.append_command(CANVAS_OP_CLEAR, 0, 0, 0, 0, color)
+    }
+
+    func set_stroke(color: u32) {
+        self.canvas_stroke = color
+    }
+
+    func set_fill(color: u32) {
+        self.canvas_fill = color
+    }
+
+    func point(x: i64, y: i64) {
+        self.append_command(CANVAS_OP_POINT, x, y, 0, 0, self.canvas_stroke)
+    }
+
+    func line(x1: i64, y1: i64, x2: i64, y2: i64) {
+        self.append_command(CANVAS_OP_LINE, x1, y1, x2, y2, self.canvas_stroke)
+    }
+
+    func rect(x: i64, y: i64, w: i64, h: i64) {
+        self.append_command(CANVAS_OP_RECT, x, y, w, h, self.canvas_stroke)
+    }
+
+    func fill_rect(x: i64, y: i64, w: i64, h: i64) {
+        self.append_command(CANVAS_OP_FILL_RECT, x, y, w, h, self.canvas_fill)
+    }
+}
+
+class Picture : Widget {
+    constructor() {
+        super("Picture")
+        self.kind_id = WIDGET_PICTURE
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = self.background
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.preferred_height = 180
+        self.image_path = ""
+    }
+
+    func set_path(path: string) {
+        self.image_path = path
+        self.image_texture = null
+        self.image_loaded = false
+        self.image_failed = false
+    }
+}
+
+class Terminal : Widget {
+    constructor() {
+        super("Terminal")
+        self.kind_id = WIDGET_TERMINAL
+        self.background = 0xFF0F1720 as u32
+        self.hover_background = self.background
+        self.foreground = 0xFFE6F4EA as u32
+        self.hover_foreground = self.foreground
+        self.border = 0xFF2D3748 as u32
+        self.hover_border = 0xFF4A5568 as u32
+        self.accent = 0xFF26A890 as u32
+        self.preferred_height = 220
+        self.padding = 10
+        self.terminal_prompt = "> "
+    }
+
+    func append_line(line: string) {
+        self.terminal_append_line(line)
+    }
+
+    func clear() {
+        self.terminal_clear()
+    }
+
+    func submit() {
+        self.terminal_submit()
+    }
+
+    func set_prompt(prompt: string) {
+        self.terminal_prompt = prompt
+    }
+}
+
+class MsgBox : Widget {
+    constructor() {
+        super("MsgBox")
+        self.kind_id = WIDGET_MSGBOX
+        self.background = 0xFFFFFFFF as u32
+        self.hover_background = 0xFFF5F7FC as u32
+        self.border = LIGHT_BORDER
+        self.hover_border = 0xFF99A5B8 as u32
+        self.foreground = LIGHT_TEXT
+        self.hover_foreground = self.foreground
+        self.accent = LIGHT_BUTTON_BG
+        self.width = 380
+        self.height = 170
+        self.preferred_height = 170
+        self.padding = 16
+        self.button_mode = MSGBOX_BUTTONS_OK
+        self.icon = MSGBOX_ICON_INFO
+        self.result = MSGBOX_RESULT_NONE
+        self.visible = false
+    }
+
+    func show(message: string, icon: i64, buttons: i64) {
+        self.message = message
+        self.icon = icon
+        self.button_mode = buttons
+        self.result = MSGBOX_RESULT_NONE
+        self.visible = true
+    }
+
+    func hide() {
+        self.visible = false
+        self.focused = false
+    }
+
+    func accept() {
+        self.close_dialog(MSGBOX_RESULT_OK)
+    }
+
+    func cancel() {
+        self.close_dialog(MSGBOX_RESULT_CANCEL)
+    }
+}
+
+class InputBox : MsgBox {
+    constructor() {
+        super()
+        self.kind = "InputBox"
+        self.kind_id = WIDGET_INPUTBOX
+        self.height = 220
+        self.preferred_height = 220
+        self.placeholder = ""
+        self.icon = MSGBOX_ICON_QUESTION
+    }
+
+    func ask(message: string, placeholder: string, buttons: i64) {
+        self.message = message
+        self.placeholder = placeholder
+        self.button_mode = buttons
+        self.result = MSGBOX_RESULT_NONE
+        self.text = ""
+        self.caret_index = 0
+        self.focused = true
+        self.visible = true
+    }
+
+    func value() -> string {
+        return self.text
     }
 }
 
@@ -1121,7 +3520,11 @@ class App {
         if init_result.is_err() {
             puts(init_result.get_err())
         } else {
-            self.window = new std.sdl.Window(new String(title), width, height, std.sdl.SDL_WINDOW_RESIZABLE)
+            let window_title: string = title
+            if root != null && text_len(root.title) > 0 {
+                window_title = root.title
+            }
+            self.window = new std.sdl.Window(new String(window_title), width, height, std.sdl.SDL_WINDOW_RESIZABLE)
             if !self.window.is_valid() {
                 puts(std.sdl.SDL_GetError())
             } else {
@@ -1152,6 +3555,7 @@ class App {
                     self.root.y = 0
                     self.root.width = width
                     self.root.height = height
+                    std.sdl.SDL_StartTextInput(self.window.get_handle())
                     self.running = true
                     self.valid = true
                 }
@@ -1177,6 +3581,37 @@ class App {
                     if (*key).key == std.sdl.SDLK_ESCAPE {
                         self.running = false
                     }
+                    if (*key).key == std.sdl.SDLK_BACKSPACE {
+                        let target: Widget = self.root.focused_textbox()
+                        if target != null {
+                            target.backspace_text()
+                        }
+                    }
+                    if (*key).key == std.sdl.SDLK_LEFT {
+                        let target: Widget = self.root.focused_textbox()
+                        if target != null {
+                            target.move_caret_left()
+                        }
+                    }
+                    if (*key).key == std.sdl.SDLK_RIGHT {
+                        let target: Widget = self.root.focused_textbox()
+                        if target != null {
+                            target.move_caret_right()
+                        }
+                    }
+                    if (*key).key == std.sdl.SDLK_RETURN {
+                        let target: Widget = self.root.focused_textbox()
+                        if target != null && target.kind_id == WIDGET_TERMINAL {
+                            target.terminal_submit()
+                        }
+                    }
+                }
+                if self.events.is_text_input() {
+                    let text_event: SDL_TextInputEvent* = self.events.get_text_input_event()
+                    let target: Widget = self.root.focused_textbox()
+                    if target != null && (*text_event).text != null {
+                        target.append_text((*text_event).text as string)
+                    }
                 }
                 if self.events.is_mouse_button_down() {
                     let mouse: SDL_MouseButtonEvent* = self.events.get_mouse_button_event()
@@ -1184,7 +3619,10 @@ class App {
                     self.mouse_y = (*mouse).y as i64
                     if (*mouse).button == std.sdl.SDL_BUTTON_LEFT {
                         self.mouse_down = true
-                        self.root.begin_pointer(self.mouse_x, self.mouse_y)
+                        self.root.clear_text_focus()
+                        if !self.root.begin_pointer(self.mouse_x, self.mouse_y) {
+                            self.root.clear_interaction_focus()
+                        }
                         self.root.dispatch_click((*mouse).x as i64, (*mouse).y as i64)
                     }
                 }
@@ -1217,11 +3655,15 @@ class App {
             }
 
             self.root.layout_tree()
+            if self.root != null && text_len(self.root.title) > 0 {
+                self.window.set_title(new String(self.root.title))
+            }
             self.root.update_hover(self.mouse_x, self.mouse_y)
             self.root.animate()
             set_color(self.renderer, self.root.background)
             self.renderer.clear()
             self.root.render(self.renderer, self.font)
+            self.root.render_popups(self.renderer, self.font)
             self.renderer.present()
             std.sdl.SDL.delay(16)
         }
@@ -1233,6 +3675,7 @@ class App {
             std.sdl.TTF_Quit()
             self.ttf_ready = false
         }
+        std.sdl.SDL_StopTextInput(self.window.get_handle())
         std.sdl.SDL.quit()
     }
 }
