@@ -623,8 +623,8 @@ func main() -> i64 {
 ### Range-Based `for`
 
 `for i in start..end { ... }` counts from `start` up to (not including)
-`end` - sugar for `foreach let i in ... { ... }`, spelled without `let`
-and using `for` instead of `foreach`. The bounds can be any expression,
+`end` - sugar for `for i in ... { ... }`, spelled without `let`
+and using `for` instead of `for`. The bounds can be any expression,
 not just literals, and nests like any other loop. See
 `test/range_for_demo.llpl` for the full runnable version this is taken
 from:
@@ -640,8 +640,7 @@ func main() -> i64 {
 
 ### `for`/`foreach` Over Custom Iterators
 
-`for item in collection { ... }` and `foreach let item in collection {
-... }` both already work for any fixed-size array *and* for any class
+`for item in collection { ... }`already works for any fixed-size array *and* for any class
 implementing the iterator protocol: an `iter_has_next() -> bool` and
 `iter_next() -> T` method pair (an optional `iter_reset()` is called
 automatically before the loop if present, so an object can be looped over
@@ -653,7 +652,7 @@ those methods directly in their own bodies.
 (also in `prelude.llpl`) formalizes this convention so a class can
 document/opt into it explicitly via an `impl` block instead, with the
 usual trait/impl arity checking catching a missing method at compile
-time. `for`/`foreach` dispatch on either style identically - a class
+time. `for` dispatch on either style identically - a class
 implementing the protocol via `impl Iterator<T> for X { ... }` is exactly
 as foreach-able as one that writes the methods inline. See
 `test/iterator_trait_demo.llpl` for the full runnable version this is
@@ -1446,7 +1445,7 @@ func main() -> i64 {
 A struct literal works anywhere a comma/paren/bracket already gives it an
 unambiguous end - a call argument, inside `(...)`, as a field value in
 another struct literal - but a *bare* one directly as an if/while/for/
-match/foreach condition is rejected (it would be ambiguous with that
+match/for condition is rejected (it would be ambiguous with that
 construct's own following `{ body }`); wrap it in parens there instead.
 
 ## Tuples and Destructuring
@@ -2104,7 +2103,7 @@ m.has_group(3)    // false - this pattern only has 2 groups
 ### Iterating Every Match
 
 `find_all(text)` returns a `RegexMatchIterator` implementing the
-`foreach` iterator protocol, so it works directly in a `foreach` loop -
+`for` iterator protocol, so it works directly in a `foreach` loop -
 each yielded `RegexMatch`'s `group_start`/`group_end` are positions into
 the *original* text, even though finding "the next match" internally means
 re-searching a suffix of it. See `test/regex_replace_demo.llpl` for the
@@ -2115,7 +2114,7 @@ func main() -> i64 {
     let digits = /[0-9]+/
     let text: char* = "abc 123 def 4567 ghi"
 
-    foreach let m in digits.find_all(text) {
+    for m in digits.find_all(text) {
         puts(m.group(0).c_str())  // "123", then "4567"
     }
     return 0
@@ -2130,9 +2129,9 @@ every non-overlapping one. Both return a `String`, and both accept
 match; `$$` is a literal `$`):
 
 ```swift
-func main() -> i64 {
+func main() {
     let digits = /[0-9]+/
-    let text: char* = "abc 123 def 4567 ghi"
+    let text = "abc 123 def 4567 ghi"
     digits.replace(text, "#")      // "abc # def 4567 ghi"
     digits.replace_all(text, "#")  // "abc # def # ghi"
 
@@ -2250,15 +2249,15 @@ class RingBuffer {
 
 ```swift
 // Cast integer to pointer
-let addr: u64 = 4096
-let ptr: u8* = addr as u8*
+let addr = 4096
+let ptr = addr as u8*
 
 // Cast pointer to integer
-let ptr_val: u64 = ptr as u64
+let ptr_val = ptr as u64
 
 // Cast between pointer types
-let void_ptr: void* = ptr as void*
-let i64_ptr: i64* = void_ptr as i64*
+let void_ptr = ptr as void*
+let i64_ptr = void_ptr as i64*
 ```
 
 ### Hex and Binary Masks

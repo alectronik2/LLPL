@@ -67,7 +67,7 @@ func throw_func() {
     throw "This is a test exception"
 }
 
-func throw_func( l: i64 ) {
+func throw_func_with_value( l: i64 ) {
     throw "This is another test exception \(l)"
 }
 
@@ -125,7 +125,7 @@ func main( args: string[] ) -> u32 {
     delete k
 
     try {
-        throw_func(22)
+        throw_func_with_value(22)
     } catch error: string {
         puts("Caught an exception: \(error)")
     } finally {
@@ -165,7 +165,14 @@ func main( args: string[] ) -> u32 {
 
     delete kl
 
-    assert( false )
+    assert( true )
 
     xy()
+
+    let digits = /[0-9]+/
+    let text: char* = "abc 123 def 4567 ghi"
+
+    for m in digits.find_all(text) {
+        puts(m)  // "123", then "4567"
+    }
 }

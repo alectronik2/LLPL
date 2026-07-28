@@ -409,6 +409,16 @@ private void executeStep(PlanStep step) {
 }
 
 private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
+    size_t completedPlanSteps = 0;
+
+    void markProgress(string message) {
+        completedPlanSteps++;
+        progressStep(completedPlanSteps, plan.length, message);
+    }
+
+    progressStart(plan.length);
+    scope(exit) progressFinish();
+
     void runBuildChunk(size_t start, size_t end) {
         if (start >= end) return;
 
@@ -464,6 +474,7 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
             if (!willRun[idx]) {
                 done[idx] = true;
                 doneCount++;
+                markProgress("up to date " ~ s.description);
             } else {
                 cargoLine(stepVerb(s), s.description);
             }
@@ -531,6 +542,7 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
             done[finishedIdx] = true;
             doneCount++;
             runningCount--;
+            markProgress("finished " ~ steps[finishedIdx].description);
 
             foreach (output; steps[finishedIdx].outputs) {
                 if (auto consumers = output in consumersByOutput) {
@@ -583,14 +595,19 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
         // reflect reality instead of pre-build state (see buildPlan).
         if (plan[i].kind == StepKind.packageGate) {
             if (isUpToDate(plan[i].outputs, plan[i].inputs, configPath)) {
+                markProgress("up to date " ~ plan[i].description);
                 i++;
                 // The actions covered by this gate carry no incremental
                 // inputs/outputs of their own (see buildPlan) - without
                 // this, they'd run unconditionally despite the package
                 // itself being up to date.
-                while (i < plan.length && plan[i].kind == StepKind.action) i++;
+                while (i < plan.length && plan[i].kind == StepKind.action) {
+                    markProgress("up to date " ~ plan[i].description);
+                    i++;
+                }
             } else {
                 cargoLine(stepVerb(plan[i]), plan[i].description);
+                markProgress("packaging " ~ plan[i].description);
                 i++;
             }
             continue;
@@ -599,6 +616,7 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
         if (plan[i].kind == StepKind.action) {
             cargoLine(stepVerb(plan[i]), plan[i].description);
             executeStep(plan[i]);
+            markProgress("finished " ~ plan[i].description);
             i++;
             continue;
         }

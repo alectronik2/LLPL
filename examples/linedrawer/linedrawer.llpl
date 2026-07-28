@@ -11,10 +11,12 @@ func main( args: string[] ) {
     puts( "\(1 in ary)" )
 
     let sarr: string[] = ["hello", "world"]
-    let x = "hello" in sarr
+    puts( "\("hello" in sarr)" )
+
+    for s in sarr {
+        puts( "# \(s)")
+    }
 
     let f = func() { puts("Func called") }
     f()
-
-    puts( "in rq: \(x)" )
 }
