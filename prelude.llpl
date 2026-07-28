@@ -219,6 +219,10 @@ class RegexMatch {
         }
         return result
     }
+
+    func to_string() -> string {
+        return self.group(0).c_str()
+    }
 }
 
 class RegexMatchIterator {
