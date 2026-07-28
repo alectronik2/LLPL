@@ -102,87 +102,12 @@ struct EmbeddedFile {
     let len: u64
 }
 
-class ReflectField {
-    let raw: char*
-
-    constructor(raw: char*) {
-        self.raw = raw
-    }
-
-    destructor() {}
-
-    func exists() -> bool {
-        return (self.raw as u64) != 0
-    }
-
-    func name() -> string {
-        return llpl_reflect_field_name(self.raw)
-    }
-
-    func type_name() -> string {
-        return llpl_reflect_field_type_name(self.raw)
-    }
-
-    func offset() -> i64 {
-        return llpl_reflect_field_offset(self.raw) as i64
-    }
-
-    func size() -> i64 {
-        return llpl_reflect_field_size(self.raw) as i64
-    }
-}
-
-class ReflectType {
-    let raw: char*
-
-    constructor(raw: char*) {
-        self.raw = raw
-    }
-
-    destructor() {}
-
-    func exists() -> bool {
-        return (self.raw as u64) != 0
-    }
-
-    func name() -> string {
-        return llpl_reflect_type_name(self.raw)
-    }
-
-    func kind() -> string {
-        return llpl_reflect_type_kind(self.raw)
-    }
-
-    func size() -> i64 {
-        return llpl_reflect_type_size(self.raw) as i64
-    }
-
-    func field_count() -> i64 {
-        return llpl_reflect_field_count(self.raw) as i64
-    }
-
-    func field(index: i64) -> ReflectField {
-        if index < 0 {
-            return new ReflectField(null)
-        }
-        return new ReflectField(llpl_reflect_field(self.raw, index as u64))
-    }
-}
-
-func reflect_type(name: string) -> ReflectType {
-    return new ReflectType(llpl_reflect_type(name))
-}
+// Reflection classes moved to stdlib/reflection.llpl to reduce prelude compilation time
 
 class RegexMatch {
     let matched: bool
     let pattern: char*
     let text: char*
-    // Added to group_start/group_end's reported offsets - 0 for an
-    // ordinary top-level match, non-zero when `text` is itself a suffix
-    // of some larger original string (see RegexMatchIterator, which
-    // searches one suffix at a time but wants callers to see positions
-    // relative to the whole original text). Never affects group()'s
-    // returned *content*, which is read out of `text` directly regardless.
     let base_offset: i64
 
     constructor(pattern: string, text: string, base_offset: i64 = 0) {
@@ -254,11 +179,6 @@ class RegexMatch {
         return out
     }
 
-    // Expands `$0`/`$1`/... backreferences in `template` against this
-    // match's own captured groups (`$$` for a literal `$`; a `$` not
-    // followed by a digit or another `$` is left as-is). Shared by
-    // Regex.replace/replace_all, but also independently useful against a
-    // match obtained directly from Regex.captures().
     func expand(template: string) -> String {
         let ts: String = new String(template)
         let result: String = new String("")
@@ -301,17 +221,6 @@ class RegexMatch {
     }
 }
 
-// Walks every non-overlapping match of `pattern` in `text`, left to
-// right - implements the `foreach` iterator protocol (see codegen.d's
-// ITER_HAS_NEXT et al.), so `for m in re.find_all(text) { ... }`
-// works directly. Searches one suffix of `text` at a time (there's no
-// "search starting at an offset" primitive at the C level, only "search
-// from the start of this string") - each yielded RegexMatch is
-// constructed with that suffix's offset as its base_offset, so its own
-// group_start/group_end still read as positions into the *original*
-// text. An empty match (a pattern like `x*` that can match zero-width)
-// still advances by at least one byte each step, so this always
-// terminates.
 class RegexMatchIterator {
     let pattern: char*
     let text: char*
@@ -404,15 +313,10 @@ class Regex {
         return new RegexMatch(self.pattern, text)
     }
 
-    // All non-overlapping matches, left to right - `for m in
-    // re.find_all(text) { ... }`.
     func find_all(text: string) -> RegexMatchIterator {
         return new RegexMatchIterator(self.pattern, text)
     }
 
-    // Replaces just the first match with `replacement` (see
-    // RegexMatch.expand for its `$0`/`$1`/`$$` backreference syntax).
-    // Returns `text` unchanged (as a new String) if there's no match.
     func replace(text: string, replacement: string) -> String {
         let m: RegexMatch = self.captures(text)
         if !m.is_match() {
@@ -427,7 +331,6 @@ class Regex {
         return result
     }
 
-    // Replaces every non-overlapping match with `replacement`.
     func replace_all(text: string, replacement: string) -> String {
         let ts: String = new String(text)
         let result: String = new String("")

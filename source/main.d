@@ -10,6 +10,7 @@ import std.format;
 import std.string : splitLines, startsWith, indexOf, lastIndexOf, replace, strip;
 import std.getopt;
 import std.process : execute, environment;
+import std.datetime.stopwatch;
 import core.stdc.stdlib : exit;
 import lexer;
 import parser;
@@ -108,15 +109,21 @@ void main(string[] args) {
     }
 
     try {
+        StopWatch totalTime;
+        StopWatch phaseTime;
+        totalTime.start();
+
         if (verbose) {
             writefln("Compiling %s...", inputFile);
         }
 
         // Resolve modules and dependencies (prelude.llpl first, if present)
+        phaseTime.start();
         auto programs = resolveWithPrelude(inputFile);
+        phaseTime.stop();
 
         if (verbose) {
-            writefln("Resolved %d modules", programs.length);
+            writefln("Resolved %d modules (%.2f ms)", programs.length, phaseTime.peek().total!"msecs");
             foreach (prog; programs) {
                 if (prog.modulePath.length > 0) {
                     writefln("  - %s", prog.modulePath);
@@ -125,15 +132,24 @@ void main(string[] args) {
         }
 
         // Code generation for all modules
+        phaseTime.reset();
+        phaseTime.start();
         auto codegen = new CodeGenerator(safeMode, enableDCE, targetProfile);
         string cCode = codegen.generateMultiple(programs);
+        phaseTime.stop();
+
         if (projectConfig !is null) {
             codegen.linkLibraries ~= projectConfig.linkLibraries;
             codegen.compilerFlags ~= projectConfig.compilerFlags;
         }
 
         if (verbose) {
-            writefln("Code generation complete");
+            writefln("Code generation complete (%.2f ms)", phaseTime.peek().total!"msecs");
+        }
+
+        totalTime.stop();
+        if (verbose) {
+            writefln("Total compilation time: %.2f ms", totalTime.peek().total!"msecs");
         }
 
         if (provenanceFile.length > 0) {

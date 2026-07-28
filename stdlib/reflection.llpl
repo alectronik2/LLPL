@@ -1,0 +1,76 @@
+// Runtime type reflection - moved from prelude to reduce prelude size
+
+namespace std {
+
+class ReflectField {
+    let raw: char*
+
+    constructor(raw: char*) {
+        self.raw = raw
+    }
+
+    destructor() {}
+
+    func exists() -> bool {
+        return (self.raw as u64) != 0
+    }
+
+    func name() -> string {
+        return llpl_reflect_field_name(self.raw)
+    }
+
+    func type_name() -> string {
+        return llpl_reflect_field_type_name(self.raw)
+    }
+
+    func offset() -> i64 {
+        return llpl_reflect_field_offset(self.raw) as i64
+    }
+
+    func size() -> i64 {
+        return llpl_reflect_field_size(self.raw) as i64
+    }
+}
+
+class ReflectType {
+    let raw: char*
+
+    constructor(raw: char*) {
+        self.raw = raw
+    }
+
+    destructor() {}
+
+    func exists() -> bool {
+        return (self.raw as u64) != 0
+    }
+
+    func name() -> string {
+        return llpl_reflect_type_name(self.raw)
+    }
+
+    func kind() -> string {
+        return llpl_reflect_type_kind(self.raw)
+    }
+
+    func size() -> i64 {
+        return llpl_reflect_type_size(self.raw) as i64
+    }
+
+    func field_count() -> i64 {
+        return llpl_reflect_field_count(self.raw) as i64
+    }
+
+    func field(index: i64) -> ReflectField {
+        if index < 0 {
+            return new ReflectField(null)
+        }
+        return new ReflectField(llpl_reflect_field(self.raw, index as u64))
+    }
+}
+
+func reflect_type(name: string) -> ReflectType {
+    return new ReflectType(llpl_reflect_type(name))
+}
+
+} // namespace std

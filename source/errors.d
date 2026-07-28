@@ -44,7 +44,27 @@ private string spaces(size_t n) {
     return result;
 }
 
-// Renders an error with a source citation in the style of rustc/clang, e.g.:
+// ANSI color codes
+private enum Colors {
+    RESET = "\033[0m",
+    RED = "\033[31m",
+    YELLOW = "\033[33m",
+    BLUE = "\033[34m",
+    BOLD = "\033[1m",
+    DIM = "\033[2m",
+}
+
+private bool shouldUseColor() {
+    import std.process : environment;
+    string noColor = environment.get("NO_COLOR");
+    string forceColor = environment.get("FORCE_COLOR");
+    if (forceColor.length > 0) return true;
+    if (noColor.length > 0) return false;
+    // Default to color if stderr is a terminal
+    return true;
+}
+
+// Renders an error with a source citation in the style of rustc/clang with colors:
 //
 //   error: Cannot infer type of 'x'
 //     --> examples/kernel.llpl:3:9
@@ -52,36 +72,64 @@ private string spaces(size_t n) {
 //     3 |     let x
 //       |         ^
 string formatCompileError(CompileError err) {
-    string header = format("error: %s\n", err.msg);
+    bool useColor = shouldUseColor();
+
+    string red(string s) { return useColor ? Colors.RED ~ s ~ Colors.RESET : s; }
+    string bold(string s) { return useColor ? Colors.BOLD ~ s ~ Colors.RESET : s; }
+    string blue(string s) { return useColor ? Colors.BLUE ~ s ~ Colors.RESET : s; }
+    string dim(string s) { return useColor ? Colors.DIM ~ s ~ Colors.RESET : s; }
+
+    string header = format("%s: %s\n", red("error"), err.msg);
 
     if (err.filePath.length == 0 || err.line <= 0) {
         return header;
     }
 
-    string location = format("  --> %s:%d:%d\n", err.filePath, err.line, err.column);
+    string location = format("  %s %s:%d:%d\n", blue("-->"), err.filePath, err.line, err.column);
 
-    string sourceLine = "";
+    string[] lines;
     bool haveSource = false;
     if (exists(err.filePath)) {
-        auto lines = readText(err.filePath).splitLines();
-        if (err.line >= 1 && err.line <= lines.length) {
-            sourceLine = lines[err.line - 1];
-            haveSource = true;
-        }
+        lines = readText(err.filePath).splitLines();
+        haveSource = lines.length > 0;
     }
 
     if (!haveSource) {
         return header ~ location;
     }
 
-    string lineNumStr = format("%d", err.line);
-    string gutter = spaces(lineNumStr.length);
-    int caretPos = err.column > 0 ? err.column - 1 : 0;
+    int errorLine = err.line;
+    int contextBefore = 1;
+    int contextAfter = 1;
+    int startLine = (errorLine - contextBefore > 1) ? errorLine - contextBefore : 1;
+    int endLine = (errorLine + contextAfter <= lines.length) ? errorLine + contextAfter : cast(int)lines.length;
 
     string result = header ~ location;
+
+    // Gutter width for line numbers
+    string maxLineStr = format("%d", endLine);
+    string gutter = spaces(maxLineStr.length);
+
     result ~= format(" %s |\n", gutter);
-    result ~= format(" %s | %s\n", lineNumStr, sourceLine);
-    result ~= format(" %s | %s^\n", gutter, spaces(caretPos));
+
+    for (int i = startLine; i <= endLine; i++) {
+        string lineNumStr = format("%d", i);
+        string paddedNum = spaces(maxLineStr.length - lineNumStr.length) ~ lineNumStr;
+
+        if (i == errorLine) {
+            // Highlight error line
+            string sourceLine = lines[i - 1];
+            result ~= format(" %s %s %s\n", red(paddedNum), red("|"), sourceLine);
+
+            // Add caret pointer
+            int caretPos = err.column > 0 ? err.column - 1 : 0;
+            result ~= format(" %s %s %s%s\n", gutter, red("|"), spaces(caretPos), red("^"));
+        } else {
+            // Context lines in dim color
+            string sourceLine = lines[i - 1];
+            result ~= format(" %s %s %s\n", dim(paddedNum), dim("|"), dim(sourceLine));
+        }
+    }
 
     return result;
 }
