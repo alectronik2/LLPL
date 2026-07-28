@@ -8,6 +8,7 @@ import std.algorithm;
 import std.format;
 import std.json;
 import std.process : environment, execute;
+import std.datetime.stopwatch;
 import ast;
 import lexer;
 import parser;
@@ -53,10 +54,30 @@ class ModuleResolver {
     private bool recoverParseErrors;
     private CompileError[] collectedDiagnostics;
     private string[string] headerImportCache;
+    private bool[string] pathExistsCache;  // Cache filesystem exists() results
+    private bool enableTiming = false;
+    private double readFileTime = 0;
+    private double lexTime = 0;
+    private double parseTime = 0;
+    private double importResolvTime = 0;
+    private int resolvePathCalls = 0;
+    private int cachedExistsCalls = 0;
 
     this(string[] searchPaths = [], bool recoverParseErrors = false) {
         this.searchPaths = searchPaths ~ [".", "lib", "modules"];
         this.recoverParseErrors = recoverParseErrors;
+        this.enableTiming = (environment.get("LLPL_TIMING", "").length > 0);
+    }
+
+    void reportTiming() {
+        if (enableTiming) {
+            writefln("  File I/O: %.2f ms", readFileTime);
+            writefln("  Lexing: %.2f ms", lexTime);
+            writefln("  Parsing: %.2f ms", parseTime);
+            writefln("  Import resolution: %.2f ms", importResolvTime);
+            writefln("  resolveImportPath calls: %d", resolvePathCalls);
+            writefln("  cachedExists calls: %d", cachedExistsCalls);
+        }
     }
 
     // Resolve a module and all its dependencies
@@ -101,15 +122,29 @@ class ModuleResolver {
         modInfo.isBeingParsed = true;
 
         // Read and parse the file
+        StopWatch timer;
+        timer.start();
         string source = readText(absPath);
+        timer.stop();
+        if (enableTiming) readFileTime += timer.peek().total!"msecs";
+
+        timer.reset();
+        timer.start();
         auto lexer = new Lexer(source);
         auto tokens = lexer.tokenize();
+        timer.stop();
+        if (enableTiming) lexTime += timer.peek().total!"msecs";
+
+        timer.reset();
+        timer.start();
         auto parser = new Parser(tokens, absPath);
         modInfo.ast = recoverParseErrors ? parser.parseRecovering() : parser.parse();
         if (recoverParseErrors) {
             collectedDiagnostics ~= parser.diagnostics();
         }
         modInfo.ast.modulePath = absPath;
+        timer.stop();
+        if (enableTiming) parseTime += timer.peek().total!"msecs";
 
         // Extract imports
         foreach (decl; modInfo.ast.declarations) {
@@ -117,7 +152,12 @@ class ModuleResolver {
                 modInfo.imports ~= importStmt;
 
                 // Resolve the imported module
+                timer.reset();
+                timer.start();
                 string importPath = resolveImportPath(importStmt.modulePath, absPath);
+                timer.stop();
+                if (enableTiming) importResolvTime += timer.peek().total!"msecs";
+
                 importStmt.resolvedPath = importPath;
                 if (importPath.length > 0) {
                     resolveModule(importPath);
@@ -132,7 +172,16 @@ class ModuleResolver {
         importOrder ~= absPath;
     }
 
+    private bool cachedExists(string path) {
+        if (enableTiming) cachedExistsCalls++;
+        if (path !in pathExistsCache) {
+            pathExistsCache[path] = exists(path);
+        }
+        return pathExistsCache[path];
+    }
+
     private string resolveImportPath(string modulePath, string fromFile) {
+        if (enableTiming) resolvePathCalls++;
         // If it's a relative path, resolve from the importing file's directory
         string baseDir = dirName(fromFile);
 
@@ -151,8 +200,9 @@ class ModuleResolver {
         // Try relative to importing file
         foreach (path; testPaths) {
             string candidatePath = buildNormalizedPath(baseDir, path);
-            if (exists(candidatePath)) {
-                return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
+            if (cachedExists(candidatePath)) {
+                auto absPath = absolutePath(candidatePath);
+                return isHeaderImport ? materializeHeaderImport(absPath) : absPath;
             }
         }
 
@@ -160,14 +210,16 @@ class ModuleResolver {
         foreach (searchPath; searchPaths) {
             foreach (path; testPaths) {
                 string candidatePath = buildNormalizedPath(searchPath, path);
-                if (exists(candidatePath)) {
-                    return isHeaderImport ? materializeHeaderImport(absolutePath(candidatePath)) : absolutePath(candidatePath);
+                if (cachedExists(candidatePath)) {
+                    auto absPath = absolutePath(candidatePath);
+                    return isHeaderImport ? materializeHeaderImport(absPath) : absPath;
                 }
             }
         }
 
         if (isHeaderImport) {
-            throw new Exception(format("Could not resolve C header import: %s (from %s)", modulePath, fromFile));
+            throw new Exception(format("Could not resolve C header import: %s (from %s)",
+                                     modulePath, fromFile));
         }
 
         stderr.writefln("Warning: Could not resolve import: %s (from %s)", modulePath, fromFile);
@@ -314,7 +366,9 @@ Program[] resolveWithPrelude(string entryPath) {
     if (preludePath.length > 0) {
         resolver.resolveAll(preludePath);
     }
-    return resolver.resolveAll(entryPath);
+    auto result = resolver.resolveAll(entryPath);
+    resolver.reportTiming();
+    return result;
 }
 
 Program[] resolveWithPreludeRecovering(string entryPath, out CompileError[] diagnostics, out ProjectConfig project) {
