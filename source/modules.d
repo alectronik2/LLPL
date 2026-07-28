@@ -9,6 +9,8 @@ import std.format;
 import std.json;
 import std.process : environment, execute;
 import std.datetime.stopwatch;
+import std.datetime.systime : SysTime, Clock;
+import core.stdc.time : time_t;
 import ast;
 import lexer;
 import parser;
@@ -56,6 +58,10 @@ class ModuleResolver {
     private string[string] headerImportCache;
     private bool[string] pathExistsCache;  // Cache filesystem exists() results
     private string[string] modulePathCache;  // Map module name -> resolved path
+    private SysTime[string] fileMtimeCache;  // Track file modification times for incremental compilation
+    private bool enableIncrementalCache = false;
+    private int incrementalHits = 0;
+    private int incrementalMisses = 0;
     private bool enableTiming = false;
     private double readFileTime = 0;
     private double lexTime = 0;
@@ -69,6 +75,19 @@ class ModuleResolver {
         this.searchPaths = searchPaths ~ [".", "lib", "modules"];
         this.recoverParseErrors = recoverParseErrors;
         this.enableTiming = (environment.get("LLPL_TIMING", "").length > 0);
+        this.enableIncrementalCache = (environment.get("LLPL_INCREMENTAL", "").length > 0);
+    }
+
+    private bool canUseIncrementalCache(string absPath) {
+        if (!enableIncrementalCache) return false;
+        if (absPath !in modules) return false;
+
+        ModuleInfo info = modules[absPath];
+        if (!info.isParsed || info.ast is null) return false;
+
+        // TODO: check file mtime for actual incremental benefit
+        // For now, rely on isParsed flag within single run
+        return true;
     }
 
     void reportTiming() {
@@ -79,6 +98,9 @@ class ModuleResolver {
             writefln("  Import resolution: %.2f ms", importResolvTime);
             writefln("  resolveImportPath calls: %d (cache hits: %d)", resolvePathCalls, cacheHits);
             writefln("  cachedExists calls: %d", cachedExistsCalls);
+        }
+        if (enableIncrementalCache) {
+            writefln("  Incremental cache: %d hits, %d misses", incrementalHits, incrementalMisses);
         }
     }
 
@@ -106,6 +128,15 @@ class ModuleResolver {
         // Check if already parsed
         if (absPath in modules && modules[absPath].isParsed) {
             return;
+        }
+
+        // Check incremental cache
+        if (canUseIncrementalCache(absPath)) {
+            incrementalHits++;
+            return;
+        }
+        if (enableIncrementalCache) {
+            incrementalMisses++;
         }
 
         // Check for circular dependency
