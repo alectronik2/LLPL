@@ -8950,7 +8950,7 @@ class CodeGenerator {
     }
 
     private string generateArrayForeach(ForeachStmt foreachStmt, Type arrType, bool isDeferred) {
-        Type elemType = new Type(arrType.name, false, false, 0);
+        Type elemType = new Type(arrType.name, arrType.pointerDepth, false, 0);
 
         tempVarCounter++;
         string idxName = format("__foreach_i%d", tempVarCounter);
