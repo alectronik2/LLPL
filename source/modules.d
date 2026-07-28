@@ -55,6 +55,7 @@ class ModuleResolver {
     private CompileError[] collectedDiagnostics;
     private string[string] headerImportCache;
     private bool[string] pathExistsCache;  // Cache filesystem exists() results
+    private string[string] modulePathCache;  // Map module name -> resolved path
     private bool enableTiming = false;
     private double readFileTime = 0;
     private double lexTime = 0;
@@ -62,6 +63,7 @@ class ModuleResolver {
     private double importResolvTime = 0;
     private int resolvePathCalls = 0;
     private int cachedExistsCalls = 0;
+    private int cacheHits = 0;
 
     this(string[] searchPaths = [], bool recoverParseErrors = false) {
         this.searchPaths = searchPaths ~ [".", "lib", "modules"];
@@ -75,7 +77,7 @@ class ModuleResolver {
             writefln("  Lexing: %.2f ms", lexTime);
             writefln("  Parsing: %.2f ms", parseTime);
             writefln("  Import resolution: %.2f ms", importResolvTime);
-            writefln("  resolveImportPath calls: %d", resolvePathCalls);
+            writefln("  resolveImportPath calls: %d (cache hits: %d)", resolvePathCalls, cacheHits);
             writefln("  cachedExists calls: %d", cachedExistsCalls);
         }
     }
@@ -182,6 +184,21 @@ class ModuleResolver {
 
     private string resolveImportPath(string modulePath, string fromFile) {
         if (enableTiming) resolvePathCalls++;
+
+        // Check module path cache first
+        if (modulePath in modulePathCache) {
+            if (enableTiming) cacheHits++;
+            return modulePathCache[modulePath];
+        }
+
+        string result = resolveImportPathImpl(modulePath, fromFile);
+
+        // Cache result (even empty string to avoid repeated searches)
+        modulePathCache[modulePath] = result;
+        return result;
+    }
+
+    private string resolveImportPathImpl(string modulePath, string fromFile) {
         // If it's a relative path, resolve from the importing file's directory
         string baseDir = dirName(fromFile);
 
