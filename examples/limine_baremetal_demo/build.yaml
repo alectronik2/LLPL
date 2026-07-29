@@ -4,15 +4,14 @@
 #
 # Override where Limine's own assets/tooling live with
 #   ../../tools/llplbuild/llplbuild build --var LIMINE_DIR=/path/to/limine
-# (or the LIMINE_DIR environment variable) - defaults to /usr/share/limine,
-# matching the old Makefile's `LIMINE_DIR ?= /usr/share/limine`.
+# (or the LIMINE_DIR environment variable).
 
 project: llpl-limine-baremetal-demo
 entry: kernel.llpl
 llpl_compiler: ../../llpl
 
 variables:
-  LIMINE_DIR: /usr/share/limine
+  LIMINE_DIR: /home/nix/Projects/experiment64/limine
 
 toolchain:
   cc: tcc
@@ -32,6 +31,10 @@ common_cflags:
   - -mcmodel=kernel
   - -fno-pie
   - -mno-red-zone
+  # runtime.c enables its %f formatter when it sees TCC, but this kernel
+  # deliberately disables all FP/SSE state. Hide TCC's marker for these
+  # freestanding objects so runtime.c compiles out the double-taking helper.
+  - -U__TINYC__
   - -mno-sse
   - -mno-sse2
   - -mno-mmx
@@ -71,7 +74,9 @@ package:
     - require_file:
         path: "${LIMINE_DIR}/limine-uefi-cd.bin"
         message: "Missing ${LIMINE_DIR}/limine-uefi-cd.bin"
-    - run: "command -v limine >/dev/null 2>&1 || { echo 'limine command not found on PATH' >&2; exit 1; }"
+    - require_file:
+        path: "${LIMINE_DIR}/limine"
+        message: "Missing ${LIMINE_DIR}/limine"
     - run: "rm -rf isodir"
     - mkdir: isodir/boot/limine
     - mkdir: isodir/EFI/BOOT
@@ -84,7 +89,7 @@ package:
     - copy: {from: "${LIMINE_DIR}/BOOTX64.EFI", to: isodir/EFI/BOOT/BOOTX64.EFI}
       allow_failure: true
     - run: "xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label isodir -o kernel.iso"
-    - run: "limine bios-install kernel.iso"
+    - run: "${LIMINE_DIR}/limine bios-install kernel.iso"
 
 run:
   args: ["-cdrom", "kernel.iso", "-serial", "stdio", "-m", "256"]

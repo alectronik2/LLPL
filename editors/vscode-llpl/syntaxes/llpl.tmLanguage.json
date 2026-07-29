@@ -20,6 +20,7 @@
         { "include": "#trait-declaration" },
         { "include": "#impl-declaration" },
         { "include": "#function-declaration" },
+        { "include": "#unittest-declaration" },
         { "include": "#alias-declaration" },
         { "include": "#macro-declaration" },
         { "include": "#control-keywords" },
@@ -213,19 +214,25 @@
         },
         "operator-declaration": {
             "comment": "func operator+(...) - the overloaded operator symbol isn't identifier syntax, so it needs its own rule ahead of function-declaration.",
-            "match": "\\b(func)\\s+(operator)\\s*(==|!=|<=|>=|<<|>>|[+\\-*/%=<>!&|^~])",
+            "match": "\\b(?:(inline)\\s+)?(func)\\s+(operator)\\s*(==|!=|<=|>=|<<|>>|[+\\-*/%=<>!&|^~])",
             "captures": {
-                "1": { "name": "keyword.other.function.llpl" },
-                "2": { "name": "keyword.other.operator.llpl" },
-                "3": { "name": "keyword.operator.llpl" }
+                "1": { "name": "storage.modifier.llpl" },
+                "2": { "name": "keyword.other.function.llpl" },
+                "3": { "name": "keyword.other.operator.llpl" },
+                "4": { "name": "keyword.operator.llpl" }
             }
         },
         "function-declaration": {
-            "match": "\\b(func)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "match": "\\b(?:(inline)\\s+)?(func)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
             "captures": {
-                "1": { "name": "keyword.other.function.llpl" },
-                "2": { "name": "entity.name.function.llpl" }
+                "1": { "name": "storage.modifier.llpl" },
+                "2": { "name": "keyword.other.function.llpl" },
+                "3": { "name": "entity.name.function.llpl" }
             }
+        },
+        "unittest-declaration": {
+            "match": "\\b(unittest)\\b",
+            "name": "keyword.other.unittest.llpl"
         },
         "alias-declaration": {
             "match": "\\b(alias)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
@@ -250,7 +257,7 @@
             }
         },
         "control-keywords": {
-            "match": "\\b(if|else|while|do|for|foreach|in|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw)\\b",
+            "match": "\\b(if|else|while|do|until|for|foreach|in|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw|assert)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {
@@ -258,7 +265,7 @@
             "name": "keyword.other.llpl"
         },
         "modifier-keywords": {
-            "match": "\\b(packed|interrupt|volatile|private|static|virtual|override)\\b",
+            "match": "\\b(packed|interrupt|volatile|private|static|inline|virtual|override|property)\\b",
             "name": "storage.modifier.llpl"
         },
         "sizeof-keyword": {

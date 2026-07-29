@@ -11,6 +11,7 @@ LIBSYS_1.0 {
     llpl_alloc;
     llpl_free;
     llpl_panic;
+    __llpl_check_index;
     rc_alloc;
     rc_free;
     rc_init;

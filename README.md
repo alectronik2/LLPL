@@ -17,7 +17,7 @@ A low-level programming language with familiary syntax that compiles to C for ba
 - **Result<T, E> with Traces**: `?` propagation captures a chained `file:line` trace
 - **Panics with Hooks**: `llpl_panic("...")` prints a message and aborts; optional handler for cleanup
 - **Assert Statement**: `assert(condition)` and `assert(condition, "message")` abort with a panic on failure
-- **Optional Bounds Checking**: `--safe` enables runtime bounds checks on fixed-size array indexing
+- **Default Bounds Checking**: runtime bounds checks on fixed-size array indexing are enabled by default
 - **C FFI**: Easy interoperability with C code
 - **Hardware Support**: MMIO register wrappers, DMA descriptors, cache barriers, page-region helpers, and `#device` descriptor generation
 - **Pipe operator**: And syntactic sugar like `unless`
@@ -318,7 +318,8 @@ All CLI flags:
 | `--cc` | C compiler to invoke in `--binary` mode. Defaults to `$CC`, falling back to `cc`. |
 | `--keep-c` | Keep the intermediate `.c` file in `--binary` mode even on success. |
 | `-v`, `--verbose` | Verbose output. |
-| `--safe` | Enable runtime safety checks - currently, bounds-checked fixed-size array indexing. Off by default. |
+| `--safe` | Runtime safety checks are on by default; this compatibility flag keeps explicit `--safe` invocations working. |
+| `--no-safe` | Disable default runtime safety checks. |
 | `--target` | Target profile: `hosted`, `freestanding`, or `kernel`. Freestanding/kernel profiles refuse clearly hosted-only modules and link directives. |
 | `--dce` | Dead-code elimination. On by default. |
 | `--lsp-symbols` | Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling. |
@@ -337,15 +338,11 @@ default - override with `--cc=<path>` or `$CC`) linked against
 ./llpl input.llpl -b -o output
 ```
 
-Add `--safe` to enable runtime bounds checks on fixed-size array indexing:
-
-```bash
-./llpl --safe input.llpl -b -o output
-```
-
-This currently checks one-dimensional fixed-size arrays (`T[N]`) declared
-as locals, globals, or class fields; pointer indexing and array parameters
-that have decayed to pointers are not checked.
+Runtime bounds checks on fixed-size array indexing are enabled by default.
+This currently checks fixed-size arrays (`T[N]`, including nested dimensions
+when the bound is known) declared as locals, globals, or class fields;
+unbounded pointer indexing is not checked.
+Use `--no-safe` to disable these checks explicitly.
 
 Use `--target=freestanding` or `--target=kernel` for preflight checks that
 fail closed on hosted-only pieces such as `stdlib/io`, `stdlib/net`,

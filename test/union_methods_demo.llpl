@@ -1,0 +1,21 @@
+extern func puts(s: char*) -> i64
+
+union Slot {
+    raw: u64
+    low: u8
+
+    func value() -> u64 {
+        return self.raw
+    }
+}
+
+func main() -> i64 {
+    let slot: Slot
+    slot.raw = 42
+
+    if slot.value() == 42 {
+        puts("union methods work")
+    }
+
+    return 0
+}

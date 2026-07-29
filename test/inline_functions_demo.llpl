@@ -1,0 +1,34 @@
+extern func puts(s: char*) -> i64
+
+inline func inc(x: i64) -> i64 {
+    x + 1
+}
+
+struct InlinePoint {
+    x: i64
+
+    constructor(@x: i64) {}
+
+    inline func doubled() -> i64 {
+        self.x * 2
+    }
+}
+
+class InlineBox {
+    value: i64
+
+    constructor(@value: i64) {}
+
+    inline func add(delta: i64) -> i64 {
+        self.value + delta
+    }
+}
+
+func main() -> i64 {
+    let p = InlinePoint(4)
+    let b = new InlineBox(5)
+    puts("inc=\(inc(2))")
+    puts("point=\(p.doubled())")
+    puts("box=\(b.add(6))")
+    return 0
+}

@@ -1,0 +1,107 @@
+struct Memory {
+    max_phys_addr: uint
+    free_mem:      uint
+
+    num_frames:    uint
+
+}
+
+enum FrameType : u8 {
+    Other,
+    Reserved,
+    Kernel,
+    PFDB,
+    Malloc,
+    HugeMalloc,
+    HandleTab,
+    File,
+    Free
+}
+
+packed struct PageFrame {
+    tag:      u8
+    refcount: u32
+
+    union {
+        size:     uint
+        next:     PageFrame*
+    }
+}
+
+const VMM_PAGE_MASK  = 4095
+const VMM_PAGE_SHIFT = 12
+
+const PG_PRESENT  = 1 << 0
+const PG_WRITABLE = 1 << 1
+const PG_USER     = 1 << 2
+const PG_PWT      = 1 << 3 // write through
+const PG_PCD      = 1 << 4 // cache disable (for MMIO)
+const PG_GLOBAL   = 1 << 8
+const PG_NOEXEC   = 1 << 63
+
+const PADDR_4K_MASK = 0x000F_FFFF_FFFF_F000
+
+packed struct PteStruct {
+        present  : u8:1
+        rw       : u8:1
+        user     : u8:1
+        pwt      : u8:1
+        pcd      : u8:1
+        accessed : u8:1
+        dirty    : u8:1
+        ps       : u8:1
+        global   : u8:1
+        avail    : u8:3
+    }
+
+packed union Pte {
+    let pte: PteStruct
+    let raw: u64
+
+    property func paddr() -> uint {
+        return self.raw & PADDR_4K_MASK
+    }
+
+    property func pfn() -> uint {
+        return self.raw >> VMM_PAGE_SHIFT
+    }
+}
+
+struct PageFrameIndexer {
+    addr: uint
+
+    constructor( @addr: uint ) {}
+
+    property l4() -> uint {
+        (self.addr >> 39) & -0x1FF
+    }
+
+    property l3() -> uint {
+        (self.addr >> 30) & ~0x1FF
+    }
+    
+    property l2() -> uint {
+        (self.addr >> 21) & ~0x1FF
+    }
+
+    property l1() -> uint {
+        (self.addr >>12) & ~0x1FF
+    }
+}
+
+inline func pages_num( v: uint ) -> uint {
+    roundup( v, PAGE_SIZE ) >> PAGE_SHIFT
+}
+
+unittest {
+    let p = PageFrameIndexer( 0x2000 )
+    assert(p.addr == 0x2000)
+
+    puts("index l4 = \(p.l4) - l3 = \(p.l3) - l2 = \(p.l2) - l1 = \(p.l1)")
+    puts("self.addr=\(p.addr)")
+
+    let r = roundup(8, 10)
+    assert(r == 16)
+    puts("Succeeded.")
+    puts("\(r)")
+}

@@ -1,4 +1,4 @@
-// bounds_check_pointer_fail: pointer with known fixed-array bound, compiled with --safe.
+// bounds_check_pointer_fail: pointer with known fixed-array bound, checked by default.
 
 func main() -> i64 {
     let arr: i64[2]

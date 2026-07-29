@@ -1,0 +1,40 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+struct Foo {
+    bar: uint
+    baz: uint = 9
+
+    constructor(@bar: uint) {}
+}
+
+class Box {
+    value: i64
+
+    constructor(@value: i64) {}
+}
+
+struct Pair<T> {
+    value: T
+
+    constructor(@value: T) {}
+}
+
+func main() -> i64 {
+    let foo: Foo = new Foo(7)
+    print_int("foo.bar", foo.bar)
+    print_int("foo.baz", foo.baz)
+
+    let box: Box = new Box(11)
+    print_int("box.value", box.value)
+
+    let pair: Pair<i64> = new Pair<i64>(13)
+    print_int("pair.value", pair.value)
+
+    return 0
+}

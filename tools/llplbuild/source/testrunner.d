@@ -52,14 +52,22 @@ private TestResult runOne(string srcPath, TestOptions opts) {
 
     string[] flags = readFlags(flagsPath).split();
     string[] compileCmd = [opts.compiler] ~ flags ~ [srcPath, "-b", "-o", tmpBin];
+    bool compilerRanTest = flags.canFind("--unittest");
     auto compileResult = execute(compileCmd);
-    if (compileResult.status != 0) {
+    if (compileResult.status != 0 && !compilerRanTest) {
         return TestResult(base, false, "", format("compiler error\n%s", compileResult.output));
     }
 
-    auto runResult = execute([tmpBin]);
-    string actual = runResult.output;
-    int rc = runResult.status;
+    string actual;
+    int rc;
+    if (compilerRanTest) {
+        actual = compileResult.output;
+        rc = compileResult.status;
+    } else {
+        auto runResult = execute([tmpBin]);
+        actual = runResult.output;
+        rc = runResult.status;
+    }
 
     if (exists(expectedFailPath)) {
         if (rc == 0) {

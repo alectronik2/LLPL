@@ -33,8 +33,11 @@ void main(string[] args) {
     string ccOverride;
     bool keepC = false;
     string lspSymbolsFile;
-    bool safeMode = false;
+    bool safeMode = true;
+    bool noSafeMode = false;
     bool enableDCE = true;
+    bool enableUnitTests = false;
+    string unitTestExpectedFile;
     string targetProfile;
     string provenanceFile;
     string effectsFile;
@@ -53,11 +56,17 @@ void main(string[] args) {
         "keep-c", "Keep the intermediate .c file in --binary mode even on a successful build",
             &keepC,
         "v|verbose", "Verbose output", &verbose,
-        "safe", "Enable runtime safety checks (bounds-check fixed arrays, decayed array parameters, and bounded pointers)",
+        "safe", "Enable runtime safety checks (default: on; accepted for compatibility)",
             &safeMode,
+        "no-safe", "Disable default runtime safety checks",
+            &noSafeMode,
         "target", "Target profile: hosted, freestanding, or kernel (default: hosted)",
             &targetProfile,
         "dce", "Enable dead-code elimination (default: true)", &enableDCE,
+        "unittest", "Compile unittest { ... } blocks and generate a test main",
+            &enableUnitTests,
+        "unittest-expected", "Compare --unittest stdout against this file (default: <input>.unittest.expected if present)",
+            &unitTestExpectedFile,
         "lsp-symbols", "Analyze <file> and dump diagnostics/symbols/usages as JSON (for editor tooling)",
             &lspSymbolsFile,
         "diagnostics-json", "Write machine-readable diagnostics JSON to <file> on compiler errors",
@@ -75,6 +84,10 @@ void main(string[] args) {
     if (lspSymbolsFile.length > 0) {
         runLspSymbols(lspSymbolsFile);
         return;
+    }
+
+    if (noSafeMode) {
+        safeMode = false;
     }
 
     if (helpInfo.helpWanted || args.length < 2) {
@@ -102,6 +115,10 @@ void main(string[] args) {
         targetProfile = projectConfig !is null && projectConfig.target.length > 0
             ? projectConfig.target
             : "hosted";
+    }
+
+    if (enableUnitTests) {
+        binaryMode = true;
     }
 
     if (outputFile.length == 0) {
@@ -134,7 +151,7 @@ void main(string[] args) {
         // Code generation for all modules
         phaseTime.reset();
         phaseTime.start();
-        auto codegen = new CodeGenerator(safeMode, enableDCE, targetProfile);
+        auto codegen = new CodeGenerator(safeMode, enableDCE, targetProfile, enableUnitTests);
         string cCode = codegen.generateMultiple(programs);
         phaseTime.stop();
 
@@ -177,7 +194,12 @@ void main(string[] args) {
 
         if (binaryMode) {
             compileToBinary(cCode, outputFile, ccOverride, keepC, verbose,
-                codegen.linkLibraries, codegen.compilerFlags);
+                codegen.linkLibraries, codegen.compilerFlags, !enableUnitTests);
+            if (enableUnitTests) {
+                string actual = runUnitTestBinary(outputFile);
+                checkUnitTestExpectedOutput(inputFile, unitTestExpectedFile, actual);
+                write(actual);
+            }
         } else {
             std.file.write(outputFile, cCode);
             writefln("Successfully compiled to %s", outputFile);
@@ -426,7 +448,7 @@ private void writeAuditVerdict(string dir, string inputFile, string outputFile, 
 // about, so --binary isn't meant for those - use the Makefile-based
 // two-step build there instead.
 private void compileToBinary(string cCode, string outputFile, string ccOverride, bool keepC, bool verbose,
-        string[] linkLibraries, string[] compilerFlags) {
+        string[] linkLibraries, string[] compilerFlags, bool announceSuccess = true) {
     string runtimeDir = buildNormalizedPath(dirName(thisExePath()), "runtime");
     string runtimeC = buildNormalizedPath(runtimeDir, "runtime.c");
     string runtimeH = buildNormalizedPath(runtimeDir, "runtime.h");
@@ -483,5 +505,48 @@ private void compileToBinary(string cCode, string outputFile, string ccOverride,
         std.file.remove(cFile);
     }
 
-    writefln("Successfully compiled to %s", outputFile);
+    if (announceSuccess) {
+        writefln("Successfully compiled to %s", outputFile);
+    }
+}
+
+private string runUnitTestBinary(string outputFile) {
+    string executable = outputFile;
+    if (!isAbsolute(outputFile) && outputFile.indexOf(dirSeparator) < 0) {
+        executable = buildPath(".", outputFile);
+    }
+
+    auto result = execute([executable]);
+    if (result.status != 0) {
+        stderr.writefln("error: unittest executable '%s' failed (exit %d)", outputFile, result.status);
+        exit(result.status);
+    }
+    return result.output;
+}
+
+private string defaultUnitTestExpectedPath(string inputFile) {
+    return stripExtension(inputFile) ~ ".unittest.expected";
+}
+
+private void checkUnitTestExpectedOutput(string inputFile, string expectedOverride, string actual) {
+    string expectedPath = expectedOverride.length > 0 ? expectedOverride : defaultUnitTestExpectedPath(inputFile);
+    if (!exists(expectedPath)) {
+        if (expectedOverride.length > 0) {
+            stderr.writefln("error: unittest expected output file '%s' not found", expectedPath);
+            exit(1);
+        }
+        return;
+    }
+
+    string expected = readText(expectedPath);
+    if (actual == expected) return;
+
+    stderr.writefln("error: unittest output differs from %s", expectedPath);
+    stderr.writeln("--- expected");
+    stderr.write(expected);
+    if (expected.length == 0 || expected[$ - 1] != '\n') stderr.writeln();
+    stderr.writeln("--- actual");
+    stderr.write(actual);
+    if (actual.length == 0 || actual[$ - 1] != '\n') stderr.writeln();
+    exit(1);
 }

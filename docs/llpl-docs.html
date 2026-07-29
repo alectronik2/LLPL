@@ -337,7 +337,8 @@ export LLPL_HOME=$(pwd)</pre>
           <tr><td><code>--cc</code></td><td>C compiler to invoke in <code>--binary</code> mode. Defaults to <code>$CC</code>, falling back to <code>cc</code>.</td></tr>
           <tr><td><code>--keep-c</code></td><td>Keep the intermediate <code>.c</code> file in <code>--binary</code> mode even on success.</td></tr>
           <tr><td><code>-v</code>, <code>--verbose</code></td><td>Verbose output.</td></tr>
-          <tr><td><code>--safe</code></td><td>Enable runtime safety checks — currently, bounds-checked fixed-size array indexing. Off by default. See <a href="#lang-types-pointers">Pointers &amp; arrays</a>.</td></tr>
+          <tr><td><code>--safe</code></td><td>Runtime safety checks are on by default; this compatibility flag keeps explicit <code>--safe</code> invocations working. See <a href="#lang-types-pointers">Pointers &amp; arrays</a>.</td></tr>
+          <tr><td><code>--no-safe</code></td><td>Disable default runtime safety checks.</td></tr>
           <tr><td><code>--dce</code></td><td>Dead-code elimination. On by default.</td></tr>
           <tr><td><code>--lsp-symbols</code></td><td>Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling.</td></tr>
           <tr><td><code>-h</code>, <code>--help</code></td><td>Help text.</td></tr>
@@ -1356,21 +1357,22 @@ Graphics.Utils.describe()</pre></div>
         </p>
 
         <div class="callout">
-          <span class="k">Bounds checking with --safe</span>
+          <span class="k">Default bounds checking</span>
           <p>
             Fixed-size array indexing (<code>T[N]</code>, like
-            <code>arr</code> above) is <strong>unchecked by default</strong> —
-            an out-of-range index is undefined behavior, same as raw C.
-            Compiling with <code>llpl --safe</code> wraps every fixed-size
-            index expression in a runtime bounds check instead: an
-            out-of-range access panics with <code>"index out of bounds"</code>
+            <code>arr</code> above) is <strong>checked by default</strong>.
+            The compiler wraps every fixed-size index expression in a
+            runtime bounds check: an
+            out-of-range access panics with <code>"index out of bounds at &lt;file&gt;:&lt;line&gt;"</code>
             rather than reading or writing past the array. It only covers
-            genuine fixed-size arrays — indexing through a plain pointer
-            (<code>T*</code>) or a dynamic array (<code>T[]</code>,
-            <code>Vector&lt;T&gt;</code>, <code>Slice&lt;T&gt;</code>) isn't
-            affected either way, since those already have (or lack) their
-            own bounds behavior independent of this flag. Off by default —
-            pass <code>--safe</code> explicitly to opt in.
+            genuine fixed-size arrays, including pointers whose fixed-array
+            bound is known — unbounded pointer indexing and dynamic arrays
+            (<code>T[]</code>, <code>Vector&lt;T&gt;</code>,
+            <code>Slice&lt;T&gt;</code>) aren't affected either way, since
+            those already have (or lack) their own bounds behavior
+            independent of this flag. The
+            <code>--safe</code> flag is still accepted for compatibility;
+            pass <code>--no-safe</code> to disable these checks explicitly.
           </p>
         </div>
       </div>

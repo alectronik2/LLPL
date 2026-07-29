@@ -1,4 +1,4 @@
-// bounds_check_pass: fixed-size array access within bounds, compiled with --safe.
+// bounds_check_pass: fixed-size array access within bounds, checked by default.
 
 extern func puts(s: char*) -> i64
 

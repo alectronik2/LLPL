@@ -1,0 +1,23 @@
+extern func puts(s: char*) -> i64
+
+packed union PackedSlot {
+    let byte: u8
+    let word: u64
+}
+
+struct Container {
+    let tag: u8
+    let slot: PackedSlot
+    let tail: u8
+}
+
+#assert_size PackedSlot 8
+#assert_align PackedSlot 1
+#assert_offset Container.slot 1
+#assert_offset Container.tail 9
+#assert_size Container 10
+
+func main() -> i64 {
+    puts("packed union ok")
+    return 0
+}

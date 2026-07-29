@@ -43,6 +43,10 @@ func typed<T>( arg: T ) -> T {
     return arg
 }
 
+func something( k: Klass ) {
+    puts("Something called")
+}
+
 func main() {
     let x = 128
 
@@ -108,5 +112,19 @@ func main() {
     for i in 1..5 {
         puts("loop: \(i)")
     }
+
+    something(k)
     //delete k
+}
+
+class hello {
+    var: int = 0
+
+    property get_var() -> int {
+        var
+    }
+
+    property get_var( x: uint ) {
+        puts("SET PROPERRTY")
+    }
 }

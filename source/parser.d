@@ -269,6 +269,7 @@ class Parser {
             case TokenType.Macro:
             case TokenType.Alias:
             case TokenType.Interrupt:
+            case TokenType.Inline:
             case TokenType.Function:
             case TokenType.Class:
             case TokenType.Struct:
@@ -276,6 +277,7 @@ class Parser {
             case TokenType.Union:
             case TokenType.Ui:
             case TokenType.Grammar:
+            case TokenType.UnitTest:
             case TokenType.Extern:
             case TokenType.Trait:
             case TokenType.Impl:
@@ -327,18 +329,20 @@ class Parser {
             return macroDecl();
         } else if (check(TokenType.Alias)) {
             return aliasDecl();
-        } else if (check(TokenType.Interrupt) || check(TokenType.Function)) {
+        } else if (check(TokenType.Inline) || check(TokenType.Interrupt) || check(TokenType.Function)) {
             return functionDecl();
         } else if (check(TokenType.Class)) {
             return classDecl(attrs);
-        } else if (check(TokenType.Struct) || check(TokenType.Packed)) {
+        } else if (check(TokenType.Struct) || (check(TokenType.Packed) && peek(1).type == TokenType.Struct)) {
             return structDecl(attrs);
-        } else if (check(TokenType.Union)) {
+        } else if (check(TokenType.Union) || (check(TokenType.Packed) && peek(1).type == TokenType.Union)) {
             return unionDecl();
         } else if (check(TokenType.Ui)) {
             return uiDecl();
         } else if (check(TokenType.Grammar)) {
             return grammarDecl();
+        } else if (check(TokenType.UnitTest)) {
+            return unitTestDecl();
         } else if (check(TokenType.Extern)) {
             return externDecl();
         } else if (check(TokenType.Trait)) {
@@ -379,6 +383,16 @@ class Parser {
             attrs ~= attr;
         }
         return attrs;
+    }
+
+    private bool matchPropertyModifier() {
+        if (check(TokenType.Identifier) && current.value == "property" && (
+                peek(1).type == TokenType.Function ||
+                (peek(1).type == TokenType.Identifier && peek(2).type == TokenType.LeftParen))) {
+            advance();
+            return true;
+        }
+        return false;
     }
 
     // `#link "NAME"` / `#flags "..."` / `#assert_* ...` - standalone
@@ -713,7 +727,7 @@ class Parser {
     // ast.Parameter.defaultValue/codegen.d's resolveCallArguments) - once
     // one parameter has a default, every parameter after it must too, so a
     // purely positional call always unambiguously fills left-to-right.
-    private Parameter[] paramList(out bool isVariadic) {
+    private Parameter[] paramList(out bool isVariadic, bool allowFieldInitializers = false) {
         Parameter[] params;
         isVariadic = false;
         bool sawDefault = false;
@@ -722,6 +736,10 @@ class Parser {
                 if (match(TokenType.Ellipsis)) {
                     isVariadic = true;
                     break;
+                }
+                bool initializesField = match(TokenType.At);
+                if (initializesField && !allowFieldInitializers) {
+                    error("'@' field-initializing parameters are only allowed in constructors");
                 }
                 string paramName = expect(TokenType.Identifier).value;
                 expect(TokenType.Colon);
@@ -741,7 +759,7 @@ class Parser {
                         "Parameter '%s' has no default value, but appears after a parameter that does",
                         paramName));
                 }
-                params ~= new Parameter(paramName, paramType, defaultValue, isParamConst);
+                params ~= new Parameter(paramName, paramType, defaultValue, isParamConst, initializesField);
             } while (match(TokenType.Comma));
         }
         if (isVariadic && params.length == 0) {
@@ -768,6 +786,13 @@ class Parser {
         }
 
         return new FunctionDecl(name, params, returnType, null, true, false, isVariadic, startLine, startColumn);
+    }
+
+    private UnitTestDecl unitTestDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.UnitTest);
+        return new UnitTestDecl(block(), startLine, startColumn);
     }
 
     private UiDecl uiDecl() {
@@ -880,6 +905,7 @@ class Parser {
     private FunctionDecl functionDecl() {
         int startLine = current.line;
         int startColumn = current.column;
+        bool isInline = match(TokenType.Inline);
         bool isInterrupt = match(TokenType.Interrupt);
         expect(TokenType.Function);
 
@@ -934,8 +960,10 @@ class Parser {
             name = resolved;
         }
 
-        return new FunctionDecl(name, params, returnType, body_, false, isInterrupt, isVariadic,
+        auto decl = new FunctionDecl(name, params, returnType, body_, false, isInterrupt, isVariadic,
             startLine, startColumn, typeParams, typeParamBounds);
+        decl.isInline = isInline;
+        return decl;
     }
 
     private ClassDecl classDecl(VarAttribute[] attrs = []) {
@@ -975,16 +1003,23 @@ class Parser {
             // private/static (e.g. `private override func` is fine).
             bool isVirtualMember = match(TokenType.Virtual);
             bool isOverrideMember = match(TokenType.Override);
+            bool isInlineMember = match(TokenType.Inline);
+            bool isPropertyMember = matchPropertyModifier();
             if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
             } else if (check(TokenType.Destructor)) {
                 destructor = destructorDecl(name);
-            } else if (check(TokenType.Function)) {
-                auto method = functionDecl();
+            } else if (check(TokenType.Inline) || check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
+                auto method = check(TokenType.Function) ? functionDecl() : propertyMethodDecl();
                 method.isPrivate = isPrivateMember;
                 method.isStatic = isStaticMember;
+                method.isInline = isInlineMember || method.isInline;
                 method.isVirtual = isVirtualMember;
                 method.isOverride = isOverrideMember;
+                method.isProperty = isPropertyMember;
+                if (method.isProperty && method.params.length > 1) {
+                    errorAt(method.line, method.column, "property methods can declare at most one parameter");
+                }
                 methods ~= method;
             } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 auto field = varDecl();
@@ -1019,24 +1054,37 @@ class Parser {
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
+        VarDecl[][] anonymousUnions;
         FunctionDecl[] constructors;
         FunctionDecl[] methods;
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            bool isInlineMember = match(TokenType.Inline);
+            bool isPropertyMember = matchPropertyModifier();
             if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 fields ~= varDecl();
             } else if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
-            } else if (check(TokenType.Function)) {
+            } else if (check(TokenType.Inline) || check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
                 // `func`/`func operator...` - see ast.StructDecl.methods'
                 // own comment on why `self` still ends up passed by value,
                 // same as a constructor's.
-                methods ~= functionDecl();
+                auto method = check(TokenType.Function) ? functionDecl() : propertyMethodDecl();
+                method.isInline = isInlineMember || method.isInline;
+                method.isProperty = isPropertyMember;
+                if (method.isProperty && method.params.length > 1) {
+                    errorAt(method.line, method.column, "property methods can declare at most one parameter");
+                }
+                methods ~= method;
             } else if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
                 // `name: Type` with no `let` - same bare-field shorthand
                 // classDecl already offers (see varDeclBody's own comment).
                 int declLine = current.line;
                 int declColumn = current.column;
                 fields ~= varDeclBody(declLine, declColumn, false, false);
+            } else if (check(TokenType.Union) && peek(1).type == TokenType.LeftBrace) {
+                VarDecl[] unionFields = anonymousUnionFields();
+                fields ~= unionFields;
+                anonymousUnions ~= unionFields;
             } else {
                 error("Expected field, method, or constructor declaration");
             }
@@ -1044,35 +1092,72 @@ class Parser {
 
         expect(TokenType.RightBrace);
         return new StructDecl(name, fields, packed, startLine, startColumn, typeParams, typeParamBounds, attrs,
-            constructors, methods);
+            constructors, methods, anonymousUnions);
+    }
+
+    private VarDecl[] anonymousUnionFields() {
+        expect(TokenType.Union);
+        expect(TokenType.LeftBrace);
+
+        VarDecl[] fields;
+        while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
+                fields ~= varDecl();
+            } else if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
+                int declLine = current.line;
+                int declColumn = current.column;
+                fields ~= varDeclBody(declLine, declColumn, false, false);
+            } else {
+                error("Expected field declaration in anonymous union");
+            }
+        }
+
+        expect(TokenType.RightBrace);
+        return fields;
     }
 
     // `union Name { let field: T  ...  constructor(...) { ... } }` - same
-    // shape as structDecl just above, minus `packed`/generics/attributes
-    // (a union's overlapping layout makes `packed` meaningless, and this
-    // type exists mainly to bind a real C library's own union exactly -
-    // see UnionDecl's own doc comment - not to be a fully general type).
+    // shape as structDecl just above, minus generics/attributes. A union's
+    // own fields overlap, but `packed union` still matters when the union is
+    // nested inside other ABI-sensitive hardware/FFI layouts because C's
+    // packed attribute lowers the union type's alignment.
     private UnionDecl unionDecl() {
         int startLine = current.line;
         int startColumn = current.column;
+        bool packed = match(TokenType.Packed);
         expect(TokenType.Union);
         string name = expect(TokenType.Identifier).value;
         expect(TokenType.LeftBrace);
 
         VarDecl[] fields;
         FunctionDecl[] constructors;
+        FunctionDecl[] methods;
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+            bool isInlineMember = match(TokenType.Inline);
+            bool isPropertyMember = matchPropertyModifier();
             if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 fields ~= varDecl();
+            } else if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
+                int declLine = current.line;
+                int declColumn = current.column;
+                fields ~= varDeclBody(declLine, declColumn, false, false);
             } else if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
+            } else if (check(TokenType.Inline) || check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
+                auto method = check(TokenType.Function) ? functionDecl() : propertyMethodDecl();
+                method.isInline = isInlineMember || method.isInline;
+                method.isProperty = isPropertyMember;
+                if (method.isProperty && method.params.length > 1) {
+                    errorAt(method.line, method.column, "property methods can declare at most one parameter");
+                }
+                methods ~= method;
             } else {
-                error("Expected field or constructor declaration");
+                error("Expected field, method, or constructor declaration");
             }
         }
 
         expect(TokenType.RightBrace);
-        return new UnionDecl(name, fields, startLine, startColumn, constructors);
+        return new UnionDecl(name, fields, packed, startLine, startColumn, constructors, methods);
     }
 
     // `grammar Name { rule : alt | alt ; ... }` - see ast.d's GrammarDecl
@@ -1340,6 +1425,32 @@ class Parser {
         return new ImplDecl(traitName, targetType, methods, startLine, startColumn);
     }
 
+    // `property name() -> T { ... }` - shorthand for `property func name()`
+    // inside aggregate bodies. Kept separate from functionDecl() so plain
+    // functions still require the `func` keyword.
+    private FunctionDecl propertyMethodDecl() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        string name = expectName("Expected property method name").value;
+        expect(TokenType.LeftParen);
+
+        bool isVariadic;
+        Parameter[] params = paramList(isVariadic);
+        if (isVariadic) {
+            error("A property method cannot be variadic");
+        }
+        expect(TokenType.RightParen);
+
+        Type returnType = new Type("void");
+        if (match(TokenType.Arrow)) {
+            returnType = parseType();
+        }
+
+        Block body_ = block();
+        return new FunctionDecl(name, params, returnType, body_, false, false, false,
+            startLine, startColumn);
+    }
+
     private FunctionDecl constructorDecl(string className) {
         int startLine = current.line;
         int startColumn = current.column;
@@ -1347,7 +1458,7 @@ class Parser {
         expect(TokenType.LeftParen);
 
         bool isVariadic;
-        Parameter[] params = paramList(isVariadic);
+        Parameter[] params = paramList(isVariadic, true);
         if (isVariadic) {
             error("A constructor cannot be variadic");
         }
@@ -1388,10 +1499,10 @@ class Parser {
 
     // Parses `name: Type [: bitWidth] [= initializer]` - shared by
     // varDecl (after it's consumed a leading `let`/`const`/`volatile`)
-    // and a class field written with no keyword at all (classDecl below):
-    // `x: int` inside a class body means exactly what `let x: int` does.
-    // Unambiguous there - no other class-body construct starts with a
-    // bare identifier immediately followed by `:`.
+    // and an aggregate field written with no keyword at all (classDecl/
+    // structDecl below): `x: int` inside a body means exactly what
+    // `let x: int` does. Unambiguous there - no other body construct
+    // starts with a bare identifier immediately followed by `:`.
     private VarDecl varDeclBody(int declLine, int declColumn, bool isConst, bool isVolatile) {
         Token nameToken = expect(TokenType.Identifier);
         string name = nameToken.value;
@@ -1402,7 +1513,7 @@ class Parser {
         }
 
         // Bit-field width, e.g. `let flags: uint : 3`. Only meaningful on
-        // class fields; the code generator rejects it anywhere else.
+        // aggregate fields; the code generator rejects it anywhere else.
         int bitWidth = -1;
         if (match(TokenType.Colon)) {
             Token widthToken = expect(TokenType.Integer, "Expected bit-field width");

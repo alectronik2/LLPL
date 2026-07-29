@@ -57,5 +57,9 @@ func main() -> i64 {
 
     puts("interpolated: \(p)")  // implicit as_string inside "\(...)"
 
+    let s: String = new String("TEST STR")
+    puts("testing class print: \(s)")
+    puts(s.as_string)
+
     return 0
 }

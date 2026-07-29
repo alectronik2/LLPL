@@ -1,5 +1,5 @@
 // bounds_check_extended_pass: pointer, decayed parameter, and multi-dimensional
-// array access within bounds, compiled with --safe.
+// array access within bounds, checked by default.
 
 extern func puts(s: char*) -> i64
 

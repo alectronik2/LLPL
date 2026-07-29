@@ -1,0 +1,29 @@
+extern func puts(s: char*) -> i64
+
+func helper() -> i64 {
+    return 42
+}
+
+struct UnitPoint {
+    x: i64
+
+    constructor(@x: i64) {}
+}
+
+unittest {
+    puts("unit one")
+    assert(helper() == 42)
+    let p = UnitPoint(7)
+    assert(p.x == 7)
+    let n: uint = 9
+    puts("uint = \(n)")
+}
+
+unittest {
+    puts("unit two")
+}
+
+func main() -> i64 {
+    puts("ordinary main")
+    return 0
+}

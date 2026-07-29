@@ -10,6 +10,9 @@ import hal.limine
 import hal.serial
 import hal.cpu
 
+import mm.heap
+import mm.vmm
+
 alias hs = HAL.Serial
 
 @section(".limine_requests_start") @used
@@ -255,6 +258,8 @@ func kernel_main() {
             draw_memmap(fb, memmap)
         }
     }
+
+    let x = kmalloc<u64>(sizeof(u64))
 
     while true {
         HAL.halt()

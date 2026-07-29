@@ -659,13 +659,17 @@ class CodeGenerator {
     private string targetProfile;
     private bool currentFunctionIsInterrupt;
     private bool suppressSourceLineDirectives;
+    private bool enableUnitTests;
+    private int unitTestCounter;
 
-    this(bool safeMode = false, bool enableDCE = true, string targetProfile = "hosted") {
+    this(bool safeMode = true, bool enableDCE = true, string targetProfile = "hosted",
+         bool enableUnitTests = false) {
         indentLevel = 0;
         tempVarCounter = 0;
         this.safeMode = safeMode;
         this.enableDCE = enableDCE;
         this.targetProfile = targetProfile;
+        this.enableUnitTests = enableUnitTests;
     }
 
     private bool isFreestandingTarget() {
@@ -902,10 +906,21 @@ class CodeGenerator {
                         foreach (ctor; structDecl.constructors) {
                             if (ctor.body_ !is null) changed |= walkForReachableCalls(ctor.body_);
                         }
+                        foreach (method; structDecl.methods) {
+                            if (method.body_ !is null) changed |= walkForReachableCalls(method.body_);
+                        }
                     } else if (auto unionDecl = cast(UnionDecl)decl) {
                         currentNamespaceSegments = unionDecl.namespaceSegments;
                         foreach (ctor; unionDecl.constructors) {
                             if (ctor.body_ !is null) changed |= walkForReachableCalls(ctor.body_);
+                        }
+                        foreach (method; unionDecl.methods) {
+                            if (method.body_ !is null) changed |= walkForReachableCalls(method.body_);
+                        }
+                    } else if (enableUnitTests) {
+                        if (auto unitTestDecl = cast(UnitTestDecl)decl) {
+                            currentNamespaceSegments = unitTestDecl.namespaceSegments;
+                            if (unitTestDecl.body_ !is null) changed |= walkForReachableCalls(unitTestDecl.body_);
                         }
                     }
                 }
@@ -1103,6 +1118,10 @@ class CodeGenerator {
         return (key in reachableFunctions) !is null;
     }
 
+    private bool isOrdinaryTopLevelMain(FunctionDecl funcDecl) {
+        return funcDecl.name == "main" && funcDecl.namespaceSegments.length == 0;
+    }
+
     private string indent() {
         string result = "";
         for (int i = 0; i < indentLevel; i++) {
@@ -1191,15 +1210,8 @@ class CodeGenerator {
         Type t = inferType(expr);
         resolveType(t);
 
-        bool isPlainInt = !t.isPointer && !t.isArray &&
-            (t.name == "i64" || t.name == "u64" ||
-             t.name == "u8" ||
-             t.name == "i8" || t.name == "int8" || t.name == "uint8" ||
-             t.name == "i16" || t.name == "u16" || t.name == "int16" || t.name == "uint16" ||
-             t.name == "i32" || t.name == "u32" || t.name == "int32" || t.name == "uint32");
-        bool isUnsigned = t.name == "u64" || t.name == "u8" ||
-            t.name == "uint8" || t.name == "u16" || t.name == "uint16" ||
-            t.name == "u32" || t.name == "uint32";
+        bool isPlainInt = isIntegerType(t);
+        bool isUnsigned = isUnsignedIntegerType(t);
         bool isFloat = !t.isPointer && !t.isArray && (t.name == "f32" || t.name == "f64");
 
         if (spec.precision >= 0) {
@@ -1237,8 +1249,12 @@ class CodeGenerator {
         if (t.isPointer) return "%p";
 
         switch (t.name) {
-            case "i64": case "i8": case "int8": case "i16": case "int16": case "i32": case "int32": return "%d";
-            case "u64": case "u8": case "uint8": case "u16": case "uint16": case "u32": case "uint32": return "%u";
+            case "i64": case "i8": case "int8": case "i16": case "int16":
+            case "i32": case "int32": case "int64": case "int":
+                return "%d";
+            case "u64": case "u8": case "uint8": case "u16": case "uint16":
+            case "u32": case "uint32": case "uint64": case "uint":
+                return "%u";
             // f32/f64 (see canonicalIntTypeName) both promote to `double`
             // in the generated ksnprintf varargs call regardless, same as
             // C's own float->double default argument promotion - runtime.c's
@@ -1366,7 +1382,7 @@ class CodeGenerator {
         sig ~= "func " ~ displayName ~ "(";
         foreach (i, p; fn.params) {
             if (i > 0) sig ~= ", ";
-            sig ~= p.name ~ ": " ~ p.type.toString();
+            sig ~= (p.initializesField ? "@" : "") ~ p.name ~ ": " ~ p.type.toString();
         }
         if (fn.isVariadic) {
             if (fn.params.length > 0) sig ~= ", ";
@@ -1390,7 +1406,7 @@ class CodeGenerator {
     }
 
     private string unionSignature(UnionDecl ud, string displayName) {
-        return format("union %s (%d field(s))", displayName, ud.fields.length);
+        return format("%sunion %s (%d field(s))", ud.packed ? "packed " : "", displayName, ud.fields.length);
     }
 
     private string macroSignature(MacroDecl m, string displayName) {
@@ -1469,6 +1485,10 @@ class CodeGenerator {
                     foreach (field; unionDecl.fields) {
                         collectedSymbols ~= SymbolInfo(dname ~ "." ~ field.name, "field", prog.modulePath,
                             field.line, field.column, fieldSignature(field, dname));
+                    }
+                    foreach (method; unionDecl.methods) {
+                        collectedSymbols ~= SymbolInfo(dname ~ "." ~ method.name, "method", prog.modulePath,
+                            method.line, method.column, methodSignature(method, dname));
                     }
                 } else if (auto macroDecl = cast(MacroDecl)decl) {
                     string dname = mangled(macroDecl.namespaceSegments, macroDecl.name);
@@ -1937,6 +1957,9 @@ class CodeGenerator {
             } else if (auto implDecl = cast(ImplDecl)decl) {
                 implDecl.namespaceSegments = segments;
                 result ~= implDecl;
+            } else if (auto unitTestDecl = cast(UnitTestDecl)decl) {
+                unitTestDecl.namespaceSegments = segments;
+                result ~= unitTestDecl;
             } else if (auto linkDecl = cast(LinkDecl)decl) {
                 // Not namespace-scoped (see LinkDecl's own doc comment) -
                 // passed through unchanged, same as the fallback branch
@@ -2593,6 +2616,7 @@ class CodeGenerator {
             currentModulePath = prog.modulePath;
             foreach (decl; prog.declarations) {
                 if (auto funcDecl = cast(FunctionDecl)decl) {
+                    if (enableUnitTests && isOrdinaryTopLevelMain(funcDecl)) continue;
                     if (!isReachableFreeFunction(funcDecl)) continue;
                     currentNamespaceSegments = funcDecl.namespaceSegments;
                     if (funcDecl.isExtern) {
@@ -2656,8 +2680,9 @@ class CodeGenerator {
                             params ~= parameterDeclaration(param);
                         }
                         if (funcDecl.isVariadic) params ~= ", ...";
-                        earlyDeclCode ~= format("%s %s(%s);\n",
-                            typeToC(returnTypeForFwd), mangleFreeFunctionName(funcDecl), params);
+                        earlyDeclCode ~= format("%s%s %s(%s);\n",
+                            inlineFunctionPrefix(funcDecl), typeToC(returnTypeForFwd),
+                            mangleFreeFunctionName(funcDecl), params);
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
                     currentNamespaceSegments = classDecl.namespaceSegments;
@@ -2774,8 +2799,9 @@ class CodeGenerator {
                             if (!method.isStatic || i > 0) params ~= ", ";
                             params ~= parameterDeclaration(param);
                         }
-                        earlyDeclCode ~= format("%s %s(%s);\n",
-                            typeToC(returnTypeForFwd), mangleMethodName(classDecl, cName, method), params);
+                        earlyDeclCode ~= format("%s%s %s(%s);\n",
+                            inlineFunctionPrefix(method), typeToC(returnTypeForFwd),
+                            mangleMethodName(classDecl, cName, method), params);
                     }
                 } else if (auto structDecl = cast(StructDecl)decl) {
                     // Constructor forward declaration(s) - see
@@ -2819,8 +2845,9 @@ class CodeGenerator {
                                 resolveType(param.type);
                                 params ~= ", " ~ parameterDeclaration(param);
                             }
-                            earlyDeclCode ~= format("%s %s(%s);\n",
-                                typeToC(returnTypeForFwd), mangleMethodName(structDecl, sName, method), params);
+                            earlyDeclCode ~= format("%s%s %s(%s);\n",
+                                inlineFunctionPrefix(method), typeToC(returnTypeForFwd),
+                                mangleMethodName(structDecl, sName, method), params);
                         }
                     }
                 } else if (auto unionDecl = cast(UnionDecl)decl) {
@@ -2838,6 +2865,28 @@ class CodeGenerator {
                                 params ~= parameterDeclaration(param);
                             }
                             earlyDeclCode ~= format("%s %s(%s);\n", uName, mangleConstructorName(unionDecl, uName, ctor), params);
+                        }
+                    }
+                    if (unionDecl.methods.length > 0) {
+                        currentNamespaceSegments = unionDecl.namespaceSegments;
+                        string uName = mangledUnion(unionDecl);
+                        bool[string] checkedMethodNames;
+                        foreach (method; unionDecl.methods) {
+                            if (method.name !in checkedMethodNames) {
+                                checkedMethodNames[method.name] = true;
+                                checkNoDuplicateSignatures(methodCandidatesNamed(unionDecl, method.name),
+                                    format("method '%s.%s'", uName, method.name), method.line, method.column);
+                            }
+                            Type returnTypeForFwd = cloneType(method.returnType);
+                            resolveType(returnTypeForFwd);
+                            string params = format("%s self", uName);
+                            foreach (param; method.params) {
+                                resolveType(param.type);
+                                params ~= ", " ~ parameterDeclaration(param);
+                            }
+                            earlyDeclCode ~= format("%s%s %s(%s);\n",
+                                inlineFunctionPrefix(method), typeToC(returnTypeForFwd),
+                                mangleMethodName(unionDecl, uName, method), params);
                         }
                     }
                 }
@@ -2912,6 +2961,7 @@ class CodeGenerator {
         // proper ordering: all structs before all classes to avoid dependency issues.
         string structDeclCode = "";
         string classDeclCode = "";
+        unitTestCounter = 0;
 
         // Every plain struct/union/class's *layout* only (struct/union
         // header + fields, no constructors/destructor/methods) - see
@@ -3115,6 +3165,9 @@ class CodeGenerator {
 
         // 4. Regular classes
         code ~= classDeclCode;
+        if (enableUnitTests) {
+            code ~= generateUnitTestMain(unitTestCounter);
+        }
 
         if (deferredFunctionBodies.length > 0) {
             code ~= "// Function bodies deferred until after plain class/struct definitions exist\n";
@@ -3161,8 +3214,12 @@ class CodeGenerator {
 
     private string generateDeclaration(ASTNode node) {
         if (auto funcDecl = cast(FunctionDecl)node) {
+            if (enableUnitTests && isOrdinaryTopLevelMain(funcDecl)) return "";
             if (!isReachableFreeFunction(funcDecl)) return "";
             return withSourceLine(node, generateFunction(funcDecl));
+        } else if (auto unitTestDecl = cast(UnitTestDecl)node) {
+            if (!enableUnitTests) return "";
+            return withSourceLine(node, generateUnitTestFunction(unitTestDecl, unitTestCounter++));
         } else if (auto classDecl = cast(ClassDecl)node) {
             return withSourceLine(node, generateClass(classDecl));
         } else if (auto structDecl = cast(StructDecl)node) {
@@ -3568,8 +3625,22 @@ class CodeGenerator {
         if (!structDecl.name.startsWith("SDL_")) {
             string attr = structDecl.packed ? " __attribute__((packed))" : "";
             code ~= format("struct%s %s {\n", attr, sName);
+            bool[string] anonymousUnionFieldNames;
+            foreach (unionFields; structDecl.anonymousUnions) {
+                foreach (field; unionFields) {
+                    anonymousUnionFieldNames[field.name] = true;
+                }
+            }
             foreach (field; structDecl.fields) {
+                if (field.name in anonymousUnionFieldNames) continue;
                 code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
+            }
+            foreach (unionFields; structDecl.anonymousUnions) {
+                code ~= "    union {\n";
+                foreach (field; unionFields) {
+                    code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
+                }
+                code ~= "    };\n";
             }
             code ~= "};\n";
         }
@@ -3647,6 +3718,8 @@ class CodeGenerator {
 
         string bodyCode = "";
         bodyCode ~= generateFieldDefaultInitializers(structDecl.fields);
+        bodyCode ~= generateConstructorParameterInitializers(constructor.params, structDecl.fields,
+            constructor.line, constructor.column);
         if (constructor.body_) {
             foreach (stmt; constructor.body_.statements) {
                 bodyCode ~= generateBodyStatement(stmt, false);
@@ -3674,6 +3747,10 @@ class CodeGenerator {
         variableTypes.remove("self");
 
         return code;
+    }
+
+    private string inlineFunctionPrefix(FunctionDecl fn) {
+        return fn.isInline ? "static inline " : "";
     }
 
     // A struct method (`func`/`func operator...` in the struct body - see
@@ -3714,8 +3791,8 @@ class CodeGenerator {
         }
 
         resolveType(method.returnType);
-        code ~= format("%s %s(%s) {\n", typeToC(method.returnType), mangleMethodName(structDecl, sName, method),
-            params);
+        code ~= format("%s%s %s(%s) {\n", inlineFunctionPrefix(method), typeToC(method.returnType),
+            mangleMethodName(structDecl, sName, method), params);
         indentLevel++;
 
         deferredStatements = [];
@@ -3762,7 +3839,8 @@ class CodeGenerator {
 
         string code = "";
         if (!unionDecl.name.startsWith("SDL_")) {
-            code ~= format("union %s {\n", uName);
+            string attr = unionDecl.packed ? " __attribute__((packed))" : "";
+            code ~= format("union%s %s {\n", attr, uName);
             foreach (field; unionDecl.fields) {
                 code ~= fieldDeclaration(field.type, field.name, field.bitWidth);
             }
@@ -3777,11 +3855,83 @@ class CodeGenerator {
         foreach (ctor; unionDecl.constructors) {
             code ~= generateUnionConstructor(unionDecl, ctor);
         }
+        foreach (method; unionDecl.methods) {
+            code ~= generateUnionMethod(unionDecl, method);
+        }
         return code;
     }
 
     private string generateUnion(UnionDecl unionDecl) {
         return generateUnionLayout(unionDecl) ~ generateUnionMethods(unionDecl);
+    }
+
+    // A union method is generated the same way as a struct method: `self`
+    // is an ordinary by-value first parameter, and field access uses `.`
+    // through the existing value-type member access path.
+    private string generateUnionMethod(UnionDecl unionDecl, FunctionDecl method) {
+        string uName = mangledUnion(unionDecl);
+        string code = "";
+        string params = format("%s self", uName);
+
+        string prevClassName = currentClassName;
+        currentClassName = uName;
+        currentNamespaceSegments = unionDecl.namespaceSegments;
+        string prevScopeName = currentScopeName;
+        currentScopeName = uName ~ "." ~ method.name;
+        Type prevReturnType = currentReturnType;
+        currentReturnType = method.returnType;
+        Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
+        currentReturnTypeAsWritten = cloneType(method.returnType);
+        variableTypes["self"] = new Type(uName);
+        recordLocal("self", variableTypes["self"], method.line, method.column, "self");
+        variableCNames = null;
+        pointerIndexBounds = null;
+        shadowRenameCounter = 0;
+
+        foreach (param; method.params) {
+            resolveType(param.type);
+            params ~= ", " ~ parameterDeclaration(param);
+            variableTypes[param.name] = param.type;
+            recordLocal(param.name, param.type, method.line, method.column, "parameter");
+            recordPointerBound(param.name, param.type);
+            if (param.isConst) constVariables[param.name] = true;
+        }
+
+        resolveType(method.returnType);
+        code ~= format("%s%s %s(%s) {\n", inlineFunctionPrefix(method), typeToC(method.returnType),
+            mangleMethodName(unionDecl, uName, method), params);
+        indentLevel++;
+
+        deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
+
+        string bodyCode = "";
+        if (method.body_) {
+            foreach (stmt; withImplicitReturn(method.body_.statements, method.returnType)) {
+                bodyCode ~= generateBodyStatement(stmt, false);
+            }
+        }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
+        indentLevel--;
+        code ~= "}\n\n";
+
+        currentClassName = prevClassName;
+        currentReturnType = prevReturnType;
+        currentReturnTypeAsWritten = prevReturnTypeAsWritten;
+        currentScopeName = prevScopeName;
+
+        foreach (param; method.params) {
+            variableTypes.remove(param.name);
+            constVariables.remove(param.name);
+        }
+        variableTypes.remove("self");
+
+        return code;
     }
 
     // generateStructConstructor's twin for `union` - see its own comment
@@ -3827,6 +3977,8 @@ class CodeGenerator {
         rcFunctionBodyIndent = indentLevel;
 
         string bodyCode = "";
+        bodyCode ~= generateConstructorParameterInitializers(constructor.params, unionDecl.fields,
+            constructor.line, constructor.column);
         if (constructor.body_) {
             foreach (stmt; constructor.body_.statements) {
                 bodyCode ~= generateBodyStatement(stmt, false);
@@ -3856,7 +4008,7 @@ class CodeGenerator {
     private string generateGlobalVar(VarDecl varDecl) {
         currentNamespaceSegments = varDecl.namespaceSegments;
         if (varDecl.bitWidth >= 0) {
-            throw new CompileError("Bit-fields are only allowed on class fields, not global variables",
+            throw new CompileError("Bit-fields are only allowed on aggregate fields, not global variables",
                 currentModulePath, varDecl.line, varDecl.column);
         }
         if (varDecl.type is null) {
@@ -4300,6 +4452,56 @@ class CodeGenerator {
         return code;
     }
 
+    private bool hasFieldNamed(VarDecl[] fields, string name) {
+        foreach (field; fields) {
+            if (field.name == name) return true;
+        }
+        return false;
+    }
+
+    private string generateConstructorParameterInitializers(Parameter[] params, VarDecl[] fields,
+            int line, int column) {
+        string code = "";
+        foreach (param; params) {
+            if (!param.initializesField) continue;
+            if (!hasFieldNamed(fields, param.name)) {
+                throw new CompileError(format(
+                    "Constructor parameter '@%s' does not match a field on '%s'",
+                    param.name, currentClassName), currentModulePath, line, column);
+            }
+            auto lhs = new MemberExpr(new Identifier("self", line, column), param.name, line, column);
+            auto rhs = new Identifier(param.name, line, column);
+            auto assign = new BinaryExpr("=", lhs, rhs, line, column);
+            code ~= generateBodyStatement(new ExprStmt(assign), false);
+        }
+        return code;
+    }
+
+    private VarDecl findFieldOnCurrentAggregate(string name) {
+        if (currentClassName.length == 0) return null;
+        if (auto classDecl = currentClassName in classRegistry) {
+            return findFieldOnHierarchy(*classDecl, name);
+        }
+        if (auto structDecl = currentClassName in structRegistry) {
+            foreach (field; structDecl.fields) {
+                if (field.name == name) return field;
+            }
+        }
+        if (auto unionDecl = currentClassName in unionRegistry) {
+            foreach (field; unionDecl.fields) {
+                if (field.name == name) return field;
+            }
+        }
+        return null;
+    }
+
+    private string tryGenerateBareFieldAccess(Identifier ident) {
+        if (findFieldOnCurrentAggregate(ident.name) is null) return "";
+        auto member = new MemberExpr(new Identifier("self", ident.line, ident.column),
+            ident.name, ident.line, ident.column);
+        return generateExpression(member);
+    }
+
     // If a function/method/lambda body's last statement is a bare
     // expression (not already a `return`) and its return type isn't
     // `void`, treats that trailing expression as an implicit return value -
@@ -4364,6 +4566,8 @@ class CodeGenerator {
         // Generate constructor body
         string bodyCode = "";
         bodyCode ~= generateFieldDefaultInitializers(classDecl.fields);
+        bodyCode ~= generateConstructorParameterInitializers(constructor.params, classDecl.fields,
+            constructor.line, constructor.column);
         if (constructor.body_) {
             foreach (stmt; constructor.body_.statements) {
                 bodyCode ~= generateBodyStatement(stmt, false);
@@ -4754,8 +4958,9 @@ class CodeGenerator {
             if (param.isConst) constVariables[param.name] = true;
         }
 
-        code ~= format("%s %s(%s) {\n",
-            typeToC(method.returnType), mangleMethodName(classDecl, cName, method), params);
+        code ~= format("%s%s %s(%s) {\n",
+            inlineFunctionPrefix(method), typeToC(method.returnType),
+            mangleMethodName(classDecl, cName, method), params);
         indentLevel++;
 
         deferredStatements = [];
@@ -4861,8 +5066,9 @@ class CodeGenerator {
             currentClassName = mangledClass(classRegistry[funcDecl.params[0].type.name]);
         }
 
-        code ~= format("%s %s(%s) {\n",
-            typeToC(funcDecl.returnType), mangleFreeFunctionName(funcDecl), params);
+        code ~= format("%s%s %s(%s) {\n",
+            inlineFunctionPrefix(funcDecl), typeToC(funcDecl.returnType),
+            mangleFreeFunctionName(funcDecl), params);
         indentLevel++;
 
         deferredStatements = [];
@@ -4908,6 +5114,78 @@ class CodeGenerator {
         }
 
         return code;
+    }
+
+    private string unitTestFunctionName(int index) {
+        return format("__llpl_unittest_%d", index);
+    }
+
+    private string generateUnitTestFunction(UnitTestDecl unitTestDecl, int index) {
+        string name = unitTestFunctionName(index);
+        string code = format("static void %s(void) {\n", name);
+
+        string prevScopeName = currentScopeName;
+        currentScopeName = name;
+        Type prevReturnType = currentReturnType;
+        currentReturnType = new Type("void");
+        Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
+        currentReturnTypeAsWritten = new Type("void");
+        string prevClassName = currentClassName;
+        currentClassName = "";
+        currentNamespaceSegments = unitTestDecl.namespaceSegments;
+        auto savedVariableTypes = variableTypes.dup;
+        auto savedConstVariables = constVariables.dup;
+        variableCNames = null;
+        pointerIndexBounds = null;
+        shadowRenameCounter = 0;
+
+        indentLevel++;
+        deferredStatements = [];
+        rcLocalNames = null; rcLocalTypes = null;
+        rcFunctionBodyIndent = indentLevel;
+
+        string bodyCode = "";
+        if (unitTestDecl.body_ !is null) {
+            foreach (stmt; unitTestDecl.body_.statements) {
+                bodyCode ~= generateBodyStatement(stmt, false);
+            }
+        }
+
+        code ~= deferFrameDeclarations();
+        code ~= bodyCode;
+        code ~= deferredCleanupCode();
+        code ~= releaseRcLocals(null);
+
+        indentLevel--;
+        code ~= "}\n\n";
+
+        currentScopeName = prevScopeName;
+        currentReturnType = prevReturnType;
+        currentReturnTypeAsWritten = prevReturnTypeAsWritten;
+        currentClassName = prevClassName;
+        variableTypes = savedVariableTypes;
+        constVariables = savedConstVariables;
+        return code;
+    }
+
+    private string generateUnitTestMain(int count) {
+        if (count == 0) return "\nint main(void) {\n    return 0;\n}\n";
+        string code = "\nint main(void) {\n";
+        foreach (i; 0 .. count) {
+            code ~= format("    %s();\n", unitTestFunctionName(i));
+        }
+        code ~= "    return 0;\n}\n";
+        return code;
+    }
+
+    private Type resolveDirectConstructorType(string name) {
+        Type t = new Type(name);
+        resolveType(t);
+        if ((t.name in classRegistry) !is null || (t.name in structRegistry) !is null ||
+                (t.name in unionRegistry) !is null) {
+            return t;
+        }
+        return null;
     }
 
     // The real C `int main(int argc, char** argv)` entry point for a
@@ -5847,7 +6125,7 @@ class CodeGenerator {
 
         if (auto varDecl = cast(VarDecl)node) {
             if (varDecl.bitWidth >= 0) {
-                throw new CompileError("Bit-fields are only allowed on class fields, not local variables",
+                throw new CompileError("Bit-fields are only allowed on aggregate fields, not local variables",
                     currentModulePath, varDecl.line, varDecl.column);
             }
 
@@ -6348,12 +6626,19 @@ class CodeGenerator {
         Parameter[] params;
         foreach (p; fn.params) {
             ASTNode defaultValue = p.defaultValue is null ? null : cloneNode(p.defaultValue, null, typeSubs);
-            params ~= new Parameter(p.name, cloneType(p.type, typeSubs), defaultValue);
+            params ~= new Parameter(p.name, cloneType(p.type, typeSubs), defaultValue,
+                p.isConst, p.initializesField);
         }
         auto clone = new FunctionDecl(newName, params, cloneType(fn.returnType, typeSubs),
             cloneBlock(fn.body_, null, typeSubs), fn.isExtern, fn.isInterrupt, fn.isVariadic,
             fn.line, fn.column);
         clone.namespaceSegments = [];
+        clone.isPrivate = fn.isPrivate;
+        clone.isStatic = fn.isStatic;
+        clone.isVirtual = fn.isVirtual;
+        clone.isOverride = fn.isOverride;
+        clone.isProperty = fn.isProperty;
+        clone.isInline = fn.isInline;
         return clone;
     }
 
@@ -8707,6 +8992,14 @@ class CodeGenerator {
         return result;
     }
 
+    private FunctionDecl[] propertyMethodCandidates(FunctionDecl[] candidates, int paramCount = -1) {
+        FunctionDecl[] result;
+        foreach (m; candidates) {
+            if (m.isProperty && (paramCount < 0 || m.params.length == paramCount)) result ~= m;
+        }
+        return result;
+    }
+
     // `ClassName_methodName` if `method` is the only one of its class
     // named that - the exact mangling this compiler has always used -
     // else suffixed with its own parameter types to stay unique among its
@@ -8763,6 +9056,18 @@ class CodeGenerator {
     private string mangleConstructorName(UnionDecl ud, string uName, FunctionDecl ctor) {
         if (ud.constructors.length <= 1) return format("%s_new", uName);
         return format("%s_new%s", uName, overloadSuffix(ctor.params));
+    }
+
+    private FunctionDecl[] methodCandidatesNamed(UnionDecl ud, string name) {
+        FunctionDecl[] result;
+        foreach (m; ud.methods) if (m.name == name) result ~= m;
+        return result;
+    }
+
+    private string mangleMethodName(UnionDecl ud, string uName, FunctionDecl method) {
+        auto candidates = methodCandidatesNamed(ud, method.name);
+        if (candidates.length <= 1) return format("%s_%s", uName, method.name);
+        return format("%s_%s%s", uName, method.name, overloadSuffix(method.params));
     }
 
     // Groups every top-level FunctionDecl by its plain (pre-overload-
@@ -9302,6 +9607,16 @@ class CodeGenerator {
                         } catch (CompileError e) {
                         }
                     }
+                } else if (auto unionDecl = selfType.name in unionRegistry) {
+                    auto candidates = methodCandidatesNamed(*unionDecl, methodName);
+                    if (candidates.length == 1) return candidates[0];
+                    if (candidates.length > 1 && rightOperand !is null) {
+                        try {
+                            return resolveOverload(candidates, [rightOperand], [],
+                                format("operator '%s'", op), selfOperand.line, selfOperand.column);
+                        } catch (CompileError e) {
+                        }
+                    }
                 }
                 if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
                     return *fn;
@@ -9349,6 +9664,15 @@ class CodeGenerator {
                 auto candidates = methodCandidatesNamed(*structDecl, methodName);
                 if (candidates.length > 0) {
                     string ownerName = mangledStruct(*structDecl);
+                    if (candidates.length > 1) {
+                        return format("%s_%s%s", ownerName, methodName, overloadSuffix(matched.params));
+                    }
+                    return format("%s_%s", ownerName, methodName);
+                }
+            } else if (auto unionDecl = selfType.name in unionRegistry) {
+                auto candidates = methodCandidatesNamed(*unionDecl, methodName);
+                if (candidates.length > 0) {
+                    string ownerName = mangledUnion(*unionDecl);
                     if (candidates.length > 1) {
                         return format("%s_%s%s", ownerName, methodName, overloadSuffix(matched.params));
                     }
@@ -9479,8 +9803,69 @@ class CodeGenerator {
         }
     }
 
-    // When --safe is enabled, fixed-size array indexing (T[N]) is wrapped
-    // with a runtime bounds check. The helper returns a void* pointing at
+    // `obj.prop = value` calls `property prop(value: T)` when there is no
+    // real field named `prop`. Getter-only properties deliberately fall
+    // through to the ordinary assignment path, which then reports the same
+    // non-lvalue error it did before.
+    private string tryPropertySetterCall(MemberExpr memberExpr, ASTNode valueExpr) {
+        try {
+            Type selfType = inferType(memberExpr.object);
+            resolveType(selfType);
+
+            if (auto classDecl = selfType.name in classRegistry) {
+                ClassDecl fieldOwner;
+                if (findFieldOnHierarchy(*classDecl, memberExpr.member, fieldOwner) !is null) {
+                    return "";
+                }
+
+                ClassDecl methodOwner;
+                auto setters = propertyMethodCandidates(
+                    resolveMethodOnHierarchy(*classDecl, memberExpr.member, methodOwner), 1);
+                if (setters.length == 0) return "";
+                auto matched = resolveOverload(setters, [valueExpr], [],
+                    format("property '%s' setter", memberExpr.member), memberExpr.line, memberExpr.column);
+                checkMemberAccess(matched.isPrivate, mangledClass(methodOwner),
+                    format("method '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
+                return generateExpression(new CallExpr(
+                    new MemberExpr(memberExpr.object, memberExpr.member, memberExpr.line, memberExpr.column),
+                    [valueExpr], memberExpr.line, memberExpr.column));
+            }
+
+            if (auto structDecl = selfType.name in structRegistry) {
+                foreach (field; structDecl.fields) {
+                    if (field.name == memberExpr.member) return "";
+                }
+                auto setters = propertyMethodCandidates(methodCandidatesNamed(*structDecl, memberExpr.member), 1);
+                if (setters.length == 0) return "";
+                resolveOverload(setters, [valueExpr], [],
+                    format("property '%s' setter", memberExpr.member), memberExpr.line, memberExpr.column);
+                return generateExpression(new CallExpr(
+                    new MemberExpr(memberExpr.object, memberExpr.member, memberExpr.line, memberExpr.column),
+                    [valueExpr], memberExpr.line, memberExpr.column));
+            }
+
+            if (auto unionDecl = selfType.name in unionRegistry) {
+                foreach (field; unionDecl.fields) {
+                    if (field.name == memberExpr.member) return "";
+                }
+                auto setters = propertyMethodCandidates(methodCandidatesNamed(*unionDecl, memberExpr.member), 1);
+                if (setters.length == 0) return "";
+                resolveOverload(setters, [valueExpr], [],
+                    format("property '%s' setter", memberExpr.member), memberExpr.line, memberExpr.column);
+                return generateExpression(new CallExpr(
+                    new MemberExpr(memberExpr.object, memberExpr.member, memberExpr.line, memberExpr.column),
+                    [valueExpr], memberExpr.line, memberExpr.column));
+            }
+        } catch (CompileError e) {
+            throw e;
+        } catch (Exception e) {
+            return "";
+        }
+        return "";
+    }
+
+    // In safe mode, fixed-size array indexing (T[N]) is wrapped with a
+    // runtime bounds check. The helper returns a void* pointing at
     // the element, which the generated code casts back to a T* and
     // dereferences - this works for both reads and assignments because the
     // dereferenced pointer is a valid C lvalue.
@@ -9500,14 +9885,15 @@ class CodeGenerator {
             resolveType(elemType);
             string idxCode = generateExpression(indexExpr.index);
             string elemValueTypeC = valueTypeForSizeof(elemType);
-            string checked = format("__llpl_check_index(%s, %s, %d, sizeof(%s))",
-                arrCode, idxCode, bound, elemValueTypeC);
+            string checked = format("__llpl_check_index(%s, %s, %d, sizeof(%s), %s, %d)",
+                arrCode, idxCode, bound, elemValueTypeC,
+                cStringLiteral(currentModulePath.length > 0 ? baseName(currentModulePath) : ""), indexExpr.line);
 
             if (elemType.isArray && elemType.arraySize > 0) {
-                return format("*(%s)%s", pointerToValueCastType(elemType), checked);
+                return format("(*(%s)%s)", pointerToValueCastType(elemType), checked);
             }
             string elemTypeC = typeToC(elemType);
-            return format("*(%s*)%s", elemTypeC, checked);
+            return format("(*(%s*)%s)", elemTypeC, checked);
         } catch (Exception e) {
             // If we can't infer the array type (e.g. a global array), fall back
             // to raw indexing rather than failing compilation.
@@ -10051,6 +10437,12 @@ class CodeGenerator {
                         return setterCall;
                     }
                 }
+                if (auto memberExpr = cast(MemberExpr)binExpr.left) {
+                    string setterCall = tryPropertySetterCall(memberExpr, binExpr.right);
+                    if (setterCall.length > 0) {
+                        return setterCall;
+                    }
+                }
                 Type leftType = null;
                 try {
                     leftType = inferType(binExpr.left);
@@ -10384,6 +10776,9 @@ class CodeGenerator {
                 StructDecl sd = (cd is null && className.length > 0 && className in structRegistry)
                     ? structRegistry[className] : null;
                 FunctionDecl[] structCandidates = sd !is null ? methodCandidatesNamed(sd, methodName) : [];
+                UnionDecl ud = (cd is null && sd is null && className.length > 0 && className in unionRegistry)
+                    ? unionRegistry[className] : null;
+                FunctionDecl[] unionCandidates = ud !is null ? methodCandidatesNamed(ud, methodName) : [];
                 string calleeDescription = format("method '%s.%s'", className, methodName);
                 ASTNode[] resolvedArgs;
                 FunctionDecl methodDecl = null;
@@ -10394,7 +10789,7 @@ class CodeGenerator {
                 // behavior of trusting that mechanism rather than requiring
                 // every method to be registered here.
                 string methodSymbol = className.length > 0 ? format("%s_%s", className, methodName) : "";
-                if (candidates.length == 0 && structCandidates.length == 0) {
+                if (candidates.length == 0 && structCandidates.length == 0 && unionCandidates.length == 0) {
                     if (hasNamedArgs(callExpr.argNames)) {
                         throw new CompileError(
                             format("Cannot resolve named arguments for '%s' - its target method " ~
@@ -10412,7 +10807,7 @@ class CodeGenerator {
                             callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
                         methodDecl.params);
                     methodSymbol = mangleMethodName(owner, mangledClass(owner), methodDecl);
-                } else {
+                } else if (structCandidates.length > 0) {
                     // Struct method - self is passed by value (see
                     // generateStructMethod), so objectExpr below needs no
                     // address-of; structs have no `private` concept yet, so
@@ -10424,6 +10819,16 @@ class CodeGenerator {
                             callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
                         methodDecl.params);
                     methodSymbol = mangleMethodName(sd, className, methodDecl);
+                } else {
+                    // Union method - same by-value receiver convention as
+                    // struct methods.
+                    methodDecl = resolveOverload(unionCandidates, callExpr.args, callExpr.argNames,
+                        calleeDescription, callExpr.line, callExpr.column);
+                    resolvedArgs = applyImplicitArgumentConversions(
+                        resolveCallArguments(methodDecl.params, false, callExpr.args,
+                            callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
+                        methodDecl.params);
+                    methodSymbol = mangleMethodName(ud, className, methodDecl);
                 }
 
                 // A virtual/overridden method dispatches through the
@@ -10511,6 +10916,11 @@ class CodeGenerator {
                         auto startCall = new CallExpr(new MemberExpr(newExpr, *startMethod,
                             callExpr.line, callExpr.column), [], callExpr.line, callExpr.column);
                         return generateExpression(startCall);
+                    }
+                    if (resolveDirectConstructorType(calleeIdent.name) !is null) {
+                        auto newExpr = new NewExpr(new Type(calleeIdent.name), callExpr.args,
+                            callExpr.line, callExpr.column, callExpr.argNames);
+                        return generateExpression(newExpr);
                     }
                 }
 
@@ -10684,6 +11094,22 @@ class CodeGenerator {
                     } else {
                         ClassDecl methodOwner;
                         auto candidates = resolveMethodOnHierarchy(*classDecl, memberExpr.member, methodOwner);
+                        auto properties = propertyMethodCandidates(candidates, 0);
+                        if (properties.length > 1) {
+                            throw new CompileError(
+                                format("'%s' is ambiguous - %s has %d property methods named '%s'",
+                                    memberExpr.member, classDecl.name, properties.length, memberExpr.member),
+                                currentModulePath, memberExpr.line, memberExpr.column);
+                        }
+                        if (properties.length == 1) {
+                            string methodOwnerName = mangledClass(methodOwner);
+                            checkMemberAccess(properties[0].isPrivate, methodOwnerName,
+                                format("method '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
+                            return generateExpression(new CallExpr(
+                                new MemberExpr(memberExpr.object, memberExpr.member,
+                                    memberExpr.line, memberExpr.column),
+                                [], memberExpr.line, memberExpr.column));
+                        }
                         if (candidates.length > 1) {
                             throw new CompileError(
                                 format("'%s' is ambiguous - %s has %d overloads named '%s'; a bare " ~
@@ -10700,6 +11126,52 @@ class CodeGenerator {
                         string implKey = ownerClassName ~ "_" ~ memberExpr.member;
                         if (implKey in functionRegistry) {
                             return implKey;
+                        }
+                    }
+                } else if (auto structDecl = memberObjType.name in structRegistry) {
+                    bool hasField = false;
+                    foreach (field; structDecl.fields) {
+                        if (field.name == memberExpr.member) {
+                            hasField = true;
+                            break;
+                        }
+                    }
+                    if (!hasField) {
+                        auto properties = propertyMethodCandidates(methodCandidatesNamed(*structDecl, memberExpr.member), 0);
+                        if (properties.length > 1) {
+                            throw new CompileError(
+                                format("'%s' is ambiguous - %s has %d property methods named '%s'",
+                                    memberExpr.member, structDecl.name, properties.length, memberExpr.member),
+                                currentModulePath, memberExpr.line, memberExpr.column);
+                        }
+                        if (properties.length == 1) {
+                            return generateExpression(new CallExpr(
+                                new MemberExpr(memberExpr.object, memberExpr.member,
+                                    memberExpr.line, memberExpr.column),
+                                [], memberExpr.line, memberExpr.column));
+                        }
+                    }
+                } else if (auto unionDecl = memberObjType.name in unionRegistry) {
+                    bool hasField = false;
+                    foreach (field; unionDecl.fields) {
+                        if (field.name == memberExpr.member) {
+                            hasField = true;
+                            break;
+                        }
+                    }
+                    if (!hasField) {
+                        auto properties = propertyMethodCandidates(methodCandidatesNamed(*unionDecl, memberExpr.member), 0);
+                        if (properties.length > 1) {
+                            throw new CompileError(
+                                format("'%s' is ambiguous - %s has %d property methods named '%s'",
+                                    memberExpr.member, unionDecl.name, properties.length, memberExpr.member),
+                                currentModulePath, memberExpr.line, memberExpr.column);
+                        }
+                        if (properties.length == 1) {
+                            return generateExpression(new CallExpr(
+                                new MemberExpr(memberExpr.object, memberExpr.member,
+                                    memberExpr.line, memberExpr.column),
+                                [], memberExpr.line, memberExpr.column));
                         }
                     }
                 }
@@ -10739,9 +11211,21 @@ class CodeGenerator {
                 recordUsage(*cName, ident.line, ident.column);
                 return *cName;
             }
-            string resolved = resolveName(ident.name,
-                (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null ||
-                       (n in globalVarRegistry) !is null);
+            string resolved;
+            try {
+                resolved = resolveName(ident.name,
+                    (n) => (n in variableTypes) !is null || (n in functionRegistry) !is null ||
+                           (n in globalVarRegistry) !is null);
+            } catch (CompileError e) {
+                string fieldAccess = tryGenerateBareFieldAccess(ident);
+                if (fieldAccess.length > 0) return fieldAccess;
+                throw e;
+            }
+            if ((resolved in variableTypes) is null && (resolved in functionRegistry) is null &&
+                    (resolved in globalVarRegistry) is null) {
+                string fieldAccess = tryGenerateBareFieldAccess(ident);
+                if (fieldAccess.length > 0) return fieldAccess;
+            }
             recordUsage(resolved, ident.line, ident.column);
             return resolved;
         } else if (auto intLit = cast(IntLiteral)node) {
@@ -10861,10 +11345,8 @@ class CodeGenerator {
             return new Type("bool");
         } else if (cast(NullLiteral)expr) {
             throw inferError(expr, "Cannot infer type from 'null'; add an explicit type annotation");
-        } else if (cast(ArrayLiteral)expr) {
-            throw inferError(expr,
-                "Cannot infer type of an array literal; declare an explicit array type " ~
-                "(e.g. 'let arr: u8[3] = [1, 2, 3]')");
+        } else if (auto arrLit = cast(ArrayLiteral)expr) {
+            return inferArrayLiteralType(arrLit);
         } else if (auto newExpr = cast(NewExpr)expr) {
             checkNotGenericFunctionConstruction(newExpr);
             resolveType(newExpr.type);
@@ -10903,9 +11385,18 @@ class CodeGenerator {
             t.closureReturnType = lambdaExpr.returnType;
             return t;
         } else if (auto ident = cast(Identifier)expr) {
-            string resolved = resolveName(ident.name, (n) => (n in variableTypes) !is null);
-            if (resolved in variableTypes) {
-                return variableTypes[resolved];
+            try {
+                string resolved = resolveName(ident.name, (n) => (n in variableTypes) !is null);
+                if (resolved in variableTypes) {
+                    return variableTypes[resolved];
+                }
+            } catch (CompileError e) {
+            }
+            if (auto field = findFieldOnCurrentAggregate(ident.name)) {
+                if (field.type is null) {
+                    field.type = inferType(field.initializer);
+                }
+                return field.type;
             }
             throw inferError(expr, format("Cannot infer type: unknown variable '%s'", ident.name));
         } else if (auto memberExpr = cast(MemberExpr)expr) {
@@ -10935,6 +11426,15 @@ class CodeGenerator {
                     }
                     return field.type;
                 }
+                ClassDecl methodOwner;
+                auto properties = propertyMethodCandidates(
+                    resolveMethodOnHierarchy(*classDecl, memberExpr.member, methodOwner), 0);
+                if (properties.length > 1) {
+                    throw inferError(expr, format("Cannot infer type: property '%s' is ambiguous", memberExpr.member));
+                }
+                if (properties.length == 1) {
+                    return properties[0].returnType;
+                }
             }
             if (auto structDecl = objType.name in structRegistry) {
                 foreach (field; structDecl.fields) {
@@ -10944,6 +11444,30 @@ class CodeGenerator {
                         }
                         return field.type;
                     }
+                }
+                auto properties = propertyMethodCandidates(methodCandidatesNamed(*structDecl, memberExpr.member), 0);
+                if (properties.length > 1) {
+                    throw inferError(expr, format("Cannot infer type: property '%s' is ambiguous", memberExpr.member));
+                }
+                if (properties.length == 1) {
+                    return properties[0].returnType;
+                }
+            }
+            if (auto unionDecl = objType.name in unionRegistry) {
+                foreach (field; unionDecl.fields) {
+                    if (field.name == memberExpr.member) {
+                        if (field.type is null) {
+                            field.type = inferType(field.initializer);
+                        }
+                        return field.type;
+                    }
+                }
+                auto properties = propertyMethodCandidates(methodCandidatesNamed(*unionDecl, memberExpr.member), 0);
+                if (properties.length > 1) {
+                    throw inferError(expr, format("Cannot infer type: property '%s' is ambiguous", memberExpr.member));
+                }
+                if (properties.length == 1) {
+                    return properties[0].returnType;
                 }
             }
             throw inferError(expr, format("Cannot infer type of field '%s'", memberExpr.member));
@@ -10986,6 +11510,22 @@ class CodeGenerator {
                             callExpr.line, callExpr.column);
                         return methodDecl.returnType;
                     }
+                } else if (auto structDecl = objType.name in structRegistry) {
+                    auto candidates = methodCandidatesNamed(*structDecl, memberCallee.member);
+                    if (candidates.length > 0) {
+                        auto methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                            format("method '%s.%s'", objType.name, memberCallee.member),
+                            callExpr.line, callExpr.column);
+                        return methodDecl.returnType;
+                    }
+                } else if (auto unionDecl = objType.name in unionRegistry) {
+                    auto candidates = methodCandidatesNamed(*unionDecl, memberCallee.member);
+                    if (candidates.length > 0) {
+                        auto methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
+                            format("method '%s.%s'", objType.name, memberCallee.member),
+                            callExpr.line, callExpr.column);
+                        return methodDecl.returnType;
+                    }
                 }
                 throw inferError(expr, format("Cannot infer type: unknown method '%s'", memberCallee.member));
             } else if (auto calleeIdent = cast(Identifier)callExpr.callee) {
@@ -10998,6 +11538,9 @@ class CodeGenerator {
                     (n) => (n in grammar.grammarStartRule) !is null);
                 if (grammarClass in grammar.grammarStartRule) {
                     return new Type("ParseNode");
+                }
+                if (auto ctorType = resolveDirectConstructorType(calleeIdent.name)) {
+                    return new Type(ctorType.name);
                 }
                 string resolvedVar = resolveName(calleeIdent.name, (n) => (n in variableTypes) !is null);
                 if (resolvedVar in variableTypes && variableTypes[resolvedVar].closureReturnType !is null) {
@@ -11095,6 +11638,11 @@ class CodeGenerator {
                 foreach (method; structDecl.methods) {
                     if (method.name == methodName) return method.returnType;
                 }
+            } else if (auto unionDecl = arrType.name in unionRegistry) {
+                string methodName = operatorMethodName("[]", 1);
+                foreach (method; unionDecl.methods) {
+                    if (method.name == methodName) return method.returnType;
+                }
             }
             throw inferError(expr, "Cannot infer type: indexing a non-array, non-pointer value");
         } else if (auto macroInvocation = cast(MacroInvocation)expr) {
@@ -11108,6 +11656,46 @@ class CodeGenerator {
         }
 
         throw inferError(expr, "Cannot infer type of this expression; add an explicit type annotation");
+    }
+
+    private Type inferArrayLiteralType(ArrayLiteral lit) {
+        if (lit.elements.length == 0) {
+            throw inferError(lit,
+                "Cannot infer type of an empty array literal; add an explicit array type annotation");
+        }
+
+        Type elemType = inferType(lit.elements[0]);
+        resolveType(elemType);
+        foreach (i, elem; lit.elements[1 .. $]) {
+            Type current = inferType(elem);
+            resolveType(current);
+            if (!sameInferredArrayElementType(elemType, current)) {
+                throw inferError(elem, format(
+                    "Cannot infer array literal type: element %d has type '%s', expected '%s'",
+                    i + 2, current.toString(), elemType.toString()));
+            }
+        }
+
+        Type arrayType = cloneType(elemType);
+        if (arrayType.isArray) {
+            arrayType.extraDims = [arrayType.arraySize] ~ arrayType.extraDims;
+        }
+        arrayType.isArray = true;
+        arrayType.arraySize = cast(int)lit.elements.length;
+        return arrayType;
+    }
+
+    private bool sameInferredArrayElementType(Type a, Type b) {
+        if (a is null || b is null) return a is b;
+        if (a.name != b.name || a.pointerDepth != b.pointerDepth ||
+                a.isArray != b.isArray || a.arraySize != b.arraySize) {
+            return false;
+        }
+        if (a.extraDims != b.extraDims || a.typeArgs.length != b.typeArgs.length) return false;
+        foreach (i; 0 .. a.typeArgs.length) {
+            if (!sameInferredArrayElementType(a.typeArgs[i], b.typeArgs[i])) return false;
+        }
+        return true;
     }
 
     // Maps a base LLPL primitive type name to its C equivalent, leaving

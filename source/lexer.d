@@ -39,6 +39,7 @@ enum TokenType {
     Volatile,
     Private,
     Static,
+    Inline,
     Virtual,
     Override,
     If,
@@ -82,6 +83,7 @@ enum TokenType {
     Throw,
     Delete,
     Assert,
+    UnitTest,
 
     // Operators
     Plus,
@@ -224,6 +226,7 @@ class Lexer {
             "volatile": "Volatile",
             "private": "Private",
             "static": "Static",
+            "inline": "Inline",
             "virtual": "Virtual",
             "override": "Override",
             "if": "If",
@@ -265,7 +268,8 @@ class Lexer {
             "finally": "Finally",
             "throw": "Throw",
             "delete": "Delete",
-            "assert": "Assert"
+            "assert": "Assert",
+            "unittest": "UnitTest"
         ];
     }
 
@@ -756,6 +760,7 @@ class Lexer {
                 case "Volatile": type = TokenType.Volatile; break;
                 case "Private": type = TokenType.Private; break;
                 case "Static": type = TokenType.Static; break;
+                case "Inline": type = TokenType.Inline; break;
                 case "Virtual": type = TokenType.Virtual; break;
                 case "Override": type = TokenType.Override; break;
                 case "If": type = TokenType.If; break;
@@ -799,6 +804,7 @@ class Lexer {
                 case "Throw": type = TokenType.Throw; break;
                 case "Delete": type = TokenType.Delete; break;
                 case "Assert": type = TokenType.Assert; break;
+                case "UnitTest": type = TokenType.UnitTest; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);

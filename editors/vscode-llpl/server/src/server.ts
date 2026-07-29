@@ -103,11 +103,11 @@ const EMPTY_RESULT: AnalysisResult = { diagnostics: [], symbols: [], usages: [] 
 
 const KEYWORDS = [
     'import', 'from', 'namespace', 'using', 'class', 'struct', 'union', 'packed', 'enum', 'macro',
-    'constructor', 'destructor', 'func', 'let', 'const', 'volatile', 'private', 'static', 'virtual',
+    'constructor', 'destructor', 'func', 'inline', 'let', 'const', 'volatile', 'private', 'static', 'virtual',
     'override', 'if', 'else', 'while', 'do', 'for', 'foreach', 'in', 'return', 'continue', 'break', 'defer',
-    'unless', 'try', 'catch', 'finally', 'throw', 'delete', 'asm', 'new', 'true', 'false', 'null',
+    'until', 'unless', 'try', 'catch', 'finally', 'throw', 'delete', 'assert', 'asm', 'new', 'true', 'false', 'null',
     'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait', 'ui',
-    'impl', 'quote', 'unquote', 'interrupt',
+    'impl', 'quote', 'unquote', 'interrupt', 'property', 'unittest',
     'sizeof', 'self', 'super', 'int', 'uint', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32',
     'int64', 'uint64', 'u8', 'u16', 'u32', 'u64', 'i8', 'i16', 'i32', 'i64',
     'char', 'bool', 'void', 'float', 'string',

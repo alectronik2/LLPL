@@ -1,0 +1,37 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Fpp {
+    base: i64
+
+    constructor() {}
+
+    property func foo() -> i64 {
+        return 128
+    }
+
+    property bar() -> i64 {
+        return base * 2
+    }
+
+    property bar(nu: i64) {
+        base = nu / 2
+    }
+}
+
+func main() -> i64 {
+    let x = new Fpp()
+    x.base = 128
+    let y = x.foo
+    print_int("property", y)
+    print_int("call", x.foo())
+    print_int("shorthand", x.bar)
+    x.bar = 512
+    print_int("setter", x.bar)
+    return 0
+}

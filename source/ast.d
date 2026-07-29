@@ -20,6 +20,7 @@ enum NodeType {
     FlagsDecl,
     AbiAssertDecl,
     DeviceDecl,
+    UnitTestDecl,
     EnumDecl,
     GrammarDecl,
     VarDecl,
@@ -274,6 +275,20 @@ class DeviceDecl : ASTNode {
     }
 }
 
+// `unittest { ... }` - a top-level test block. Ignored during ordinary
+// compilation; when the compiler is invoked with --unittest, each block is
+// emitted as a private void helper and a generated main() calls them in
+// declaration order.
+class UnitTestDecl : ASTNode {
+    Block body_;
+    string[] namespaceSegments;
+
+    this(Block body_, int line = 0, int column = 0) {
+        super(NodeType.UnitTestDecl, line, column);
+        this.body_ = body_;
+    }
+}
+
 // `macro NAME(params) { statements }` - a block of statements with named
 // placeholders, expanded inline at each `NAME!(args)` call site by the code
 // generator (see CodeGenerator.generateMacroExpansion). Purely a
@@ -522,12 +537,18 @@ class Parameter {
     // comments), so `bar: const T*` still only protects the pointer
     // variable itself from being reassigned, not what it points to.
     bool isConst;
+    // `@field: T` in a constructor parameter list is shorthand for taking
+    // a normal parameter named `field` and assigning it into `self.field`
+    // before the constructor body runs.
+    bool initializesField;
 
-    this(string name, Type type, ASTNode defaultValue = null, bool isConst = false) {
+    this(string name, Type type, ASTNode defaultValue = null, bool isConst = false,
+         bool initializesField = false) {
         this.name = name;
         this.type = type;
         this.defaultValue = defaultValue;
         this.isConst = isConst;
+        this.initializesField = initializesField;
     }
 }
 
@@ -562,6 +583,9 @@ class FunctionDecl : ASTNode {
     // `static func` - a class method that doesn't receive a `self` parameter
     // and can be called on the class itself rather than on instances.
     bool isStatic;
+    // `inline func` - emitted as a C `static inline` definition/prototype.
+    // This is a backend hint/linkage choice, not AST-level substitution.
+    bool isInline;
     // `virtual func` - establishes a new dispatchable vtable slot (only
     // meaningful on a class with no base, or one introducing a method its
     // own subclasses may override); `override func` - provides this
@@ -573,6 +597,9 @@ class FunctionDecl : ASTNode {
     // for a method (set by classDecl() in parser.d).
     bool isVirtual;
     bool isOverride;
+    // `property func foo()` - allows `x.foo` to call the zero-argument
+    // instance method as a field-like property. Only meaningful for methods.
+    bool isProperty;
 
     this(string name, Parameter[] params, Type returnType, Block body_, bool isExtern = false,
          bool isInterrupt = false, bool isVariadic = false, int line = 0, int column = 0,
@@ -654,6 +681,7 @@ class ClassDecl : ASTNode {
 class StructDecl : ASTNode {
     string name;
     VarDecl[] fields;
+    VarDecl[][] anonymousUnions;
     FunctionDecl[] constructors;
     // `func`/`func operator...` written directly in the struct body (see
     // parser.d's structDecl) - always takes `self` *by value*, like a
@@ -674,10 +702,11 @@ class StructDecl : ASTNode {
 
     this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0,
          string[] typeParams = [], string[] typeParamBounds = [], VarAttribute[] attributes = [],
-         FunctionDecl[] constructors = [], FunctionDecl[] methods = []) {
+         FunctionDecl[] constructors = [], FunctionDecl[] methods = [], VarDecl[][] anonymousUnions = []) {
         super(NodeType.StructDecl, line, column);
         this.name = name;
         this.fields = fields;
+        this.anonymousUnions = anonymousUnions;
         this.packed = packed;
         this.typeParams = typeParams;
         this.typeParamBounds = typeParamBounds;
@@ -705,13 +734,18 @@ class UnionDecl : ASTNode {
     string name;
     VarDecl[] fields;
     FunctionDecl[] constructors;
+    FunctionDecl[] methods;
+    bool packed;
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
 
-    this(string name, VarDecl[] fields, int line = 0, int column = 0, FunctionDecl[] constructors = []) {
+    this(string name, VarDecl[] fields, bool packed = false, int line = 0, int column = 0,
+         FunctionDecl[] constructors = [], FunctionDecl[] methods = []) {
         super(NodeType.UnionDecl, line, column);
         this.name = name;
         this.fields = fields;
+        this.packed = packed;
         this.constructors = constructors;
+        this.methods = methods;
     }
 }
 
@@ -975,7 +1009,7 @@ class VarDecl : ASTNode {
     // optimizer's single-threaded viewpoint such a store looks dead. Maps
     // straight to C's `volatile`.
     bool isVolatile;
-    int bitWidth = -1; // -1 means "not a bit-field"; only meaningful for class fields
+    int bitWidth = -1; // -1 means "not a bit-field"; only meaningful for aggregate fields
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
     VarAttribute[] attributes;
     // `private let`/`private const` - a field only readable/writable from

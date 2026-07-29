@@ -334,6 +334,8 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 }
 
 private void runCommand(string[] cmd, bool allowFailure, string description) {
+    progressClearForExternalOutput();
+
     Pid pid;
     try {
         pid = spawnProcess(cmd);

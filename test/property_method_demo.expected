@@ -1,0 +1,4 @@
+property = 128
+call = 128
+shorthand = 256
+setter = 512

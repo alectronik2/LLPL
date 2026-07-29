@@ -1105,9 +1105,15 @@ void llpl_panic(char* msg) {
 #endif
 }
 
-void* __llpl_check_index(void* arr, int64_t idx, int64_t size, uint64_t elem_size) {
+void* __llpl_check_index(void* arr, int64_t idx, int64_t size, uint64_t elem_size, char* file, int64_t line) {
     if (idx < 0 || idx >= size) {
-        llpl_panic("index out of bounds");
+        char msg[512];
+        if (file && file[0]) {
+            ksnprintf(msg, sizeof(msg), "index out of bounds at %s:%d", file, line);
+        } else {
+            ksnprintf(msg, sizeof(msg), "index out of bounds at <unknown>:%d", line);
+        }
+        llpl_panic(msg);
     }
     return (char*)arr + idx * elem_size;
 }

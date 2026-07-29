@@ -4,14 +4,17 @@ import std.stdio;
 import std.format;
 import std.algorithm : min;
 import std.array : replicate;
+import std.conv : to;
+import std.process : environment;
 import core.stdc.stdio : fileno;
 
 // Only colors when stdout is a real terminal - a redirected/piped build
 // log shouldn't be full of escape codes.
-private bool colorEnabled() {
+private bool ansiEnabled() {
     version (Posix) {
         import core.sys.posix.unistd : isatty;
-        return isatty(fileno(stdout.getFP())) != 0;
+        string term = environment.get("TERM", "");
+        return term != "dumb" && isatty(fileno(stdout.getFP())) != 0;
     } else {
         return false;
     }
@@ -27,11 +30,24 @@ private enum Color : string {
 }
 
 private string paint(string s, string color) {
-    return colorEnabled() ? (color ~ s ~ Color.reset) : s;
+    return ansiEnabled() ? (color ~ s ~ Color.reset) : s;
 }
 
 private bool progressActive;
 private size_t progressLineLen;
+
+private size_t terminalWidth() {
+    try {
+        string columns = environment.get("COLUMNS", "");
+        if (columns.length > 0) {
+            auto parsed = columns.to!size_t;
+            if (parsed > 0) return parsed;
+        }
+    } catch (Exception) {
+        // Ignore malformed COLUMNS and use a conservative fallback below.
+    }
+    return 80;
+}
 
 private string truncateProgressMessage(string message) {
     enum maxMessageLen = 48;
@@ -40,21 +56,33 @@ private string truncateProgressMessage(string message) {
     return message[0 .. maxMessageLen - 3] ~ "...";
 }
 
+private string fitProgressLine(string line) {
+    size_t width = terminalWidth();
+    if (width <= 1 || line.length < width) return line;
+    size_t limit = width - 1; // keep the cursor off the terminal's wrap column
+    if (limit <= 3) return line[0 .. limit];
+    return line[0 .. limit - 3] ~ "...";
+}
+
 private void clearProgressLine() {
-    if (!progressActive || !colorEnabled()) return;
-    writef("\r%*s\r", cast(int)progressLineLen, "");
+    if (!progressActive || !ansiEnabled()) return;
+    write("\r\x1b[2K");
     stdout.flush();
 }
 
+void progressClearForExternalOutput() {
+    clearProgressLine();
+}
+
 void progressStart(size_t total) {
-    if (!colorEnabled() || total == 0) return;
+    if (!ansiEnabled() || total == 0) return;
     progressActive = true;
     progressLineLen = 0;
     progressStep(0, total, "starting");
 }
 
 void progressStep(size_t completed, size_t total, string message) {
-    if (!colorEnabled() || total == 0) return;
+    if (!ansiEnabled() || total == 0) return;
 
     enum barWidth = 28;
     size_t clamped = min(completed, total);
@@ -63,17 +91,15 @@ void progressStep(size_t completed, size_t total, string message) {
     string bar = replicate("#", filled) ~ replicate("-", barWidth - filled);
     string line = format("%3d%% [%s] %s/%s %s",
         percent, bar, clamped, total, truncateProgressMessage(message));
+    line = fitProgressLine(line);
 
-    writef("\r%s", line);
-    if (progressLineLen > line.length) {
-        writef("%*s", cast(int)(progressLineLen - line.length), "");
-    }
+    writef("\r\x1b[2K%s", line);
     progressLineLen = line.length;
     stdout.flush();
 }
 
 void progressFinish() {
-    if (!progressActive || !colorEnabled()) return;
+    if (!progressActive || !ansiEnabled()) return;
     writeln();
     stdout.flush();
     progressActive = false;

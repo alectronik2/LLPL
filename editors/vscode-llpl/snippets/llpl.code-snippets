@@ -19,15 +19,32 @@
         ],
         "description": "Generic function - type parameters are always inferred from arguments"
     },
+    "Inline Function": {
+        "prefix": "inline",
+        "body": [
+            "inline func ${1:name}(${2:param}: ${3:int}) -> ${4:int} {",
+            "\t$0",
+            "\treturn 0",
+            "}"
+        ],
+        "description": "Inline function declaration"
+    },
+    "Unit Test": {
+        "prefix": "unittest",
+        "body": [
+            "unittest {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Unit test block compiled and run with --unittest"
+    },
     "Class": {
         "prefix": "class",
         "body": [
             "class ${1:Name} {",
             "\tlet ${2:field}: ${3:int}",
             "",
-            "\tconstructor(${2:field}: ${3:int}) {",
-            "\t\tself.${2:field} = ${2:field}",
-            "\t}",
+            "\tconstructor(@${2:field}: ${3:int}) {}",
             "",
             "\tdestructor() {",
             "\t\t$0",
@@ -42,9 +59,7 @@
             "class ${1:Name}<${2:T}> {",
             "\tlet ${3:field}: ${2:T}",
             "",
-            "\tconstructor(${3:field}: ${2:T}) {",
-            "\t\tself.${3:field} = ${3:field}",
-            "\t}",
+            "\tconstructor(@${3:field}: ${2:T}) {}",
             "",
             "\tdestructor() {",
             "\t\t$0",
@@ -59,9 +74,8 @@
             "class ${1:Name} : ${2:Base} {",
             "\tlet ${3:field}: ${4:int}",
             "",
-            "\tconstructor(${3:field}: ${4:int}) {",
+            "\tconstructor(@${3:field}: ${4:int}) {",
             "\t\tsuper()",
-            "\t\tself.${3:field} = ${3:field}",
             "\t}",
             "",
             "\tvirtual func ${5:method}() {",
@@ -120,9 +134,7 @@
             "union ${1:Name} {",
             "\tlet ${2:field}: ${3:int}",
             "",
-            "\tconstructor(${2:field}: ${3:int}) {",
-            "\t\tself.${2:field} = ${2:field}",
-            "\t}",
+            "\tconstructor(@${2:field}: ${3:int}) {}",
             "}"
         ],
         "description": "Union (C-style, overlapping storage) declaration with a constructor"

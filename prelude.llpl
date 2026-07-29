@@ -95,7 +95,7 @@ extern func llpl_panic_backtrace()
 // kernel.llpl overrides the weak hooks so a panic is never silent there).
 // Used below by Slice<T>/Vector<T>'s bounds checks.
 extern func llpl_panic(msg: char*)
-extern func __llpl_check_index(arr: void*, idx: i64, size: i64, elem_size: u64) -> void*
+extern func __llpl_check_index(arr: void*, idx: i64, size: i64, elem_size: u64, file: char*, line: i64) -> void*
 
 struct EmbeddedFile {
     let data: char*
@@ -435,6 +435,10 @@ class String {
     // `string` rather than a String instance.
     func c_str() -> string {
         return self.buf
+    }
+
+    func as_string() -> string {
+        return self.c_str()
     }
 
     func byte_at(index: i64) -> char {
@@ -1930,4 +1934,12 @@ struct __LLPL_Tuple8<A, B, C, D, E, F, G, H> {
     let _5: F
     let _6: G
     let _7: H
+}
+
+func roundup<T>( val: T, to: T ) -> T {
+    return ((val + to - 1) & ~(to - 1))
+}
+
+func rounddown<T>( val: T, to: T ) -> T {
+    return ((val % to) + to) % to
 }

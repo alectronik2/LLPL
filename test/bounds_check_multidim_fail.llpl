@@ -1,4 +1,4 @@
-// bounds_check_multidim_fail: second-dimension check, compiled with --safe.
+// bounds_check_multidim_fail: second-dimension check, checked by default.
 
 func main() -> i64 {
     let matrix: i64[2][3]

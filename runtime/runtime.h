@@ -183,7 +183,7 @@ int64_t llpl_symbol_line(char* symbol);
 void llpl_set_panic_handler(void (*handler)(char*));
 void llpl_panic_backtrace(void);
 void llpl_panic(char* msg);
-void* __llpl_check_index(void* arr, int64_t idx, int64_t size, uint64_t elem_size);
+void* __llpl_check_index(void* arr, int64_t idx, int64_t size, uint64_t elem_size, char* file, int64_t line);
 
 // Minimal printf-style formatter for kernel logging. Deliberately not named
 // snprintf/vsnprintf: it isn't ISO C compatible (notably %d/%u/%x read a

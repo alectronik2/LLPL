@@ -1,0 +1,17 @@
+struct Flags {
+    enabled: u8:1
+    mode: u8:2
+    rest: u8:5
+}
+
+func main() -> i64 {
+    let f: Flags
+    f.enabled = 1
+    f.mode = 3
+    f.rest = 17
+
+    if f.enabled == 1 && f.mode == 3 && f.rest == 17 {
+        puts("struct bitfields work")
+    }
+    return 0
+}

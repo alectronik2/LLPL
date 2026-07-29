@@ -9,14 +9,16 @@ find-references) for LLPL (`.llpl`) files.
 - Syntax highlighting for the full language: `namespace`, `using namespace`,
   `class`, `struct` (with `packed`), `union`, `enum`, `macro` (with
   `NAME!(args)` invocations), `constructor`/`destructor`, `func` (including
-  `static func`, `interrupt func`, and operator overloads like
-  `func operator+`), `let`/`const`, `alias`,
+  `static func`, `inline func`, `interrupt func`, `property` methods, and
+  operator overloads like `func operator+`), `let`/`const`, `alias`,
+  `unittest { ... }`,
   `ui Name: Window { ... }` declarations, control flow
   (`if`/`else`/`while`/`do`/`for`/`foreach`/`return`/`defer`/`try`/
-  `catch`/`finally`/`throw`/`delete`/`match`/`case`/`default`/`unless`),
+  `catch`/`finally`/`throw`/`delete`/`assert`/`match`/`case`/`default`/
+  `unless`/`until`),
   range-based `for i in 0..5 { }`, `import`/`from`, `extern`,
-  `new`/`as` casts, inline
-  `asm(...)`, `#link "NAME"`/`#flags "..."` compiler directives, and the
+  `new`/`as` casts, `asm(...)`, `#link "NAME"`/`#flags "..."` compiler
+  directives, and the
   built-in types (`int`/`uint` and their `8`/`16`/`32`/`64`-bit forms,
   including the `i8`/`u8`/`i16`/`u16`/`i32`/`u32`/`i64`/`u64` short names,
   `char`, `bool`, `void`, `float`, `string`).
@@ -31,7 +33,8 @@ find-references) for LLPL (`.llpl`) files.
   inside the string, including nested calls/parens.
 - Comment toggling (`//` and `/* */`), bracket matching/auto-closing
   (including for char literals' `'...'`).
-- Snippets for common constructs (`func`, `class`, `struct`, `union`,
+- Snippets for common constructs (`func`, `inline func`, `unittest`,
+  `class`, `struct`, `union`,
   `namespace`, `using namespace`, `enum`, `macro`, `match`, `alias`,
   `unless`, `if`, `while`, `for`, range-based `for`, `defer`, `delete`,
   `try`/`catch`/`finally`, `extern`, `import`, `#link`, `#flags`, `asm`,
@@ -74,7 +77,7 @@ npm install
 npm run compile
 npm install -g @vscode/vsce   # once, if you don't have vsce
 vsce package
-code --install-extension llpl-language-0.7.0.vsix
+code --install-extension llpl-language-0.8.0.vsix
 ```
 
 Or symlink the extension folder straight into your VS Code extensions

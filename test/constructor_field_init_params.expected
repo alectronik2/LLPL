@@ -1,0 +1,4 @@
+foo.bar = 7
+foo.baz = 9
+box.value = 11
+pair.value = 13

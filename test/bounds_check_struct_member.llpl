@@ -1,0 +1,31 @@
+// bounds_check_struct_member: checked array indexing must still compose with
+// field access on struct elements.
+
+extern func puts(s: char*) -> i64
+
+struct Entry {
+    let used: bool
+    let value: i64
+}
+
+let entries: Entry[3]
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    entries[0].used = true
+    entries[0].value = 7
+    entries[1].used = false
+    entries[1].value = 11
+
+    let i: i64 = 0
+    if entries[i].used {
+        print_int("entry0", entries[i].value)
+    }
+    print_int("entry1", entries[1].value)
+    return 0
+}

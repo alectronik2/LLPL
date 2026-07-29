@@ -17,6 +17,13 @@ func main() -> i64 {
     arr = replacement
     print_int("alias1", arr[1])
 
+    let inferred = [11, 22, 33]
+    print_int("inferred1", inferred[1])
+
+    let words = ["str", "ing"]
+    puts(words[0])
+    puts(words[1])
+
     let grid: i64[2][2] = [[1, 2], [3, 4]]
     grid = [[7, 8], [9, 10]]
     print_int("grid00", grid[0][0])

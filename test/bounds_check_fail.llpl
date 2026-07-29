@@ -1,4 +1,4 @@
-// bounds_check_fail: fixed-size array access out of bounds, compiled with --safe.
+// bounds_check_fail: fixed-size array access out of bounds, checked by default.
 
 func main() -> i64 {
     let arr: i64[3]
