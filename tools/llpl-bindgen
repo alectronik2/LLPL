@@ -10,12 +10,24 @@ dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 root="$(CDPATH= cd -- "$dir/.." && pwd)"
 compiler="${LLPL:-$root/llpl}"
 src="$dir/llpl-bindgen.llpl"
-bin="${LLPL_BINDGEN_BIN:-$(mktemp -u "${TMPDIR:-/tmp}/llpl-bindgen.XXXXXX")}"
+if [ -n "${LLPL_BINDGEN_BIN:-}" ]; then
+  bin="$LLPL_BINDGEN_BIN"
+else
+  cache_root="${XDG_CACHE_HOME:-${HOME:-${TMPDIR:-/tmp}}/.cache}"
+  cache_dir="$cache_root/llpl"
+  if ! mkdir -p "$cache_dir" 2>/dev/null; then
+    cache_dir="${TMPDIR:-/tmp}/llpl-cache"
+    mkdir -p "$cache_dir"
+  fi
+  bin="$cache_dir/llpl-bindgen"
+fi
 
 if [ ! -x "$compiler" ]; then
   printf 'llpl-bindgen: compiler not found: %s\n' "$compiler" >&2
   exit 1
 fi
 
-"$compiler" -b "$src" -o "$bin" >/dev/null
+if [ ! -x "$bin" ] || [ "$src" -nt "$bin" ] || [ "$compiler" -nt "$bin" ]; then
+  "$compiler" -b "$src" -o "$bin" >/dev/null
+fi
 exec "$bin" "$@"

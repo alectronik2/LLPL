@@ -28,6 +28,9 @@ class Parser {
     // context - see argumentList() and primary()'s parenthesized/array
     // cases, which reset this around their own contents).
     private bool noStructLiteral = false;
+    private string[] withContextNames;
+    private int withContextCounter;
+    private bool parsedWithLeadingDotPrimary;
 
     this(Token[] tokens, string filePath = "") {
         this.tokens = tokens;
@@ -111,7 +114,8 @@ class Parser {
         // field/method literally named "match") and `x.sizeof` (see
         // codegen.d's `.sizeof` property) are both unambiguous in that
         // position, so allow them there specifically.
-        if (check(TokenType.Identifier) || check(TokenType.Match) || check(TokenType.Sizeof) || check(TokenType.Ui)) {
+        if (check(TokenType.Identifier) || check(TokenType.Match) || check(TokenType.Sizeof) ||
+                check(TokenType.Ui) || check(TokenType.Interrupt)) {
             Token tok = current;
             advance();
             return tok;
@@ -262,6 +266,7 @@ class Parser {
         switch (type) {
             case TokenType.Hash:
             case TokenType.At:
+            case TokenType.Public:
             case TokenType.Import:
             case TokenType.Using:
             case TokenType.Namespace:
@@ -278,6 +283,7 @@ class Parser {
             case TokenType.Ui:
             case TokenType.Grammar:
             case TokenType.UnitTest:
+            case TokenType.With:
             case TokenType.Extern:
             case TokenType.Trait:
             case TokenType.Impl:
@@ -308,7 +314,9 @@ class Parser {
     }
 
     private ASTNode declaration() {
+        bool isPublic = match(TokenType.Public);
         if (check(TokenType.Hash)) {
+            if (isPublic) error("Compiler directives cannot be marked public");
             return hashDirective();
         }
         VarAttribute[] attrs = parseAttributes();
@@ -317,48 +325,54 @@ class Parser {
                 check(TokenType.Struct) || check(TokenType.Packed))) {
             error("Attributes are currently only supported on global variables, classes, and structs");
         }
+        ASTNode decl;
         if (check(TokenType.Import)) {
-            return importStmt();
+            decl = importStmt();
         } else if (check(TokenType.Using)) {
-            return usingNamespaceStmt();
+            decl = usingNamespaceStmt();
         } else if (check(TokenType.Namespace)) {
-            return namespaceDecl();
+            decl = namespaceDecl();
         } else if (check(TokenType.Enum)) {
-            return enumDecl();
+            decl = enumDecl();
         } else if (check(TokenType.Macro)) {
-            return macroDecl();
+            decl = macroDecl();
         } else if (check(TokenType.Alias)) {
-            return aliasDecl();
+            decl = aliasDecl();
         } else if (check(TokenType.Inline) || check(TokenType.Interrupt) || check(TokenType.Function)) {
-            return functionDecl();
+            decl = functionDecl();
         } else if (check(TokenType.Class)) {
-            return classDecl(attrs);
+            decl = classDecl(attrs);
         } else if (check(TokenType.Struct) || (check(TokenType.Packed) && peek(1).type == TokenType.Struct)) {
-            return structDecl(attrs);
+            decl = structDecl(attrs);
         } else if (check(TokenType.Union) || (check(TokenType.Packed) && peek(1).type == TokenType.Union)) {
-            return unionDecl();
+            decl = unionDecl();
         } else if (check(TokenType.Ui)) {
-            return uiDecl();
+            decl = uiDecl();
         } else if (check(TokenType.Grammar)) {
-            return grammarDecl();
+            decl = grammarDecl();
         } else if (check(TokenType.UnitTest)) {
-            return unitTestDecl();
+            decl = unitTestDecl();
         } else if (check(TokenType.Extern)) {
-            return externDecl();
+            decl = externDecl();
         } else if (check(TokenType.Trait)) {
-            return traitDecl();
+            decl = traitDecl();
         } else if (check(TokenType.Impl)) {
-            return implDecl();
+            decl = implDecl();
         } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
-            auto decl = letDecl();
+            decl = letDecl();
             if (auto varDecl = cast(VarDecl)decl) {
                 varDecl.attributes = attrs;
             }
-            return decl;
         } else {
             error("Expected declaration");
             return null;
         }
+        if (isPublic && (cast(ImportStmt)decl !is null || cast(UsingNamespaceStmt)decl !is null ||
+                cast(ImplDecl)decl !is null || cast(UnitTestDecl)decl !is null)) {
+            error("public can only mark exported declarations");
+        }
+        decl.isPublic = isPublic;
+        return decl;
     }
 
     private VarAttribute[] parseAttributes() {
@@ -470,7 +484,7 @@ class Parser {
     // Two forms share the `enum` keyword, disambiguated by whether *any*
     // member uses `Name(field: type, ...)`:
     //
-    //   - Plain: `enum Name[: Type] { A[, B = value]*, }` desugars straight
+    //   - Plain: `enum Name[: Type] { A B = value, ... }` desugars straight
     //     into a NamespaceDecl of const VarDecls with auto-incrementing
     //     IntLiteral values (C enum semantics: an explicit value resumes
     //     auto-increment from there). This reuses every bit of the existing
@@ -478,7 +492,7 @@ class Parser {
     //     need zero codegen of their own - `EnumName.MEMBER` resolves
     //     exactly like any other namespaced const, unchanged since before
     //     tagged enums existed.
-    //   - Tagged: `enum Name { Variant(field: type, ...), Other, ... }` - a
+    //   - Tagged: `enum Name { Variant(field: type, ...) Other, ... }` - a
     //     real sum type, where each variant can carry its own data. Parses
     //     into an EnumDecl (variant field lists reuse paramList(), the same
     //     parser a function's parameter list uses); codegen.d's
@@ -499,7 +513,7 @@ class Parser {
         expect(TokenType.Enum);
         string name = expect(TokenType.Identifier).value;
 
-        Type backingType = new Type("i64");
+        Type backingType = new Type("int");
         bool hasExplicitBackingType = false;
         if (match(TokenType.Colon)) {
             backingType = parseType();
@@ -551,7 +565,7 @@ class Parser {
             memberHasValue ~= hasValue;
             memberValues ~= value;
 
-            if (!match(TokenType.Comma)) break;
+            match(TokenType.Comma);
         }
 
         expect(TokenType.RightBrace);
@@ -630,6 +644,11 @@ class Parser {
                 errorAt(startLine, startColumn, "Expected an array literal ('[ ... ]') after '='");
             }
             return new ArrayAliasDecl(name, arrayLit.elements, startLine, startColumn);
+        }
+
+        if (check(TokenType.Function) || check(TokenType.LeftParen)) {
+            Type targetType = parseType();
+            return new AliasDecl(name, [], 0, false, 0, startLine, startColumn, targetType);
         }
 
         string[] targetPath = [expect(TokenType.Identifier).value];
@@ -1504,7 +1523,7 @@ class Parser {
     // `let x: int` does. Unambiguous there - no other body construct
     // starts with a bare identifier immediately followed by `:`.
     private VarDecl varDeclBody(int declLine, int declColumn, bool isConst, bool isVolatile) {
-        Token nameToken = expect(TokenType.Identifier);
+        Token nameToken = expectName();
         string name = nameToken.value;
 
         Type type = null;
@@ -1560,7 +1579,7 @@ class Parser {
             return new TuplePattern(elements, startLine, startColumn);
         }
 
-        Token nameToken = expect(TokenType.Identifier);
+        Token nameToken = expectName();
         string name = nameToken.value;
 
         if (check(TokenType.LeftBrace)) {
@@ -1569,7 +1588,7 @@ class Parser {
             string[] fieldNames;
             if (!check(TokenType.RightBrace)) {
                 do {
-                    fieldNames ~= expect(TokenType.Identifier).value;
+                    fieldNames ~= expectName().value;
                 } while (match(TokenType.Comma));
             }
             expect(TokenType.RightBrace);
@@ -1693,6 +1712,36 @@ class Parser {
         return first;
     }
 
+    private Type parseFunctionType() {
+        expect(TokenType.Function);
+        expect(TokenType.LeftParen);
+        Parameter[] params;
+        if (!check(TokenType.RightParen)) {
+            do {
+                string paramName = "";
+                Type paramType;
+                if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
+                    paramName = current.value;
+                    advance();
+                    expect(TokenType.Colon);
+                    paramType = parseType();
+                } else {
+                    paramType = parseType();
+                }
+                params ~= new Parameter(paramName, paramType);
+            } while (match(TokenType.Comma));
+        }
+        expect(TokenType.RightParen);
+        Type ret = new Type("void");
+        if (match(TokenType.Arrow)) {
+            ret = parseType();
+        }
+        Type t = new Type("__LLPL_Closure");
+        t.closureParams = params;
+        t.closureReturnType = ret;
+        return t;
+    }
+
     // A closing `>` for a `<...>` type-argument list, tolerant of nested
     // generics: `Box<Box<int>>` lexes its last two characters as a single
     // RightShift token (`>>`), not two Greater tokens, since the lexer has
@@ -1760,6 +1809,9 @@ class Parser {
     }
 
     private Type parseType() {
+        if (check(TokenType.Function)) {
+            return parseFunctionType();
+        }
         if (check(TokenType.LeftParen)) {
             return parseParenType();
         }
@@ -1846,6 +1898,19 @@ class Parser {
         return new Block(statements);
     }
 
+    // A control-flow statement body may be either a braced block or one
+    // ordinary statement. The latter is sugar only; downstream AST/codegen
+    // still sees a Block so existing scoping and emission stay centralized.
+    private Block statementBody(string owner) {
+        if (check(TokenType.LeftBrace)) {
+            return block();
+        }
+        if (check(TokenType.RightBrace) || check(TokenType.EOF) || check(TokenType.Else)) {
+            error("Expected '{' or statement after " ~ owner);
+        }
+        return new Block([statement()]);
+    }
+
     // `<statement> unless <condition>` - a trailing modifier accepted after
     // any statement, desugaring to `if !(<condition>) { <statement> }`.
     // Checked after the statement is fully parsed (so it applies to the
@@ -1898,6 +1963,8 @@ class Parser {
             return forStmt();
         } else if (check(TokenType.Foreach)) {
             return foreachStmt();
+        } else if (check(TokenType.With)) {
+            return withStmt();
         } else if (check(TokenType.Return)) {
             return returnStmt();
         } else if (check(TokenType.Continue)) {
@@ -2154,7 +2221,7 @@ class Parser {
     private IfStmt ifStmt() {
         expect(TokenType.If);
         ASTNode condition = expressionNoStructLiteral();
-        Block thenBlock = block();
+        Block thenBlock = statementBody("if condition");
         Block elseBlock = null;
 
         if (match(TokenType.Else)) {
@@ -2163,7 +2230,7 @@ class Parser {
                 auto elseIfStmt = ifStmt();
                 elseBlock = new Block([elseIfStmt]);
             } else {
-                elseBlock = block();
+                elseBlock = statementBody("else");
             }
         }
 
@@ -2282,6 +2349,18 @@ class Parser {
         errorAt(startLine, startColumn,
             "The old 'foreach let' syntax has been removed; use 'for x in iterable { ... }'");
         assert(false);
+    }
+
+    private WithStmt withStmt() {
+        int startLine = current.line;
+        int startColumn = current.column;
+        expect(TokenType.With);
+        ASTNode object = expressionNoStructLiteral();
+        string contextName = format("__llpl_with%d", withContextCounter++);
+        withContextNames ~= contextName;
+        Block body_ = block();
+        withContextNames = withContextNames[0 .. $ - 1];
+        return new WithStmt(object, body_, contextName, startLine, startColumn);
     }
 
     private ReturnStmt returnStmt() {
@@ -2717,6 +2796,8 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
         ASTNode expr = primary();
+        bool withLeadingDotBase = parsedWithLeadingDotPrimary;
+        parsedWithLeadingDotPrimary = false;
 
         while (true) {
             Type[] explicitTypeArgs;
@@ -2746,7 +2827,13 @@ class Parser {
                 string[] argNames;
                 ASTNode[] args = argumentList(argNames);
                 expr = new CallExpr(expr, args, startLine, startColumn, argNames, explicitTypeArgs);
-            } else if (match(TokenType.Dot)) {
+            } else if (check(TokenType.Dot) && !newlineBeforeCurrent()) {
+                advance();
+                if (withLeadingDotBase && !isAdjacentToPrevious(tokens[pos - 1])) {
+                    pos--;
+                    current = tokens[pos];
+                    break;
+                }
                 // Member access
                 int memberLine = current.line;
                 int memberColumn = current.column;
@@ -2777,6 +2864,12 @@ class Parser {
         }
 
         return expr;
+    }
+
+    private bool isAdjacentToPrevious(Token tok) {
+        if (pos == 0) return false;
+        Token prev = tokens[pos - 1];
+        return tok.line == prev.line && tok.column == prev.column + cast(int)prev.value.length;
     }
 
     private bool explicitGenericCallTypeArgsAhead() {
@@ -2869,6 +2962,15 @@ class Parser {
         if (check(TokenType.Function)) {
             return lambdaExpr();
         }
+        if (match(TokenType.Dot)) {
+            if (withContextNames.length == 0) {
+                error("A leading '.member' expression is only valid inside a 'with' block");
+            }
+            string member = expectName("Expected member name after '.'").value;
+            parsedWithLeadingDotPrimary = true;
+            return new MemberExpr(new Identifier(withContextNames[$ - 1], tokLine, tokColumn),
+                member, tokLine, tokColumn);
+        }
         if (check(TokenType.If)) {
             return ifExpr();
         }
@@ -2906,7 +3008,8 @@ class Parser {
             return new RegexLiteral(tokens[pos - 1].value, tokLine, tokColumn);
         }
         if (match(TokenType.InterpolatedString)) {
-            string[] interpParts = tokens[pos - 1].interpParts;
+            Token interpTok = tokens[pos - 1];
+            string[] interpParts = interpTok.interpParts;
             string[] literalParts;
             ASTNode[] expressions;
             InterpFormat[] specs;
@@ -2917,13 +3020,17 @@ class Parser {
                     string exprSource;
                     InterpFormat spec;
                     splitInterpolationFormat(part, exprSource, spec);
-                    expressions ~= parseInterpolationExpr(exprSource, tokLine, tokColumn);
+                    size_t exprIndex = i / 2;
+                    int exprLine = exprIndex < interpTok.interpLines.length ? interpTok.interpLines[exprIndex] : tokLine;
+                    int exprColumn = exprIndex < interpTok.interpColumns.length ? interpTok.interpColumns[exprIndex] : tokColumn;
+                    expressions ~= parseInterpolationExpr(exprSource, exprLine, exprColumn);
                     specs ~= spec;
                 }
             }
             return new InterpolatedStringLiteral(literalParts, expressions, specs, tokLine, tokColumn);
         }
-        if (match(TokenType.Identifier)) {
+        if (check(TokenType.Identifier) || check(TokenType.Interrupt)) {
+            advance();
             string name = tokens[pos - 1].value;
             bool qualifiedMacro = false;
             int offset = 0;

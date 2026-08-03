@@ -14,6 +14,10 @@ A low-level programming language with familiary syntax that compiles to C for ba
 - **Inline Assembly**: GCC-style extended `asm(...)` statements for kernel/low-level code
 - **Defer Statement**: Resource cleanup similar to Swift
 - **Macros**: Compile-time expansion with `quote`/`unquote`
+- **Comptime Expansion**: `comptime for` / `comptime if` for generated LLPL source before parsing
+- **Comptime Diagnostics**: errors inside generated source report the comptime expansion site
+- **Module Directories**: `import hal` can import every direct `.llpl` file in `hal/`
+- **Module Export Surfaces**: `public` declarations opt modules into explicit exported symbols
 - **Result<T, E> with Traces**: `?` propagation captures a chained `file:line` trace
 - **Panics with Hooks**: `llpl_panic("...")` prints a message and aborts; optional handler for cleanup
 - **Assert Statement**: `assert(condition)` and `assert(condition, "message")` abort with a panic on failure
@@ -150,6 +154,38 @@ for let i: i64 = 0, i < 10, i = i + 1 {
 }
 ```
 
+### Enums
+
+Plain enums desugar to namespaced constants. Commas between members are
+optional, so both compact and line-oriented styles work:
+
+```swift
+enum Status : u8 {
+    Cold
+    Warm = 7
+    Hot
+}
+```
+
+Tagged enums support payload-carrying variants and `match` destructuring:
+
+```swift
+enum Shape {
+    Point
+    Circle(radius: i64)
+    Rect(width: i64, height: i64)
+}
+
+func area(shape: Shape) -> i64 {
+    match shape {
+        case Shape.Point() => { return 0 }
+        case Shape.Circle(r) => { return r * r }
+        case Shape.Rect(w, h) => { return w * h }
+    }
+    return -1
+}
+```
+
 ### Defer Statement
 
 ```swift
@@ -184,6 +220,34 @@ func compute() -> i64 {
     let x: i64 = 0
     assignTwice!(x, 41)
     return square!(x)
+}
+```
+
+### Comptime Source Expansion
+
+`comptime for` expands source before lexing/parsing. Bounds may be integer
+literals or numeric `const` names visible in the same file.
+
+```swift
+const NUM_VECTORS = 256
+
+comptime for i in 0..NUM_VECTORS {
+    extern func isr$i()
+}
+```
+
+Inside the block, `$i`, `${i}`, and standalone `i` are substituted with the
+current integer. Ranges are half-open (`0..3` expands `0`, `1`, `2`).
+
+`comptime if` includes one branch before parsing:
+
+```swift
+const ENABLE_LOG = 1
+
+comptime if ENABLE_LOG {
+    func log(msg: char*) { puts(msg) }
+} else {
+    func log(msg: char*) {}
 }
 ```
 
@@ -315,14 +379,19 @@ All CLI flags:
 |---|---|
 | `-o`, `--output` | Output file path - a `.c` source file, or (with `-b`) a native binary. |
 | `-b`, `--binary` | Compile straight to a native binary instead of emitting C - invokes a system C compiler (see `--cc`). |
-| `--cc` | C compiler to invoke in `--binary` mode. Defaults to `$CC`, falling back to `cc`. |
+| `run` | Compile a LLPL file to a temporary binary and execute it: `./llpl run input.llpl [-- args...]`. |
+| `--cc` | C compiler to invoke in `--binary` mode. Defaults to `$CC`, falling back to `tcc`. |
 | `--keep-c` | Keep the intermediate `.c` file in `--binary` mode even on success. |
 | `-v`, `--verbose` | Verbose output. |
 | `--safe` | Runtime safety checks are on by default; this compatibility flag keeps explicit `--safe` invocations working. |
 | `--no-safe` | Disable default runtime safety checks. |
 | `--target` | Target profile: `hosted`, `freestanding`, or `kernel`. Freestanding/kernel profiles refuse clearly hosted-only modules and link directives. |
 | `--dce` | Dead-code elimination. On by default. |
+| `--unittest` | Compile `unittest { ... }` blocks and generate a test main. Implies binary mode. |
+| `--unittest-expected` | Compare `--unittest` stdout against a file. Defaults to `<input>.unittest.expected` if present. |
 | `--lsp-symbols` | Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling. |
+| `--diagnostics-json` | Write machine-readable diagnostics JSON to a file on compiler errors. |
+| `--emit-ast` | Parse an LLPL file and emit the canonical AST dump used by golden tests. |
 | `--emit-provenance` | Write a JSON map from generated C lines back to LLPL source locations. |
 | `--emit-effects` | Write conservative per-function capability/effect JSON (`ffi`, `alloc`, `mmio`, `dma`, `cache`, `paging`, `unsafe`, etc.). |
 | `--debug-bundle` | Write generated C, provenance, symbol/usage JSON, effects JSON, ABI assertions, and a manifest into a replay/debug artifact directory. |
@@ -330,7 +399,7 @@ All CLI flags:
 | `-h`, `--help` | Help text. |
 
 Or compile straight to a native binary with `-b`/`--binary`, which
-generates the C internally and invokes a system C compiler (`cc` by
+generates the C internally and invokes a system C compiler (`tcc` by
 default - override with `--cc=<path>` or `$CC`) linked against
 `runtime/runtime.c`:
 
@@ -369,6 +438,8 @@ Repo-local tooling lives under `tools/`:
 | `tools/llpl-replay record|replay ...` | Record and replay a compiled binary run, comparing exit status/stdout/stderr. |
 | `tools/llpl-bindgen <header.h>` | Narrow C header importer written in LLPL with `grammar {}` token parsing, emitting LLPL `const` and `extern func` bindings. |
 | `tools/llpl-pkg init|list|vendor` | Tiny manifest workflow for pinned git dependencies in `llpl.pkg`. |
+| `tools/assembler/build/m64 <source.m64>` | High-level x86_64 assembler used by the bare-metal examples; see `tools/assembler/README.md`. |
+| `tools/llplbuild/llplbuild build|check|run|clean|configs|test` | YAML-driven build/test tool; see `tools/llplbuild/README.md`. |
 
 This targets ordinary hosted programs only - a freestanding/kernel target
 like `examples/baremetal_demo` needs its own `tools/llplbuild` build
@@ -569,6 +640,9 @@ Classes are reference-counted:
   keeps its target alive and safely reports whether it's still alive -
   use it to break a reference cycle between two classes that hold each
   other, so releasing one doesn't cascade back through the other
+- `llpl_set_allocator(alloc_fn, free_fn)` installs allocator hooks used by
+  `new`/`delete` and `llpl_alloc`/`llpl_free`; call `llpl_reset_allocator()`
+  to restore the runtime heap. From C, use `llpl_set_allocator_raw`.
 
 ```swift
 class Container {

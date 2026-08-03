@@ -1,0 +1,51 @@
+extern func puts(s: char*) -> i64
+extern func malloc(size: u64) -> char*
+extern func free(ptr: char*)
+
+let alloc_calls: i64 = 0
+let free_calls: i64 = 0
+let last_size: u64 = 0
+
+func tracked_alloc(size: u64) -> char* {
+    alloc_calls = alloc_calls + 1
+    last_size = size
+    return malloc(size)
+}
+
+func tracked_free(ptr: char*) {
+    free_calls = free_calls + 1
+    free(ptr)
+}
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Foo {
+    let value: i64
+
+    constructor(value: i64) {
+        self.value = value
+    }
+
+    destructor() {}
+}
+
+func main() -> i64 {
+    let alloc_fn: (u64) -> char* = tracked_alloc
+    let free_fn: (char*) -> void = tracked_free
+    llpl_set_allocator(alloc_fn, free_fn)
+
+    let f: Foo = new Foo(42)
+    print_int("value", f.value)
+    print_int("alloc calls after new", alloc_calls)
+    print_int("last alloc size", last_size as i64)
+
+    delete f
+    print_int("free calls after delete", free_calls)
+
+    llpl_reset_allocator()
+    return 0
+}

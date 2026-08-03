@@ -38,6 +38,7 @@ enum TokenType {
     Const,
     Volatile,
     Private,
+    Public,
     Static,
     Inline,
     Virtual,
@@ -84,6 +85,7 @@ enum TokenType {
     Delete,
     Assert,
     UnitTest,
+    With,
 
     // Operators
     Plus,
@@ -162,6 +164,11 @@ struct Token {
     // and ending on a literal ("lit", "expr", "lit", "expr", ..., "lit") -
     // see Lexer.string_ and Parser.primary's InterpolatedString case.
     string[] interpParts;
+    // One location per embedded expression in interpParts. Each entry points
+    // at the first character after `\(` so diagnostics inside interpolation
+    // land on the expression instead of the opening quote of the string.
+    int[] interpLines;
+    int[] interpColumns;
 
     // True if at least one newline appeared in the source between the
     // previous real token and this one. Newlines themselves carry no
@@ -225,6 +232,7 @@ class Lexer {
             "const": "Const",
             "volatile": "Volatile",
             "private": "Private",
+            "public": "Public",
             "static": "Static",
             "inline": "Inline",
             "virtual": "Virtual",
@@ -269,7 +277,8 @@ class Lexer {
             "throw": "Throw",
             "delete": "Delete",
             "assert": "Assert",
-            "unittest": "UnitTest"
+            "unittest": "UnitTest",
+            "with": "With"
         ];
     }
 
@@ -470,6 +479,8 @@ class Lexer {
         advance(); // skip opening quote
 
         string[] parts; // set only once a `\(` is found; see below
+        int[] interpLines;
+        int[] interpColumns;
         string str = "";
         while (current != '\0' && current != '"') {
             if (current == '\\') {
@@ -486,6 +497,8 @@ class Lexer {
                         advance(); // consume '(' itself
                         parts ~= str;
                         str = "";
+                        interpLines ~= line;
+                        interpColumns ~= column;
                         parts ~= captureInterpolationExpr();
                         continue; // already advanced past the whole \(...) span
                     }
@@ -521,6 +534,8 @@ class Lexer {
         parts ~= str;
         Token tok = Token(TokenType.InterpolatedString, "", startLine, startColumn);
         tok.interpParts = parts;
+        tok.interpLines = interpLines;
+        tok.interpColumns = interpColumns;
         return tok;
     }
 
@@ -759,6 +774,7 @@ class Lexer {
                 case "Const": type = TokenType.Const; break;
                 case "Volatile": type = TokenType.Volatile; break;
                 case "Private": type = TokenType.Private; break;
+                case "Public": type = TokenType.Public; break;
                 case "Static": type = TokenType.Static; break;
                 case "Inline": type = TokenType.Inline; break;
                 case "Virtual": type = TokenType.Virtual; break;
@@ -805,6 +821,7 @@ class Lexer {
                 case "Delete": type = TokenType.Delete; break;
                 case "Assert": type = TokenType.Assert; break;
                 case "UnitTest": type = TokenType.UnitTest; break;
+                case "With": type = TokenType.With; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);

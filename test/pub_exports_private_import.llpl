@@ -1,0 +1,5 @@
+import { hidden } from modules.pub_exports_lib
+
+func main() -> i64 {
+    return hidden()
+}

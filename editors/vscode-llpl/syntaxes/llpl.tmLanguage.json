@@ -257,7 +257,7 @@
             }
         },
         "control-keywords": {
-            "match": "\\b(if|else|while|do|until|for|foreach|in|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw|assert)\\b",
+            "match": "\\b(if|else|while|do|until|for|foreach|in|with|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw|assert)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {

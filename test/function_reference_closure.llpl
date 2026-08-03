@@ -1,0 +1,13 @@
+func some_function() {
+    puts("some_function was called")
+}
+
+func main() -> i64 {
+    let inferred = some_function
+    inferred()
+
+    let annotated: func() = some_function
+    annotated()
+
+    return 0
+}

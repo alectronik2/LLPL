@@ -14,6 +14,7 @@ variables:
   LIMINE_DIR: /home/nix/Projects/experiment64/limine
 
 toolchain:
+  m64: ../../tools/assembler/build/m64
   cc: tcc
   ld: ld
   qemu: qemu-system-x86_64
@@ -53,11 +54,15 @@ c_sources:
   - path: ../../runtime/runtime.c
     include_dirs: [../../runtime]
 
+m64_sources:
+  - src: hal/isr.m64
+    output: build/isr.o
+
 link:
   output: kernel.elf
   script: linker.ld
   ldflags: [-m, elf_x86_64, -nostdlib]
-  objects: [kernel.o, runtime.o]
+  objects: [kernel.o, runtime.o, build/isr.o]
 
 package:
   output: kernel.iso
@@ -77,7 +82,6 @@ package:
     - require_file:
         path: "${LIMINE_DIR}/limine"
         message: "Missing ${LIMINE_DIR}/limine"
-    - run: "rm -rf isodir"
     - mkdir: isodir/boot/limine
     - mkdir: isodir/EFI/BOOT
     - copy: {from: kernel.elf, to: isodir/boot/kernel.elf}

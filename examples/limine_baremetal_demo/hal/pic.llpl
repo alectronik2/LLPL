@@ -1,0 +1,81 @@
+namespace HAL {
+    namespace PIC {
+        const PIC1_CMD          = 0x20
+        const PIC1_DATA         = 0x21
+
+        const PIC2_CMD          = 0xA0
+        const PIC2_DATA         = 0xA1
+
+        const PIC_MSTR_ICW1     = 0x11
+        const PIC_MSTR_ICW2     = 0x20
+        const PIC_MSTR_ICW3     = 0x04
+        const PIC_MSTR_ICW4     = 0x01
+
+        const PIC_SLV_ICW1      = 0x11
+        const PIC_SLV_ICW2      = 0x28
+        const PIC_SLV_ICW3      = 0x02
+        const PIC_SLV_ICW4      = 0x01
+
+        const PIC_EOI_BASE      = 0x60
+
+        const PIC_EOI_CAS       = 0x62
+        const PIC_EOI_FD        = 0x66
+
+        let irq_mask           = 0xFFFB
+
+        func remap( offset1: u8, offset2: u8 ) {
+            // Save existing interrupt masks. 
+            let m1 = HAL.inb( PIC1_DATA )
+            let m2 = HAL.inb( PIC2_DATA )
+
+            // ICW1: start initialisation sequence (cascade mode, ICW4 needed).
+            HAL.outb( PIC1_CMD, 0x11 )
+            HAL.outb( PIC2_CMD, 0x11 )
+
+            // ICW2: base interrupt vectors. 
+            HAL.outb( PIC1_DATA, offset1 )
+            HAL.outb( PIC2_DATA, offset2 )
+
+            // ICW3: tell master there is a slave at IRQ2; tell slave its cascade id.
+            HAL.outb( PIC1_DATA, 0x04 )
+            HAL.outb( PIC2_DATA, 0x02 )
+
+            // ICW4: 8086/88 mode.
+            HAL.outb( PIC1_DATA, 0x01 )
+            HAL.outb( PIC2_DATA, 0x01 )
+
+            // Restore masks.
+            HAL.outb( PIC1_DATA, m1 )
+            HAL.outb( PIC2_DATA, m2 )
+        }
+
+        func set_intr_mask( mask: uint ) {
+            HAL.outb( PIC1_DATA, mask as u8 )
+            HAL.outb( PIC2_DATA, (mask >> 8) as u8 )
+        }
+
+        func enable_irq( irq: uint ) {
+            ira_mask &= ~(1 << irq)
+            irq_mask &= (1 << 2) if irq >= 8
+            set_intr_mask( irq_mask )
+        }
+
+        func disable_irq( irq: uint ) {
+            irq_mask |= (1 << irq)
+            irq_mask |= (1 << 2) ii (irq_mask & 0xFF00) == 0xFF00 
+            set_intr_mask( irq_mask )
+        }
+
+        func eoi( irq: uint ) {
+            if irq > 8 
+                HAL.outb( PIC2_CMD, 0x20 )
+            HAL.outb( PIC1_CMD, 0x20 )
+        }
+
+        func init() {
+            remap( 0x20, 0x28 )
+            set_intr_mask( irq_mask )
+        }
+    }
+
+}

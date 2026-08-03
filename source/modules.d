@@ -15,6 +15,7 @@ import ast;
 import lexer;
 import parser;
 import errors;
+import comptime;
 
 class ProjectConfig {
     string path;
@@ -67,14 +68,17 @@ class ModuleResolver {
     private double lexTime = 0;
     private double parseTime = 0;
     private double importResolvTime = 0;
+    private double headerBindgenTime = 0;
     private int resolvePathCalls = 0;
     private int cachedExistsCalls = 0;
     private int cacheHits = 0;
+    private int headerCacheHits = 0;
+    private int headerCacheMisses = 0;
 
-    this(string[] searchPaths = [], bool recoverParseErrors = false) {
+    this(string[] searchPaths = [], bool recoverParseErrors = false, bool forceTiming = false) {
         this.searchPaths = searchPaths ~ [".", "lib", "modules"];
         this.recoverParseErrors = recoverParseErrors;
-        this.enableTiming = (environment.get("LLPL_TIMING", "").length > 0);
+        this.enableTiming = forceTiming || (environment.get("LLPL_TIMING", "").length > 0);
         this.enableIncrementalCache = (environment.get("LLPL_INCREMENTAL", "").length > 0);
     }
 
@@ -96,6 +100,8 @@ class ModuleResolver {
             writefln("  Lexing: %.2f ms", lexTime);
             writefln("  Parsing: %.2f ms", parseTime);
             writefln("  Import resolution: %.2f ms", importResolvTime);
+            writefln("  Header bindgen: %.2f ms (%d cache hits, %d misses)",
+                headerBindgenTime, headerCacheHits, headerCacheMisses);
             writefln("  resolveImportPath calls: %d (cache hits: %d)", resolvePathCalls, cacheHits);
             writefln("  cachedExists calls: %d", cachedExistsCalls);
         }
@@ -157,7 +163,8 @@ class ModuleResolver {
         // Read and parse the file
         StopWatch timer;
         timer.start();
-        string source = readText(absPath);
+        string source = expandComptimeFor(readText(absPath), absPath);
+        registerExpandedSource(absPath, source);
         timer.stop();
         if (enableTiming) readFileTime += timer.peek().total!"msecs";
 
@@ -187,12 +194,13 @@ class ModuleResolver {
                 // Resolve the imported module
                 timer.reset();
                 timer.start();
-                string importPath = resolveImportPath(importStmt.modulePath, absPath);
+                string[] importPaths = resolveImportPaths(importStmt.modulePath, absPath);
                 timer.stop();
                 if (enableTiming) importResolvTime += timer.peek().total!"msecs";
 
-                importStmt.resolvedPath = importPath;
-                if (importPath.length > 0) {
+                importStmt.resolvedPaths = importPaths;
+                importStmt.resolvedPath = importPaths.length > 0 ? importPaths[0] : "";
+                foreach (importPath; importPaths) {
                     resolveModule(importPath);
                 }
             }
@@ -214,22 +222,30 @@ class ModuleResolver {
     }
 
     private string resolveImportPath(string modulePath, string fromFile) {
+        auto paths = resolveImportPaths(modulePath, fromFile);
+        return paths.length > 0 ? paths[0] : "";
+    }
+
+    private string[] resolveImportPaths(string modulePath, string fromFile) {
         if (enableTiming) resolvePathCalls++;
 
+        string cacheKey = fromFile ~ "\n" ~ modulePath;
+
         // Check module path cache first
-        if (modulePath in modulePathCache) {
+        if (cacheKey in modulePathCache) {
             if (enableTiming) cacheHits++;
-            return modulePathCache[modulePath];
+            string cached = modulePathCache[cacheKey];
+            return cached.length > 0 ? cached.split("\n") : [];
         }
 
-        string result = resolveImportPathImpl(modulePath, fromFile);
+        string[] result = resolveImportPathsImpl(modulePath, fromFile);
 
         // Cache result (even empty string to avoid repeated searches)
-        modulePathCache[modulePath] = result;
+        modulePathCache[cacheKey] = result.join("\n");
         return result;
     }
 
-    private string resolveImportPathImpl(string modulePath, string fromFile) {
+    private string[] resolveImportPathsImpl(string modulePath, string fromFile) {
         // If it's a relative path, resolve from the importing file's directory
         string baseDir = dirName(fromFile);
 
@@ -250,7 +266,7 @@ class ModuleResolver {
             string candidatePath = buildNormalizedPath(baseDir, path);
             if (cachedExists(candidatePath)) {
                 auto absPath = absolutePath(candidatePath);
-                return isHeaderImport ? materializeHeaderImport(absPath) : absPath;
+                return [isHeaderImport ? materializeHeaderImport(absPath) : absPath];
             }
         }
 
@@ -260,7 +276,37 @@ class ModuleResolver {
                 string candidatePath = buildNormalizedPath(searchPath, path);
                 if (cachedExists(candidatePath)) {
                     auto absPath = absolutePath(candidatePath);
-                    return isHeaderImport ? materializeHeaderImport(absPath) : absPath;
+                    return [isHeaderImport ? materializeHeaderImport(absPath) : absPath];
+                }
+            }
+        }
+
+        if (!isHeaderImport) {
+            string[] dirTestPaths;
+            if (modulePath.startsWith("std/")) {
+                dirTestPaths ~= "stdlib/" ~ modulePath[4 .. $];
+            }
+            dirTestPaths ~= modulePath;
+
+            string[] resolveDir(string dirPath) {
+                if (!cachedExists(dirPath) || !isDir(dirPath)) return [];
+                string[] paths;
+                foreach (entry; dirEntries(dirPath, SpanMode.shallow)) {
+                    if (!entry.isFile || extension(entry.name) != ".llpl") continue;
+                    paths ~= absolutePath(entry.name);
+                }
+                sort(paths);
+                return paths;
+            }
+
+            foreach (path; dirTestPaths) {
+                auto paths = resolveDir(buildNormalizedPath(baseDir, path));
+                if (paths.length > 0) return paths;
+            }
+            foreach (searchPath; searchPaths) {
+                foreach (path; dirTestPaths) {
+                    auto paths = resolveDir(buildNormalizedPath(searchPath, path));
+                    if (paths.length > 0) return paths;
                 }
             }
         }
@@ -271,7 +317,7 @@ class ModuleResolver {
         }
 
         stderr.writefln("Warning: Could not resolve import: %s (from %s)", modulePath, fromFile);
-        return "";
+        return [];
     }
 
     private string sanitizeForTempName(string text) {
@@ -306,9 +352,25 @@ class ModuleResolver {
         return "tools/llpl-bindgen";
     }
 
+    private string bindgenSourcePath(string binder) {
+        string dir = dirName(absolutePath(binder));
+        string candidate = buildNormalizedPath(dir, "llpl-bindgen.llpl");
+        return exists(candidate) ? candidate : "";
+    }
+
     private string headerImportTempPath(string headerPath) {
         string baseName = sanitizeForTempName(headerPath);
         return buildNormalizedPath(tempDir(), "llpl-bindgen-" ~ baseName ~ ".llpl");
+    }
+
+    private bool generatedHeaderImportIsFresh(string tempPath, string headerPath, string binder) {
+        if (!exists(tempPath)) return false;
+        SysTime outputTime = timeLastModified(tempPath);
+        if (timeLastModified(headerPath) > outputTime) return false;
+        if (exists(binder) && timeLastModified(binder) > outputTime) return false;
+        string sourcePath = bindgenSourcePath(binder);
+        if (sourcePath.length > 0 && timeLastModified(sourcePath) > outputTime) return false;
+        return true;
     }
 
     private string materializeHeaderImport(string headerPath) {
@@ -317,12 +379,23 @@ class ModuleResolver {
         }
 
         string binder = bindgenCommand();
+        string tempPath = headerImportTempPath(headerPath);
+        if (generatedHeaderImportIsFresh(tempPath, headerPath, binder)) {
+            if (enableTiming) headerCacheHits++;
+            headerImportCache[headerPath] = tempPath;
+            return tempPath;
+        }
+        if (enableTiming) headerCacheMisses++;
+
+        StopWatch timer;
+        timer.start();
         auto result = execute([binder, headerPath]);
+        timer.stop();
+        if (enableTiming) headerBindgenTime += timer.peek().total!"msecs";
         if (result.status != 0) {
             throw new Exception(format("llpl-bindgen failed for %s (exit %d)", headerPath, result.status));
         }
 
-        string tempPath = headerImportTempPath(headerPath);
         std.file.write(tempPath, result.output);
         headerImportCache[headerPath] = tempPath;
         return tempPath;
@@ -399,8 +472,9 @@ ProjectConfig findProjectConfig(string entryPath) {
 // happens to be. Read here (not threaded in from main.d/lspquery.d
 // separately) so both the CLI compiler and editor-tooling entry points
 // (lspquery.d) automatically get identical resolution behavior.
-Program[] resolveWithPrelude(string entryPath) {
+Program[] resolveWithPrelude(string entryPath, bool enableTiming = false) {
     string[] extraSearchPaths;
+    extraSearchPaths ~= dirName(absolutePath(entryPath));
     string llplHome = environment.get("LLPL_HOME", "");
     if (llplHome.length > 0) {
         extraSearchPaths ~= llplHome;
@@ -409,7 +483,7 @@ Program[] resolveWithPrelude(string entryPath) {
     if (project !is null) {
         extraSearchPaths ~= project.moduleSearchPaths();
     }
-    auto resolver = new ModuleResolver(extraSearchPaths);
+    auto resolver = new ModuleResolver(extraSearchPaths, false, enableTiming);
     string preludePath = findPreludePath();
     if (preludePath.length > 0) {
         resolver.resolveAll(preludePath);
@@ -421,6 +495,7 @@ Program[] resolveWithPrelude(string entryPath) {
 
 Program[] resolveWithPreludeRecovering(string entryPath, out CompileError[] diagnostics, out ProjectConfig project) {
     string[] extraSearchPaths;
+    extraSearchPaths ~= dirName(absolutePath(entryPath));
     string llplHome = environment.get("LLPL_HOME", "");
     if (llplHome.length > 0) {
         extraSearchPaths ~= llplHome;

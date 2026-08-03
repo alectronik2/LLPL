@@ -1,0 +1,19 @@
+class AstProperty {
+    stored: i64
+
+    constructor() {}
+
+    property value() -> i64 {
+        return stored
+    }
+
+    property value(nu: i64) {
+        stored = nu
+    }
+}
+
+func main() -> i64 {
+    let a = new AstProperty()
+    a.value = 3
+    return a.value
+}

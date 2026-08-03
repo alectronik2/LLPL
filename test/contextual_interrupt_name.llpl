@@ -1,0 +1,13 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    let interrupt: i64 = 7
+    print_int("interrupt", interrupt)
+    return 0
+}

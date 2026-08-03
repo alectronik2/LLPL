@@ -12,7 +12,7 @@ func print_char(label: string, value: char) {
     puts(buf as string)
 }
 
-func main() -> i64 {
+func main() -> int {
     let a: string = "same"
     let b: string = "same"
     let c: string = "tail"

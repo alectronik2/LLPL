@@ -1,0 +1,10 @@
+import stdlib.args
+
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let parser = std.args.ArgParser(new String("tool"))
+    if parser.program_name.c_str()[0] != 't' { return 1 }
+    puts("qualified std constructor")
+    return 0
+}

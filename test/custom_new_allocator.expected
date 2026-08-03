@@ -1,0 +1,4 @@
+value = 42
+alloc calls after new = 1
+last alloc size = 16
+free calls after delete = 1

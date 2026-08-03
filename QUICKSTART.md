@@ -56,7 +56,7 @@ gcc hello.c -o hello
 ```
 
 Or skip the separate `gcc` step and compile straight to a binary with
-`-b`/`--binary` (invokes a system C compiler - `cc` by default, or `$CC`,
+`-b`/`--binary` (invokes a system C compiler - `tcc` by default, or `$CC`,
 or `--cc=<path>` - and links against `runtime/runtime.c` automatically):
 
 ```bash
@@ -64,11 +64,22 @@ or `--cc=<path>` - and links against `runtime/runtime.c` automatically):
 ./hello
 ```
 
-Add `--safe` to enable runtime bounds checks on fixed-size array indexing
-(`T[N]` locals, globals, and class fields):
+For a quick edit-run loop, compile to a temporary binary and execute it in
+one step:
+
+```bash
+./llpl run hello.llpl
+./llpl run hello.llpl -- arg1 arg2
+```
+
+Runtime bounds checks on fixed-size array indexing (`T[N]` locals, globals,
+and class fields) are enabled by default. `--safe` is still accepted for
+compatibility; use `--no-safe` only when you explicitly want to disable
+those checks:
 
 ```bash
 ./llpl --safe hello.llpl -b -o hello
+./llpl --no-safe hello.llpl -b -o hello
 ```
 
 This only targets ordinary hosted programs; a freestanding/kernel target
@@ -77,6 +88,31 @@ like `examples/baremetal_demo` still needs its own `tools/llplbuild` build
 `-b` - see [Building a Kernel](#building-a-kernel) below.
 
 ## Language Syntax Cheat Sheet
+
+Useful compiler commands while iterating:
+
+```bash
+./llpl --emit-ast hello.llpl
+./llpl --emit-provenance prov.json hello.llpl -o hello.c
+./llpl --diagnostics-json diagnostics.json hello.llpl -o hello.c
+./llpl audit --target=kernel --audit-dir out/audit kernel.llpl
+```
+
+Modules can import individual files or whole folders:
+
+```swift
+import hal.serial
+import hal          // imports direct .llpl files under hal/
+```
+
+`comptime for` expands source before parsing:
+
+```swift
+const NUM = 4
+comptime for i in 0..NUM {
+    extern func isr$i()
+}
+```
 
 ### Variables
 ```swift

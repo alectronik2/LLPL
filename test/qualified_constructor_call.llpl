@@ -1,0 +1,18 @@
+extern func puts(s: char*) -> i64
+
+namespace demo.tools {
+    class Thing {
+        let value: i64
+
+        constructor(value: i64) {
+            self.value = value
+        }
+    }
+}
+
+func main() -> i64 {
+    let thing = demo.tools.Thing(42)
+    if thing.value != 42 { return 1 }
+    puts("qualified constructor")
+    return 0
+}

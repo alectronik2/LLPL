@@ -1,0 +1,64 @@
+import stdlib.args
+
+packed struct PteStruct {
+    present  : u8:1
+    rw       : u8:1
+    user     : u8:1
+    pwt      : u8:1
+    pcd      : u8:1
+    accessed : u8:1
+    dirty    : u8:1
+    ps       : u8:1
+    global   : u8:1
+    avail    : u8:3
+
+    property hello() -> int {
+        128
+    }
+}
+
+packed union Pte {
+    pte: PteStruct
+    raw: uint
+}
+
+enum Enum {
+    A = 1
+    B = 2
+    C = 3
+}
+
+unittest {
+    let p: Pte
+
+    with p.pte {
+        .present = true
+        .user = true
+        .global = true
+    }
+
+    puts("RAW: \(p.raw)")
+    puts("hello is \(p.pte.hello)")
+
+    let e = Enum.C
+    puts("Enum is \(e)")
+
+    if true 
+        puts("without braces")
+    else
+        puts("never mind")
+
+    comptime for i in 0..10 {
+        puts("i is \(i)")
+    }
+
+    comptime if true {
+        puts("comptime if is true")
+    } else {
+        puts("comptime if is false")
+    }
+
+    let s = new std.args.ArgParser(program_name: "testy3")
+    puts("Sizeof ArgParser is \(sizeof(s))")
+    delete s
+}

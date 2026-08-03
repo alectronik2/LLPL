@@ -1,0 +1,50 @@
+extern func puts(s: char*) -> i64
+
+enum Status : u8 {
+    Cold
+    Warm = 7
+    Hot
+}
+
+enum Mode {
+    Off
+    On = 4
+    Standby
+}
+
+enum Shape {
+    Point
+    Circle(radius: i64)
+    Rect(width: i64, height: i64)
+}
+
+func enum_backing(x: int) -> char* {
+    return "enum backing int"
+}
+
+func enum_backing(x: i64) -> char* {
+    return "enum backing i64"
+}
+
+func area(shape: Shape) -> i64 {
+    match shape {
+        case Shape.Point() => { return 0 }
+        case Shape.Circle(r) => { return r * r }
+        case Shape.Rect(w, h) => { return w * h }
+    }
+    return -1
+}
+
+func main() -> i64 {
+    if Status.Cold != 0 { return 1 }
+    if Status.Warm != 7 { return 2 }
+    if Status.Hot != 8 { return 3 }
+    if Mode.Standby != 5 { return 4 }
+
+    let shape = Shape.Rect(4, 5)
+    if area(shape) != 20 { return 5 }
+
+    puts(enum_backing(Mode.Off))
+    puts("enum no commas")
+    return 0
+}

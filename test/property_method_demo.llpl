@@ -1,25 +1,25 @@
 extern func puts(s: char*) -> i64
 
-func print_int(label: char*, value: i64) {
+func print_int(label: char*, value: int) {
     let buf: char[64]
     ksnprintf(buf as char*, 64, "%s = %d", label, value)
     puts(buf as char*)
 }
 
 class Fpp {
-    base: i64
+    base: int
 
     constructor() {}
 
-    property func foo() -> i64 {
+    property func foo() -> int {
         return 128
     }
 
-    property bar() -> i64 {
+    property bar() -> int {
         return base * 2
     }
 
-    property bar(nu: i64) {
+    property bar(nu: int) {
         base = nu / 2
     }
 }

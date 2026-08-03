@@ -35,7 +35,7 @@ func main() -> i64 {
         let b: i64 = 20
         a + b
     } else {
-        0
+        0 as i64
     }
     print_int("z", z)
 

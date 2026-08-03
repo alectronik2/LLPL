@@ -1,0 +1,55 @@
+namespace HAL {
+    namespace PIT {
+        const TMR_CTRL         = 0x43
+        const TMR_CNT0         = 0x40
+        const TMR_BOTH         = 0x30
+        const TMR_CH0          = 0x00
+        const TMR_MD3          = 0x6
+
+        const TIMER_FREQ       = 100
+        const USECS_PER_TICK   = 10_000
+        const MSECS_PER_TICK   = 10
+
+        const PIT_CLOCK        = 1_193_180
+
+        const CLOCKS_PER_SEC   = 1000
+        const CLOCKS_PER_TICK  = 10
+
+        struct timeval {
+            sec:  uint
+            usec: uint
+        }
+
+        let ticks              = 0
+        let clocks             = 0
+        let systemclock: timeval
+
+        func timer_handler( arg: void* ) -> Status {
+            clocks += CLOCKS_PER_TICK
+            ticks += 1
+
+            systemclock.usec += USECS_PER_TICK
+            while systemclock.usec >= 1_000_000 {
+                systemclock.sec++
+                systemclock.usec -= 1_000_000
+            }
+
+            run_timer_list()
+
+            return STATUS.Ok
+        }
+
+        func run_timer_list() {
+
+        }
+
+        func pit_init() {
+            let cnt = PIT_CLOCK / TIMER_FREQ
+            HAL.outb( TMR_CTRL, TMR_CH0 + TMR_BOTH + TMR_MD3 )
+            HAL.outb( TMR_CNT0, (cnt & 0xFF) as u8 )
+            HAL.outb( TMR_CNT0, (cnt >> 8) as u8)
+
+            
+        }
+    }
+}

@@ -946,7 +946,7 @@ func emit_typedef_struct_decl(tokens: Vector<CToken>, start: i64, end: i64, stru
     let close_idx: i64 = if struct_start + 2 < end && tokens.get(struct_start + 2).text == "{" {
         find_matching_brace(tokens, struct_start + 2, end)
     } else {
-        -1
+        -1 as i64
     }
 
     let struct_name: String = tokens.get(struct_start + 1).text
@@ -959,7 +959,7 @@ func emit_typedef_struct_decl(tokens: Vector<CToken>, start: i64, end: i64, stru
     let alias_start: i64 = if close_idx >= 0 {
         close_idx + 1
     } else {
-        struct_start + 3
+        struct_start + 3 as i64
     }
     let i: i64 = alias_start
     while i < end {

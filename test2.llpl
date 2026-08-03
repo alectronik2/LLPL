@@ -115,6 +115,19 @@ func main() {
 
     something(k)
     //delete k
+
+    let h = new hello()
+    h.get_var = 212
+    let p = h.get_var
+
+    puts("GOT \(p)")
+
+    let f: func() = some_function
+    f()
+}
+
+func some_function() {
+    puts("some_function was called")
 }
 
 class hello {
@@ -126,5 +139,6 @@ class hello {
 
     property get_var( x: uint ) {
         puts("SET PROPERRTY")
+        self.var = x
     }
 }

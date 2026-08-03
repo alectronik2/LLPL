@@ -1,0 +1,27 @@
+Program
+  Class AstProperty
+    Field stored: i64
+    Constructor AstProperty_constructor() -> void
+      Block
+    PropertyGetter value() -> i64
+      Block
+        Return
+          Identifier stored
+    PropertySetter value(nu: i64) -> void
+      Block
+        ExprStmt
+          Binary =
+            Identifier stored
+            Identifier nu
+  Function main() -> i64
+    Block
+      Field a: <inferred>
+        New AstProperty
+      ExprStmt
+        Binary =
+          Member value
+            Identifier a
+          Int 3
+      Return
+        Member value
+          Identifier a

@@ -1,0 +1,15 @@
+import folder_import_modules
+
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    print_int("alpha", alpha_value())
+    print_int("beta", beta_value())
+    return 0
+}

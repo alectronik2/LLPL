@@ -1,0 +1,9 @@
+import { exposed, Visible } from modules.pub_exports_lib
+
+extern func printf(fmt: char*, ...) -> i32
+
+func main() -> i64 {
+    let v: Visible = Visible { x: exposed() }
+    printf("%lld\n", v.x)
+    return 0
+}

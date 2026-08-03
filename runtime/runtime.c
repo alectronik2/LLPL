@@ -105,11 +105,10 @@ void llpl_eh_resume(void) {
     llpl_eh_deliver_pending();
 }
 
-// Free-list allocator over a static 1MB heap. Supports allocation, freeing,
-// and coalescing of adjacent free blocks. Works for both hosted binaries and
-// bare-metal targets because it never calls the system malloc.
-#define HEAP_SIZE (1024 * 1024)
-static uint8_t heap[HEAP_SIZE];
+// Free-list allocator over one or more heap segments. Hosted builds grow by
+// requesting additional segments from malloc; freestanding builds keep the
+// old static fallback because there is no system allocator to grow from.
+#define INITIAL_HEAP_SEGMENT_SIZE (1024 * 1024)
 
 #define ALLOC_FLAG 1
 #define ALIGNMENT 8
@@ -120,7 +119,22 @@ typedef struct BlockHeader {
     struct BlockHeader* prev; // valid only when the block is free
 } BlockHeader;
 
+typedef struct HeapSegment {
+    uint8_t* start;
+    size_t size;
+    struct HeapSegment* next;
+} HeapSegment;
+
 static BlockHeader* free_list = NULL;
+static HeapSegment* heap_segments = NULL;
+#if !__STDC_HOSTED__
+static uint8_t fallback_heap[INITIAL_HEAP_SEGMENT_SIZE];
+static HeapSegment fallback_segment = { fallback_heap, INITIAL_HEAP_SEGMENT_SIZE, NULL };
+#endif
+static __LLPL_Closure llpl_custom_alloc = {0};
+static __LLPL_Closure llpl_custom_free = {0};
+static LLPL_AllocFn llpl_custom_alloc_raw = NULL;
+static LLPL_FreeFn llpl_custom_free_raw = NULL;
 
 static size_t block_size(BlockHeader* b) { return b->size & ~ALLOC_FLAG; }
 static int block_allocated(BlockHeader* b) { return b->size & ALLOC_FLAG; }
@@ -131,12 +145,57 @@ static size_t align_up(size_t n) {
     return (n + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 }
 
+static void insert_into_free_list(BlockHeader* b);
+
+static uint8_t* align_ptr(uint8_t* p) {
+    uintptr_t v = (uintptr_t)p;
+    v = (v + ALIGNMENT - 1) & ~(uintptr_t)(ALIGNMENT - 1);
+    return (uint8_t*)v;
+}
+
+static void add_free_segment(uint8_t* start, size_t size) {
+    start = align_ptr(start);
+    size = align_up(size);
+    if (size <= sizeof(BlockHeader)) return;
+
+    BlockHeader* block = (BlockHeader*)start;
+    block->size = size;
+    block->next = NULL;
+    block->prev = NULL;
+    insert_into_free_list(block);
+}
+
+static int grow_heap(size_t min_size) {
+    size_t segment_size = INITIAL_HEAP_SEGMENT_SIZE;
+    if (segment_size < min_size) segment_size = align_up(min_size);
+
+#if __STDC_HOSTED__
+    if (segment_size > ((size_t)-1) - sizeof(HeapSegment) - ALIGNMENT) {
+        return 0;
+    }
+    size_t raw_size = sizeof(HeapSegment) + segment_size + ALIGNMENT;
+    uint8_t* raw = (uint8_t*)malloc(raw_size);
+    if (!raw) return 0;
+
+    HeapSegment* segment = (HeapSegment*)raw;
+    segment->start = align_ptr(raw + sizeof(HeapSegment));
+    segment->size = segment_size;
+    segment->next = heap_segments;
+    heap_segments = segment;
+    add_free_segment(segment->start, segment->size);
+    return 1;
+#else
+    if (heap_segments) return 0;
+    (void)segment_size;
+    heap_segments = &fallback_segment;
+    add_free_segment(fallback_segment.start, fallback_segment.size);
+    return 1;
+#endif
+}
+
 static void heap_init(void) {
-    if (free_list) return;
-    free_list = (BlockHeader*)heap;
-    free_list->size = HEAP_SIZE;
-    free_list->next = NULL;
-    free_list->prev = NULL;
+    if (heap_segments) return;
+    grow_heap(INITIAL_HEAP_SEGMENT_SIZE);
 }
 
 static void remove_from_free_list(BlockHeader* b) {
@@ -158,7 +217,25 @@ static BlockHeader* header_from_ptr(void* ptr) {
     return (BlockHeader*)((uint8_t*)ptr - sizeof(BlockHeader));
 }
 
+static HeapSegment* segment_for_ptr(void* ptr) {
+    uint8_t* p = (uint8_t*)ptr;
+    for (HeapSegment* segment = heap_segments; segment; segment = segment->next) {
+        if (p >= segment->start && p < segment->start + segment->size) {
+            return segment;
+        }
+    }
+    return NULL;
+}
+
 void* rc_alloc(size_t size) {
+    if (llpl_custom_alloc.fn) {
+        return (void*)((char* (*)(void*, uint64_t))llpl_custom_alloc.fn)(
+            llpl_custom_alloc.env, (uint64_t)size);
+    }
+    if (llpl_custom_alloc_raw) {
+        return (void*)llpl_custom_alloc_raw((uint64_t)size);
+    }
+
     heap_init();
 
     if (size == 0) size = ALIGNMENT;
@@ -170,13 +247,20 @@ void* rc_alloc(size_t size) {
     total_size = align_up(total_size);
 
     BlockHeader* best = NULL;
-    for (BlockHeader* cur = free_list; cur; cur = cur->next) {
-        if (block_size(cur) >= total_size) {
-            best = cur;
-            break; // first fit
+    for (;;) {
+        size_t scanned = 0;
+        for (BlockHeader* cur = free_list; cur; cur = cur->next) {
+            if (block_size(cur) >= total_size) {
+                best = cur;
+                break; // first fit
+            }
+            if (++scanned > 10000) {
+                return NULL;
+            }
         }
+        if (best) break;
+        if (!grow_heap(total_size)) return NULL; // Out of memory
     }
-    if (!best) return NULL; // Out of memory
 
     remove_from_free_list(best);
 
@@ -194,8 +278,24 @@ void* rc_alloc(size_t size) {
 
 void rc_free(void* ptr) {
     if (!ptr) return;
+    if (llpl_custom_free.fn) {
+        ((void (*)(void*, char*))llpl_custom_free.fn)(llpl_custom_free.env, (char*)ptr);
+        return;
+    }
+    if (llpl_custom_alloc.fn) {
+        return;
+    }
+    if (llpl_custom_free_raw) {
+        llpl_custom_free_raw((char*)ptr);
+        return;
+    }
+    if (llpl_custom_alloc_raw) {
+        return;
+    }
 
     BlockHeader* b = header_from_ptr(ptr);
+    HeapSegment* segment = segment_for_ptr(b);
+    if (!segment) return;
     if (!block_allocated(b)) return; // double-free guard
 
     mark_free(b);
@@ -203,21 +303,57 @@ void rc_free(void* ptr) {
 
     // Coalesce with next block if it is free and adjacent.
     BlockHeader* next = (BlockHeader*)((uint8_t*)b + block_size(b));
-    if ((uint8_t*)next < heap + HEAP_SIZE && !block_allocated(next)) {
+    if ((uint8_t*)next < segment->start + segment->size && !block_allocated(next)) {
         remove_from_free_list(next);
         b->size += block_size(next);
     }
 
     // Coalesce with previous free block if adjacent.
-    if ((uint8_t*)b > heap) {
+    if ((uint8_t*)b > segment->start) {
+        size_t scanned = 0;
         for (BlockHeader* cur = free_list; cur; cur = cur->next) {
+            if ((uint8_t*)cur < segment->start ||
+                    (uint8_t*)cur >= segment->start + segment->size) {
+                if (++scanned > 10000) {
+                    return;
+                }
+                continue;
+            }
             if ((uint8_t*)cur + block_size(cur) == (uint8_t*)b) {
                 remove_from_free_list(b);
                 cur->size += block_size(b);
                 break;
             }
+            if (++scanned > 10000) {
+                return;
+            }
         }
     }
+}
+
+void llpl_set_allocator(__LLPL_Closure alloc_fn, __LLPL_Closure free_fn) {
+    llpl_custom_alloc = alloc_fn;
+    llpl_custom_free = free_fn;
+    llpl_custom_alloc_raw = NULL;
+    llpl_custom_free_raw = NULL;
+}
+
+void llpl_set_allocator_raw(LLPL_AllocFn alloc_fn, LLPL_FreeFn free_fn) {
+    llpl_custom_alloc.fn = NULL;
+    llpl_custom_alloc.env = NULL;
+    llpl_custom_free.fn = NULL;
+    llpl_custom_free.env = NULL;
+    llpl_custom_alloc_raw = alloc_fn;
+    llpl_custom_free_raw = free_fn;
+}
+
+void llpl_reset_allocator(void) {
+    llpl_custom_alloc.fn = NULL;
+    llpl_custom_alloc.env = NULL;
+    llpl_custom_free.fn = NULL;
+    llpl_custom_free.env = NULL;
+    llpl_custom_alloc_raw = NULL;
+    llpl_custom_free_raw = NULL;
 }
 
 void rc_init(RefCount* rc) {

@@ -1,0 +1,3 @@
+func alpha_value() -> i64 {
+    return 11
+}

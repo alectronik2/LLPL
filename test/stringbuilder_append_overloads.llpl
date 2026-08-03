@@ -1,0 +1,31 @@
+import std.text.string_utils
+
+using namespace std.text
+
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let sb: StringBuilder = new StringBuilder()
+    let native_signed: int = -3
+    let native_unsigned: uint = 5
+    let wide_unsigned: u64 = 99
+    let small_float: f32 = 1.25 as f32
+
+    sb.append(new String("S"))
+    sb.append(" raw=" as char*)
+    sb.append(42)
+    sb.append('!')
+    sb.append(" int=" as char*)
+    sb.append(native_signed)
+    sb.append(" uint=" as char*)
+    sb.append(native_unsigned)
+    sb.append(" u64=" as char*)
+    sb.append(wide_unsigned)
+    sb.append(" f32=" as char*)
+    sb.append(small_float)
+    sb.append(" bool=" as char*)
+    sb.append(true)
+
+    puts(sb.to_string().c_str())
+    return 0
+}

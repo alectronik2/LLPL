@@ -1,0 +1,14 @@
+namespace Demo {
+    grammar Words {
+        word: "a" | "b";
+        words: word* <EOF>;
+    }
+
+    ui DemoWindow: Window {
+        title: "Demo"
+        width: 50%
+        onClick: {
+            return
+        }
+    }
+}

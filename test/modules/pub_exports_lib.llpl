@@ -1,0 +1,15 @@
+public func exposed() -> i64 {
+    return 7
+}
+
+func hidden() -> i64 {
+    return 9
+}
+
+public struct Visible {
+    let x: i64
+}
+
+struct Hidden {
+    let y: i64
+}

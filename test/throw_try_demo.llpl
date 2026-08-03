@@ -43,7 +43,7 @@ func branch_defer_then_throw(code: i64) {
 
 func main() -> i64 {
     try {
-        throw 7
+        throw 7 as i64
         puts("unreachable local throw")
     } catch (e: i64) {
         print_int("caught_throw", e)
@@ -84,7 +84,7 @@ func main() -> i64 {
 
     try {
         try {
-            throw 13
+            throw 13 as i64
         } finally {
             puts("inner_finally_before_outer_catch")
         }

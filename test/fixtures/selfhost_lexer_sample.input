@@ -1,0 +1,120 @@
+import { Foo, Bar as Baz } from demo.lib
+
+public namespace Demo {
+    using namespace std.text
+    alias CountPtr = int*
+    alias PairInit = [1, 2, 3]
+
+    @section(".demo") @used
+    let MARKER: int = 1
+
+    @align(0x20)
+    volatile let MMIO: int = 0
+
+    const COUNT = 3
+
+    macro bump(target) {
+        quote {
+            unquote(target) = unquote(target) + 1
+        }
+    }
+
+    @reflect
+    class Box {
+        private let hidden: int = 0
+        value: int
+
+        constructor(@value: int) {}
+        destructor() {}
+
+        static func make(value: int) -> Box {
+            return new Box(value)
+        }
+
+        property doubled() -> int {
+            return self.value * 2
+        }
+
+        func operator+(other: Box) -> Box {
+            return self
+        }
+
+        func set(value: int) {
+            self.value = value
+        }
+    }
+
+    packed struct Pair<T> {
+        left: T
+        right: T
+    }
+
+    enum Mode {
+        Off
+        On = COUNT
+    }
+
+    enum Shape {
+        Point
+        Circle(radius: int)
+    }
+
+    trait Printable {
+        func print()
+        func label() -> string
+    }
+
+    impl Printable for Box {
+        func print() {
+            return
+        }
+
+        func label() -> string {
+            return "box"
+        }
+    }
+
+    func main() -> i64 {
+        let s: string = "hi"
+        let i: int = 0
+        while i < COUNT {
+            if i == 2 {
+                break
+            }
+            continue
+        }
+        for j in 0..COUNT {
+            defer puts("loop")
+        }
+        foreach ch in s {
+            volatile let code: int = ch as int
+        }
+        match COUNT {
+            case 0 => {
+                return 2
+            }
+            case '(' => {
+                return 3
+            }
+            default => {
+                assert(COUNT > 0, "count")
+            }
+        }
+        try {
+            throw 5
+        } catch (e: int) {
+            delete new Box(1)
+        } finally {
+            puts("done")
+        }
+        if COUNT >= 3 && s != "" {
+            return 0
+        }
+        return 1
+    }
+
+    unittest {
+        let n: int = COUNT
+        bump!(n)
+    }
+}

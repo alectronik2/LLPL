@@ -6,12 +6,8 @@
 // a simple visualization directly into the framebuffer returned by the
 // bootloader.
 
-import hal.limine
-import hal.serial
-import hal.cpu
-
-import mm.heap
-import mm.vmm
+import hal
+import mm
 
 alias hs = HAL.Serial
 
@@ -231,11 +227,18 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
 func kernel_main() {
     HAL.disable_interrupts()
     hs.init()
-    hs.write("LLPL Limine bare-metal demo booted\n")
+    hs.write("LLPL Limine bare-metal demo bootingd\n")
 
-    let fb = limine_get_framebuffer()
-    let memmap = limine_get_memmap()
-    let hhdm = limine_get_hhdm()
+    let fb      = limine_get_framebuffer()
+    let memmap  = limine_get_memmap()
+    let hhdm    = limine_get_hhdm()
+
+    HAL.GDT.init()
+    HAL.IDT.init()
+    HAL.PIC.init()
+
+    PFDB.init( memmap, hhdm )
+    VMM.init()
 
     if memmap == null {
         hs.write("No Limine memory map response\n")
@@ -259,7 +262,7 @@ func kernel_main() {
         }
     }
 
-    let x = kmalloc<u64>(sizeof(u64))
+    let x = kmalloc<u64>()
 
     while true {
         HAL.halt()

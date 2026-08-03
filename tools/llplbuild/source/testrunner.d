@@ -19,6 +19,7 @@ import terminal;
 
 struct TestOptions {
     string dir = "test";
+    string[] paths;
     string compiler = "./llpl";
     string[] skip = ["macro_quote"]; // no main() - see run_tests.sh's own history
     int jobs = 4;
@@ -36,6 +37,17 @@ private string readFlags(string path) {
     return readText(path).strip();
 }
 
+private TestResult compareExpectedPrefix(string base, string label, string expectedPath, string actual) {
+    string expected = readText(expectedPath);
+    string prefix = actual.length >= expected.length ? actual[0 .. expected.length] : actual;
+    if (prefix == expected) {
+        return TestResult(base, true, label, "");
+    }
+    return TestResult(base, false, "", format(
+        "expected output prefix differs from %s\n--- expected\n%s\n--- actual (first %d bytes)\n%s",
+        expectedPath, expected, expected.length, prefix));
+}
+
 // Runs one test end to end: compile via `-b` (already applies
 // -funsigned-char - see source/main.d - so unlike run_tests.sh's old
 // two-step compile+gcc, this is a single command), run the resulting
@@ -43,14 +55,48 @@ private string readFlags(string path) {
 // the exact same rules run_tests.sh has always used.
 private TestResult runOne(string srcPath, TestOptions opts) {
     string base = stripExtension(baseName(srcPath));
-    string expectedPath = buildPath(opts.dir, base ~ ".expected");
-    string expectedFailPath = buildPath(opts.dir, base ~ ".expected_fail");
-    string flagsPath = buildPath(opts.dir, base ~ ".flags");
+    string testDir = dirName(srcPath);
+    string expectedPath = buildPath(testDir, base ~ ".expected");
+    string expectedFailPath = buildPath(testDir, base ~ ".expected_fail");
+    string compileFailExpectedPath = buildPath(testDir, base ~ ".compile_fail.expected");
+    string astExpectedPath = buildPath(testDir, base ~ ".ast.expected");
+    string flagsPath = buildPath(testDir, base ~ ".flags");
     string tmpBin = buildPath(tempDir(), "llplbuild-test-" ~ base);
+    string tmpC = buildPath(tempDir(), "llplbuild-test-" ~ base ~ ".c");
+    string tmpAst = buildPath(tempDir(), "llplbuild-test-" ~ base ~ ".ast");
 
     scope (exit) if (exists(tmpBin)) remove(tmpBin);
+    scope (exit) if (exists(tmpC)) remove(tmpC);
+    scope (exit) if (exists(tmpAst)) remove(tmpAst);
 
     string[] flags = readFlags(flagsPath).split();
+
+    if (exists(astExpectedPath)) {
+        string[] astCmd = [opts.compiler] ~ flags ~ ["--emit-ast", srcPath, "-o", tmpAst];
+        auto astResult = execute(astCmd);
+        if (astResult.status != 0) {
+            return TestResult(base, false, "", format("AST emit failed\n%s", astResult.output));
+        }
+        string actual = readText(tmpAst);
+        string expected = readText(astExpectedPath);
+        if (actual == expected) {
+            return TestResult(base, true, "(AST golden)", "");
+        }
+        return TestResult(base, false, "", format(
+            "AST output differs from %s\n--- expected\n%s\n--- actual\n%s",
+            astExpectedPath, expected, actual));
+    }
+
+    if (exists(compileFailExpectedPath)) {
+        string[] compileCmd = [opts.compiler] ~ flags ~ [srcPath, "-o", tmpC];
+        auto compileResult = execute(compileCmd);
+        if (compileResult.status == 0) {
+            return TestResult(base, false, "", "expected compile failure but compilation succeeded");
+        }
+        return compareExpectedPrefix(base, "(expected compile failure)",
+            compileFailExpectedPath, compileResult.output);
+    }
+
     string[] compileCmd = [opts.compiler] ~ flags ~ [srcPath, "-b", "-o", tmpBin];
     bool compilerRanTest = flags.canFind("--unittest");
     auto compileResult = execute(compileCmd);
@@ -74,14 +120,7 @@ private TestResult runOne(string srcPath, TestOptions opts) {
             return TestResult(base, false, "", "expected runtime failure but exited 0");
         }
         if (exists(expectedPath)) {
-            string expected = readText(expectedPath);
-            string prefix = actual.length >= expected.length ? actual[0 .. expected.length] : actual;
-            if (prefix == expected) {
-                return TestResult(base, true, "(expected failure)", "");
-            }
-            return TestResult(base, false, "", format(
-                "expected failure output prefix differs\n--- expected\n%s\n--- actual (first %d bytes)\n%s",
-                expected, expected.length, prefix));
+            return compareExpectedPrefix(base, "(expected failure)", expectedPath, actual);
         }
         return TestResult(base, true, "(expected failure, no output check)", "");
     }
@@ -111,10 +150,24 @@ int runTests(TestOptions opts) {
     auto start = MonoTime.currTime;
 
     string[] sources;
-    foreach (entry; dirEntries(opts.dir, "*.llpl", SpanMode.shallow)) {
-        string base = stripExtension(baseName(entry.name));
-        if (opts.skip.canFind(base)) continue;
-        sources ~= entry.name;
+    if (opts.paths.length > 0) {
+        foreach (path; opts.paths) {
+            if (isDir(path)) {
+                foreach (entry; dirEntries(path, "*.llpl", SpanMode.shallow)) {
+                    string base = stripExtension(baseName(entry.name));
+                    if (opts.skip.canFind(base)) continue;
+                    sources ~= entry.name;
+                }
+            } else {
+                sources ~= path;
+            }
+        }
+    } else {
+        foreach (entry; dirEntries(opts.dir, "*.llpl", SpanMode.shallow)) {
+            string base = stripExtension(baseName(entry.name));
+            if (opts.skip.canFind(base)) continue;
+            sources ~= entry.name;
+        }
     }
     sources.sort();
 

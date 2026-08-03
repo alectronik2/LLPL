@@ -5,6 +5,14 @@ import std.string;
 import std.format;
 import std.file;
 
+private string[string] expandedSourcesByFile;
+
+void registerExpandedSource(string filePath, string source) {
+    if (filePath.length > 0) {
+        expandedSourcesByFile[filePath] = source;
+    }
+}
+
 // A compiler error with enough context to render a source citation:
 // the file it occurred in and the 1-based line/column of the offending token.
 class CompileError : Exception {
@@ -89,7 +97,10 @@ string formatCompileError(CompileError err) {
 
     string[] lines;
     bool haveSource = false;
-    if (exists(err.filePath)) {
+    if (auto expanded = err.filePath in expandedSourcesByFile) {
+        lines = (*expanded).splitLines();
+        haveSource = lines.length > 0;
+    } else if (exists(err.filePath)) {
         lines = readText(err.filePath).splitLines();
         haveSource = lines.length > 0;
     }
@@ -131,5 +142,23 @@ string formatCompileError(CompileError err) {
         }
     }
 
+    string marker = findComptimeTraceMarker(lines, errorLine);
+    if (marker.length > 0) {
+        result ~= format(" %s %s expanded from %s\n", gutter, blue("="), marker);
+    }
+
     return result;
+}
+
+private string findComptimeTraceMarker(string[] lines, int errorLine) {
+    if (errorLine <= 0 || lines.length == 0) return "";
+    int start = errorLine <= lines.length ? errorLine : cast(int)lines.length;
+    for (int i = start; i >= 1 && i >= start - 80; i--) {
+        string line = lines[i - 1].strip();
+        enum prefix = "// llpl:comptime ";
+        if (line.startsWith(prefix)) {
+            return line[prefix.length .. $];
+        }
+    }
+    return "";
 }

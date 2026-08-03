@@ -1,0 +1,1 @@
+error: 'ReadOnlyProperty.value' is a read-only property - add 'property value(value: T)' to support assignment

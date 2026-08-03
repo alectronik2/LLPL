@@ -178,6 +178,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
     string generatedC = stripExtension(cfg.entry) ~ ".c";
     string[] llplDeps = allLlplSources(".", cfg.llplCompiler);
     llplDeps ~= embeddedAssetInputsForSources(llplDeps);
+    llplDeps ~= cfg.llplCompiler;
 
     plan ~= PlanStep(StepKind.compileLlpl,
         cfg.entry,
@@ -192,6 +193,15 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
             [a.src],
             [a.output],
             [cfg.nasm, "-f", "elf64", a.src, "-o", a.output],
+            PackageAction.init, "", "", false, 1);
+    }
+
+    foreach (a; cfg.m64Sources) {
+        plan ~= PlanStep(StepKind.assemble,
+            a.src,
+            [a.src],
+            [a.output],
+            [cfg.m64, a.src, "-o", a.output],
             PackageAction.init, "", "", false, 1);
     }
 
@@ -257,6 +267,14 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
                 [a.src],
                 [a.output],
                 [cfg.nasm, "-f", "elf64", a.src, "-o", a.output],
+                PackageAction.init, "", "", false, group);
+        }
+        foreach (a; el.m64Sources) {
+            plan ~= PlanStep(StepKind.assemble,
+                format("%s (%s)", a.src, el.name),
+                [a.src],
+                [a.output],
+                [cfg.m64, a.src, "-o", a.output],
                 PackageAction.init, "", "", false, group);
         }
         foreach (src; el.cSources) {
@@ -336,9 +354,9 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 private void runCommand(string[] cmd, bool allowFailure, string description) {
     progressClearForExternalOutput();
 
-    Pid pid;
+    typeof(execute(cmd)) result;
     try {
-        pid = spawnProcess(cmd);
+        result = execute(cmd);
     } catch (ProcessException e) {
         if (allowFailure) {
             logWarn(format("%s: '%s' not found, skipping (allow_failure)", description, cmd[0]));
@@ -346,12 +364,30 @@ private void runCommand(string[] cmd, bool allowFailure, string description) {
         }
         throw new BuildError(format("%s: couldn't run '%s': %s", description, cmd[0], e.msg));
     }
-    int code = wait(pid);
+    int code = result.status;
     if (code != 0 && !allowFailure) {
-        throw new BuildError(format("%s failed (exit %d): %s", description, code, cmd.join(" ")));
+        string details = result.output.length > 0 ? ("\n" ~ result.output.chomp()) : "";
+        throw new BuildError(format("%s failed (exit %d): %s%s", description, code, cmd.join(" "), details));
     }
     if (code != 0) {
         logWarn(format("%s failed (exit %d) - continuing (allow_failure)", description, code));
+    }
+}
+
+private bool copyIsUpToDate(string from, string to) {
+    if (!exists(from) || !isFile(from) || !exists(to) || !isFile(to)) return false;
+    return getSize(from) == getSize(to) && timeLastModified(from) <= timeLastModified(to);
+}
+
+private bool actionIsUpToDate(PackageAction action) {
+    final switch (action.kind) {
+        case ActionKind.copy:
+            return copyIsUpToDate(action.copyFrom, action.copyTo);
+        case ActionKind.mkdir:
+        case ActionKind.write:
+        case ActionKind.run:
+        case ActionKind.requireFile:
+            return false;
     }
 }
 
@@ -361,6 +397,8 @@ private void runAction(PackageAction action) {
             mkdirRecurse(action.mkdirPath);
             break;
         case ActionKind.copy:
+            if (copyIsUpToDate(action.copyFrom, action.copyTo)) break;
+            if (exists(action.copyTo) && isFile(action.copyTo)) remove(action.copyTo);
             std.file.copy(action.copyFrom, action.copyTo);
             break;
         case ActionKind.write:
@@ -616,6 +654,11 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
         }
 
         if (plan[i].kind == StepKind.action) {
+            if (actionIsUpToDate(plan[i].pkgAction)) {
+                markProgress("up to date " ~ plan[i].description);
+                i++;
+                continue;
+            }
             cargoLine(stepVerb(plan[i]), plan[i].description);
             executeStep(plan[i]);
             markProgress("finished " ~ plan[i].description);
@@ -711,6 +754,7 @@ void clean(BuildConfig cfg) {
     files ~= stripExtension(cfg.entry) ~ ".c";
     foreach (src; cfg.cSources) files ~= objPathFor(src.path, src.objOutput);
     foreach (a; cfg.asmSources) files ~= a.output;
+    foreach (a; cfg.m64Sources) files ~= a.output;
     if (cfg.hasLink) files ~= cfg.link.output;
     foreach (el; cfg.extraLinks) {
         foreach (src; el.llplSources) {
@@ -718,6 +762,7 @@ void clean(BuildConfig cfg) {
             files ~= src.objOutput;
         }
         foreach (a; el.asmSources) files ~= a.output;
+        foreach (a; el.m64Sources) files ~= a.output;
         foreach (src; el.cSources) files ~= objPathFor(src.path, src.objOutput);
         files ~= el.link.output;
     }

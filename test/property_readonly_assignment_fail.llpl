@@ -1,0 +1,13 @@
+class ReadOnlyProperty {
+    constructor() {}
+
+    property value() -> i64 {
+        return 7
+    }
+}
+
+func main() -> i64 {
+    let r = new ReadOnlyProperty()
+    r.value = 9
+    return 0
+}

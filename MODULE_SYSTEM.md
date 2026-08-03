@@ -6,9 +6,12 @@ The LLPL compiler now supports a robust module system with the following feature
 
 - **Multi-file projects**: Split your code across multiple `.llpl` files
 - **Import statements**: Use `import name` to include other modules
+- **Directory imports**: Use `import folder` to include every direct `.llpl` file in that directory
+- **Aliases and selective imports**: Import a module under an alias or import selected symbols
+- **Explicit exports**: Use `public` to opt a module into a public import surface
 - **Circular dependencies**: Modules can import each other without issues
 - **Automatic resolution**: The compiler handles dependency order automatically
-- **Search paths**: Modules are searched in current directory, `lib/`, and `modules/`
+- **Search paths**: Modules are searched relative to the importing file, the entry file, project config paths, `$LLPL_HOME`, current directory, `lib/`, and `modules/`
 
 ### Syntax
 
@@ -29,18 +32,73 @@ A quoted path is still accepted, for paths that aren't valid identifiers:
 import "graphics.llpl"
 ```
 
+#### Directory Import
+
+If a file import is not found, the resolver checks for a matching directory.
+Every direct `.llpl` file in that directory is imported in sorted order:
+
+```swift
+import hal      // imports hal/cpu.llpl, hal/gdt.llpl, hal/serial.llpl, ...
+import mm       // imports direct .llpl files under mm/
+```
+
+Directory imports are shallow. They do not recursively import subdirectories;
+put explicit imports inside the files that need deeper modules.
+
+Aliases and selective import lists are intentionally not allowed on directory
+imports because there is no single target module to alias or filter.
+
 #### Import with Alias
 
 ```swift
 import graphics as gfx
 ```
 
+#### Selective Import
+
+```swift
+import { Screen, draw as draw_screen } from graphics
+```
+
+Selective imports bind only the named exported symbols into the importing
+module. Use ordinary module imports when you want the full module surface.
+
+#### Public Exports
+
+Modules are backwards-compatible by default: if a module contains no `public`
+declarations, every top-level symbol remains exportable to imports.
+
+Once a module contains at least one `public` declaration, only declarations marked
+`public` are exported to other modules:
+
+```swift
+public func exposed() -> i64 {
+    return 7
+}
+
+func helper() -> i64 {
+    return 9
+}
+```
+
+`helper` can still be used inside its own module, but it cannot be imported
+selectively or through a module alias from another file. Marking a namespace as
+`public` exports the declarations inside it:
+
+```swift
+public namespace HAL.IDT {
+    func init() {
+    }
+}
+```
+
 ### How It Works
 
 1. **Dependency Resolution**: The compiler starts with your entry file and recursively resolves all imports
 2. **Circular Detection**: When a circular import is detected, the compiler notes it and continues
-3. **Forward Declarations**: All classes, functions, and methods get forward declarations in C
-4. **Ordered Compilation**: Modules are compiled in dependency order
+3. **Directory Expansion**: Directory imports expand to a sorted list of direct `.llpl` files
+4. **Forward Declarations**: All classes, functions, and methods get forward declarations in C
+5. **Ordered Compilation**: Modules are compiled in dependency order
 
 ### Example: Circular Imports
 
@@ -111,10 +169,24 @@ The compiler will automatically:
 The compiler searches for imported files in this order:
 
 1. **Relative to importing file**: If you `import utils` from `/project/src/main.llpl`, it checks `/project/src/utils.llpl`
-2. **`$LLPL_HOME`**, if set: e.g. `import std.io.file` checks `$LLPL_HOME/stdlib/io/file.llpl`
-3. **Current directory**: `./utils.llpl`
-4. **lib directory**: `lib/utils.llpl`
-5. **modules directory**: `modules/utils.llpl`
+2. **Entry file directory**: lets nested modules use project-root imports such as `import hal.cpu`
+3. **`$LLPL_HOME`**, if set: e.g. `import std.io.file` checks `$LLPL_HOME/stdlib/io/file.llpl`
+4. **Project config paths**: `source_roots` and `import_paths` from the nearest `llpl.json`, if present
+5. **Current directory**: `./utils.llpl`
+6. **lib directory**: `lib/utils.llpl`
+7. **modules directory**: `modules/utils.llpl`
+
+For every file lookup, the resolver also maps `std/...` to `stdlib/...`, so:
+
+```swift
+import std.text.string_utils
+```
+
+resolves to `stdlib/text/string_utils.llpl` under `$LLPL_HOME` or another
+search root.
+
+If no file is found, the same roots are checked for a directory import. For
+example, `import hal` checks `hal.llpl` first, then a `hal/` directory.
 
 `$LLPL_HOME` is what lets every standard library module (and anything
 that imports one) write `import std.*` instead of a relative path
@@ -326,7 +398,9 @@ This topological sort with cycle handling ensures correct compilation order whil
 
 1. **Import once**: Each file is only compiled once, even if imported multiple times
 2. **No conditional imports**: All imports are unconditional
-3. **File-based**: Modules are files, not logical units - use `namespace` (see below) for logical grouping independent of file layout
+3. **Directory imports are shallow**: nested directories require explicit imports
+4. **Directory imports cannot be aliased or selective**: aliases/selective imports require a single target file
+5. **File-based**: Modules are files, not logical units - use `namespace` (see below) for logical grouping independent of file layout
 
 Symbols aren't automatically isolated by file the way they are in some
 languages, but LLPL's `namespace` blocks give you real isolation: a class or
@@ -337,11 +411,8 @@ enclosing namespace.
 
 ### Future Enhancements
 
-- [ ] Selective imports: `import { Class1, func1 } from module`
-- [ ] Module-level visibility: `public func` vs `private func`
 - [ ] Package system: `import package:module`
 - [ ] Precompiled modules
-- [ ] Module caching
 
 ### Migration from Single-File
 

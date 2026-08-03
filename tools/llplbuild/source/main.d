@@ -33,9 +33,9 @@ void main(string[] args) {
     if (helpInfo.helpWanted) {
         defaultGetoptPrinter(
             "llplbuild - a cargo-like build tool for LLPL\n" ~
-            "Usage: llplbuild [options] [build|check|run|clean|configs|test]\n" ~
+            "Usage: llplbuild [options] [build|check|run|clean|configs|test] [test-file-or-dir ...]\n" ~
             "  build/check/run/clean/configs: run from a target directory with its own build.yaml\n" ~
-            "  test: run from the repo root - no build.yaml needed\n" ~
+            "  test: run from the repo root - no build.yaml needed; optional paths run focused tests\n" ~
             "Options:",
             helpInfo.options);
         return;
@@ -46,6 +46,9 @@ void main(string[] args) {
     if (command == "test") {
         TestOptions topts;
         topts.dir = testDir;
+        if (args.length > 2) {
+            topts.paths = args[2 .. $];
+        }
         topts.compiler = testCompiler;
         topts.jobs = jobs > 0 ? jobs : 1;
         exit(runTests(topts));

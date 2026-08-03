@@ -6,7 +6,7 @@ func print_int(label: char*, value: i64) {
     puts(buf as char*)
 }
 
-func main() -> i64 {
+func main() -> int {
     let a: String = new String("hello")
     let b: String = new String("hello")
     let c: String = new String("world")

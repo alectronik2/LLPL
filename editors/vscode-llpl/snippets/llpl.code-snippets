@@ -38,6 +38,24 @@
         ],
         "description": "Unit test block compiled and run with --unittest"
     },
+    "Property Getter": {
+        "prefix": "propertyget",
+        "body": [
+            "property ${1:name}() -> ${2:int} {",
+            "\treturn ${3:value}",
+            "}"
+        ],
+        "description": "Property getter method used as obj.name"
+    },
+    "Property Setter": {
+        "prefix": "propertyset",
+        "body": [
+            "property ${1:name}(${2:value}: ${3:int}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Property setter method used as obj.name = value"
+    },
     "Class": {
         "prefix": "class",
         "body": [
@@ -256,6 +274,16 @@
             "}"
         ],
         "description": "Foreach loop over an iterable"
+    },
+    "With Block": {
+        "prefix": "with",
+        "body": [
+            "with ${1:target} {",
+            "\t.${2:member}",
+            "\t$0",
+            "}"
+        ],
+        "description": "With block - leading-dot members are resolved against the target"
     },
     "Defer": {
         "prefix": "defer",

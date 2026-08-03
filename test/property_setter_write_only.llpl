@@ -1,0 +1,24 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class WriteOnly {
+    stored: i64
+
+    constructor() {}
+
+    property value(nu: i64) {
+        stored = nu
+    }
+}
+
+func main() -> i64 {
+    let w = new WriteOnly()
+    w.value = 42
+    print_int("stored", w.stored)
+    return 0
+}

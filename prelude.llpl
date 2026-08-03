@@ -68,6 +68,8 @@ extern func llpl_reflect_field_size(field: char*) -> u64
 extern func llpl_alloc(size: u64) -> char*
 extern func llpl_free(ptr: char*)
 extern func llpl_memcpy(dest: char*, src: char*, count: u64)
+extern func llpl_set_allocator(alloc_fn: (u64) -> char*, free_fn: (char*) -> void)
+extern func llpl_reset_allocator()
 // Weak<T>'s own building blocks - see runtime.h/runtime.c's own comments
 // on RefCount.weak_count. `ptr` is always a class instance's own address
 // (its RefCount header is its first field), cast to char* the same way
@@ -1562,8 +1564,24 @@ impl Comparable for i64 {
     }
 }
 
+impl Comparable for int {
+    func compare(other: int) -> i64 {
+        if self < other { return -1 }
+        if self > other { return 1 }
+        return 0
+    }
+}
+
 impl Comparable for u64 {
     func compare(other: u64) -> i64 {
+        if self < other { return -1 }
+        if self > other { return 1 }
+        return 0
+    }
+}
+
+impl Comparable for uint {
+    func compare(other: uint) -> i64 {
         if self < other { return -1 }
         if self > other { return 1 }
         return 0

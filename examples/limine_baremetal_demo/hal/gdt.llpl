@@ -1,0 +1,143 @@
+// GDT (Global Descriptor Table) module.
+//
+
+namespace HAL {
+    namespace GDT {
+        // One 8-byte GDT descriptor. `packed` is essential here: without it the
+        // compiler could insert padding and the CPU would read garbage.
+        packed struct Entry {
+            let limit_low: u16
+            let base_low: u16
+            let base_mid: u8
+            let access: u8
+            let granularity: u8
+            let base_high: u8
+        }
+
+        // The 10-byte operand `lgdt`/`sgdt` read/write directly. `packed` is
+        // required here too: a bare u16 followed by a u64 would otherwise be
+        // padded to put the u64 on an 8-byte boundary, breaking the layout.
+        packed struct Pointer {
+            let limit: u16
+            let base: u64
+        }
+
+        // 64-bit TSS layout. We only set RSP0 (kernel stack for ring-3
+        // interrupts without an IST) and IST1 (the stack the timer and syscall
+        // gates use).
+        packed struct TSS {
+            let reserved0: u32
+            let rsp0: u64
+            let rsp1: u64
+            let rsp2: u64
+            let reserved1: u64
+            let ist1: u64
+            let ist2: u64
+            let ist3: u64
+            let ist4: u64
+            let ist5: u64
+            let ist6: u64
+            let ist7: u64
+            let reserved2: u64
+            let reserved3: u16
+            let iomap_base: u16
+        }
+
+        extern func get_tss() -> u64
+        extern func get_kernel_stack_top() -> u64
+        extern func load_tss(selector: u16)
+
+        let entries: Entry[7]
+        let pointer: Pointer
+
+        func set_entry(index: i64, limit_low: u16, base_low: u16, base_mid: u8,
+                        access: u8, granularity: u8, base_high: u8) {
+            entries[index].limit_low = limit_low
+            entries[index].base_low = base_low
+            entries[index].base_mid = base_mid
+            entries[index].access = access
+            entries[index].granularity = granularity
+            entries[index].base_high = base_high
+        }
+
+        // A 64-bit TSS descriptor spans two consecutive GDT entries. The low
+        // 8 bytes hold the usual limit/base fields with the "available 64-bit TSS"
+        // access byte (0x89); the high 8 bytes hold base bits 32-63.
+        func set_tss_descriptor(index: i64, base: u64, limit: u64) {
+            entries[index].limit_low = (limit & 0xFFFF) as u16
+            entries[index].base_low = (base & 0xFFFF) as u16
+            entries[index].base_mid = ((base >> 16) & 0xFF) as u8
+            entries[index].access = 0x89 as u8
+            entries[index].granularity = 0 as u8
+            entries[index].base_high = ((base >> 24) & 0xFF) as u8
+
+            let upper: u64 = base >> 32
+            entries[index + 1].limit_low = (upper & 0xFFFF) as u16
+            entries[index + 1].base_low = ((upper >> 16) & 0xFFFF) as u16
+            entries[index + 1].base_mid = 0
+            entries[index + 1].access = 0
+            entries[index + 1].granularity = 0
+            entries[index + 1].base_high = 0
+        }
+
+        func init_tss() {
+            let tss_addr: u64 = get_tss()
+            let tss: TSS* = tss_addr as TSS*
+            tss.reserved0 = 0
+            tss.rsp0 = get_kernel_stack_top()
+            tss.rsp1 = 0
+            tss.rsp2 = 0
+            tss.reserved1 = 0
+            tss.ist1 = 0
+            tss.ist2 = 0
+            tss.ist3 = 0
+            tss.ist4 = 0
+            tss.ist5 = 0
+            tss.ist6 = 0
+            tss.ist7 = 0
+            tss.reserved2 = 0
+            tss.reserved3 = 0
+            tss.iomap_base = (104 as u16)
+        }
+
+        func init() {
+            set_entry(0, 0, 0, 0, 0, 0, 0)            // null descriptor
+            set_entry(1, 0xFFFF, 0, 0, 0x9A, 0xAF, 0) // kernel code, selector 0x08
+            set_entry(2, 0xFFFF, 0, 0, 0x92, 0xCF, 0) // kernel data, selector 0x10
+            set_entry(3, 0xFFFF, 0, 0, 0xFA, 0xAF, 0) // user code,    selector 0x18
+            set_entry(4, 0xFFFF, 0, 0, 0xF2, 0xCF, 0) // user data,    selector 0x20
+
+            init_tss()
+            set_tss_descriptor(5, get_tss(), 104)     // TSS, selector 0x28
+
+            pointer.limit = (7 * 8) - 1
+            pointer.base = entries as u64
+
+            asm("lgdt (%0)" : : "r"(&pointer))
+            reload_segments()
+            load_tss(0x28)
+        }
+
+        // After `lgdt`, the CPU keeps using its cached CS descriptor until an
+        // explicit segment reload (far jump/call/return). A numeric local
+        // label keeps this compatible with both GCC and TCC inline asm.
+        func reload_segments() {
+            // Note: the "i" constraint already prints its own "$" prefix, so the
+            // template references %0 directly rather than writing "$%0".
+            asm("pushq %0"
+                "leaq 1f(%%rip), %%rax"
+                "pushq %%rax"
+                ".byte 0x48, 0xcb"
+                "1:"
+                : : "i"(0x08) : "rax")
+
+            asm("movw %0, %%ax"
+                "movw %%ax, %%ds"
+                "movw %%ax, %%es"
+                "movw %%ax, %%fs"
+                "movw %%ax, %%gs"
+                "movw %%ax, %%ss"
+                : : "i"(0x10) : "ax")
+        }
+    }
+}

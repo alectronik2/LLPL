@@ -13,7 +13,8 @@
 //     special-case an *ordinary*-shaped `main` at all (see source/main.d),
 //     so declaring it with the real C signature (int32_t argc, matching
 //     what the C runtime actually calls main with - the language's own
-//     default `i64` is 64-bit and would be a real ABI mismatch here)
+//     default `int` is pointer-width and would be a real ABI mismatch here
+//     on 64-bit targets)
 //     already just works, no runtime support needed. Pair it with parse().
 //
 // Usage:

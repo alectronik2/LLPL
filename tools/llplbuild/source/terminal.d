@@ -100,7 +100,7 @@ void progressStep(size_t completed, size_t total, string message) {
 
 void progressFinish() {
     if (!progressActive || !ansiEnabled()) return;
-    writeln();
+    clearProgressLine();
     stdout.flush();
     progressActive = false;
     progressLineLen = 0;

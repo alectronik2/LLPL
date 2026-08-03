@@ -1,0 +1,1742 @@
+import std.io.file
+
+using namespace std.io
+
+extern func printf(fmt: char*, ...) -> i32
+extern func puts(s: char*) -> i64
+extern func exit(code: i32)
+
+class Token {
+    let kind: string
+    let value: String
+    let line: i64
+    let column: i64
+
+    constructor(kind: string, value: String, line: i64, column: i64) {
+        self.kind = kind
+        self.value = new String(value.c_str())
+        self.line = line
+        self.column = column
+    }
+}
+
+class TextBuf {
+    let data: char*
+    let length: i64
+    let capacity: i64
+
+    constructor() {
+        self.length = 0
+        self.capacity = 64
+        self.data = llpl_alloc(self.capacity as u64)
+        self.data[0] = '\0'
+    }
+
+    destructor() {
+        llpl_free(self.data)
+    }
+
+    func grow() {
+        let new_capacity: i64 = self.capacity * 2
+        let new_data: char* = llpl_alloc(new_capacity as u64)
+        if new_data == null {
+            printf("selfhost parser: TextBuf allocation failed length=%lld capacity=%lld new_capacity=%lld\n",
+                self.length, self.capacity, new_capacity)
+            exit(1)
+        }
+        llpl_memcpy(new_data, self.data, (self.length + 1) as u64)
+        llpl_free(self.data)
+        self.data = new_data
+        self.capacity = new_capacity
+    }
+
+    func append_char(c: char) {
+        if self.length + 2 >= self.capacity {
+            self.grow()
+        }
+        self.data[self.length] = c
+        self.length = self.length + 1
+        self.data[self.length] = '\0'
+    }
+
+    func append_string(s: String) {
+        let i: i64 = 0
+        while i < s.byte_len() {
+            self.append_char(s.byte_at(i))
+            i = i + 1
+        }
+    }
+
+    func to_string() -> String {
+        return new String(self.data)
+    }
+}
+
+class Lexer {
+    let source: String
+    let pos: i64
+    let line: i64
+    let column: i64
+
+    constructor(source: String) {
+        self.source = new String(source.c_str())
+        self.pos = 0
+        self.line = 1
+        self.column = 1
+    }
+
+    func len() -> i64 {
+        return self.source.byte_len()
+    }
+
+    func current() -> char {
+        if self.pos >= self.len() {
+            return '\0'
+        }
+        return self.source.byte_at(self.pos)
+    }
+
+    func peek(offset: i64) -> char {
+        let p: i64 = self.pos + offset
+        if p >= self.len() {
+            return '\0'
+        }
+        return self.source.byte_at(p)
+    }
+
+    func advance() {
+        if self.current() == '\n' {
+            self.line = self.line + 1
+            self.column = 1
+        } else {
+            self.column = self.column + 1
+        }
+        self.pos = self.pos + 1
+    }
+
+    func is_digit(c: char) -> bool {
+        return c >= '0' && c <= '9'
+    }
+
+    func is_alpha(c: char) -> bool {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    }
+
+    func is_ident_start(c: char) -> bool {
+        return self.is_alpha(c) || c == '_'
+    }
+
+    func is_ident_part(c: char) -> bool {
+        return self.is_ident_start(c) || self.is_digit(c)
+    }
+
+    func is_hex(c: char) -> bool {
+        return self.is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+    }
+
+    func keyword_kind(text: String) -> string {
+        match text.c_str() {
+            case "import" => { return "Import" }
+            case "namespace" => { return "Namespace" }
+            case "func" => { return "Function" }
+            case "class" => { return "Class" }
+            case "struct" => { return "Struct" }
+            case "union" => { return "Union" }
+            case "ui" => { return "Ui" }
+            case "grammar" => { return "Grammar" }
+            case "packed" => { return "Packed" }
+            case "interrupt" => { return "Interrupt" }
+            case "constructor" => { return "Constructor" }
+            case "destructor" => { return "Destructor" }
+            case "let" => { return "Let" }
+            case "const" => { return "Const" }
+            case "volatile" => { return "Volatile" }
+            case "private" => { return "Private" }
+            case "public" => { return "Public" }
+            case "static" => { return "Static" }
+            case "inline" => { return "Inline" }
+            case "virtual" => { return "Virtual" }
+            case "override" => { return "Override" }
+            case "if" => { return "If" }
+            case "else" => { return "Else" }
+            case "while" => { return "While" }
+            case "do" => { return "Do" }
+            case "until" => { return "Until" }
+            case "for" => { return "For" }
+            case "foreach" => { return "Foreach" }
+            case "in" => { return "In" }
+            case "return" => { return "Return" }
+            case "continue" => { return "Continue" }
+            case "break" => { return "Break" }
+            case "defer" => { return "Defer" }
+            case "asm" => { return "Asm" }
+            case "new" => { return "New" }
+            case "true" => { return "True" }
+            case "false" => { return "False" }
+            case "null" => { return "Null" }
+            case "extern" => { return "Extern" }
+            case "as" => { return "As" }
+            case "from" => { return "From" }
+            case "using" => { return "Using" }
+            case "match" => { return "Match" }
+            case "case" => { return "Case" }
+            case "default" => { return "Default" }
+            case "alias" => { return "Alias" }
+            case "operator" => { return "Operator" }
+            case "enum" => { return "Enum" }
+            case "macro" => { return "Macro" }
+            case "unless" => { return "Unless" }
+            case "quote" => { return "Quote" }
+            case "unquote" => { return "Unquote" }
+            case "sizeof" => { return "Sizeof" }
+            case "trait" => { return "Trait" }
+            case "impl" => { return "Impl" }
+            case "try" => { return "Try" }
+            case "catch" => { return "Catch" }
+            case "finally" => { return "Finally" }
+            case "throw" => { return "Throw" }
+            case "delete" => { return "Delete" }
+            case "assert" => { return "Assert" }
+            case "unittest" => { return "UnitTest" }
+            case "with" => { return "With" }
+            default => { return "Identifier" }
+        }
+    }
+
+    func skip_ignored() {
+        let done: bool = false
+        while !done {
+            while self.current() == ' ' || self.current() == '\t' || self.current() == '\r' || self.current() == '\n' {
+                self.advance()
+            }
+            if self.current() == '/' && self.peek(1) == '/' {
+                while self.current() != '\0' && self.current() != '\n' {
+                    self.advance()
+                }
+            } else if self.current() == '/' && self.peek(1) == '*' {
+                self.advance()
+                self.advance()
+                while self.current() != '\0' {
+                    if self.current() == '*' && self.peek(1) == '/' {
+                        self.advance()
+                        self.advance()
+                        break
+                    }
+                    self.advance()
+                }
+            } else {
+                done = true
+            }
+        }
+    }
+
+    func identifier() -> Token {
+        let start_line: i64 = self.line
+        let start_col: i64 = self.column
+        let text: TextBuf = new TextBuf()
+        while self.is_ident_part(self.current()) {
+            text.append_char(self.current())
+            self.advance()
+        }
+        let value: String = text.to_string()
+        return new Token(self.keyword_kind(value), value, start_line, start_col)
+    }
+
+    func number() -> Token {
+        let start_line: i64 = self.line
+        let start_col: i64 = self.column
+        let text: TextBuf = new TextBuf()
+        let is_float: bool = false
+
+        if self.current() == '0' && (self.peek(1) == 'x' || self.peek(1) == 'X' ||
+                self.peek(1) == 'b' || self.peek(1) == 'B' ||
+                self.peek(1) == 'o' || self.peek(1) == 'O') {
+            text.append_char(self.current())
+            self.advance()
+            text.append_char(self.current())
+            self.advance()
+            while self.is_hex(self.current()) || self.current() == '_' {
+                if self.current() != '_' {
+                    text.append_char(self.current())
+                }
+                self.advance()
+            }
+            return new Token("Integer", text.to_string(), start_line, start_col)
+        }
+
+        while self.is_digit(self.current()) || self.current() == '_' {
+            if self.current() != '_' {
+                text.append_char(self.current())
+            }
+            self.advance()
+        }
+        if self.current() == '.' && self.is_digit(self.peek(1)) {
+            is_float = true
+            text.append_char(self.current())
+            self.advance()
+            while self.is_digit(self.current()) || self.current() == '_' {
+                if self.current() != '_' {
+                    text.append_char(self.current())
+                }
+                self.advance()
+            }
+        }
+        if self.current() == 'e' || self.current() == 'E' {
+            is_float = true
+            text.append_char(self.current())
+            self.advance()
+            if self.current() == '+' || self.current() == '-' {
+                text.append_char(self.current())
+                self.advance()
+            }
+            while self.is_digit(self.current()) || self.current() == '_' {
+                if self.current() != '_' {
+                    text.append_char(self.current())
+                }
+                self.advance()
+            }
+        }
+        if self.current() == 'f' || self.current() == 'F' || self.current() == 'd' || self.current() == 'D' {
+            is_float = true
+            text.append_char(self.current())
+            self.advance()
+        }
+        if is_float {
+            return new Token("Float", text.to_string(), start_line, start_col)
+        }
+        return new Token("Integer", text.to_string(), start_line, start_col)
+    }
+
+    func string_literal() -> Token {
+        let start_line: i64 = self.line
+        let start_col: i64 = self.column
+        let text: TextBuf = new TextBuf()
+        self.advance()
+        while self.current() != '\0' && self.current() != '"' &&
+                self.current() != '\n' && self.current() != '\r' {
+            if self.current() == '\\' {
+                self.advance()
+                if self.current() == 'n' { text.append_char('\n') }
+                else if self.current() == 't' { text.append_char('\t') }
+                else if self.current() == 'r' { text.append_char('\r') }
+                else if self.current() == '"' { text.append_char('"') }
+                else if self.current() == '\\' { text.append_char('\\') }
+                else { text.append_char(self.current()) }
+                self.advance()
+            } else {
+                text.append_char(self.current())
+                self.advance()
+            }
+        }
+        if self.current() == '"' {
+            self.advance()
+        }
+        return new Token("String", text.to_string(), start_line, start_col)
+    }
+
+    func char_literal() -> Token {
+        let start_line: i64 = self.line
+        let start_col: i64 = self.column
+        let text: TextBuf = new TextBuf()
+        self.advance()
+        if self.current() == '\\' {
+            self.advance()
+            if self.current() == 'n' { text.append_char('\n') }
+            else if self.current() == 't' { text.append_char('\t') }
+            else if self.current() == 'r' { text.append_char('\r') }
+            else { text.append_char(self.current()) }
+            self.advance()
+        } else {
+            text.append_char(self.current())
+            self.advance()
+        }
+        if self.current() == '\'' {
+            self.advance()
+        }
+        return new Token("Char", text.to_string(), start_line, start_col)
+    }
+
+    func one(kind: string, value: string, line: i64, col: i64) -> Token {
+        self.advance()
+        return new Token(kind, new String(value), line, col)
+    }
+
+    func two(kind: string, value: string, line: i64, col: i64) -> Token {
+        self.advance()
+        self.advance()
+        return new Token(kind, new String(value), line, col)
+    }
+
+    func next() -> Token {
+        self.skip_ignored()
+        let start_line: i64 = self.line
+        let start_col: i64 = self.column
+        let c: char = self.current()
+
+        if c == '\0' {
+            return new Token("EOF", new String(""), start_line, start_col)
+        }
+        if self.is_ident_start(c) {
+            return self.identifier()
+        }
+        if self.is_digit(c) {
+            return self.number()
+        }
+        if c == '"' {
+            return self.string_literal()
+        }
+        if c == '\'' {
+            return self.char_literal()
+        }
+
+        if c == '+' && self.peek(1) == '+' { return self.two("PlusPlus", "++", start_line, start_col) }
+        if c == '-' && self.peek(1) == '-' { return self.two("MinusMinus", "--", start_line, start_col) }
+        if c == '-' && self.peek(1) == '>' { return self.two("Arrow", "->", start_line, start_col) }
+        if c == '=' && self.peek(1) == '=' { return self.two("Equal", "==", start_line, start_col) }
+        if c == '=' && self.peek(1) == '>' { return self.two("FatArrow", "=>", start_line, start_col) }
+        if c == '!' && self.peek(1) == '=' { return self.two("NotEqual", "!=", start_line, start_col) }
+        if c == '<' && self.peek(1) == '=' { return self.two("LessEqual", "<=", start_line, start_col) }
+        if c == '>' && self.peek(1) == '=' { return self.two("GreaterEqual", ">=", start_line, start_col) }
+        if c == '&' && self.peek(1) == '&' { return self.two("And", "&&", start_line, start_col) }
+        if c == '|' && self.peek(1) == '|' { return self.two("Or", "||", start_line, start_col) }
+        if c == '|' && self.peek(1) == '>' { return self.two("PipeForward", "|>", start_line, start_col) }
+        if c == '<' && self.peek(1) == '<' { return self.two("LeftShift", "<<", start_line, start_col) }
+        if c == '>' && self.peek(1) == '>' { return self.two("RightShift", ">>", start_line, start_col) }
+        if c == '+' && self.peek(1) == '=' { return self.two("PlusEqual", "+=", start_line, start_col) }
+        if c == '-' && self.peek(1) == '=' { return self.two("MinusEqual", "-=", start_line, start_col) }
+        if c == '*' && self.peek(1) == '=' { return self.two("StarEqual", "*=", start_line, start_col) }
+        if c == '/' && self.peek(1) == '=' { return self.two("SlashEqual", "/=", start_line, start_col) }
+        if c == '%' && self.peek(1) == '=' { return self.two("PercentEqual", "%=", start_line, start_col) }
+        if c == '&' && self.peek(1) == '=' { return self.two("AmpEqual", "&=", start_line, start_col) }
+        if c == '|' && self.peek(1) == '=' { return self.two("PipeEqual", "|=", start_line, start_col) }
+        if c == '^' && self.peek(1) == '=' { return self.two("CaretEqual", "^=", start_line, start_col) }
+        if c == '.' && self.peek(1) == '.' && self.peek(2) == '.' {
+            self.advance()
+            self.advance()
+            self.advance()
+            return new Token("Ellipsis", new String("..."), start_line, start_col)
+        }
+        if c == '.' && self.peek(1) == '.' { return self.two("DotDot", "..", start_line, start_col) }
+
+        match c {
+            case '+' => { return self.one("Plus", "+", start_line, start_col) }
+            case '-' => { return self.one("Minus", "-", start_line, start_col) }
+            case '*' => { return self.one("Star", "*", start_line, start_col) }
+            case '/' => { return self.one("Slash", "/", start_line, start_col) }
+            case '%' => { return self.one("Percent", "%", start_line, start_col) }
+            case '=' => { return self.one("Assign", "=", start_line, start_col) }
+            case '<' => { return self.one("Less", "<", start_line, start_col) }
+            case '>' => { return self.one("Greater", ">", start_line, start_col) }
+            case '!' => { return self.one("Not", "!", start_line, start_col) }
+            case '&' => { return self.one("BitwiseAnd", "&", start_line, start_col) }
+            case '|' => { return self.one("BitwiseOr", "|", start_line, start_col) }
+            case '^' => { return self.one("BitwiseXor", "^", start_line, start_col) }
+            case '~' => { return self.one("BitwiseNot", "~", start_line, start_col) }
+            case '?' => { return self.one("Question", "?", start_line, start_col) }
+            case '(' => { return self.one("LeftParen", "(", start_line, start_col) }
+            case ')' => { return self.one("RightParen", ")", start_line, start_col) }
+            case '{' => { return self.one("LeftBrace", "{", start_line, start_col) }
+            case '}' => { return self.one("RightBrace", "}", start_line, start_col) }
+            case '[' => { return self.one("LeftBracket", "[", start_line, start_col) }
+            case ']' => { return self.one("RightBracket", "]", start_line, start_col) }
+            case ',' => { return self.one("Comma", ",", start_line, start_col) }
+            case '.' => { return self.one("Dot", ".", start_line, start_col) }
+            case ':' => { return self.one("Colon", ":", start_line, start_col) }
+            case ';' => { return self.one("Semicolon", ";", start_line, start_col) }
+            case '@' => { return self.one("At", "@", start_line, start_col) }
+            case '#' => { return self.one("Hash", "#", start_line, start_col) }
+        }
+
+        let unknown: TextBuf = new TextBuf()
+        unknown.append_char(c)
+        self.advance()
+        return new Token("Unknown", unknown.to_string(), start_line, start_col)
+    }
+}
+
+func dump_tokens(source: String) {
+    let lexer: Lexer = new Lexer(source)
+    let done: bool = false
+    while !done {
+        let tok: Token = lexer.next()
+        printf("%s %s %lld %lld\n", tok.kind, tok.value.c_str(), tok.line, tok.column)
+        if tok.kind == "EOF" {
+            done = true
+        }
+    }
+}
+
+func print_indent(depth: i64) {
+    let i: i64 = 0
+    while i < depth {
+        printf("  ")
+        i = i + 1
+    }
+}
+
+class Parser {
+    let lexer: Lexer
+    let current: Token
+
+    constructor(source: String) {
+        self.lexer = new Lexer(source)
+        self.current = self.lexer.next()
+    }
+
+    func advance() {
+        if self.current == null || self.current.kind == "EOF" {
+            return
+        }
+        self.current = self.lexer.next()
+    }
+
+    func check(kind: string) -> bool {
+        if self.current == null {
+            return kind == "EOF"
+        }
+        return self.current.kind == kind
+    }
+
+    func match(kind: string) -> bool {
+        if self.check(kind) {
+            self.advance()
+            return true
+        }
+        return false
+    }
+
+    func check_type_greater() -> bool {
+        return self.check("Greater") || self.check("RightShift")
+    }
+
+    func match_type_greater() -> bool {
+        if self.check("Greater") {
+            self.advance()
+            return true
+        }
+        if self.check("RightShift") {
+            self.current = new Token("Greater", new String(">"), self.current.line, self.current.column + 1)
+            return true
+        }
+        return false
+    }
+
+    func expect(kind: string) -> Token {
+        if !self.check(kind) {
+            if self.current == null {
+                printf("parse error: expected %s, got EOF\n", kind)
+                return new Token("EOF", new String(""), 0, 0)
+            }
+            printf("parse error: expected %s, got %s at %lld:%lld\n",
+                kind, self.current.kind, self.current.line, self.current.column)
+            return self.current
+        }
+        let tok: Token = self.current
+        self.advance()
+        return tok
+    }
+
+    func line(depth: i64, text: string) {
+        print_indent(depth)
+        puts(text)
+    }
+
+    func line_name(depth: i64, label: string, name: String) {
+        print_indent(depth)
+        printf("%s %s\n", label, name.c_str())
+    }
+
+    func parse_program() {
+        puts("Program")
+        while !self.check("EOF") {
+            self.parse_decl(1)
+        }
+    }
+
+    func parse_decl(depth: i64) {
+        let is_public: bool = self.match("Public")
+        let attrs: String = self.parse_attributes_text()
+        if attrs.byte_len() > 0 {
+            print_indent(depth)
+            printf("Attributes %s\n", attrs.c_str())
+        }
+        let is_packed: bool = self.match("Packed")
+        if self.check("Hash") {
+            self.parse_directive(depth)
+        } else if self.check("Import") {
+            self.parse_import(depth, is_public)
+        } else if self.check("Using") {
+            self.parse_using_namespace(depth)
+        } else if self.check("Namespace") {
+            self.parse_namespace(depth, is_public)
+        } else if self.check("Alias") {
+            self.parse_alias(depth, is_public)
+        } else if self.check("Macro") {
+            self.parse_macro(depth, is_public)
+        } else if self.check("Function") || self.check("Extern") ||
+                self.check("Inline") || self.check("Interrupt") {
+            self.parse_function(depth, is_public)
+        } else if self.check("Class") || self.check("Struct") || self.check("Union") {
+            self.parse_aggregate(depth, is_public, is_packed)
+        } else if self.check("Enum") {
+            self.parse_enum(depth, is_public)
+        } else if self.check("Trait") {
+            self.parse_trait(depth, is_public)
+        } else if self.check("Impl") {
+            self.parse_impl(depth)
+        } else if self.check("UnitTest") {
+            self.parse_unittest(depth)
+        } else if self.check("Ui") {
+            self.parse_ui(depth, is_public)
+        } else if self.check("Grammar") {
+            self.parse_grammar(depth, is_public)
+        } else if self.check("Const") || self.check("Let") || self.check("Volatile") {
+            self.parse_var_decl(depth)
+        } else {
+            self.line(depth, "SkippedDecl")
+            self.skip_until_decl_boundary()
+        }
+    }
+
+    func parse_attributes_text() -> String {
+        let out: TextBuf = new TextBuf()
+        let first: bool = true
+        while self.match("At") {
+            if !self.check("Identifier") {
+                return out.to_string()
+            }
+            if !first {
+                out.append_char(' ')
+            }
+            out.append_char('@')
+            let name: Token = self.expect("Identifier")
+            out.append_string(name.value)
+            if self.match("LeftParen") {
+                out.append_char('(')
+                let args: TextBuf = new TextBuf()
+                self.parse_raw_until_right_paren(args)
+                out.append_string(args.to_string())
+                self.expect("RightParen")
+                out.append_char(')')
+            }
+            first = false
+        }
+        return out.to_string()
+    }
+
+    func parse_raw_until_right_paren(out: TextBuf) {
+        let parens: i64 = 0
+        let brackets: i64 = 0
+        let braces: i64 = 0
+        while !self.check("EOF") {
+            if parens == 0 && brackets == 0 && braces == 0 && self.check("RightParen") {
+                return
+            }
+            if self.check("LeftParen") { parens = parens + 1 }
+            if self.check("RightParen") { parens = parens - 1 }
+            if self.check("LeftBracket") { brackets = brackets + 1 }
+            if self.check("RightBracket") { brackets = brackets - 1 }
+            if self.check("LeftBrace") { braces = braces + 1 }
+            if self.check("RightBrace") { braces = braces - 1 }
+            self.append_current_token_text(out)
+            out.append_char(' ')
+            self.advance()
+        }
+    }
+
+    func parse_directive(depth: i64) {
+        let start_line: i64 = self.current.line
+        self.advance()
+        while !self.check("EOF") && self.current.line == start_line {
+            self.advance()
+        }
+        self.line(depth, "Directive")
+    }
+
+    func parse_import(depth: i64, is_public: bool) {
+        self.expect("Import")
+        let path: TextBuf = new TextBuf()
+        let names: TextBuf = new TextBuf()
+        let selective: bool = false
+        if self.match("LeftBrace") {
+            selective = true
+            let first_name: bool = true
+            while !self.check("RightBrace") && !self.check("EOF") {
+                if !first_name {
+                    names.append_string(new String(", "))
+                }
+                let imported: Token = self.expect("Identifier")
+                names.append_string(imported.value)
+                if self.match("As") {
+                    names.append_string(new String(" as "))
+                    let alias_name: Token = self.expect("Identifier")
+                    names.append_string(alias_name.value)
+                }
+                self.match("Comma")
+                first_name = false
+            }
+            self.expect("RightBrace")
+            self.expect("From")
+        }
+        if self.check("String") {
+            path.append_char('"')
+            let s: String = self.current.value
+            path.append_string(s)
+            path.append_char('"')
+            self.advance()
+        } else {
+            let done: bool = false
+            while !done {
+                let part: String = self.parse_path_part()
+                path.append_string(part)
+                if self.match("Dot") {
+                    path.append_char('.')
+                } else {
+                    done = true
+                }
+            }
+        }
+        let alias_name: String = new String("")
+        if self.match("As") {
+            let alias_tok: Token = self.expect("Identifier")
+            alias_name = alias_tok.value
+        }
+        if is_public {
+            print_indent(depth)
+            printf("Public ")
+        } else {
+            print_indent(depth)
+        }
+        if selective {
+            printf("Import {%s} from %s", names.to_string().c_str(), path.to_string().c_str())
+        } else {
+            printf("Import %s", path.to_string().c_str())
+        }
+        if alias_name.byte_len() > 0 {
+            printf(" as %s", alias_name.c_str())
+        }
+        printf("\n")
+    }
+
+    func parse_using_namespace(depth: i64) {
+        self.expect("Using")
+        self.expect("Namespace")
+        let path: TextBuf = new TextBuf()
+        let done: bool = false
+        while !done {
+            let part: String = self.parse_path_part()
+            path.append_string(part)
+            if self.match("Dot") {
+                path.append_char('.')
+            } else {
+                done = true
+            }
+        }
+        print_indent(depth)
+        printf("Using Namespace %s\n", path.to_string().c_str())
+    }
+
+    func parse_namespace(depth: i64, is_public: bool) {
+        self.expect("Namespace")
+        let name: TextBuf = new TextBuf()
+        let done: bool = false
+        while !done {
+            let part: String = self.parse_path_part()
+            name.append_string(part)
+            if self.match("Dot") {
+                name.append_char('.')
+            } else {
+                done = true
+            }
+        }
+        print_indent(depth)
+        if is_public {
+            printf("Public Namespace %s\n", name.to_string().c_str())
+        } else {
+            printf("Namespace %s\n", name.to_string().c_str())
+        }
+        self.expect("LeftBrace")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            self.parse_decl(depth + 1)
+        }
+        self.expect("RightBrace")
+    }
+
+    func parse_path_part() -> String {
+        if self.check("EOF") {
+            return new String("")
+        }
+        let value: String = self.current.value
+        if self.check("Identifier") || self.check("Ui") || self.check("Grammar") ||
+                self.check("Namespace") || self.check("Import") {
+            self.advance()
+            return value
+        }
+        let tok: Token = self.expect("Identifier")
+        return tok.value
+    }
+
+    func parse_type_params_text() -> String {
+        let text: TextBuf = new TextBuf()
+        if !self.match("Less") {
+            return text.to_string()
+        }
+        text.append_char('<')
+        let first: bool = true
+        while !self.check_type_greater() && !self.check("EOF") {
+            let start_kind: string = self.current.kind
+            let start_line: i64 = self.current.line
+            let start_column: i64 = self.current.column
+            if !first {
+                text.append_char(',')
+                text.append_char(' ')
+            }
+            let name: String = self.parse_type_name()
+            text.append_string(name)
+            if self.match("Colon") {
+                text.append_char(':')
+                text.append_char(' ')
+                let bound: String = self.parse_type_name()
+                text.append_string(bound)
+            }
+            self.match("Comma")
+            first = false
+            if self.current.kind == start_kind &&
+                    self.current.line == start_line &&
+                    self.current.column == start_column {
+                self.advance()
+            }
+        }
+        if !self.match_type_greater() {
+            self.expect("Greater")
+        }
+        text.append_char('>')
+        return text.to_string()
+    }
+
+    func parse_type_name() -> String {
+        let text: TextBuf = new TextBuf()
+        if self.check("LeftParen") {
+            text.append_char('(')
+            self.advance()
+            let first: bool = true
+            while !self.check("RightParen") && !self.check("EOF") {
+                if !first {
+                    text.append_char(' ')
+                }
+                let t: String = self.parse_type_name()
+                let i: i64 = 0
+                while i < t.byte_len() {
+                    text.append_char(t.byte_at(i))
+                    i = i + 1
+                }
+                if self.match("Comma") {
+                    text.append_char(',')
+                }
+                first = false
+            }
+            self.expect("RightParen")
+            text.append_char(')')
+            if self.match("Arrow") {
+                text.append_string(new String(" -> "))
+                let ret: String = self.parse_type_name()
+                text.append_string(ret)
+            }
+            return text.to_string()
+        }
+        if self.check("Identifier") {
+            let name: String = self.current.value
+            text.append_string(name)
+            self.advance()
+            while self.match("Dot") {
+                text.append_char('.')
+                let part: Token = self.expect("Identifier")
+                text.append_string(part.value)
+            }
+            if self.check("Less") {
+                let type_params: String = self.parse_type_params_text()
+                text.append_string(type_params)
+            }
+            while self.match("Star") {
+                text.append_char('*')
+            }
+            while self.match("LeftBracket") {
+                text.append_char('[')
+                if self.check("Integer") {
+                    let n: String = self.current.value
+                    text.append_string(n)
+                    self.advance()
+                }
+                self.expect("RightBracket")
+                text.append_char(']')
+            }
+            if self.match("Arrow") {
+                text.append_string(new String(" -> "))
+                let ret: String = self.parse_type_name()
+                text.append_string(ret)
+            }
+            return text.to_string()
+        }
+        if !self.check("EOF") {
+            self.advance()
+        }
+        return new String("<unknown>")
+    }
+
+    func append_current_token_text(out: TextBuf) {
+        let s: String = self.current.value
+        let i: i64 = 0
+        while i < s.byte_len() {
+            let c: char = s.byte_at(i)
+            if c == '\n' {
+                out.append_string(new String("\\n"))
+            } else if c == '\r' {
+                out.append_string(new String("\\r"))
+            } else if c == '\t' {
+                out.append_string(new String("\\t"))
+            } else {
+                out.append_char(c)
+            }
+            i = i + 1
+        }
+        if s.byte_len() == 0 {
+            out.append_char(' ')
+        }
+    }
+
+    func parse_default_expr_text(out: TextBuf) {
+        let parens: i64 = 0
+        let brackets: i64 = 0
+        let braces: i64 = 0
+        while !self.check("EOF") {
+            if parens == 0 && brackets == 0 && braces == 0 &&
+                    (self.check("Comma") || self.check("RightParen")) {
+                return
+            }
+            if self.check("LeftParen") { parens = parens + 1 }
+            if self.check("RightParen") { parens = parens - 1 }
+            if self.check("LeftBracket") { brackets = brackets + 1 }
+            if self.check("RightBracket") { brackets = brackets - 1 }
+            if self.check("LeftBrace") { braces = braces + 1 }
+            if self.check("RightBrace") { braces = braces - 1 }
+            self.append_current_token_text(out)
+            out.append_char(' ')
+            self.advance()
+        }
+    }
+
+    func parse_param_list_text() -> String {
+        let params: TextBuf = new TextBuf()
+        let first: bool = true
+        while !self.check("RightParen") && !self.check("EOF") {
+            if !first {
+                params.append_char(',')
+                params.append_char(' ')
+            }
+            if self.match("Ellipsis") {
+                params.append_string(new String("..."))
+                first = false
+                break
+            }
+            if self.match("At") {
+                params.append_char('@')
+            }
+            let pname: Token = self.expect("Identifier")
+            params.append_string(pname.value)
+            self.expect("Colon")
+            params.append_char(':')
+            params.append_char(' ')
+            if self.match("Const") {
+                params.append_string(new String("const "))
+            }
+            let pt: String = self.parse_type_name()
+            params.append_string(pt)
+            if self.match("Assign") {
+                params.append_string(new String(" = "))
+                self.parse_default_expr_text(params)
+            }
+            self.match("Comma")
+            first = false
+        }
+        return params.to_string()
+    }
+
+    func parse_function_name_text() -> String {
+        let name: TextBuf = new TextBuf()
+        if self.match("Operator") {
+            name.append_string(new String("operator"))
+            if self.match("LeftBracket") {
+                self.expect("RightBracket")
+                name.append_string(new String("[]"))
+            } else {
+                self.append_current_token_text(name)
+                self.advance()
+            }
+            return name.to_string()
+        }
+        if self.check("Identifier") {
+            let tok: Token = self.expect("Identifier")
+            name.append_string(tok.value)
+        } else {
+            self.append_current_token_text(name)
+            self.advance()
+        }
+        let type_params: String = self.parse_type_params_text()
+        name.append_string(type_params)
+        return name.to_string()
+    }
+
+    func parse_function(depth: i64, is_public: bool) {
+        let is_extern: bool = self.match("Extern")
+        let is_inline: bool = self.match("Inline")
+        let is_interrupt: bool = self.match("Interrupt")
+        self.expect("Function")
+        let name: String = self.parse_function_name_text()
+        self.expect("LeftParen")
+        let params: String = self.parse_param_list_text()
+        self.expect("RightParen")
+        let ret: String = new String("void")
+        if self.match("Arrow") {
+            ret = self.parse_type_name()
+        }
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        if is_extern {
+            printf("Extern ")
+        }
+        if is_inline {
+            printf("Inline ")
+        }
+        if is_interrupt {
+            printf("Interrupt ")
+        }
+        printf("Function %s(%s) -> %s\n", name.c_str(), params.c_str(), ret.c_str())
+        if self.check("LeftBrace") {
+            self.parse_block(depth + 1)
+        }
+    }
+
+    func parse_alias(depth: i64, is_public: bool) {
+        self.expect("Alias")
+        let name: Token = self.expect("Identifier")
+        self.expect("Assign")
+        let target: TextBuf = new TextBuf()
+        self.parse_raw_line_or_balanced(target)
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        printf("Alias %s = %s\n", name.value.c_str(), target.to_string().c_str())
+    }
+
+    func parse_macro(depth: i64, is_public: bool) {
+        self.expect("Macro")
+        let name: Token = self.expect("Identifier")
+        self.expect("LeftParen")
+        let params: TextBuf = new TextBuf()
+        let first: bool = true
+        while !self.check("RightParen") && !self.check("EOF") {
+            if !first {
+                params.append_string(new String(", "))
+            }
+            let param: Token = self.expect("Identifier")
+            params.append_string(param.value)
+            self.match("Comma")
+            first = false
+        }
+        self.expect("RightParen")
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        printf("Macro %s(%s)\n", name.value.c_str(), params.to_string().c_str())
+        if self.check("LeftBrace") {
+            self.parse_block(depth + 1)
+        }
+    }
+
+    func parse_unittest(depth: i64) {
+        self.expect("UnitTest")
+        self.line(depth, "UnitTest")
+        if self.check("LeftBrace") {
+            self.parse_block(depth + 1)
+        }
+    }
+
+    func parse_ui(depth: i64, is_public: bool) {
+        self.expect("Ui")
+        let name: Token = self.expect("Identifier")
+        let root_type: String = new String("Window")
+        if self.match("Colon") {
+            root_type = self.parse_type_name()
+        }
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        printf("Ui %s : %s\n", name.value.c_str(), root_type.c_str())
+        if self.check("LeftBrace") {
+            self.parse_raw_balanced_block(depth + 1, "UiBody")
+        }
+    }
+
+    func parse_grammar(depth: i64, is_public: bool) {
+        self.expect("Grammar")
+        let name: Token = self.expect("Identifier")
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        printf("Grammar %s\n", name.value.c_str())
+        if self.check("LeftBrace") {
+            self.parse_raw_balanced_block(depth + 1, "GrammarBody")
+        }
+    }
+
+    func parse_raw_balanced_block(depth: i64, label: string) {
+        self.expect("LeftBrace")
+        let body: TextBuf = new TextBuf()
+        let braces: i64 = 1
+        while braces > 0 && !self.check("EOF") {
+            if self.check("LeftBrace") {
+                braces = braces + 1
+            } else if self.check("RightBrace") {
+                braces = braces - 1
+                if braces == 0 {
+                    self.advance()
+                    break
+                }
+            }
+            if braces > 0 {
+                self.append_current_token_text(body)
+                body.append_char(' ')
+                self.advance()
+            }
+        }
+        print_indent(depth)
+        printf("%s %s\n", label, body.to_string().c_str())
+    }
+
+    func parse_raw_until_semicolon(out: TextBuf) {
+        let parens: i64 = 0
+        let brackets: i64 = 0
+        while !self.check("EOF") {
+            if parens == 0 && brackets == 0 && self.check("Semicolon") {
+                return
+            }
+            if self.check("LeftParen") { parens = parens + 1 }
+            if self.check("RightParen") { parens = parens - 1 }
+            if self.check("LeftBracket") { brackets = brackets + 1 }
+            if self.check("RightBracket") { brackets = brackets - 1 }
+            self.append_current_token_text(out)
+            out.append_char(' ')
+            self.advance()
+        }
+    }
+
+    func parse_raw_line_or_balanced(out: TextBuf) {
+        let parens: i64 = 0
+        let brackets: i64 = 0
+        let braces: i64 = 0
+        let start_line: i64 = self.current.line
+        while !self.check("EOF") {
+            if parens == 0 && brackets == 0 && braces == 0 {
+                if self.is_boundary_token() || self.check("RightBrace") {
+                    return
+                }
+                if self.current.line > start_line {
+                    return
+                }
+            }
+            if self.check("LeftParen") { parens = parens + 1 }
+            if self.check("RightParen") { parens = parens - 1 }
+            if self.check("LeftBracket") { brackets = brackets + 1 }
+            if self.check("RightBracket") { brackets = brackets - 1 }
+            if self.check("LeftBrace") { braces = braces + 1 }
+            if self.check("RightBrace") { braces = braces - 1 }
+            self.append_current_token_text(out)
+            out.append_char(' ')
+            self.advance()
+        }
+    }
+
+    func parse_enum(depth: i64, is_public: bool) {
+        self.expect("Enum")
+        let name: Token = self.expect("Identifier")
+        let backing: String = new String("")
+        if self.match("Colon") {
+            backing = self.parse_type_name()
+        }
+
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        printf("Enum %s", name.value.c_str())
+        if backing.byte_len() > 0 {
+            printf(" : %s", backing.c_str())
+        }
+        printf("\n")
+
+        self.expect("LeftBrace")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            self.parse_enum_member(depth + 1)
+            self.match("Comma")
+        }
+        self.expect("RightBrace")
+    }
+
+    func parse_enum_member(depth: i64) {
+        let name: Token = self.expect("Identifier")
+        print_indent(depth)
+        printf("Variant %s", name.value.c_str())
+        if self.match("LeftParen") {
+            let params: String = self.parse_param_list_text()
+            self.expect("RightParen")
+            printf("(%s)", params.c_str())
+        }
+        printf("\n")
+        if self.match("Assign") {
+            let value: TextBuf = new TextBuf()
+            self.parse_enum_value_text(value)
+            print_indent(depth + 1)
+            printf("RawExpr value %s\n", value.to_string().c_str())
+        }
+    }
+
+    func parse_enum_value_text(out: TextBuf) {
+        let parens: i64 = 0
+        let brackets: i64 = 0
+        let braces: i64 = 0
+        let start_line: i64 = self.current.line
+        while !self.check("EOF") {
+            if parens == 0 && brackets == 0 && braces == 0 {
+                if self.check("Comma") || self.check("RightBrace") {
+                    return
+                }
+                if self.current.line > start_line {
+                    return
+                }
+            }
+            if self.check("LeftParen") { parens = parens + 1 }
+            if self.check("RightParen") { parens = parens - 1 }
+            if self.check("LeftBracket") { brackets = brackets + 1 }
+            if self.check("RightBracket") { brackets = brackets - 1 }
+            if self.check("LeftBrace") { braces = braces + 1 }
+            if self.check("RightBrace") { braces = braces - 1 }
+            self.append_current_token_text(out)
+            out.append_char(' ')
+            self.advance()
+        }
+    }
+
+    func parse_trait(depth: i64, is_public: bool) {
+        self.expect("Trait")
+        let name: Token = self.expect("Identifier")
+        let type_params: String = self.parse_type_params_text()
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        printf("Trait %s%s\n", name.value.c_str(), type_params.c_str())
+        self.expect("LeftBrace")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            self.parse_trait_method(depth + 1)
+        }
+        self.expect("RightBrace")
+    }
+
+    func parse_trait_method(depth: i64) {
+        self.expect("Function")
+        let name: String = self.parse_function_name_text()
+        self.expect("LeftParen")
+        let params: String = self.parse_param_list_text()
+        self.expect("RightParen")
+        let ret: String = new String("void")
+        if self.match("Arrow") {
+            ret = self.parse_type_name()
+        }
+        print_indent(depth)
+        printf("TraitMethod %s(%s) -> %s\n", name.c_str(), params.c_str(), ret.c_str())
+    }
+
+    func parse_impl(depth: i64) {
+        self.expect("Impl")
+        let trait_name: String = self.parse_type_name()
+        self.expect("For")
+        let target: String = self.parse_type_name()
+        print_indent(depth)
+        printf("Impl %s for %s\n", trait_name.c_str(), target.c_str())
+        self.expect("LeftBrace")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            if self.check("Function") || self.check("Inline") || self.check("Interrupt") {
+                self.parse_function(depth + 1, false)
+            } else {
+                print_indent(depth + 1)
+                printf("SkippedImplMember %s %s\n", self.current.kind, self.current.value.c_str())
+                self.skip_until_decl_boundary()
+            }
+        }
+        self.expect("RightBrace")
+    }
+
+    func parse_aggregate(depth: i64, is_public: bool, is_packed: bool) {
+        let kind: string = self.current.kind
+        self.advance()
+        let name: Token = self.expect("Identifier")
+        let type_params: String = self.parse_type_params_text()
+        let base_type: String = new String("")
+        if kind == "Class" && self.match("Colon") {
+            base_type = self.parse_type_name()
+        }
+
+        print_indent(depth)
+        if is_public {
+            printf("Public ")
+        }
+        if is_packed {
+            printf("Packed ")
+        }
+        printf("%s %s%s", kind, name.value.c_str(), type_params.c_str())
+        if base_type.byte_len() > 0 {
+            printf(" : %s", base_type.c_str())
+        }
+        printf("\n")
+
+        self.expect("LeftBrace")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            self.parse_aggregate_member(depth + 1)
+        }
+        self.expect("RightBrace")
+    }
+
+    func parse_member_modifiers(out: TextBuf) -> bool {
+        let any: bool = false
+        let done: bool = false
+        while !done {
+            if self.match("Private") {
+                out.append_string(new String("Private "))
+                any = true
+            } else if self.match("Public") {
+                out.append_string(new String("Public "))
+                any = true
+            } else if self.match("Static") {
+                out.append_string(new String("Static "))
+                any = true
+            } else if self.match("Virtual") {
+                out.append_string(new String("Virtual "))
+                any = true
+            } else if self.match("Override") {
+                out.append_string(new String("Override "))
+                any = true
+            } else if self.match("Inline") {
+                out.append_string(new String("Inline "))
+                any = true
+            } else if self.check("Identifier") && self.current.value == "property" {
+                self.advance()
+                out.append_string(new String("Property "))
+                any = true
+            } else {
+                done = true
+            }
+        }
+        return any
+    }
+
+    func parse_aggregate_member(depth: i64) {
+        let modifiers: TextBuf = new TextBuf()
+        self.parse_member_modifiers(modifiers)
+        if self.check("Constructor") {
+            self.parse_constructor(depth, modifiers.to_string())
+        } else if self.check("Destructor") {
+            self.parse_destructor(depth, modifiers.to_string())
+        } else if self.check("Function") || self.check("Inline") || self.check("Interrupt") {
+            self.parse_method(depth, modifiers.to_string(), true)
+        } else if modifiers.to_string() == "Property " && self.check("Identifier") {
+            self.parse_method(depth, modifiers.to_string(), false)
+        } else if self.check("Let") || self.check("Const") || self.check("Volatile") ||
+                (self.check("Identifier") && self.lexer.peek(0) != '\0') {
+            self.parse_member_field(depth, modifiers.to_string())
+        } else {
+            print_indent(depth)
+            printf("SkippedMember %s %s\n", self.current.kind, self.current.value.c_str())
+            self.skip_until_decl_boundary()
+        }
+    }
+
+    func parse_constructor(depth: i64, modifiers: String) {
+        self.expect("Constructor")
+        self.expect("LeftParen")
+        let params: String = self.parse_param_list_text()
+        self.expect("RightParen")
+        print_indent(depth)
+        printf("%sConstructor(%s)\n", modifiers.c_str(), params.c_str())
+        if self.check("LeftBrace") {
+            self.parse_block(depth + 1)
+        }
+    }
+
+    func parse_destructor(depth: i64, modifiers: String) {
+        self.expect("Destructor")
+        self.expect("LeftParen")
+        self.expect("RightParen")
+        print_indent(depth)
+        printf("%sDestructor()\n", modifiers.c_str())
+        if self.check("LeftBrace") {
+            self.parse_block(depth + 1)
+        }
+    }
+
+    func parse_method(depth: i64, modifiers: String, has_func_keyword: bool) {
+        if has_func_keyword {
+            self.match("Inline")
+            self.match("Interrupt")
+            self.expect("Function")
+        }
+        let name: String = self.parse_function_name_text()
+        self.expect("LeftParen")
+        let params: String = self.parse_param_list_text()
+        self.expect("RightParen")
+        let ret: String = new String("void")
+        if self.match("Arrow") {
+            ret = self.parse_type_name()
+        }
+        print_indent(depth)
+        printf("%sMethod %s(%s) -> %s\n", modifiers.c_str(), name.c_str(), params.c_str(), ret.c_str())
+        if self.check("LeftBrace") {
+            self.parse_block(depth + 1)
+        }
+    }
+
+    func parse_member_field(depth: i64, modifiers: String) {
+        let is_const: bool = self.match("Const")
+        let is_volatile: bool = self.match("Volatile")
+        if !is_const && !is_volatile {
+            self.match("Let")
+        }
+        let name: Token = self.expect("Identifier")
+        let ty: String = new String("<inferred>")
+        if self.match("Colon") {
+            ty = self.parse_type_name()
+        }
+        print_indent(depth)
+        printf("%sField %s: %s\n", modifiers.c_str(), name.value.c_str(), ty.c_str())
+        if self.match("Assign") {
+            self.parse_expr_until(depth + 1, "expr", "RightBrace")
+        }
+    }
+
+    func parse_var_decl(depth: i64) {
+        let is_volatile: bool = self.match("Volatile")
+        let is_const: bool = self.match("Const")
+        if !is_const {
+            self.expect("Let")
+        }
+        if self.match("LeftParen") {
+            let names: TextBuf = new TextBuf()
+            let first_name: bool = true
+            while !self.check("RightParen") && !self.check("EOF") {
+                if !first_name {
+                    names.append_string(new String(", "))
+                }
+                let part: Token = self.expect("Identifier")
+                names.append_string(part.value)
+                self.match("Comma")
+                first_name = false
+            }
+            self.expect("RightParen")
+            print_indent(depth)
+            printf("FieldTuple (%s): <inferred>\n", names.to_string().c_str())
+            if self.match("Assign") {
+                self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            }
+            return
+        }
+        let name: Token = self.expect("Identifier")
+        let ty: String = new String("<inferred>")
+        if self.match("Colon") {
+            ty = self.parse_type_name()
+        }
+        print_indent(depth)
+        if is_const {
+            printf("Const %s: %s\n", name.value.c_str(), ty.c_str())
+        } else if is_volatile {
+            printf("Volatile Field %s: %s\n", name.value.c_str(), ty.c_str())
+        } else {
+            printf("Field %s: %s\n", name.value.c_str(), ty.c_str())
+        }
+        if self.match("Assign") {
+            self.parse_expr_until(depth + 1, "expr", "RightBrace")
+        }
+    }
+
+    func parse_block(depth: i64) {
+        self.expect("LeftBrace")
+        self.line(depth, "Block")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            let start_kind: string = self.current.kind
+            let start_line: i64 = self.current.line
+            let start_column: i64 = self.current.column
+            self.parse_stmt(depth + 1)
+            if self.current.kind == start_kind &&
+                    self.current.line == start_line &&
+                    self.current.column == start_column {
+                print_indent(depth + 1)
+                printf("SkippedStmtToken %s %s\n", self.current.kind, self.current.value.c_str())
+                self.advance()
+            }
+        }
+        self.expect("RightBrace")
+    }
+
+    func parse_stmt(depth: i64) {
+        if self.check("Let") || self.check("Const") || self.check("Volatile") {
+            self.parse_var_decl(depth)
+        } else if self.match("Break") {
+            self.line(depth, "Break")
+        } else if self.match("Continue") {
+            self.line(depth, "Continue")
+        } else if self.match("Return") {
+            self.line(depth, "Return")
+            if !self.check("RightBrace") && !self.check("EOF") {
+                self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            }
+        } else if self.match("Throw") {
+            self.line(depth, "Throw")
+            self.parse_expr_until(depth + 1, "expr", "RightBrace")
+        } else if self.match("Delete") {
+            self.line(depth, "Delete")
+            self.parse_expr_until(depth + 1, "expr", "RightBrace")
+        } else if self.match("Assert") {
+            self.line(depth, "Assert")
+            self.parse_expr_until(depth + 1, "args", "RightBrace")
+        } else if self.match("Defer") {
+            self.line(depth, "Defer")
+            self.parse_stmt(depth + 1)
+        } else if self.match("If") {
+            self.line(depth, "If")
+            self.parse_expr_until(depth + 1, "condition", "LeftBrace")
+            self.parse_block(depth + 1)
+            if self.match("Else") {
+                if self.check("If") {
+                    self.parse_stmt(depth + 1)
+                } else {
+                    self.parse_block(depth + 1)
+                }
+            }
+        } else if self.match("While") {
+            self.line(depth, "While")
+            self.parse_expr_until(depth + 1, "condition", "LeftBrace")
+            self.parse_block(depth + 1)
+        } else if self.match("Until") {
+            self.line(depth, "Until")
+            self.parse_expr_until(depth + 1, "condition", "LeftBrace")
+            self.parse_block(depth + 1)
+        } else if self.match("Do") {
+            self.line(depth, "Do")
+            self.parse_block(depth + 1)
+            if self.match("While") {
+                self.parse_expr_until(depth + 1, "condition", "RightBrace")
+            }
+        } else if self.match("For") {
+            self.line(depth, "For")
+            self.parse_expr_until(depth + 1, "header", "LeftBrace")
+            self.parse_block(depth + 1)
+        } else if self.match("Foreach") {
+            self.line(depth, "Foreach")
+            self.parse_expr_until(depth + 1, "header", "LeftBrace")
+            self.parse_block(depth + 1)
+        } else if self.match("With") {
+            self.line(depth, "With")
+            self.parse_expr_until(depth + 1, "object", "LeftBrace")
+            self.parse_block(depth + 1)
+        } else if self.match("Try") {
+            self.line(depth, "Try")
+            self.parse_block(depth + 1)
+            if self.match("Catch") {
+                self.line(depth + 1, "Catch")
+                if !self.check("LeftBrace") {
+                    self.parse_expr_until(depth + 2, "binding", "LeftBrace")
+                }
+                self.parse_block(depth + 2)
+            }
+            if self.match("Finally") {
+                self.line(depth + 1, "Finally")
+                self.parse_block(depth + 2)
+            }
+        } else if self.match("Match") {
+            self.line(depth, "Match")
+            self.parse_expr_until(depth + 1, "subject", "LeftBrace")
+            self.parse_match_body(depth + 1)
+        } else {
+            self.line(depth, "ExprStmt")
+            self.parse_expr_until(depth + 1, "expr", "RightBrace")
+        }
+    }
+
+    func parse_match_body(depth: i64) {
+        self.expect("LeftBrace")
+        self.line(depth, "Cases")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            if self.match("Case") {
+                self.line(depth + 1, "Case")
+                self.parse_expr_until(depth + 2, "pattern", "FatArrow")
+                self.expect("FatArrow")
+                self.parse_block(depth + 2)
+            } else if self.match("Default") {
+                self.line(depth + 1, "Default")
+                self.expect("FatArrow")
+                self.parse_block(depth + 2)
+            } else {
+                print_indent(depth + 1)
+                printf("SkippedCaseToken %s %s\n", self.current.kind, self.current.value.c_str())
+                self.advance()
+            }
+        }
+        self.expect("RightBrace")
+    }
+
+    func is_expr_stop(stop: string) -> bool {
+        if self.check("EOF") { return true }
+        if stop == "LeftBrace" && self.check("LeftBrace") { return true }
+        if stop == "RightBrace" && self.check("RightBrace") { return true }
+        if stop == "FatArrow" && self.check("FatArrow") { return true }
+        return false
+    }
+
+    func parse_expr_until(depth: i64, label: string, stop: string) {
+        let text: TextBuf = new TextBuf()
+        let parens: i64 = 0
+        let brackets: i64 = 0
+        let braces: i64 = 0
+        let start_line: i64 = self.current.line
+        let done: bool = false
+        while !done {
+            if self.check("EOF") {
+                done = true
+            } else if parens == 0 && brackets == 0 && braces == 0 {
+                if stop == "LeftBrace" && self.check("LeftBrace") {
+                    done = true
+                } else if stop == "RightBrace" && self.check("RightBrace") {
+                    done = true
+                } else if stop == "FatArrow" && self.check("FatArrow") {
+                    done = true
+                }
+                if stop != "LeftBrace" && self.current.line > start_line {
+                    done = true
+                }
+                if stop != "LeftBrace" &&
+                        (self.is_boundary_token() || self.check("Return") || self.check("If")) {
+                    done = true
+                }
+            }
+
+            if !done {
+                if text.length > 4096 {
+                    printf("parse error: raw expression too long near %s at %lld:%lld\n",
+                        self.current.kind, self.current.line, self.current.column)
+                    done = true
+                }
+            }
+
+            if !done {
+                if self.check("LeftParen") { parens = parens + 1 }
+                if self.check("RightParen") { parens = parens - 1 }
+                if self.check("LeftBracket") { brackets = brackets + 1 }
+                if self.check("RightBracket") { brackets = brackets - 1 }
+                if self.check("LeftBrace") { braces = braces + 1 }
+                if self.check("RightBrace") { braces = braces - 1 }
+                let s: String = self.current.value
+                let i: i64 = 0
+                while i < s.byte_len() {
+                    text.append_char(s.byte_at(i))
+                    i = i + 1
+                }
+                if s.byte_len() == 0 {
+                    text.append_char(' ')
+                }
+                text.append_char(' ')
+                self.advance()
+            }
+        }
+        print_indent(depth)
+        printf("RawExpr %s %s\n", label, text.to_string().c_str())
+        // Parse mode is a short-lived tool. Keep expression scratch buffers
+        // alive to avoid exercising the current cleanup/free-list edge while
+        // broad source parsing is still being brought up.
+        let keep: char* = text as char*
+        rc_retain(keep)
+    }
+
+    func skip_until_decl_boundary() {
+        let depth: i64 = 0
+        if !self.check("EOF") {
+            self.advance()
+        }
+        while !self.check("EOF") {
+            if depth == 0 && self.is_boundary_token() {
+                return
+            }
+            if self.check("LeftBrace") { depth = depth + 1 }
+            if self.check("RightBrace") {
+                if depth == 0 {
+                    self.advance()
+                    return
+                }
+                depth = depth - 1
+            }
+            self.advance()
+        }
+    }
+
+    func is_boundary_token() -> bool {
+        return self.check("Public") || self.check("Packed") || self.check("Import") ||
+            self.check("Using") || self.check("Namespace") || self.check("Alias") ||
+            self.check("Macro") || self.check("Function") || self.check("Extern") ||
+            self.check("Inline") || self.check("Interrupt") || self.check("Class") ||
+            self.check("Struct") || self.check("Union") || self.check("Enum") ||
+            self.check("Trait") || self.check("Impl") || self.check("UnitTest") ||
+            self.check("Ui") || self.check("Grammar") || self.check("Hash") ||
+            self.check("At") || self.check("Const") || self.check("Let") ||
+            self.check("Volatile")
+    }
+}
+
+func dump_parse(source: String) {
+    let parser: Parser = new Parser(source)
+    // Keep the process-lifetime parser alive; parse mode is a short-lived
+    // tool, and this avoids a current cleanup edge while recovery evolves.
+    rc_retain(parser as char*)
+    parser.parse_program()
+}
+
+func main(args: string[]) -> i64 {
+    if args[0] == null {
+        puts("usage: selfhost-lexer [--parse] <file>")
+        return 1
+    }
+    let path: string = args[0]
+    let parse_mode: bool = false
+    if args[0] == "--parse" {
+        parse_mode = true
+        if args[1] == null {
+            puts("usage: selfhost-lexer --parse <file>")
+            return 1
+        }
+        path = args[1]
+    }
+    let result: Result<String, char*> = read_file(path)
+    if result.is_err() {
+        puts(result.get_err())
+        return 1
+    }
+    if parse_mode {
+        dump_parse(result.get_ok())
+        exit(0)
+    } else {
+        dump_tokens(result.get_ok())
+    }
+    return 0
+}

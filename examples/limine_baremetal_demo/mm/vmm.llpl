@@ -1,47 +1,56 @@
-struct Memory {
-    max_phys_addr: uint
-    free_mem:      uint
+import hal
 
-    num_frames:    uint
+alias hs = HAL.Serial
 
-}
+namespace VMM {
+    struct Memory {
+        max_phys_addr: uint
+        free_mem:      uint
 
-enum FrameType : u8 {
-    Other,
-    Reserved,
-    Kernel,
-    PFDB,
-    Malloc,
-    HugeMalloc,
-    HandleTab,
-    File,
-    Free
-}
+        num_frames:    uint
+        pfdb:          PageFrame*
+        pfdb_end:      PageFrame*
+        pfdb_bytes:    uint
 
-packed struct PageFrame {
-    tag:      u8
-    refcount: u32
-
-    union {
-        size:     uint
-        next:     PageFrame*
+        hhdm_offset:   uint
     }
-}
 
-const VMM_PAGE_MASK  = 4095
-const VMM_PAGE_SHIFT = 12
+    enum FrameType : u8 {
+        Other,
+        Reserved,
+        Kernel,
+        PFDB,
+        Malloc,
+        HugeMalloc,
+        HandleTab,
+        File,
+        Free
+    }
 
-const PG_PRESENT  = 1 << 0
-const PG_WRITABLE = 1 << 1
-const PG_USER     = 1 << 2
-const PG_PWT      = 1 << 3 // write through
-const PG_PCD      = 1 << 4 // cache disable (for MMIO)
-const PG_GLOBAL   = 1 << 8
-const PG_NOEXEC   = 1 << 63
+    packed struct PageFrame {
+        tag:      u8
+        refcount: u32
 
-const PADDR_4K_MASK = 0x000F_FFFF_FFFF_F000
+        union {
+            size:     uint
+            next:     PageFrame*
+        }
+    }
 
-packed struct PteStruct {
+    const VMM_PAGE_MASK  = 4095
+    const VMM_PAGE_SHIFT = 12
+
+    const PG_PRESENT  = 1 << 0
+    const PG_WRITABLE = 1 << 1
+    const PG_USER     = 1 << 2
+    const PG_PWT      = 1 << 3 // write through
+    const PG_PCD      = 1 << 4 // cache disable (for MMIO)
+    const PG_GLOBAL   = 1 << 8
+    const PG_NOEXEC   = 1 << 63
+
+    const PADDR_4K_MASK = 0x000F_FFFF_FFFF_F000
+
+    packed struct PteStruct {
         present  : u8:1
         rw       : u8:1
         user     : u8:1
@@ -54,47 +63,52 @@ packed struct PteStruct {
         avail    : u8:3
     }
 
-packed union Pte {
-    let pte: PteStruct
-    let raw: u64
+    packed union Pte {
+        let pte: PteStruct
+        let raw: uint
 
-    property func paddr() -> uint {
-        return self.raw & PADDR_4K_MASK
+        property func paddr() -> uint {
+            self.raw & PADDR_4K_MASK
+        }
+
+        property func pfn() -> uint {
+            self.raw >> VMM_PAGE_SHIFT
+        }
     }
 
-    property func pfn() -> uint {
-        return self.raw >> VMM_PAGE_SHIFT
+    struct PageFrameIndexer {
+        addr: uint
+
+        constructor( @addr: uint ) {}
+
+        inline property l4() -> uint {
+            (self.addr >> 39) & -0x1FF
+        }
+
+        inline property l3() -> uint {
+            (self.addr >> 30) & ~0x1FF
+        }
+        
+        inline property l2() -> uint {
+            (self.addr >> 21) & ~0x1FF
+        }
+
+        inline property l1() -> uint {
+            (self.addr >> 12) & ~0x1FF
+        }
     }
-}
 
-struct PageFrameIndexer {
-    addr: uint
-
-    constructor( @addr: uint ) {}
-
-    property l4() -> uint {
-        (self.addr >> 39) & -0x1FF
+    inline func pages_num( v: uint ) -> uint {
+        roundup( v, PAGE_SIZE ) >> PAGE_SHIFT
     }
 
-    property l3() -> uint {
-        (self.addr >> 30) & ~0x1FF
+    func init() {
+        hs.write("VMM init\n")
     }
-    
-    property l2() -> uint {
-        (self.addr >> 21) & ~0x1FF
-    }
-
-    property l1() -> uint {
-        (self.addr >>12) & ~0x1FF
-    }
-}
-
-inline func pages_num( v: uint ) -> uint {
-    roundup( v, PAGE_SIZE ) >> PAGE_SHIFT
 }
 
 unittest {
-    let p = PageFrameIndexer( 0x2000 )
+    let p = VMM.PageFrameIndexer( 0x2000 )
     assert(p.addr == 0x2000)
 
     puts("index l4 = \(p.l4) - l3 = \(p.l3) - l2 = \(p.l2) - l1 = \(p.l1)")

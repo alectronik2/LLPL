@@ -9,6 +9,7 @@ import std.algorithm;
 import std.range;
 import std.path;
 import std.file;
+import std.datetime.stopwatch;
 import ast;
 import errors;
 import grammar;
@@ -519,6 +520,7 @@ class CodeGenerator {
     // Per-symbol origin module path, so alias-qualified and selective imports
     // can look up which module a given mangled name came from.
     private string[string] functionModulePath;
+    private string[string] functionCandidateModulePath;
     private string[string] classModulePath;
     private string[string] structModulePath;
     private string[string] unionModulePath;
@@ -546,6 +548,7 @@ class CodeGenerator {
     private int lambdaCounter; // Numbers each lambda literal's env struct/trampoline function uniquely
     private string[] lambdaForwardDecls; // Per-lambda env typedef + trampoline prototype, emitted before closure creation sites
     private string[] lambdaBodyDecls; // Per-lambda trampoline bodies, emitted after class/struct layouts exist
+    private string[string] functionClosureAdapters; // Free-function symbol -> closure trampoline symbol
     private int embeddedFileCounter; // Numbers each embed("path") static blob uniquely
     private string[] embeddedFileDecls; // Static byte arrays emitted before function bodies
     private bool[string] emittedBoundsCheckHelpers; // Set of C element-type signatures already emitted
@@ -553,6 +556,12 @@ class CodeGenerator {
     private bool[string] reachableFunctions; // Set of reachable free-function mangled names
     private bool[string] originalFreeFunctionKeys; // Free functions from the original programs (not generic instantiations)
     private bool enableDCE; // Whether dead-code elimination is enabled
+    private double codegenPreprocessTime = 0.0;
+    private double codegenRegistryTime = 0.0;
+    private double codegenAnalysisTime = 0.0;
+    private double codegenForwardDeclTime = 0.0;
+    private double codegenDeclarationTime = 0.0;
+    private double codegenAssemblyMetadataTime = 0.0;
 
     // Per-capture context while generating a lambda body: how to read the
     // capture's value (useExpr), how to refer to its storage location
@@ -580,6 +589,7 @@ class CodeGenerator {
     private string[string][string] moduleAliases;           // importer -> alias -> target module path
     private string[string][string] selectiveLocalAliases;   // importer -> local name -> target mangled name
     private bool[string][string] exportsByModule;           // module -> set of mangled names it declares
+    private bool[string] moduleHasExplicitExports;          // module -> contains at least one `public` declaration
     private string preludeModulePath;                       // treated as implicitly imported everywhere
 
     // `alias hf = HAL.Foo` - a name standing in for a *namespace path*
@@ -670,6 +680,15 @@ class CodeGenerator {
         this.enableDCE = enableDCE;
         this.targetProfile = targetProfile;
         this.enableUnitTests = enableUnitTests;
+    }
+
+    void reportTiming() {
+        writefln("  Codegen preprocess/desugar: %.2f ms", codegenPreprocessTime);
+        writefln("  Codegen registry/reachability: %.2f ms", codegenRegistryTime);
+        writefln("  Codegen type analysis: %.2f ms", codegenAnalysisTime);
+        writefln("  Codegen forward declarations: %.2f ms", codegenForwardDeclTime);
+        writefln("  Codegen declaration bodies: %.2f ms", codegenDeclarationTime);
+        writefln("  Codegen assembly/metadata: %.2f ms", codegenAssemblyMetadataTime);
     }
 
     private bool isFreestandingTarget() {
@@ -943,6 +962,7 @@ class CodeGenerator {
             case "Task_should_reschedule_current":
             case "Task_pick_next":
             case "Syscall_dispatch":
+            case "isr_handler":
                 return true;
             default:
                 return false;
@@ -979,6 +999,9 @@ class CodeGenerator {
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             changed |= walkForReachableCalls(foreachStmt.iterable);
             changed |= walkForReachableCalls(foreachStmt.body_);
+        } else if (auto withStmt = cast(WithStmt)node) {
+            changed |= walkForReachableCalls(withStmt.object);
+            changed |= walkForReachableCalls(withStmt.body_);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             if (returnStmt.value) changed |= walkForReachableCalls(returnStmt.value);
         } else if (auto deferStmt = cast(DeferStmt)node) {
@@ -1665,6 +1688,9 @@ class CodeGenerator {
         } else if (auto f = cast(ForeachStmt)node) {
             collectNodeEffects(f.iterable, effects);
             collectNodeEffects(f.body_, effects);
+        } else if (auto w = cast(WithStmt)node) {
+            collectNodeEffects(w.object, effects);
+            collectNodeEffects(w.body_, effects);
         } else if (auto r = cast(ReturnStmt)node) {
             collectNodeEffects(r.value, effects);
         } else if (auto d = cast(DeferStmt)node) {
@@ -1855,7 +1881,7 @@ class CodeGenerator {
     // over maximally compact output (see e.g. KHeap's arena design).
     private ASTNode[] desugarTaggedEnum(EnumDecl enumDecl) {
         VarDecl[] structFields;
-        structFields ~= new VarDecl("tag", new Type("i64"), null, false, enumDecl.line, enumDecl.column);
+        structFields ~= new VarDecl("tag", new Type("int"), null, false, enumDecl.line, enumDecl.column);
         foreach (variant; enumDecl.variants) {
             foreach (field; variant.fields) {
                 structFields ~= new VarDecl(format("%s_%s", variant.name, field.name), field.type,
@@ -1864,6 +1890,7 @@ class CodeGenerator {
         }
         auto structDecl = new StructDecl(enumDecl.name, structFields, false, enumDecl.line, enumDecl.column);
         structDecl.namespaceSegments = enumDecl.namespaceSegments;
+        structDecl.isPublic = enumDecl.isPublic;
 
         ASTNode[] result = [structDecl];
         string mangledEnumName = mangled(enumDecl.namespaceSegments, enumDecl.name);
@@ -1888,6 +1915,7 @@ class CodeGenerator {
 
             auto ctor = new FunctionDecl(variant.name, variant.fields, resultType, new Block(bodyStmts),
                 false, false, false, variant.line, variant.column);
+            ctor.isPublic = enumDecl.isPublic;
             // Namespaced as if declared inside `namespace EnumName { ... }`,
             // so it mangles to e.g. "Shape_Circle" and `Shape.Circle(...)`
             // resolves to it via the same qualified-call machinery any
@@ -1906,9 +1934,11 @@ class CodeGenerator {
     // Recursively hoists the contents of `namespace` blocks to the top level,
     // stamping each contained function/class/struct/global with the full
     // chain of enclosing namespace names (innermost last).
-    private ASTNode[] flattenNamespaces(ASTNode[] decls, string[] segments, string modulePath = "") {
+    private ASTNode[] flattenNamespaces(ASTNode[] decls, string[] segments, string modulePath = "",
+            bool publicContext = false) {
         ASTNode[] result;
         foreach (decl; decls) {
+            bool effectivePublic = publicContext || decl.isPublic;
             if (auto usingStmt = cast(UsingNamespaceStmt)decl) {
                 // Collect using-namespace declarations for this module
                 if (modulePath !in moduleUsingNamespaces) {
@@ -1917,48 +1947,62 @@ class CodeGenerator {
                 moduleUsingNamespaces[modulePath] ~= usingStmt.namespacePath;
                 // Don't include in result - these are processed during name resolution
             } else if (auto ns = cast(NamespaceDecl)decl) {
-                result ~= flattenNamespaces(ns.declarations, segments ~ ns.name, modulePath);
+                result ~= flattenNamespaces(ns.declarations, segments ~ ns.name, modulePath, effectivePublic);
             } else if (auto funcDecl = cast(FunctionDecl)decl) {
                 funcDecl.namespaceSegments = segments;
+                funcDecl.isPublic = effectivePublic;
                 result ~= funcDecl;
             } else if (auto classDecl = cast(ClassDecl)decl) {
                 classDecl.namespaceSegments = segments;
+                classDecl.isPublic = effectivePublic;
                 result ~= classDecl;
             } else if (auto structDecl = cast(StructDecl)decl) {
                 structDecl.namespaceSegments = segments;
+                structDecl.isPublic = effectivePublic;
                 result ~= structDecl;
             } else if (auto unionDecl = cast(UnionDecl)decl) {
                 unionDecl.namespaceSegments = segments;
+                unionDecl.isPublic = effectivePublic;
                 result ~= unionDecl;
             } else if (auto uiDecl = cast(UiDecl)decl) {
                 uiDecl.namespaceSegments = segments;
+                uiDecl.isPublic = effectivePublic;
                 result ~= uiDecl;
             } else if (auto enumDecl = cast(EnumDecl)decl) {
                 enumDecl.namespaceSegments = segments;
+                enumDecl.isPublic = effectivePublic;
                 result ~= enumDecl;
             } else if (auto grammarDecl = cast(GrammarDecl)decl) {
                 grammarDecl.namespaceSegments = segments;
+                grammarDecl.isPublic = effectivePublic;
                 result ~= grammarDecl;
             } else if (auto varDecl = cast(VarDecl)decl) {
                 varDecl.namespaceSegments = segments;
+                varDecl.isPublic = effectivePublic;
                 result ~= varDecl;
             } else if (auto aliasDecl = cast(AliasDecl)decl) {
                 aliasDecl.namespaceSegments = segments;
+                aliasDecl.isPublic = effectivePublic;
                 result ~= aliasDecl;
             } else if (auto arrayAliasDecl = cast(ArrayAliasDecl)decl) {
                 arrayAliasDecl.namespaceSegments = segments;
+                arrayAliasDecl.isPublic = effectivePublic;
                 result ~= arrayAliasDecl;
             } else if (auto macroDecl = cast(MacroDecl)decl) {
                 macroDecl.namespaceSegments = segments;
+                macroDecl.isPublic = effectivePublic;
                 result ~= macroDecl;
             } else if (auto traitDecl = cast(TraitDecl)decl) {
                 traitDecl.namespaceSegments = segments;
+                traitDecl.isPublic = effectivePublic;
                 result ~= traitDecl;
             } else if (auto implDecl = cast(ImplDecl)decl) {
                 implDecl.namespaceSegments = segments;
+                implDecl.isPublic = effectivePublic;
                 result ~= implDecl;
             } else if (auto unitTestDecl = cast(UnitTestDecl)decl) {
                 unitTestDecl.namespaceSegments = segments;
+                unitTestDecl.isPublic = effectivePublic;
                 result ~= unitTestDecl;
             } else if (auto linkDecl = cast(LinkDecl)decl) {
                 // Not namespace-scoped (see LinkDecl's own doc comment) -
@@ -1974,6 +2018,27 @@ class CodeGenerator {
             }
         }
         return result;
+    }
+
+    private void collectExplicitExportModes(Program[] programs) {
+        foreach (prog; programs) {
+            foreach (decl; prog.declarations) {
+                if (decl.isPublic) {
+                    moduleHasExplicitExports[prog.modulePath] = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    private bool shouldExportDecl(string modulePath, ASTNode decl) {
+        return (modulePath !in moduleHasExplicitExports) || decl.isPublic;
+    }
+
+    private void exportDeclSymbol(string modulePath, ASTNode decl, string key) {
+        if (shouldExportDecl(modulePath, decl)) {
+            exportsByModule[modulePath][key] = true;
+        }
     }
 
     private bool uiCaptureExists(Capture[] captures, string name) {
@@ -2061,6 +2126,14 @@ class CodeGenerator {
 
     string generateMultiple(Program[] programs) {
         string code = "";
+        StopWatch codegenPhaseTimer;
+        codegenPhaseTimer.start();
+        void finishCodegenPhase(ref double target) {
+            codegenPhaseTimer.stop();
+            target += codegenPhaseTimer.peek().total!"msecs";
+            codegenPhaseTimer.reset();
+            codegenPhaseTimer.start();
+        }
 
         // Register the closure runtime representation as a known struct
         // type name (see runtime.h's __LLPL_Closure and parser.d's closure
@@ -2147,13 +2220,17 @@ class CodeGenerator {
             ASTNode[] withUiDesugared;
             foreach (decl; prog.declarations) {
                 if (auto uiDecl = cast(UiDecl)decl) {
-                    withUiDesugared ~= desugarUiDecl(uiDecl);
+                    auto desugared = desugarUiDecl(uiDecl);
+                    desugared.isPublic = uiDecl.isPublic;
+                    withUiDesugared ~= desugared;
                 } else {
                     withUiDesugared ~= decl;
                 }
             }
             prog.declarations = withUiDesugared;
         }
+
+        collectExplicitExportModes(programs);
 
         // Pull every generic declaration (typeParams non-empty) out of
         // prog.declarations entirely, before any other pass - field-type
@@ -2173,7 +2250,7 @@ class CodeGenerator {
                         string key = mangledFunc(funcDecl);
                         genericFunctionTemplates[key] = funcDecl;
                         genericTemplateModulePath[key] = prog.modulePath;
-                        exportsByModule[prog.modulePath][key] = true;
+                        exportDeclSymbol(prog.modulePath, funcDecl, key);
                         continue;
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
@@ -2181,7 +2258,7 @@ class CodeGenerator {
                         string key = mangledClass(classDecl);
                         genericClassTemplates[key] = classDecl;
                         genericTemplateModulePath[key] = prog.modulePath;
-                        exportsByModule[prog.modulePath][key] = true;
+                        exportDeclSymbol(prog.modulePath, classDecl, key);
                         continue;
                     }
                 } else if (auto structDecl = cast(StructDecl)decl) {
@@ -2189,7 +2266,7 @@ class CodeGenerator {
                         string key = mangledStruct(structDecl);
                         genericStructTemplates[key] = structDecl;
                         genericTemplateModulePath[key] = prog.modulePath;
-                        exportsByModule[prog.modulePath][key] = true;
+                        exportDeclSymbol(prog.modulePath, structDecl, key);
                         continue;
                     }
                 } else if (auto traitDecl = cast(TraitDecl)decl) {
@@ -2199,7 +2276,7 @@ class CodeGenerator {
                     string key = mangled(traitDecl.namespaceSegments, traitDecl.name);
                     traitRegistry[key] = traitDecl;
                     traitModulePath[key] = prog.modulePath;
-                    exportsByModule[prog.modulePath][key] = true;
+                    exportDeclSymbol(prog.modulePath, traitDecl, key);
                     continue;
                 } else if (auto implDecl = cast(ImplDecl)decl) {
                     // Parked, not processed yet - its methods have a
@@ -2219,6 +2296,7 @@ class CodeGenerator {
             }
             prog.declarations = withGenericsPulledOut;
         }
+        finishCodegenPhase(codegenPreprocessTime);
 
         // Register functions, classes and structs from all modules up front so
         // type inference can resolve calls/fields regardless of declaration order.
@@ -2230,8 +2308,11 @@ class CodeGenerator {
         foreach (prog; programs) {
             foreach (decl; prog.declarations) {
                 if (auto aliasDecl = cast(AliasDecl)decl) {
-                    bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
-                        (aliasDecl.targetPath.length == 1 && isPrimitiveTypeName(aliasDecl.targetPath[0]));
+                    bool isTypeAlias = aliasDecl.targetType !is null ||
+                        aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
+                        (aliasDecl.targetPath.length == 1 &&
+                            (isPrimitiveTypeName(aliasDecl.targetPath[0]) ||
+                             isKnownTypeName(aliasDecl.targetPath[0])));
                     if (isTypeAlias) {
                         string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
                         // An `alias X = u32` target is parsed as a plain
@@ -2241,12 +2322,16 @@ class CodeGenerator {
                         // here too, or primitiveToC (which only knows the
                         // long forms) emits the literal, meaningless C type
                         // name "u32" verbatim.
-                        string baseName = aliasDecl.targetPath.length == 1 ?
-                            canonicalIntTypeName(aliasDecl.targetPath[0]) : aliasDecl.targetPath.join("_");
-                        typeAliases[mangledName] = new Type(baseName, aliasDecl.targetPointerDepth,
-                            aliasDecl.targetIsArray, aliasDecl.targetArraySize);
+                        if (aliasDecl.targetType !is null) {
+                            typeAliases[mangledName] = cloneType(aliasDecl.targetType);
+                        } else {
+                            string baseName = aliasDecl.targetPath.length == 1 ?
+                                canonicalIntTypeName(aliasDecl.targetPath[0]) : aliasDecl.targetPath.join("_");
+                            typeAliases[mangledName] = new Type(baseName, aliasDecl.targetPointerDepth,
+                                aliasDecl.targetIsArray, aliasDecl.targetArraySize);
+                        }
                         typeAliasModulePath[mangledName] = prog.modulePath;
-                        exportsByModule[prog.modulePath][mangledName] = true;
+                        exportDeclSymbol(prog.modulePath, aliasDecl, mangledName);
                     }
                 } else if (auto arrayAliasDecl = cast(ArrayAliasDecl)decl) {
                     string mangledName = mangled(arrayAliasDecl.namespaceSegments, arrayAliasDecl.name);
@@ -2269,6 +2354,7 @@ class CodeGenerator {
                         string key = mangledFunc(funcDecl);
                         functionCandidates[key] ~= funcDecl;
                         if (key !in candidateModulePath) candidateModulePath[key] = prog.modulePath;
+                        if (key !in functionCandidateModulePath) functionCandidateModulePath[key] = prog.modulePath;
                     }
                 }
             }
@@ -2286,33 +2372,33 @@ class CodeGenerator {
                     string key = mangleFreeFunctionName(funcDecl);
                     functionRegistry[key] = funcDecl;
                     functionModulePath[key] = prog.modulePath;
-                    exportsByModule[prog.modulePath][key] = true;
+                    exportDeclSymbol(prog.modulePath, funcDecl, key);
                     originalFreeFunctionKeys[key] = true;
                 } else if (auto classDecl = cast(ClassDecl)decl) {
                     string key = mangledClass(classDecl);
                     classRegistry[key] = classDecl;
                     classModulePath[key] = prog.modulePath;
-                    exportsByModule[prog.modulePath][key] = true;
+                    exportDeclSymbol(prog.modulePath, classDecl, key);
                 } else if (auto structDecl = cast(StructDecl)decl) {
                     string key = mangledStruct(structDecl);
                     structRegistry[key] = structDecl;
                     structModulePath[key] = prog.modulePath;
-                    exportsByModule[prog.modulePath][key] = true;
+                    exportDeclSymbol(prog.modulePath, structDecl, key);
                 } else if (auto unionDecl = cast(UnionDecl)decl) {
                     string key = mangledUnion(unionDecl);
                     unionRegistry[key] = unionDecl;
                     unionModulePath[key] = prog.modulePath;
-                    exportsByModule[prog.modulePath][key] = true;
+                    exportDeclSymbol(prog.modulePath, unionDecl, key);
                 } else if (auto macroDecl = cast(MacroDecl)decl) {
                     string key = mangled(macroDecl.namespaceSegments, macroDecl.name);
                     macroRegistry[key] = macroDecl;
                     macroModulePath[key] = prog.modulePath;
-                    exportsByModule[prog.modulePath][key] = true;
+                    exportDeclSymbol(prog.modulePath, macroDecl, key);
                 } else if (auto varDecl = cast(VarDecl)decl) {
                     string key = mangled(varDecl.namespaceSegments, varDecl.name);
                     globalVarRegistry[key] = varDecl;
                     globalVarModulePath[key] = prog.modulePath;
-                    exportsByModule[prog.modulePath][key] = true;
+                    exportDeclSymbol(prog.modulePath, varDecl, key);
                 }
             }
         }
@@ -2329,6 +2415,7 @@ class CodeGenerator {
         // emitted, so the forward-decl and definition loops below can skip
         // the dead ones.
         computeReachableFunctions(programs);
+        finishCodegenPhase(codegenRegistryTime);
 
         // Process every parked `impl Trait for Type { ... }` block now
         // that classRegistry/structRegistry are populated (so a
@@ -2481,6 +2568,7 @@ class CodeGenerator {
                 }
             }
         }
+        finishCodegenPhase(codegenAnalysisTime);
 
         // Include runtime header
         code ~= "/*\n";
@@ -2939,6 +3027,7 @@ class CodeGenerator {
             }
         }
         earlyDeclCode ~= "\n";
+        finishCodegenPhase(codegenForwardDeclTime);
 
         // Alias `#define`s are emitted early too, for the same reason as
         // the forward declarations above: the C preprocessor is purely
@@ -3062,6 +3151,7 @@ class CodeGenerator {
         }
 
         string abiAssertCode = generateAbiAssertions(programs);
+        finishCodegenPhase(codegenDeclarationTime);
 
         // genericForwardDecls/genericInstanceDecls may have been populated
         // as a side effect of *any* pass above (the early forward-decl
@@ -3199,6 +3289,7 @@ class CodeGenerator {
 
         collectEffects(programs);
         collectSymbolTable(programs);
+        finishCodegenPhase(codegenAssemblyMetadataTime);
 
         // Collected symbols/usages above are still valid (if partial) even
         // when this throws - an editor tool (lspquery.d) can still offer
@@ -3296,7 +3387,8 @@ class CodeGenerator {
                 currentNamespaceSegments = aliasDecl.namespaceSegments;
                 string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
 
-                bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
+                bool isTypeAlias = aliasDecl.targetType !is null ||
+                    aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
                     (aliasDecl.targetPath.length == 1 &&
                         (isPrimitiveTypeName(aliasDecl.targetPath[0]) ||
                          isKnownTypeName(aliasDecl.targetPath[0]))) ||
@@ -3356,7 +3448,8 @@ class CodeGenerator {
         // registered into typeAliases up front (see generateMultiple), so
         // resolveType() substitutes it correctly regardless of where this
         // declaration sits relative to its uses - nothing left to do here.
-        bool isTypeAlias = aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
+        bool isTypeAlias = aliasDecl.targetType !is null ||
+            aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
             (aliasDecl.targetPath.length == 1 &&
                 (isPrimitiveTypeName(aliasDecl.targetPath[0]) ||
                  isKnownTypeName(aliasDecl.targetPath[0]))) ||
@@ -3407,14 +3500,14 @@ class CodeGenerator {
                 // matching one in the latter, or it's a RangeError crash,
                 // not a compile error.
                 genericTemplateModulePath[mangledName] = genericTemplateModulePath[classKey];
-                exportsByModule[currentModulePath][mangledName] = true;
+                exportDeclSymbol(currentModulePath, aliasDecl, mangledName);
                 return "";
             }
             string structKey = findGenericTemplateKey(flatTarget, (k) => (k in genericStructTemplates) !is null);
             if (structKey.length > 0) {
                 genericStructTemplates[mangledName] = genericStructTemplates[structKey];
                 genericTemplateModulePath[mangledName] = genericTemplateModulePath[structKey];
-                exportsByModule[currentModulePath][mangledName] = true;
+                exportDeclSymbol(currentModulePath, aliasDecl, mangledName);
                 return "";
             }
         }
@@ -5188,6 +5281,14 @@ class CodeGenerator {
         return null;
     }
 
+    private Type resolveQualifiedConstructorType(MemberExpr memberExpr) {
+        string key = tryResolveQualifiedPath(memberExpr,
+            (n) => (n in classRegistry) !is null || (n in structRegistry) !is null ||
+                (n in unionRegistry) !is null);
+        if (key.length == 0) return null;
+        return new Type(key);
+    }
+
     // The real C `int main(int argc, char** argv)` entry point for a
     // `func main(args: string[]) -> ...` - the one shape that can't just be
     // an ordinary function the way `func main(argc: i32, argv: char**)`
@@ -6131,7 +6232,8 @@ class CodeGenerator {
 
             // Infer the type from the initializer if none was declared
             if (varDecl.type is null) {
-                varDecl.type = inferType(varDecl.initializer);
+                FunctionDecl fn = resolveFunctionReference(varDecl.initializer);
+                varDecl.type = fn !is null ? closureTypeFromFunction(fn) : inferType(varDecl.initializer);
             }
             // Captured *before* resolveType mutates varDecl.type in place -
             // a generic struct literal initializer (Pair { ... }) needs the
@@ -6288,6 +6390,8 @@ class CodeGenerator {
             code ~= indent() ~ "}\n";
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             code ~= generateForeachStmt(foreachStmt, isDeferred);
+        } else if (auto withStmt = cast(WithStmt)node) {
+            code ~= generateWithStmt(withStmt, isDeferred);
         } else if (auto returnStmt = cast(ReturnStmt)node) {
             // Replay any enclosing try block(s)' finally code first
             // (innermost-to-outermost), then function-level defers - see
@@ -6553,6 +6657,10 @@ class CodeGenerator {
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             return new ForeachStmt(foreachStmt.varName, cloneNode(foreachStmt.iterable, subs, typeSubs),
                 cloneBlock(foreachStmt.body_, subs, typeSubs), foreachStmt.line, foreachStmt.column);
+        } else if (auto withStmt = cast(WithStmt)node) {
+            return new WithStmt(cloneNode(withStmt.object, subs, typeSubs),
+                cloneBlock(withStmt.body_, subs, typeSubs), withStmt.contextName,
+                withStmt.line, withStmt.column);
         } else if (auto rangeExpr = cast(RangeExpr)node) {
             return new RangeExpr(cloneNode(rangeExpr.start, subs, typeSubs), cloneNode(rangeExpr.end, subs, typeSubs),
                 rangeExpr.line, rangeExpr.column);
@@ -6770,6 +6878,10 @@ class CodeGenerator {
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             return new ForeachStmt(foreachStmt.varName, expandQuotedNode(foreachStmt.iterable, subs),
                 expandQuotedBlock(foreachStmt.body_, subs), foreachStmt.line, foreachStmt.column);
+        } else if (auto withStmt = cast(WithStmt)node) {
+            return new WithStmt(expandQuotedNode(withStmt.object, subs),
+                expandQuotedBlock(withStmt.body_, subs), withStmt.contextName,
+                withStmt.line, withStmt.column);
         } else if (auto rangeExpr = cast(RangeExpr)node) {
             return new RangeExpr(expandQuotedNode(rangeExpr.start, subs), expandQuotedNode(rangeExpr.end, subs),
                 rangeExpr.line, rangeExpr.column);
@@ -7807,6 +7919,48 @@ class CodeGenerator {
         return result;
     }
 
+    private string generateWithStmt(WithStmt withStmt, bool isDeferred) {
+        Type objectType = inferType(withStmt.object);
+        resolveType(objectType);
+        Type contextType = objectType;
+        string initializer = generateExpression(withStmt.object);
+        if (shouldBindWithByAddress(withStmt.object, objectType)) {
+            contextType = cloneType(objectType);
+            contextType.pointerDepth++;
+            initializer = "&(" ~ initializer ~ ")";
+        }
+
+        Type previousType = null;
+        bool hadPreviousType = (withStmt.contextName in variableTypes) !is null;
+        if (hadPreviousType) previousType = variableTypes[withStmt.contextName];
+
+        variableTypes[withStmt.contextName] = contextType;
+
+        string code = indent() ~ "{\n";
+        indentLevel++;
+        code ~= indent() ~ format("%s %s = %s;\n", typeToC(contextType),
+            withStmt.contextName, initializer);
+        foreach (stmt; withStmt.body_.statements) {
+            code ~= generateStatement(stmt, isDeferred);
+        }
+        indentLevel--;
+        code ~= indent() ~ "}\n";
+
+        if (hadPreviousType) {
+            variableTypes[withStmt.contextName] = previousType;
+        } else {
+            variableTypes.remove(withStmt.contextName);
+        }
+        return code;
+    }
+
+    private bool shouldBindWithByAddress(ASTNode object, Type objectType) {
+        if (objectType.pointerDepth > 0 || objectType.isArray) return false;
+        if (!isStructTypeName(objectType.name) && !isUnionTypeName(objectType.name)) return false;
+        return cast(Identifier)object !is null || cast(MemberExpr)object !is null ||
+            cast(IndexExpr)object !is null;
+    }
+
     private string generateDestructuringStmt(DestructuringStmt stmt) {
         Type rhsType;
         if (stmt.type !is null) {
@@ -8467,12 +8621,12 @@ class CodeGenerator {
         }
 
         string mangledName = mangled(tmpl.namespaceSegments, instantiatedLeafName(tmpl.name, typeArgs));
+        Type[string] typeSubs;
+        foreach (i, tp; tmpl.typeParams) typeSubs[tp] = typeArgs[i];
 
         if (mangledName !in monomorphizedInstances) {
             monomorphizedInstances[mangledName] = true;
 
-            Type[string] typeSubs;
-            foreach (i, tp; tmpl.typeParams) typeSubs[tp] = typeArgs[i];
             auto clone = cloneFunctionDeclWithTypeSubs(tmpl, typeSubs, mangledName);
             string templateModulePath = currentModulePath;
             if (auto modulePath = templateKey in genericTemplateModulePath) {
@@ -8536,7 +8690,11 @@ class CodeGenerator {
             variableTypes = savedVarTypes;
         }
 
-        return GenericCallResolution(mangledName, args);
+        ASTNode[] resolvedArgs;
+        foreach (arg; args) {
+            resolvedArgs ~= cloneNode(arg, null, typeSubs);
+        }
+        return GenericCallResolution(mangledName, resolvedArgs);
     }
 
     // Resolves a possibly-unqualified class type name to its mangled form
@@ -8560,17 +8718,24 @@ class CodeGenerator {
         // where the alias is mangled to `std_sdl_SDL_AudioDeviceID`) - try
         // the bare name first, then each enclosing-namespace qualification,
         // mirroring the classRegistry/structRegistry lookup further below.
+        string aliasName = "";
         Type* aliasedPtr = t.name in typeAliases;
+        if (aliasedPtr !is null) aliasName = t.name;
         if (aliasedPtr is null) {
             foreach (candidate; enclosingQualifications(t.name)) {
                 if (auto found = candidate in typeAliases) {
                     aliasedPtr = found;
+                    aliasName = candidate;
                     break;
                 }
             }
         }
         Type aliased = aliasedPtr is null ? null : *aliasedPtr;
         if (aliased !is null) {
+            if (aliasName.length > 0 && !isSymbolVisibleFromCurrentModule(aliasName)) {
+                throw new CompileError(format("Cannot access private type '%s'", t.name),
+                    currentModulePath, 0, 0);
+            }
             // Substitute the alias's own type in place - a use site that
             // *also* wrote its own `*` on an already-pointer alias
             // (`string*` where `string` is `char*`) stacks depth (giving
@@ -8579,6 +8744,14 @@ class CodeGenerator {
             t.pointerDepth = t.pointerDepth + aliased.pointerDepth;
             t.isArray = t.isArray || aliased.isArray;
             if (aliased.arraySize > 0) t.arraySize = aliased.arraySize;
+            t.extraDims = aliased.extraDims.dup;
+            t.typeArgs = aliased.typeArgs.map!(a => cloneType(a)).array;
+            if (aliased.closureReturnType !is null) {
+                Parameter[] cps;
+                foreach (p; aliased.closureParams) cps ~= new Parameter(p.name, cloneType(p.type));
+                t.closureParams = cps;
+                t.closureReturnType = cloneType(aliased.closureReturnType);
+            }
         }
 
         // Built-in lowercase `string` is syntax sugar for `char*`, not a
@@ -8614,9 +8787,19 @@ class CodeGenerator {
         }
 
         if (isPrimitiveTypeName(t.name)) return;
-        if (t.name in classRegistry || t.name in structRegistry) return;
+        if (t.name in classRegistry || t.name in structRegistry) {
+            if (!isSymbolVisibleFromCurrentModule(t.name)) {
+                throw new CompileError(format("Cannot access private type '%s'", t.name),
+                    currentModulePath, 0, 0);
+            }
+            return;
+        }
         foreach (candidate; enclosingQualifications(t.name)) {
             if (candidate in classRegistry || candidate in structRegistry) {
+                if (!isSymbolVisibleFromCurrentModule(candidate)) {
+                    throw new CompileError(format("Cannot access private type '%s'", t.name),
+                        currentModulePath, 0, 0);
+                }
                 t.name = candidate;
                 return;
             }
@@ -8975,13 +9158,12 @@ class CodeGenerator {
             currentModulePath, line, column);
     }
 
-    // The "_int_int"-style suffix appended to an overloaded name's mangled
-    // C symbol - one mangleTypeArg per parameter, joined by "_". Only ever
-    // applied when a name has more than one candidate (checked by each
-    // caller below), so a non-overloaded declaration's mangled name is
-    // completely unaffected.
+    // The "__ov_int_int"-style suffix appended to an overloaded name's
+    // mangled C symbol - one mangleTypeArg per parameter, joined by "_".
+    // The reserved marker keeps overload-generated names from colliding
+    // with user-declared underscore names such as append_int.
     private string overloadSuffix(Parameter[] params) {
-        string suffix = "";
+        string suffix = "__ov";
         foreach (p; params) suffix ~= "_" ~ mangleTypeArg(p.type);
         return suffix;
     }
@@ -9235,12 +9417,12 @@ class CodeGenerator {
 
         string code = indent() ~ "{\n";
         indentLevel++;
-        code ~= indent() ~ format("int64_t %s = %s;\n", endName, generateExpression(range.end));
-        code ~= indent() ~ format("int64_t %s = %s;\n", foreachStmt.varName, generateExpression(range.start));
+        code ~= indent() ~ format("%s %s = %s;\n", primitiveToC("int"), endName, generateExpression(range.end));
+        code ~= indent() ~ format("%s %s = %s;\n", primitiveToC("int"), foreachStmt.varName, generateExpression(range.start));
         code ~= indent() ~ format("while (%s < %s) {\n", foreachStmt.varName, endName);
         indentLevel++;
 
-        variableTypes[foreachStmt.varName] = new Type("i64");
+        variableTypes[foreachStmt.varName] = new Type("int");
         foreach (stmt; foreachStmt.body_.statements) {
             code ~= generateStatement(stmt, isDeferred);
         }
@@ -9489,6 +9671,116 @@ class CodeGenerator {
         }
     }
 
+    private Type closureTypeFromFunction(FunctionDecl fn) {
+        Type t = new Type("__LLPL_Closure");
+        Parameter[] params;
+        foreach (p; fn.params) {
+            params ~= new Parameter("", cloneType(p.type));
+        }
+        t.closureParams = params;
+        t.closureReturnType = cloneType(fn.returnType);
+        return t;
+    }
+
+    private bool sameResolvedType(Type a, Type b) {
+        Type aa = cloneType(a);
+        Type bb = cloneType(b);
+        resolveType(aa);
+        resolveType(bb);
+        return sameErrorType(aa, bb);
+    }
+
+    private bool functionMatchesClosureType(FunctionDecl fn, Type closureType) {
+        if (closureType.closureReturnType is null) return false;
+        if (fn.params.length != closureType.closureParams.length) return false;
+        if (!sameResolvedType(fn.returnType, closureType.closureReturnType)) return false;
+        foreach (i, p; fn.params) {
+            if (!sameResolvedType(p.type, closureType.closureParams[i].type)) return false;
+        }
+        return true;
+    }
+
+    private FunctionDecl resolveFunctionReference(ASTNode expr, Type targetClosureType = null) {
+        FunctionDecl[] candidates;
+        string displayName;
+
+        if (auto ident = cast(Identifier)expr) {
+            displayName = ident.name;
+            try {
+                string resolved = resolveName(ident.name, (n) => (n in functionCandidates) !is null);
+                if (auto c = resolved in functionCandidates) candidates = *c;
+            } catch (CompileError e) {
+                return null;
+            }
+        } else if (auto member = cast(MemberExpr)expr) {
+            displayName = qualifiedExprName(member);
+            try {
+                string resolved = tryResolveQualifiedPath(member, (n) => (n in functionCandidates) !is null);
+                if (resolved.length > 0) {
+                    if (auto c = resolved in functionCandidates) candidates = *c;
+                }
+            } catch (CompileError e) {
+                return null;
+            }
+        }
+
+        if (candidates.length == 0) return null;
+        if (targetClosureType !is null) {
+            FunctionDecl[] matches;
+            foreach (candidate; candidates) {
+                if (functionMatchesClosureType(candidate, targetClosureType)) matches ~= candidate;
+            }
+            if (matches.length == 1) return matches[0];
+            if (matches.length > 1) {
+                throw new CompileError(format("Function reference '%s' is ambiguous for closure type '%s'",
+                    displayName, targetClosureType.toString()), currentModulePath, expr.line, expr.column);
+            }
+            throw new CompileError(format("Function reference '%s' does not match closure type '%s'",
+                displayName, targetClosureType.toString()), currentModulePath, expr.line, expr.column);
+        }
+        if (candidates.length == 1) return candidates[0];
+        throw new CompileError(format(
+            "Cannot infer type: function '%s' is overloaded; add an explicit closure type annotation",
+            displayName), currentModulePath, expr.line, expr.column);
+    }
+
+    private string functionClosureAdapter(FunctionDecl fn) {
+        string target = mangleFreeFunctionName(fn);
+        if (auto existing = target in functionClosureAdapters) return *existing;
+
+        string adapter = format("__llpl_fn_closure%d", lambdaCounter++);
+        functionClosureAdapters[target] = adapter;
+
+        string params = "void* __env";
+        string args = "";
+        foreach (i, p; fn.params) {
+            string argName = format("__arg%d", i);
+            params ~= format(", %s %s", typeToC(p.type), argName);
+            if (i > 0) args ~= ", ";
+            args ~= argName;
+        }
+
+        string retC = typeToC(fn.returnType);
+        lambdaForwardDecls ~= format("%s %s(%s);\n\n", retC, adapter, params);
+        string body = format("%s %s(%s) {\n", retC, adapter, params);
+        body ~= "    (void)__env;\n";
+        if (fn.returnType.name == "void" && fn.returnType.pointerDepth == 0 && !fn.returnType.isArray) {
+            body ~= format("    %s(%s);\n", target, args);
+        } else {
+            body ~= format("    return %s(%s);\n", target, args);
+        }
+        body ~= "}\n\n";
+        lambdaBodyDecls ~= body;
+        return adapter;
+    }
+
+    private string generateFunctionClosureValue(FunctionDecl fn, int line, int column) {
+        string target = mangleFreeFunctionName(fn);
+        recordUsage(target, line, column);
+        string adapter = functionClosureAdapter(fn);
+        return format("((__LLPL_Closure){ .fn = (void*)%s, .env = ((void*)0) })", adapter);
+    }
+
     // If `expr`'s inferred type is a class defining a zero-param
     // `as_<kind>()` method matching `targetType` (see
     // implicitConversionKind - e.g. a `YamlValue`'s `as_string()`/
@@ -9504,6 +9796,12 @@ class CodeGenerator {
     // never partial/fuzzy, so this can't silently paper over a real type
     // error the way a looser rule might.
     private string tryImplicitConversionCall(ASTNode expr, Type targetType) {
+        if (targetType.closureReturnType !is null) {
+            FunctionDecl fn = resolveFunctionReference(expr, targetType);
+            if (fn is null) return "";
+            return generateFunctionClosureValue(fn, expr.line, expr.column);
+        }
+
         string kind = implicitConversionKind(targetType);
         if (kind.length == 0) return "";
         Type sourceType;
@@ -9577,7 +9875,9 @@ class CodeGenerator {
         try {
             Type selfType = inferType(selfOperand);
             resolveType(selfType);
-            // Only look for operator overloads on non-pointer, non-array types
+            // Inline class/struct/union operator methods only make sense on
+            // aggregate values. Impl-generated operator functions also cover
+            // primitive and pointer targets such as `char*` string operators.
             if (selfType.pointerDepth == 0 && !selfType.isArray) {
                 if (auto classDecl = selfType.name in classRegistry) {
                     ClassDecl owner;
@@ -9621,6 +9921,9 @@ class CodeGenerator {
                 if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
                     return *fn;
                 }
+            }
+            if (auto fn = format("%s_%s", mangleTypeArg(selfType), methodName) in functionRegistry) {
+                return *fn;
             }
         } catch (Exception e) {
             // fall through - not an overload
@@ -9804,9 +10107,8 @@ class CodeGenerator {
     }
 
     // `obj.prop = value` calls `property prop(value: T)` when there is no
-    // real field named `prop`. Getter-only properties deliberately fall
-    // through to the ordinary assignment path, which then reports the same
-    // non-lvalue error it did before.
+    // real field named `prop`. Getter-only properties get a clear LLPL
+    // diagnostic instead of falling through to an invalid C lvalue.
     private string tryPropertySetterCall(MemberExpr memberExpr, ASTNode valueExpr) {
         try {
             Type selfType = inferType(memberExpr.object);
@@ -9819,9 +10121,19 @@ class CodeGenerator {
                 }
 
                 ClassDecl methodOwner;
-                auto setters = propertyMethodCandidates(
-                    resolveMethodOnHierarchy(*classDecl, memberExpr.member, methodOwner), 1);
-                if (setters.length == 0) return "";
+                auto candidates = resolveMethodOnHierarchy(*classDecl, memberExpr.member, methodOwner);
+                auto setters = propertyMethodCandidates(candidates, 1);
+                if (setters.length == 0) {
+                    auto getters = propertyMethodCandidates(candidates, 0);
+                    if (getters.length > 0) {
+                        throw new CompileError(format(
+                            "'%s.%s' is a read-only property - add 'property %s(value: T)' " ~
+                            "to support assignment",
+                            selfType.name, memberExpr.member, memberExpr.member),
+                            currentModulePath, memberExpr.line, memberExpr.column);
+                    }
+                    return "";
+                }
                 auto matched = resolveOverload(setters, [valueExpr], [],
                     format("property '%s' setter", memberExpr.member), memberExpr.line, memberExpr.column);
                 checkMemberAccess(matched.isPrivate, mangledClass(methodOwner),
@@ -9835,8 +10147,19 @@ class CodeGenerator {
                 foreach (field; structDecl.fields) {
                     if (field.name == memberExpr.member) return "";
                 }
-                auto setters = propertyMethodCandidates(methodCandidatesNamed(*structDecl, memberExpr.member), 1);
-                if (setters.length == 0) return "";
+                auto candidates = methodCandidatesNamed(*structDecl, memberExpr.member);
+                auto setters = propertyMethodCandidates(candidates, 1);
+                if (setters.length == 0) {
+                    auto getters = propertyMethodCandidates(candidates, 0);
+                    if (getters.length > 0) {
+                        throw new CompileError(format(
+                            "'%s.%s' is a read-only property - add 'property %s(value: T)' " ~
+                            "to support assignment",
+                            selfType.name, memberExpr.member, memberExpr.member),
+                            currentModulePath, memberExpr.line, memberExpr.column);
+                    }
+                    return "";
+                }
                 resolveOverload(setters, [valueExpr], [],
                     format("property '%s' setter", memberExpr.member), memberExpr.line, memberExpr.column);
                 return generateExpression(new CallExpr(
@@ -9848,8 +10171,19 @@ class CodeGenerator {
                 foreach (field; unionDecl.fields) {
                     if (field.name == memberExpr.member) return "";
                 }
-                auto setters = propertyMethodCandidates(methodCandidatesNamed(*unionDecl, memberExpr.member), 1);
-                if (setters.length == 0) return "";
+                auto candidates = methodCandidatesNamed(*unionDecl, memberExpr.member);
+                auto setters = propertyMethodCandidates(candidates, 1);
+                if (setters.length == 0) {
+                    auto getters = propertyMethodCandidates(candidates, 0);
+                    if (getters.length > 0) {
+                        throw new CompileError(format(
+                            "'%s.%s' is a read-only property - add 'property %s(value: T)' " ~
+                            "to support assignment",
+                            selfType.name, memberExpr.member, memberExpr.member),
+                            currentModulePath, memberExpr.line, memberExpr.column);
+                    }
+                    return "";
+                }
                 resolveOverload(setters, [valueExpr], [],
                     format("property '%s' setter", memberExpr.member), memberExpr.line, memberExpr.column);
                 return generateExpression(new CallExpr(
@@ -9943,30 +10277,40 @@ class CodeGenerator {
                 auto imp = cast(ImportStmt)decl;
                 if (imp is null) continue;
 
-                if (imp.resolvedPath.length == 0) {
+                string[] targets = imp.resolvedPaths.length > 0 ? imp.resolvedPaths :
+                    (imp.resolvedPath.length > 0 ? [imp.resolvedPath] : []);
+
+                if (targets.length == 0) {
                     if (imp.alias_.length > 0 || imp.isSelective) {
                         throw new CompileError(format("Could not resolve import '%s'", imp.modulePath),
                             prog.modulePath, imp.line, imp.column);
                     }
                     continue;
                 }
-
-                ModuleImportInfo info;
-                info.targetModulePath = imp.resolvedPath;
-                info.alias_ = imp.alias_;
-                info.isSelective = imp.isSelective;
-                foreach (n; imp.names) {
-                    info.names ~= ImportedNameInfo(n.original, n.alias_);
+                if (targets.length > 1 && (imp.alias_.length > 0 || imp.isSelective)) {
+                    throw new CompileError(
+                        "Directory imports cannot use aliases or selective import lists",
+                        prog.modulePath, imp.line, imp.column);
                 }
-                moduleImports[prog.modulePath] ~= info;
+
+                foreach (targetPath; targets) {
+                    ModuleImportInfo info;
+                    info.targetModulePath = targetPath;
+                    info.alias_ = imp.alias_;
+                    info.isSelective = imp.isSelective;
+                    foreach (n; imp.names) {
+                        info.names ~= ImportedNameInfo(n.original, n.alias_);
+                    }
+                    moduleImports[prog.modulePath] ~= info;
+                }
 
                 if (imp.alias_.length > 0) {
-                    moduleAliases[prog.modulePath][imp.alias_] = imp.resolvedPath;
+                    moduleAliases[prog.modulePath][imp.alias_] = targets[0];
                 }
 
                 if (imp.isSelective) {
                     foreach (n; imp.names) {
-                        string target = findSymbolInModule(imp.resolvedPath, n.original);
+                        string target = findSymbolInModule(targets[0], n.original);
                         if (target.length == 0) {
                             throw new CompileError(
                                 format("Selective import '%s' not found in module '%s'",
@@ -10095,9 +10439,9 @@ class CodeGenerator {
         string nsAliased = resolveNamespaceAlias(flat);
         if (nsAliased.length > 0 && exists(nsAliased)) return nsAliased;
 
-        if (exists(flat)) return flat;
+        if (exists(flat) && isSymbolVisibleFromCurrentModule(flat)) return flat;
         foreach (candidate; enclosingQualifications(flat)) {
-            if (exists(candidate)) return candidate;
+            if (exists(candidate) && isSymbolVisibleFromCurrentModule(candidate)) return candidate;
         }
         return "";
     }
@@ -10138,11 +10482,61 @@ class CodeGenerator {
         string aliased = resolveLocalImportAlias(name);
         if (aliased.length > 0 && exists(aliased)) return aliased;
 
-        if (exists(name)) return name;
+        if (exists(name) && isSymbolVisibleFromCurrentModule(name)) return name;
         foreach (candidate; enclosingQualifications(name)) {
-            if (exists(candidate)) return candidate;
+            if (exists(candidate) && isSymbolVisibleFromCurrentModule(candidate)) return candidate;
         }
         return name;
+    }
+
+    private string symbolModulePath(string name) {
+        if (auto p = name in functionModulePath) return *p;
+        if (auto p = name in functionCandidateModulePath) return *p;
+        if (auto p = name in classModulePath) return *p;
+        if (auto p = name in structModulePath) return *p;
+        if (auto p = name in unionModulePath) return *p;
+        if (auto p = name in macroModulePath) return *p;
+        if (auto p = name in globalVarModulePath) return *p;
+        if (auto p = name in typeAliasModulePath) return *p;
+        if (auto p = name in genericTemplateModulePath) return *p;
+        if (auto p = name in traitModulePath) return *p;
+        return "";
+    }
+
+    private bool isSymbolVisibleFromCurrentModule(string name) {
+        if (auto fn = name in functionRegistry) {
+            if (fn.isExtern) return true;
+        }
+        string owner = symbolModulePath(name);
+        if (owner.length == 0) return true;
+        if (owner == currentModulePath) return true;
+        if (preludeModulePath.length > 0 && owner == preludeModulePath) return true;
+        if (owner !in moduleHasExplicitExports) return true;
+
+        auto selected = currentModulePath in selectiveLocalAliases;
+        if (selected !is null) {
+            foreach (target; *selected) {
+                if (target == name) return true;
+            }
+        }
+
+        auto aliases = currentModulePath in moduleAliases;
+        if (aliases !is null) {
+            foreach (_alias, targetModule; *aliases) {
+                if (targetModule != owner) continue;
+                auto exports = owner in exportsByModule;
+                if (exports !is null && (name in *exports) !is null) return true;
+            }
+        }
+
+        auto imports = currentModulePath in moduleImports;
+        if (imports is null) return false;
+        foreach (imp; *imports) {
+            if (imp.targetModulePath != owner || imp.alias_.length > 0 || imp.isSelective) continue;
+            auto exports = owner in exportsByModule;
+            if (exports !is null && (name in *exports) !is null) return true;
+        }
+        return false;
     }
 
     // `func[cap1, &cap2](params) -> T { ... }` - see ast.d's LambdaExpr and
@@ -10639,6 +11033,12 @@ class CodeGenerator {
             }
             // Check if this is a method call
             if (auto memberExpr = cast(MemberExpr)callExpr.callee) {
+                if (auto ctorType = resolveQualifiedConstructorType(memberExpr)) {
+                    auto newExpr = new NewExpr(ctorType, callExpr.args,
+                        callExpr.line, callExpr.column, callExpr.argNames);
+                    return generateExpression(newExpr);
+                }
+
                 // A namespace-qualified function call (e.g. Graphics.helper())
                 // takes priority over instance-method-call syntax. Resolved
                 // against functionCandidates (grouped by the same
@@ -10938,7 +11338,9 @@ class CodeGenerator {
                 string resolvedName;
                 if (auto ident = cast(Identifier)callExpr.callee) {
                     resolvedName = resolveName(ident.name, (n) => (n in functionCandidates) !is null);
-                    if (auto c = resolvedName in functionCandidates) candidates = *c;
+                    if (isSymbolVisibleFromCurrentModule(resolvedName)) {
+                        if (auto c = resolvedName in functionCandidates) candidates = *c;
+                    }
                 }
 
                 string callee;
@@ -11226,6 +11628,12 @@ class CodeGenerator {
                 string fieldAccess = tryGenerateBareFieldAccess(ident);
                 if (fieldAccess.length > 0) return fieldAccess;
             }
+            if ((resolved in variableTypes) is null &&
+                    symbolModulePath(resolved).length > 0 &&
+                    !isSymbolVisibleFromCurrentModule(resolved)) {
+                throw new CompileError(format("Cannot access private symbol '%s'", ident.name),
+                    currentModulePath, ident.line, ident.column);
+            }
             recordUsage(resolved, ident.line, ident.column);
             return resolved;
         } else if (auto intLit = cast(IntLiteral)node) {
@@ -11325,7 +11733,7 @@ class CodeGenerator {
 
     private Type inferType(ASTNode expr) {
         if (cast(IntLiteral)expr) {
-            return new Type("i64");
+            return new Type("int");
         } else if (auto floatLit = cast(FloatLiteral)expr) {
             // Check suffix to determine float vs double
             string val = floatLit.value;
@@ -11476,6 +11884,9 @@ class CodeGenerator {
                 return new Type("EmbeddedFile");
             }
             if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
+                if (auto ctorType = resolveQualifiedConstructorType(memberCallee)) {
+                    return new Type(ctorType.name);
+                }
                 string genericKey = tryResolveQualifiedPath(memberCallee,
                     (n) => (n in genericFunctionTemplates) !is null);
                 if (genericKey.length > 0) {
@@ -11559,17 +11970,21 @@ class CodeGenerator {
                 }
 
                 string resolved = resolveName(calleeIdent.name, (n) => (n in functionCandidates) !is null);
-                if (auto candidates = resolved in functionCandidates) {
-                    auto decl = resolveOverload(*candidates, callExpr.args, callExpr.argNames,
-                        format("function '%s'", resolved), callExpr.line, callExpr.column);
-                    return decl.returnType;
+                if (isSymbolVisibleFromCurrentModule(resolved)) {
+                    if (auto candidates = resolved in functionCandidates) {
+                        auto decl = resolveOverload(*candidates, callExpr.args, callExpr.argNames,
+                            format("function '%s'", resolved), callExpr.line, callExpr.column);
+                        return decl.returnType;
+                    }
                 }
                 // Extern functions are excluded from functionCandidates
                 // (see mangleFreeFunctionName) - still registered in
                 // functionRegistry directly under their fixed bare name.
                 string externResolved = resolveName(calleeIdent.name, (n) => (n in functionRegistry) !is null);
-                if (auto funcDecl = externResolved in functionRegistry) {
-                    return funcDecl.returnType;
+                if (isSymbolVisibleFromCurrentModule(externResolved)) {
+                    if (auto funcDecl = externResolved in functionRegistry) {
+                        return funcDecl.returnType;
+                    }
                 }
                 throw inferError(expr, format("Cannot infer type: unknown function '%s'", calleeIdent.name));
             }

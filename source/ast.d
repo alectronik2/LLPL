@@ -72,13 +72,17 @@ enum NodeType {
     IfExpr,
     DeleteStmt,
     AssertStmt,
-    RangeExpr
+    RangeExpr,
+    WithStmt
 }
 
 abstract class ASTNode {
     NodeType type;
     int line;
     int column;
+    // Top-level/module visibility. Existing modules stay fully public unless
+    // they opt into explicit exports with at least one `public` declaration.
+    bool isPublic;
 
     this(NodeType type, int line = 0, int column = 0) {
         this.type = type;
@@ -112,6 +116,7 @@ class ImportStmt : ASTNode {
     string modulePath;
     string alias_;       // Optional module alias
     string resolvedPath; // Absolute path, filled in by ModuleResolver
+    string[] resolvedPaths; // All paths for directory imports
     ImportedName[] names;
     bool isSelective;
 
@@ -169,16 +174,18 @@ class AliasDecl : ASTNode {
     int targetPointerDepth;
     bool targetIsArray;
     int targetArraySize;
+    Type targetType; // Full type target for aliases like `alias F = func(int) -> void`
     string[] namespaceSegments; // Enclosing namespace path, set by the code generator
 
     this(string name, string[] targetPath, int targetPointerDepth = 0, bool targetIsArray = false,
-         int targetArraySize = 0, int line = 0, int column = 0) {
+         int targetArraySize = 0, int line = 0, int column = 0, Type targetType = null) {
         super(NodeType.AliasDecl, line, column);
         this.name = name;
         this.targetPath = targetPath;
         this.targetPointerDepth = targetPointerDepth;
         this.targetIsArray = targetIsArray;
         this.targetArraySize = targetArraySize;
+        this.targetType = targetType;
     }
 }
 
@@ -1217,6 +1224,22 @@ class ForeachStmt : ASTNode {
         this.varName = varName;
         this.iterable = iterable;
         this.body_ = body_;
+    }
+}
+
+// `with expr { .member ... }` - the parser rewrites leading-dot
+// expressions inside `body_` to use `contextName` as their receiver, and
+// codegen binds that name to `object` once for the block's duration.
+class WithStmt : ASTNode {
+    ASTNode object;
+    Block body_;
+    string contextName;
+
+    this(ASTNode object, Block body_, string contextName, int line = 0, int column = 0) {
+        super(NodeType.WithStmt, line, column);
+        this.object = object;
+        this.body_ = body_;
+        this.contextName = contextName;
     }
 }
 

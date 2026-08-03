@@ -101,9 +101,16 @@ void llpl_eh_pop(__LLPL_EH_Frame* frame);
 void llpl_eh_throw(char* type_id, void* error, uint64_t error_size);
 void llpl_eh_resume(void);
 
-// Memory allocation for bare metal
+typedef char* (*LLPL_AllocFn)(uint64_t size);
+typedef void (*LLPL_FreeFn)(char* ptr);
+
+// Memory allocation for bare metal. `rc_alloc`/`rc_free` are also the
+// compiler-generated class allocation path used by `new`.
 void* rc_alloc(size_t size);
 void rc_free(void* ptr);
+void llpl_set_allocator(__LLPL_Closure alloc_fn, __LLPL_Closure free_fn);
+void llpl_set_allocator_raw(LLPL_AllocFn alloc_fn, LLPL_FreeFn free_fn);
+void llpl_reset_allocator(void);
 
 // Reference counting functions
 void rc_init(RefCount* rc);

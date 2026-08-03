@@ -1,0 +1,8 @@
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    comptime for i in 0..3 {
+        puts("i is \(i)")
+    }
+    return 0
+}

@@ -11,6 +11,7 @@ import std.string : splitLines, startsWith, indexOf, lastIndexOf, replace, strip
 import std.getopt;
 import std.process : execute, environment;
 import std.datetime.stopwatch;
+import std.datetime.systime : Clock;
 import core.stdc.stdlib : exit;
 import lexer;
 import parser;
@@ -18,9 +19,30 @@ import codegen;
 import modules;
 import errors;
 import lspquery;
+import astprint;
+import comptime;
 
 void main(string[] args) {
     bool auditMode = false;
+    bool runMode = false;
+    string[] runArgs;
+    bool outputWasExplicit = false;
+    if (args.length >= 2 && args[1] == "run") {
+        runMode = true;
+        size_t separator = args.length;
+        foreach (i, arg; args) {
+            if (i > 1 && arg == "--") {
+                separator = i;
+                break;
+            }
+        }
+        if (separator < args.length) {
+            runArgs = args[separator + 1 .. $];
+            args = args[0 .. 1] ~ args[2 .. separator];
+        } else {
+            args = args[0 .. 1] ~ args[2 .. $];
+        }
+    }
     if (args.length >= 2 && args[1] == "audit") {
         auditMode = true;
         args = args[0 .. 1] ~ args[2 .. $];
@@ -44,6 +66,7 @@ void main(string[] args) {
     string debugBundleDir;
     string auditDir;
     string diagnosticsJsonFile;
+    bool emitAst = false;
 
     auto helpInfo = getopt(
         args,
@@ -51,7 +74,7 @@ void main(string[] args) {
             &outputFile,
         "b|binary", "Compile directly to a native binary instead of emitting C source " ~
             "(invokes a system C compiler - see --cc)", &binaryMode,
-        "cc", "C compiler to invoke in --binary mode (default: $CC, falling back to \"cc\")",
+        "cc", "C compiler to invoke in --binary mode (default: $CC, falling back to \"tcc\")",
             &ccOverride,
         "keep-c", "Keep the intermediate .c file in --binary mode even on a successful build",
             &keepC,
@@ -71,6 +94,8 @@ void main(string[] args) {
             &lspSymbolsFile,
         "diagnostics-json", "Write machine-readable diagnostics JSON to <file> on compiler errors",
             &diagnosticsJsonFile,
+        "emit-ast", "Parse <input.llpl> and emit a canonical AST golden-test dump",
+            &emitAst,
         "emit-provenance", "Write generated-C to LLPL source provenance JSON to <file>",
             &provenanceFile,
         "emit-effects", "Write conservative per-function capability/effect JSON to <file>",
@@ -93,6 +118,7 @@ void main(string[] args) {
     if (helpInfo.helpWanted || args.length < 2) {
         defaultGetoptPrinter("LLPL Compiler - Low Level Programming Language\n" ~
                            "Usage: llpl [options] <input.llpl>\n" ~
+                           "       llpl run [options] <input.llpl> [-- args...]\n" ~
                            "       llpl audit [options] <input.llpl>\n" ~
                            "Options:",
                            helpInfo.options);
@@ -100,6 +126,7 @@ void main(string[] args) {
     }
 
     inputFile = args[1];
+    outputWasExplicit = outputFile.length > 0;
 
     if (!exists(inputFile)) {
         if (diagnosticsJsonFile.length > 0) {
@@ -120,12 +147,31 @@ void main(string[] args) {
     if (enableUnitTests) {
         binaryMode = true;
     }
+    if (runMode) {
+        binaryMode = true;
+    }
 
-    if (outputFile.length == 0) {
-        outputFile = binaryMode ? stripExtension(inputFile) : setExtension(inputFile, "c");
+    if (outputFile.length == 0 && !emitAst) {
+        outputFile = runMode ? temporaryRunOutputPath(inputFile)
+            : (binaryMode ? stripExtension(inputFile) : setExtension(inputFile, "c"));
     }
 
     try {
+        if (emitAst) {
+            string expandedSource = expandComptimeFor(readText(inputFile), inputFile);
+            registerExpandedSource(inputFile, expandedSource);
+            auto lexer = new Lexer(expandedSource);
+            auto parser = new Parser(lexer.tokenize(), inputFile);
+            string astDump = printAst(parser.parse());
+            if (outputFile.length > 0) {
+                std.file.write(outputFile, astDump);
+                if (verbose) writefln("Wrote AST to %s", outputFile);
+            } else {
+                write(astDump);
+            }
+            return;
+        }
+
         StopWatch totalTime;
         StopWatch phaseTime;
         totalTime.start();
@@ -136,7 +182,7 @@ void main(string[] args) {
 
         // Resolve modules and dependencies (prelude.llpl first, if present)
         phaseTime.start();
-        auto programs = resolveWithPrelude(inputFile);
+        auto programs = resolveWithPrelude(inputFile, verbose);
         phaseTime.stop();
 
         if (verbose) {
@@ -162,6 +208,7 @@ void main(string[] args) {
 
         if (verbose) {
             writefln("Code generation complete (%.2f ms)", phaseTime.peek().total!"msecs");
+            codegen.reportTiming();
         }
 
         totalTime.stop();
@@ -194,7 +241,14 @@ void main(string[] args) {
 
         if (binaryMode) {
             compileToBinary(cCode, outputFile, ccOverride, keepC, verbose,
-                codegen.linkLibraries, codegen.compilerFlags, !enableUnitTests);
+                codegen.linkLibraries, codegen.compilerFlags, !enableUnitTests && !runMode);
+            if (runMode) {
+                int status = runBinary(outputFile, runArgs);
+                if (!outputWasExplicit) {
+                    if (exists(outputFile)) std.file.remove(outputFile);
+                }
+                exit(status);
+            }
             if (enableUnitTests) {
                 string actual = runUnitTestBinary(outputFile);
                 checkUnitTestExpectedOutput(inputFile, unitTestExpectedFile, actual);
@@ -447,6 +501,28 @@ private void writeAuditVerdict(string dir, string inputFile, string outputFile, 
 // assembly, and `-ffreestanding`-style flags this has no way to know
 // about, so --binary isn't meant for those - use the Makefile-based
 // two-step build there instead.
+private string defaultCCompiler() {
+    return environment.get("CC", "tcc");
+}
+
+private string sanitizePathComponent(string text) {
+    string result;
+    foreach (ch; text) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') || ch == '_' || ch == '-') {
+            result ~= ch;
+        } else {
+            result ~= '_';
+        }
+    }
+    return result.length > 0 ? result : "program";
+}
+
+private string temporaryRunOutputPath(string inputFile) {
+    string base = sanitizePathComponent(stripExtension(baseName(inputFile)));
+    return buildPath(tempDir(), format("llpl-run-%s-%s", base, Clock.currTime().stdTime));
+}
+
 private void compileToBinary(string cCode, string outputFile, string ccOverride, bool keepC, bool verbose,
         string[] linkLibraries, string[] compilerFlags, bool announceSuccess = true) {
     string runtimeDir = buildNormalizedPath(dirName(thisExePath()), "runtime");
@@ -461,7 +537,7 @@ private void compileToBinary(string cCode, string outputFile, string ccOverride,
     string cFile = outputFile ~ ".c";
     std.file.write(cFile, cCode);
 
-    string cc = ccOverride.length > 0 ? ccOverride : environment.get("CC", "cc");
+    string cc = ccOverride.length > 0 ? ccOverride : defaultCCompiler();
     // Plain C `char` signedness is implementation-defined (signed by
     // default on most x86 targets); this compiler's own type-checking
     // (isSignedIntegerType in codegen.d) treats `char` as unsigned, so the
@@ -508,6 +584,17 @@ private void compileToBinary(string cCode, string outputFile, string ccOverride,
     if (announceSuccess) {
         writefln("Successfully compiled to %s", outputFile);
     }
+}
+
+private int runBinary(string outputFile, string[] args) {
+    string executable = outputFile;
+    if (!isAbsolute(outputFile) && outputFile.indexOf(dirSeparator) < 0) {
+        executable = buildPath(".", outputFile);
+    }
+
+    auto result = execute([executable] ~ args);
+    write(result.output);
+    return result.status;
 }
 
 private string runUnitTestBinary(string outputFile) {

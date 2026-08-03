@@ -1,0 +1,59 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Counter {
+    total: i64
+
+    constructor() {}
+
+    property bar() -> i64 {
+        self.total = self.total + 1
+        return self.total
+    }
+
+    property baz() -> i64 {
+        self.total = self.total + 10
+        return self.total
+    }
+
+    property value(nu: i64) {
+        self.total = nu
+    }
+}
+
+packed struct PteStruct {
+    present: u8:1
+    rw: u8:1
+    user: u8:1
+    pwt: u8:1
+}
+
+packed union Pte {
+    pte: PteStruct
+    raw: uint
+}
+
+func main() -> i64 {
+    let c = new Counter()
+    with c { .bar .baz }
+    with c {
+        .value = 20
+        .bar
+    }
+    print_int("total", c.total)
+
+    let p: Pte
+    p.raw = 0
+    with p.pte {
+        .present = true
+        .user = true
+        .pwt = true
+    }
+    print_int("raw", p.raw as i64)
+    return 0
+}

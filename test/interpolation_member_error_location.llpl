@@ -1,0 +1,12 @@
+struct InnerLocation {
+    value: i64
+}
+
+struct OuterLocation {
+    inner: InnerLocation
+}
+
+func main() {
+    let outer: OuterLocation
+    puts("bad member \(outer.missing)")
+}

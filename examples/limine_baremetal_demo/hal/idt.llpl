@@ -1,0 +1,104 @@
+import hal.cpu
+import hal.serial
+
+alias hs = HAL.Serial
+
+comptime for i in 0..256 {
+    extern func isr$i()
+}
+
+namespace HAL {
+    alias proc = func(void*)
+    const NUM_VECTORS = 256
+
+    struct Interrupt {
+        next:    Interrupt*
+        flags:   int
+        intrno:  int
+        handler: proc
+        arg:     void*
+
+        func register( vector: int, f: proc, arg: void* = null) {
+            assert( vector < NUM_VECTORS )
+
+        }
+    }
+
+    namespace IDT {
+        packed struct Entry {
+            offset_low : u16
+            selector:    u16
+            ist:         u8
+            type_attr:   u8
+            offset_mid:  u16
+            offset_high: u32
+            zero:        u32
+        }
+
+        struct Context {
+            r15:    u64
+            r14:    u64
+            r13:    u64
+            r12:    u64
+            r11:    u64
+            r10:    u64
+            r9:     u64
+            r8:     u64
+            rdi:    u64
+            rsi:    u64
+            rbp:    u64
+            rbx:    u64
+            rdx:    u64
+            rcx:    u64
+            rax:    u64
+
+            vector: u64
+            err:    u64
+
+            rip:    u64
+            cs:     u64
+            rflags: u64
+            rsp:    u64
+            ss:     u64
+        }
+
+        packed struct Pointer {
+            limit: u16
+            base:  u64
+        }
+
+        let entries:    Entry[256]
+        let pointer:    Pointer
+        let interrupts: Interrupt[256]
+
+        // flags: 0x8E = present, ring 0, 64-bit interrupt gate.
+        func set_gate(vector: int, handler_addr: int, selector: int, flags: u8, ist: u8) {
+            assert( vector < NUM_VECTORS )
+
+            entries[vector].offset_low  = (handler_addr & 0xFFFF) as u16
+            entries[vector].selector    = selector as u16
+            entries[vector].ist         = ist
+            entries[vector].type_attr   = flags
+            entries[vector].offset_mid  = ((handler_addr >> 16) & 0xFFFF) as u16
+            entries[vector].offset_high = ((handler_addr >> 32) & 0xFFFF_FFFF) as u32
+            entries[vector].zero        = 0
+        }
+        
+        func init() {
+            comptime for i in 0..NUM_VECTORS {
+                set_gate(i, isr$i as int, 0x08, 0x8E, 0)
+            }
+
+            pointer.limit = (256 * 16) - 1
+            pointer.base = entries as u64
+
+            asm("lidt (%0)" : : "r"(&pointer))
+        }
+    }
+}
+
+func isr_handler( ctx: HAL.IDT.Context* ) {
+    hs.write("Interrupt received: vector=\(ctx.vector)\n")
+    // Linked from hal/isr.m64. Dispatching through HAL.interrupts can be
+    // filled in once the interrupt context layout is consumed on the LLPL side.
+}

@@ -1,0 +1,132 @@
+Program
+  Import {Foo, Bar as Baz} from demo.lib
+  Public Namespace Demo
+    Using Namespace std.text
+    Alias CountPtr = int * 
+    Alias PairInit = [ 1 , 2 , 3 ] 
+    Attributes @section(.demo ) @used
+    Field MARKER: int
+      RawExpr expr 1 
+    Attributes @align(0x20 )
+    Volatile Field MMIO: int
+      RawExpr expr 0 
+    Const COUNT: <inferred>
+      RawExpr expr 3 
+    Macro bump(target)
+      Block
+        ExprStmt
+          RawExpr expr quote { unquote ( target ) = unquote ( target ) + 1 } 
+    Attributes @reflect
+    Class Box
+      Private Field hidden: int
+        RawExpr expr 0 
+      Field value: int
+      Constructor(@value: int)
+        Block
+      Destructor()
+        Block
+      Static Method make(value: int) -> Box
+        Block
+          Return
+            RawExpr expr new Box ( value ) 
+      Property Method doubled() -> int
+        Block
+          Return
+            RawExpr expr self . value * 2 
+      Method operator+(other: Box) -> Box
+        Block
+          Return
+            RawExpr expr self 
+      Method set(value: int) -> void
+        Block
+          ExprStmt
+            RawExpr expr self . value = value 
+    Packed Struct Pair<T>
+      Field left: T
+      Field right: T
+    Enum Mode
+      Variant Off
+      Variant On
+        RawExpr value COUNT 
+    Enum Shape
+      Variant Point
+      Variant Circle(radius: int)
+    Trait Printable
+      TraitMethod print() -> void
+      TraitMethod label() -> string
+    Impl Printable for Box
+      Function print() -> void
+        Block
+          Return
+      Function label() -> string
+        Block
+          Return
+            RawExpr expr box 
+    Function main() -> i64
+      Block
+        Field s: string
+          RawExpr expr hi 
+        Field i: int
+          RawExpr expr 0 
+        While
+          RawExpr condition i < COUNT 
+          Block
+            If
+              RawExpr condition i == 2 
+              Block
+                Break
+            Continue
+        For
+          RawExpr header j in 0 .. COUNT 
+          Block
+            Defer
+              ExprStmt
+                RawExpr expr puts ( loop ) 
+        Foreach
+          RawExpr header ch in s 
+          Block
+            Volatile Field code: int
+              RawExpr expr ch as int 
+        Match
+          RawExpr subject COUNT 
+          Cases
+            Case
+              RawExpr pattern 0 
+              Block
+                Return
+                  RawExpr expr 2 
+            Case
+              RawExpr pattern ( 
+              Block
+                Return
+                  RawExpr expr 3 
+            Default
+              Block
+                Assert
+                  RawExpr args ( COUNT > 0 , count ) 
+        Try
+          Block
+            Throw
+              RawExpr expr 5 
+          Catch
+            RawExpr binding ( e : int ) 
+            Block
+              Delete
+                RawExpr expr new Box ( 1 ) 
+          Finally
+            Block
+              ExprStmt
+                RawExpr expr puts ( done ) 
+        If
+          RawExpr condition COUNT >= 3 && s !=   
+          Block
+            Return
+              RawExpr expr 0 
+        Return
+          RawExpr expr 1 
+    UnitTest
+      Block
+        Field n: int
+          RawExpr expr COUNT 
+        ExprStmt
+          RawExpr expr bump ! ( n ) 

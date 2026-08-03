@@ -33,6 +33,11 @@ struct AsmSource {
     string output;
 }
 
+struct M64Source {
+    string src;
+    string output;
+}
+
 struct LinkSpec {
     string output;
     string script; // "" means no -T
@@ -44,6 +49,7 @@ struct ExtraLink {
     string name;
     LlplSource[] llplSources;
     AsmSource[] asmSources;
+    M64Source[] m64Sources;
     CSource[] cSources;
     LinkSpec link;
 }
@@ -89,6 +95,7 @@ struct BuildConfig {
     string[string] variables;
 
     string nasm = "nasm";
+    string m64 = "../../tools/assembler/build/m64";
     string cc = "gcc";
     string ld = "ld";
     string qemu = "qemu-system-x86_64";
@@ -99,6 +106,7 @@ struct BuildConfig {
 
     CSource[] cSources;
     AsmSource[] asmSources;
+    M64Source[] m64Sources;
 
     bool hasLink;
     LinkSpec link;
@@ -153,6 +161,18 @@ private AsmSource[] parseAsmSources(Node node, string errCtx) {
             string src = requireStr(entry, "src", errCtx ~ ".asm_sources[]");
             string output = getStr(entry, "output", stripExtension(baseName(src)) ~ ".o");
             result ~= AsmSource(src, output);
+        }
+    }
+    return result;
+}
+
+private M64Source[] parseM64Sources(Node node, string errCtx) {
+    M64Source[] result;
+    if (auto v = "m64_sources" in node) {
+        foreach (Node entry; *v) {
+            string src = requireStr(entry, "src", errCtx ~ ".m64_sources[]");
+            string output = getStr(entry, "output", stripExtension(baseName(src)) ~ ".o");
+            result ~= M64Source(src, output);
         }
     }
     return result;
@@ -245,6 +265,7 @@ BuildConfig loadConfig(string path) {
 
     if (auto v = "toolchain" in root) {
         cfg.nasm = getStr(*v, "nasm", "nasm");
+        cfg.m64 = getStr(*v, "m64", "../../tools/assembler/build/m64");
         cfg.cc = getStr(*v, "cc", "gcc");
         cfg.ld = getStr(*v, "ld", "ld");
         cfg.qemu = getStr(*v, "qemu", "qemu-system-x86_64");
@@ -275,6 +296,8 @@ BuildConfig loadConfig(string path) {
 
     cfg.asmSources = parseAsmSources(root, absPath);
 
+    cfg.m64Sources = parseM64Sources(root, absPath);
+
     if (auto v = "link" in root) {
         cfg.hasLink = true;
         cfg.link = parseLink(*v, absPath ~ ".link");
@@ -286,6 +309,7 @@ BuildConfig loadConfig(string path) {
             el.name = requireStr(entry, "name", absPath ~ ".extra_links[]");
             el.llplSources = parseLlplSources(entry, absPath ~ ".extra_links." ~ el.name);
             el.asmSources = parseAsmSources(entry, absPath ~ ".extra_links." ~ el.name);
+            el.m64Sources = parseM64Sources(entry, absPath ~ ".extra_links." ~ el.name);
             el.cSources = parseCSources(entry, absPath ~ ".extra_links." ~ el.name);
             el.link = parseLink(entry["link"], absPath ~ ".extra_links." ~ el.name ~ ".link");
             cfg.extraLinks ~= el;
@@ -368,6 +392,10 @@ void substituteVariables(ref BuildConfig cfg, const string[string] vars) {
         a.src = substitute(a.src, vars);
         a.output = substitute(a.output, vars);
     }
+    foreach (ref a; cfg.m64Sources) {
+        a.src = substitute(a.src, vars);
+        a.output = substitute(a.output, vars);
+    }
     void substLlpl(ref LlplSource src) {
         src.src = substitute(src.src, vars);
         src.cOutput = substitute(src.cOutput, vars);
@@ -385,6 +413,10 @@ void substituteVariables(ref BuildConfig cfg, const string[string] vars) {
     foreach (ref el; cfg.extraLinks) {
         foreach (ref src; el.llplSources) substLlpl(src);
         foreach (ref a; el.asmSources) {
+            a.src = substitute(a.src, vars);
+            a.output = substitute(a.output, vars);
+        }
+        foreach (ref a; el.m64Sources) {
             a.src = substitute(a.src, vars);
             a.output = substitute(a.output, vars);
         }

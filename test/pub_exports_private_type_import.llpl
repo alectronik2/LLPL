@@ -1,0 +1,6 @@
+import modules.pub_exports_lib
+
+func main() -> i64 {
+    let h: Hidden = Hidden { y: 1 }
+    return h.y
+}

@@ -1,0 +1,24 @@
+extern func puts(s: char*) -> i64
+const LIMIT = 3
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+comptime for i in 0..LIMIT {
+    func generated_$i() -> i64 {
+        return $i
+    }
+}
+
+func main() -> i64 {
+    print_int("g0", generated_0())
+    print_int("g1", generated_1())
+    print_int("g2", generated_2())
+    comptime for i in 0..LIMIT {
+        print_int("body", generated_$i() + i)
+    }
+    return 0
+}

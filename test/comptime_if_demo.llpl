@@ -1,0 +1,19 @@
+extern func puts(s: char*) -> i64
+
+const ENABLED = 1
+
+func main() -> i64 {
+    comptime if ENABLED {
+        puts("enabled")
+    } else {
+        puts("disabled")
+    }
+
+    comptime if false {
+        puts("wrong")
+    } else {
+        puts("else branch")
+    }
+
+    return 0
+}

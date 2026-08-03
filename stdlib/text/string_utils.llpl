@@ -405,11 +405,15 @@ class StringBuilder {
         self.total_length = self.total_length + s.len()
     }
 
-    func append_char(c: char) {
+    func append(s: char*) {
+        self.append(new String(s))
+    }
+
+    func append(c: char) {
         self.append(char_to_string(c))
     }
 
-    func append_int(value: i64) {
+    func append(value: i64) {
         // Convert i64 to string
         let is_negative: bool = value < 0
         if is_negative {
@@ -429,14 +433,67 @@ class StringBuilder {
         }
 
         if is_negative {
-            self.append_char(45)
+            self.append('-')
         }
 
         // Reverse digits
         let size: i64 = digits.len()
         for let i: i64 = size - 1, i >= 0, i = i - 1 {
-            self.append_char(digits.get(i))
+            self.append(digits.get(i))
         }
+    }
+
+    func append(value: int) {
+        self.append(value as i64)
+    }
+
+    func append(value: u64) {
+        let digits: Vector<char> = new Vector<char>()
+
+        if value == 0 {
+            digits.push(48)
+        } else {
+            while value > 0 {
+                let digit: char = (48 + (value % 10)) as char
+                digits.push(digit)
+                value = value / 10
+            }
+        }
+
+        let size: i64 = digits.len()
+        for let i: i64 = size - 1, i >= 0, i = i - 1 {
+            self.append(digits.get(i))
+        }
+    }
+
+    func append(value: uint) {
+        self.append(value as u64)
+    }
+
+    func append(value: f64) {
+        let b: char[64]
+        ksnprintf(b as char*, 64, "%f", value)
+        self.append(b as char*)
+    }
+
+    func append(value: f32) {
+        self.append(value as f64)
+    }
+
+    func append(value: bool) {
+        if value {
+            self.append("true" as char*)
+        } else {
+            self.append("false" as char*)
+        }
+    }
+
+    func append_char(c: char) {
+        self.append(c)
+    }
+
+    func append_int(value: i64) {
+        self.append(value)
     }
 
     func to_string() -> String {
@@ -602,11 +659,19 @@ class stringstream {
         return self
     }
 
+    func operator<<(value: int) -> stringstream {
+        return self << (value as i64)
+    }
+
     func operator<<(value: u64) -> stringstream {
         let b: char[24]
         ksnprintf(b as char*, 24, "%u", value)
         self.append_cstr(b as char*)
         return self
+    }
+
+    func operator<<(value: uint) -> stringstream {
+        return self << (value as u64)
     }
 
     func operator<<(value: f64) -> stringstream {

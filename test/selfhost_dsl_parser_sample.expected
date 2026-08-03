@@ -1,0 +1,6 @@
+Program
+  Namespace Demo
+    Grammar Words
+      GrammarBody word : a | b ; words : word * < EOF > ; 
+    Ui DemoWindow : Window
+      UiBody title : Demo width : 50 % onClick : { return } 

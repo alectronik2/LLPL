@@ -1,0 +1,20 @@
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    if true puts("same-line then")
+
+    if false puts("skipped then") else puts("same-line else")
+
+    if true
+        puts("next-line then")
+
+    if false
+        puts("skipped next-line then")
+    else
+        puts("next-line else")
+
+    if true
+        if false puts("skipped nested then") else puts("nested else")
+
+    return 0
+}

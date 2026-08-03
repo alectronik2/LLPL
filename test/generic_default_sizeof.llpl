@@ -1,0 +1,16 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func default_size<T>(size: int = sizeof(T)) -> int {
+    return size
+}
+
+func main() -> i64 {
+    print_int("default_size<u64>()", default_size<u64>() as i64)
+    return 0
+}

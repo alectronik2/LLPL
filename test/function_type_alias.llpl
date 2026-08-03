@@ -1,0 +1,27 @@
+extern func puts(s: char*) -> i64
+
+alias VoidFn = func()
+alias IntFn = func(i64) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func say_hi() {
+    puts("hi from alias")
+}
+
+func add_one(x: i64) -> i64 {
+    return x + 1
+}
+
+func main() -> i64 {
+    let f: VoidFn = say_hi
+    f()
+
+    let g: IntFn = add_one
+    print_int("g(41)", g(41))
+    return 0
+}

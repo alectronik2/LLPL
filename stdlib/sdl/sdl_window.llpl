@@ -5,23 +5,23 @@ namespace std {
 namespace sdl {
 
 // High-level Window wrapper with RAII. Its own public API deliberately
-// stays in this language's ergonomic default width (`i64`/`u64`, what a
+// stays in this language's ergonomic default width (`int`/`uint`, what a
 // bare integer literal at a call site infers as) rather than SDL3's
 // exact-width `i32`/`u64` - overload resolution requires an *exact*
 // type match against a declared param (see codegen.d's resolveOverload),
 // so a two-constructor class taking i32 params would reject a plain
 // `new Window(title, 800, 600)` call outright (800/600 infer as the
-// 64-bit `i64`, not `i32`) even though the values themselves fit fine.
+// native-width `int`, not `i32`) even though the values themselves fit fine.
 // The narrowing to SDL3's real i32/u32/etc. widths happens with an
 // explicit cast at each call into the raw `extern func` bindings below,
 // not in this wrapper's own signature.
 class Window {
     let handle: SDL_Window*
-    let width: i64
-    let height: i64
+    let width: int
+    let height: int
     let title: String
 
-    constructor(title_str: String, w: i64, h: i64, flags: u64) {
+    constructor(title_str: String, w: int, h: int, flags: uint) {
         self.title = title_str
         self.width = w
         self.height = h

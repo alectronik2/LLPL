@@ -1,0 +1,10 @@
+comptime for i in 0..1 {
+    func generated_$i() {
+        let broken_$i =
+    }
+}
+
+func main() -> i64 {
+    generated_0()
+    return 0
+}
