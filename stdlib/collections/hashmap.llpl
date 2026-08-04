@@ -34,7 +34,7 @@ class EnhancedHashMap<K: Hashable, V> {
         self.load_factor = 75
         self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
-        for let i: i64 = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0; i < self.capacity; i = i + 1 {
             self.buckets[i] = null
         }
     }
@@ -45,7 +45,7 @@ class EnhancedHashMap<K: Hashable, V> {
         self.load_factor = 75
         self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
-        for let i: i64 = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0; i < self.capacity; i = i + 1 {
             self.buckets[i] = null
         }
     }
@@ -88,14 +88,14 @@ class EnhancedHashMap<K: Hashable, V> {
         self.capacity = self.capacity * 2
         self.buckets = llpl_alloc(self.capacity * sizeof(HashMapEntry<K, V>*)) as HashMapEntry<K, V>**
 
-        for let i: i64 = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0; i < self.capacity; i = i + 1 {
             self.buckets[i] = null
         }
 
         self.count = 0
 
         // Rehash all entries
-        for let i: i64 = 0, i < old_capacity, i = i + 1 {
+        for let i: i64 = 0; i < old_capacity; i = i + 1 {
             let entry: HashMapEntry<K, V>* = old_buckets[i]
 
             while entry != null {
@@ -218,7 +218,7 @@ class EnhancedHashMap<K: Hashable, V> {
     func keys() -> Vector<K> {
         let result: Vector<K> = new Vector<K>()
 
-        for let i: i64 = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0; i < self.capacity; i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
 
             while entry != null {
@@ -233,7 +233,7 @@ class EnhancedHashMap<K: Hashable, V> {
     func values() -> Vector<V> {
         let result: Vector<V> = new Vector<V>()
 
-        for let i: i64 = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0; i < self.capacity; i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
 
             while entry != null {
@@ -246,7 +246,7 @@ class EnhancedHashMap<K: Hashable, V> {
     }
 
     func clear() {
-        for let i: i64 = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0; i < self.capacity; i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
 
             while entry != null {
@@ -273,7 +273,7 @@ class EnhancedHashMap<K: Hashable, V> {
     func get_collision_count() -> i64 {
         let collisions: i64 = 0
 
-        for let i: i64 = 0, i < self.capacity, i = i + 1 {
+        for let i: i64 = 0; i < self.capacity; i = i + 1 {
             let entry: HashMapEntry<K, V>* = self.buckets[i]
             let chain_length: i64 = 0
 
@@ -335,12 +335,12 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: i64 = 0, i < this_items.len(), i = i + 1 {
+        for let i: i64 = 0; i < this_items.len(); i = i + 1 {
             result.insert(this_items.get(i))
         }
 
         let other_items: Vector<T> = other.to_vector()
-        for let i: i64 = 0, i < other_items.len(), i = i + 1 {
+        for let i: i64 = 0; i < other_items.len(); i = i + 1 {
             result.insert(other_items.get(i))
         }
 
@@ -351,7 +351,7 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: i64 = 0, i < this_items.len(), i = i + 1 {
+        for let i: i64 = 0; i < this_items.len(); i = i + 1 {
             let item: T = this_items.get(i)
             if other.contains(item) {
                 result.insert(item)
@@ -365,7 +365,7 @@ class HashSet<T: Hashable> {
         let result: HashSet<T> = new HashSet<T>()
 
         let this_items: Vector<T> = self.to_vector()
-        for let i: i64 = 0, i < this_items.len(), i = i + 1 {
+        for let i: i64 = 0; i < this_items.len(); i = i + 1 {
             let item: T = this_items.get(i)
             if !other.contains(item) {
                 result.insert(item)

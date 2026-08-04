@@ -11,6 +11,7 @@ dub.selections.json
 !runtime/*.c
 *.bin
 *.iso
+tools/selfhost/llpl-selfhost-lexer
 
 # Example build artifacts
 examples/*.o

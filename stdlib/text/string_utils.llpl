@@ -32,7 +32,7 @@ class StringUtils {
         let current: String = new String("")
         let len: i64 = s.len()
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let c: char = s[i]
             if c == delimiter {
                 if current.len() > 0 {
@@ -65,9 +65,9 @@ class StringUtils {
         let start: i64 = 0
         let i: i64 = 0
 
-        for i = 0, i <= len - delim_len, i = i + 1 {
+        for i = 0; i <= len - delim_len; i = i + 1 {
             let is_match: bool =1
-            for let j: i64 = 0, j < delim_len, j = j + 1 {
+            for let j: i64 = 0; j < delim_len; j = j + 1 {
                 if s[i + j] != delimiter[j] {
                     is_match = 0
                     break
@@ -93,7 +93,7 @@ class StringUtils {
         let result: String = new String("")
         let size: i64 = strings.len()
 
-        for let i: i64 = 0, i < size, i = i + 1 {
+        for let i: i64 = 0; i < size; i = i + 1 {
             result = result + strings.get(i).c_str()
             if i < size - 1 {
                 result = result + delimiter.c_str()
@@ -108,7 +108,7 @@ class StringUtils {
         let len: i64 = s.len()
         let start: i64 = 0
 
-        for start = 0, start < len, start = start + 1 {
+        for start = 0; start < len; start = start + 1 {
             let c: char = s[start]
             if c != 32 && c != 9 && c != 10 && c != 13 {
                 break
@@ -123,7 +123,7 @@ class StringUtils {
         let len: i64 = s.len()
         let end: i64 = len
 
-        for end = len, end > 0, end = end - 1 {
+        for end = len; end > 0; end = end - 1 {
             let c: char = s[end - 1]
             if c != 32 && c != 9 && c != 10 && c != 13 {
                 break
@@ -143,7 +143,7 @@ class StringUtils {
         let result: String = new String("")
         let len: i64 = s.len()
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let c: char = s[i]
             if c >= 97 && c <= 122 {
                 c = c - 32
@@ -159,7 +159,7 @@ class StringUtils {
         let result: String = new String("")
         let len: i64 = s.len()
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let c: char = s[i]
             if c >= 65 && c <= 90 {
                 c = c + 32
@@ -179,7 +179,7 @@ class StringUtils {
             return 0
         }
 
-        for let i: i64 = 0, i < p_len, i = i + 1 {
+        for let i: i64 = 0; i < p_len; i = i + 1 {
             if s[i] != prefix[i] {
                 return 0
             }
@@ -199,7 +199,7 @@ class StringUtils {
 
         let offset: i64 = s_len - suf_len
 
-        for let i: i64 = 0, i < suf_len, i = i + 1 {
+        for let i: i64 = 0; i < suf_len; i = i + 1 {
             if s[offset + i] != suffix[i] {
                 return 0
             }
@@ -222,9 +222,9 @@ class StringUtils {
             return -1
         }
 
-        for let i: i64 = 0, i <= s_len - sub_len, i = i + 1 {
+        for let i: i64 = 0; i <= s_len - sub_len; i = i + 1 {
             let is_match: bool =1
-            for let j: i64 = 0, j < sub_len, j = j + 1 {
+            for let j: i64 = 0; j < sub_len; j = j + 1 {
                 if s[i + j] != substr[j] {
                     is_match = 0
                     break
@@ -247,9 +247,9 @@ class StringUtils {
             return -1
         }
 
-        for let i: i64 = s_len - sub_len, i >= 0, i = i - 1 {
+        for let i: i64 = s_len - sub_len; i >= 0; i = i - 1 {
             let is_match: bool =1
-            for let j: i64 = 0, j < sub_len, j = j + 1 {
+            for let j: i64 = 0; j < sub_len; j = j + 1 {
                 if s[i + j] != substr[j] {
                     is_match = 0
                     break
@@ -274,11 +274,11 @@ class StringUtils {
         }
 
         let i: i64 = 0
-        for i = 0, i < len, i = i + 1 {
+        for i = 0; i < len; i = i + 1 {
             let is_match: bool =1
 
             if i <= len - old_len {
-                for let j: i64 = 0, j < old_len, j = j + 1 {
+                for let j: i64 = 0; j < old_len; j = j + 1 {
                     if s[i + j] != old_substr[j] {
                         is_match = 0
                         break
@@ -323,7 +323,7 @@ class StringUtils {
         let result: String = new String("")
         let padding_needed: i64 = length - current_len
 
-        for let i: i64 = 0, i < padding_needed, i = i + 1 {
+        for let i: i64 = 0; i < padding_needed; i = i + 1 {
             result = result + char_to_string(pad_char).c_str()
         }
 
@@ -340,7 +340,7 @@ class StringUtils {
         let result: String = s
         let padding_needed: i64 = length - current_len
 
-        for let i: i64 = 0, i < padding_needed, i = i + 1 {
+        for let i: i64 = 0; i < padding_needed; i = i + 1 {
             result = result + char_to_string(pad_char).c_str()
         }
 
@@ -352,7 +352,7 @@ class StringUtils {
         let len: i64 = s.len()
         let result: String = new String("")
 
-        for let i: i64 = len - 1, i >= 0, i = i - 1 {
+        for let i: i64 = len - 1; i >= 0; i = i - 1 {
             let c: char = s[i]
             result = result + char_to_string(c).c_str()
         }
@@ -364,7 +364,7 @@ class StringUtils {
     static func repeat(s: String, times: i64) -> String {
         let result: String = new String("")
 
-        for let i: i64 = 0, i < times, i = i + 1 {
+        for let i: i64 = 0; i < times; i = i + 1 {
             result = result + s.c_str()
         }
 
@@ -379,7 +379,7 @@ class StringUtils {
             return 1
         }
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let c: char = s[i]
             if c != 32 && c != 9 && c != 10 && c != 13 {
                 return 0
@@ -438,7 +438,7 @@ class StringBuilder {
 
         // Reverse digits
         let size: i64 = digits.len()
-        for let i: i64 = size - 1, i >= 0, i = i - 1 {
+        for let i: i64 = size - 1; i >= 0; i = i - 1 {
             self.append(digits.get(i))
         }
     }
@@ -461,7 +461,7 @@ class StringBuilder {
         }
 
         let size: i64 = digits.len()
-        for let i: i64 = size - 1, i >= 0, i = i - 1 {
+        for let i: i64 = size - 1; i >= 0; i = i - 1 {
             self.append(digits.get(i))
         }
     }
@@ -733,7 +733,7 @@ class Format {
         let args_size: i64 = args.len()
 
         let i: i64 = 0
-        for i = 0, i < len, i = i + 1 {
+        for i = 0; i < len; i = i + 1 {
             let c: char = template[i]
 
             if c == 123 && i + 1 < len && template[i + 1] == 125 {

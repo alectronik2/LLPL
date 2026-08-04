@@ -12,13 +12,17 @@ namespace PFDB {
         refcount: u32
 
         union {
-            size:     uint
-            next:     PageFrame*
+            size: uint
+            next: PageFrame*
         }
     }
 
     func init( memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse* ) {
-        let entries = memmap.entries as LimineMemmapEntry*
         hs.write("PFDB init: Limine HHDM offset: \(hhdm.offset:hex), entries: \(memmap.entry_count)\n")
+
+        for let i = 0, let entries = memmap.entries as u64*; i < memmap.entry_count; i++ {
+            let e = entries[i] as LimineMemmapEntry*
+            hs.write("PFDB init: entry: base \(e.base:hex), length \(e.length:hex), type \(e.entry_type)\n")
+        }
     }
 }

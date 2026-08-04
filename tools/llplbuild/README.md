@@ -405,9 +405,10 @@ A step is skipped when every declared output:
 Config changes also invalidate C compilation via `.llplbuild-config`.
 
 For the root generated C file, llplbuild conservatively treats every
-`.llpl` file under the project directory plus `prelude.llpl` as an input.
+`.llpl` file under the project directory, the compiler project config
+`llpl.json` found next to or above `entry`, and `prelude.llpl` as inputs.
 This avoids reimplementing the compiler's module resolver in the build
-tool.
+tool while still catching import-path changes.
 
 Embedded assets referenced with `embed("path")` are also tracked as
 inputs.

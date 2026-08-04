@@ -40,8 +40,13 @@ func main() -> i64 {
     print_int("c.n", c.n)
 
     // The classic C-style for-loop increment clause.
-    for let k: i64 = 0, k < 3, k++ {
+    for let k: i64 = 0; k < 3; k++ {
         print_int("k", k)
+    }
+
+    for let a: i64 = 0, let b: i64 = 10; a < 3; a++ {
+        print_int("multi for", a + b)
+        b++
     }
 
     return 0

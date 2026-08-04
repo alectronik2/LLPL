@@ -144,13 +144,13 @@ func demo_csv_parser() {
     let lines: Vector<String> = StringUtils.split(csv_data, '\n')
     let num_lines: i64 = lines.len()
 
-    for let i: i64 = 0, i < num_lines, i = i + 1 {
+    for let i: i64 = 0; i < num_lines; i = i + 1 {
         let line: String = lines.get(i)
         let fields: Vector<String> = StringUtils.split(line, ',')
 
         // Process each field
         let num_fields: i64 = fields.len()
-        for let j: i64 = 0, j < num_fields, j = j + 1 {
+        for let j: i64 = 0; j < num_fields; j = j + 1 {
             let field: String = fields.get(j)
             // In a real app, you would process the field
         }

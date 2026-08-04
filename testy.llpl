@@ -175,4 +175,7 @@ func main( args: string[] ) -> u32 {
     for m in digits.find_all(text) {
         puts(m)  // "123", then "4567"
     }
+
+
+    return 0 if true else return 1
 }

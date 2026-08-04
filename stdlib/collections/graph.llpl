@@ -49,14 +49,14 @@ class Graph {
         self.is_directed = directed
         self.adjacency_list = llpl_alloc(vertices * sizeof(AdjListNode*)) as AdjListNode**
 
-        for let i: i64 = 0, i < vertices, i = i + 1 {
+        for let i: i64 = 0; i < vertices; i = i + 1 {
             self.adjacency_list[i] = null
         }
     }
 
     destructor() {
         if self.adjacency_list != null {
-            for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+            for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
                 let current: AdjListNode* = self.adjacency_list[i]
                 while current != null {
                     let next: AdjListNode* = (*current).next
@@ -176,7 +176,7 @@ class Graph {
         }
 
         let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             visited[i] = false
         }
 
@@ -217,7 +217,7 @@ class Graph {
         }
 
         let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             visited[i] = false
         }
 
@@ -261,12 +261,12 @@ class Graph {
         }
 
         let in_degree: i64* = llpl_alloc(self.vertex_count * sizeof(i64)) as i64*
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             in_degree[i] = 0
         }
 
         // Calculate in-degrees
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             let current: AdjListNode* = self.adjacency_list[i]
             while current != null {
                 in_degree[(*current).vertex] = in_degree[(*current).vertex] + 1
@@ -275,7 +275,7 @@ class Graph {
         }
 
         let queue: Queue<i64> = new Queue<i64>()
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             if in_degree[i] == 0 {
                 queue.enqueue(i)
             }
@@ -319,12 +319,12 @@ class Graph {
         let visited: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
         let rec_stack: bool* = llpl_alloc(self.vertex_count * sizeof(bool)) as bool*
 
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             visited[i] = false
             rec_stack[i] = false
         }
 
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             if !visited[i] {
                 if self.has_cycle_directed_helper(i, visited, rec_stack) {
                     llpl_free(visited as char*)
@@ -382,9 +382,9 @@ class GraphMatrix {
         self.is_directed = directed
         self.matrix = llpl_alloc(vertices * sizeof(i64*)) as i64**
 
-        for let i: i64 = 0, i < vertices, i = i + 1 {
+        for let i: i64 = 0; i < vertices; i = i + 1 {
             self.matrix[i] = llpl_alloc(vertices * sizeof(i64)) as i64*
-            for let j: i64 = 0, j < vertices, j = j + 1 {
+            for let j: i64 = 0; j < vertices; j = j + 1 {
                 if i == j {
                     self.matrix[i][j] = 0
                 } else {
@@ -396,7 +396,7 @@ class GraphMatrix {
 
     destructor() {
         if self.matrix != null {
-            for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+            for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
                 if self.matrix[i] != null {
                     llpl_free(self.matrix[i] as char*)
                 }
@@ -440,17 +440,17 @@ class GraphMatrix {
         let dist: i64** = llpl_alloc(self.vertex_count * sizeof(i64*)) as i64**
 
         // Initialize distance matrix
-        for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
+        for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
             dist[i] = llpl_alloc(self.vertex_count * sizeof(i64)) as i64*
-            for let j: i64 = 0, j < self.vertex_count, j = j + 1 {
+            for let j: i64 = 0; j < self.vertex_count; j = j + 1 {
                 dist[i][j] = self.matrix[i][j]
             }
         }
 
         // Floyd-Warshall algorithm
-        for let k: i64 = 0, k < self.vertex_count, k = k + 1 {
-            for let i: i64 = 0, i < self.vertex_count, i = i + 1 {
-                for let j: i64 = 0, j < self.vertex_count, j = j + 1 {
+        for let k: i64 = 0; k < self.vertex_count; k = k + 1 {
+            for let i: i64 = 0; i < self.vertex_count; i = i + 1 {
+                for let j: i64 = 0; j < self.vertex_count; j = j + 1 {
                     if dist[i][k] + dist[k][j] < dist[i][j] {
                         dist[i][j] = dist[i][k] + dist[k][j]
                     }

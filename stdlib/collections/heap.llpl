@@ -140,7 +140,7 @@ class BinaryHeap<T> {
 
         let size: i64 = self.data.len()
         // Start from last non-leaf node and bubble down
-        for let i: i64 = (size / 2) - 1, i >= 0, i = i - 1 {
+        for let i: i64 = (size / 2) - 1; i >= 0; i = i - 1 {
             self.bubble_down(i)
         }
     }

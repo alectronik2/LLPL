@@ -126,6 +126,26 @@ private string[] allLlplSources(string projectDir, string llplCompiler) {
     return result;
 }
 
+private string[] llplProjectConfigInputs(string entryPath) {
+    string[] result;
+    string dir = exists(entryPath) && isDir(entryPath)
+        ? entryPath
+        : dirName(entryPath);
+    if (dir.length == 0) dir = ".";
+    dir = absolutePath(dir).buildNormalizedPath();
+    while (dir.length > 0) {
+        string candidate = buildNormalizedPath(dir, "llpl.json");
+        if (exists(candidate)) {
+            result ~= candidate;
+            return result;
+        }
+        string parent = dirName(dir);
+        if (parent == dir) break;
+        dir = parent;
+    }
+    return result;
+}
+
 private string[] embeddedAssetInputs(string sourcePath) {
     string[] result;
     if (!exists(sourcePath)) return result;
@@ -177,6 +197,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
 
     string generatedC = stripExtension(cfg.entry) ~ ".c";
     string[] llplDeps = allLlplSources(".", cfg.llplCompiler);
+    llplDeps ~= llplProjectConfigInputs(cfg.entry);
     llplDeps ~= embeddedAssetInputsForSources(llplDeps);
     llplDeps ~= cfg.llplCompiler;
 

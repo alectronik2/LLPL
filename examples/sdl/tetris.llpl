@@ -140,7 +140,7 @@ class Game {
     let game_over_timer: float
 
     constructor() {
-        for let i: i64 = 0, i < 200, i++ {
+        for let i: i64 = 0; i < 200; i++ {
             self.board[i] = 0
         }
 
@@ -176,8 +176,8 @@ class Game {
     }
 
     func check_collision(piece: i64, rotation: i64, test_x: i64, test_y: i64) -> bool {
-        for let r: i64 = 0, r < 4, r++ {
-            for let c: i64 = 0, c < 4, c++ {
+        for let r: i64 = 0; r < 4; r++ {
+            for let c: i64 = 0; c < 4; c++ {
                 if piece_cell(piece, rotation, r, c) != 0 {
                     let bx: i64 = test_x + c
                     let by: i64 = test_y + r
@@ -224,8 +224,8 @@ class Game {
     }
 
     func lock_piece() {
-        for let r: i64 = 0, r < 4, r++ {
-            for let c: i64 = 0, c < 4, c++ {
+        for let r: i64 = 0; r < 4; r++ {
+            for let c: i64 = 0; c < 4; c++ {
                 if piece_cell(self.piece_type, self.rotation, r, c) != 0 {
                     let bx: i64 = self.px + c
                     let by: i64 = self.py + r
@@ -247,9 +247,9 @@ class Game {
 
     func find_cleared_rows() {
         self.clear_count = 0
-        for let y: i64 = 0, y < BOARD_HEIGHT, y++ {
+        for let y: i64 = 0; y < BOARD_HEIGHT; y++ {
             let full: bool = true
-            for let x: i64 = 0, x < BOARD_WIDTH, x++ {
+            for let x: i64 = 0; x < BOARD_WIDTH; x++ {
                 if self.board[y * BOARD_WIDTH + x] == 0 {
                     full = false
                 }
@@ -278,18 +278,18 @@ class Game {
     // 1-4 cleared rows, contiguous or not.
     func finish_clear() {
         let write_y: i64 = BOARD_HEIGHT - 1
-        for let read_y: i64 = BOARD_HEIGHT - 1, read_y >= 0, read_y = read_y - 1 {
+        for let read_y: i64 = BOARD_HEIGHT - 1; read_y >= 0; read_y = read_y - 1 {
             if !self.is_clearing_row(read_y) {
                 if write_y != read_y {
-                    for let x: i64 = 0, x < BOARD_WIDTH, x++ {
+                    for let x: i64 = 0; x < BOARD_WIDTH; x++ {
                         self.board[write_y * BOARD_WIDTH + x] = self.board[read_y * BOARD_WIDTH + x]
                     }
                 }
                 write_y = write_y - 1
             }
         }
-        for let y: i64 = 0, y <= write_y, y++ {
-            for let x: i64 = 0, x < BOARD_WIDTH, x++ {
+        for let y: i64 = 0; y <= write_y; y++ {
+            for let x: i64 = 0; x < BOARD_WIDTH; x++ {
                 self.board[y * BOARD_WIDTH + x] = 0
             }
         }
@@ -384,9 +384,9 @@ class Game {
         renderer.fill_rect(bg)
 
         // Locked cells, flashing white/gray while their row is clearing.
-        for let y: i64 = 0, y < BOARD_HEIGHT, y++ {
+        for let y: i64 = 0; y < BOARD_HEIGHT; y++ {
             let flashing: bool = self.clearing && self.is_clearing_row(y)
-            for let x: i64 = 0, x < BOARD_WIDTH, x++ {
+            for let x: i64 = 0; x < BOARD_WIDTH; x++ {
                 let cell: i64 = self.board[y * BOARD_WIDTH + x]
                 if cell != 0 {
                     if flashing {
@@ -420,8 +420,8 @@ class Game {
             let fall_progress: float = self.drop_timer / effective_interval
 
             set_piece_color(renderer, self.piece_type)
-            for let r: i64 = 0, r < 4, r++ {
-                for let c: i64 = 0, c < 4, c++ {
+            for let r: i64 = 0; r < 4; r++ {
+                for let c: i64 = 0; c < 4; c++ {
                     if piece_cell(self.piece_type, self.rotation, r, c) != 0 {
                         let cell_x: float = ((self.px + c) * CELL_SIZE) as float
                         let cell_y: float = (((self.py + r) as float) + fall_progress) * (CELL_SIZE as float)
@@ -444,8 +444,8 @@ class Game {
         let preview_cell: i64 = 20
         let preview_x: i64 = BOARD_PIXEL_WIDTH + 30
         let preview_y: i64 = 40
-        for let r: i64 = 0, r < 4, r++ {
-            for let c: i64 = 0, c < 4, c++ {
+        for let r: i64 = 0; r < 4; r++ {
+            for let c: i64 = 0; c < 4; c++ {
                 if piece_cell(self.next_type, 0, r, c) != 0 {
                     let rect: SDL_Rect = new SDL_Rect(
                         preview_x + c * preview_cell, preview_y + r * preview_cell,

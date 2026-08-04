@@ -2300,7 +2300,7 @@ class Parser {
         // `for i in <range-or-iterable> { ... }` - a counted/ranged or
         // iterator loop over a fresh per-iteration binding. Unambiguous via one token of
         // lookahead: the ordinary C-style for's own initializer can also
-        // start with a bare identifier (`for i = 0, i < 5, i = i + 1 {
+        // start with a bare identifier (`for i = 0; i < 5; i = i + 1 {
         // }`), but never one immediately followed by `in`.
         if (check(TokenType.Identifier) && peek(1).type == TokenType.In) {
             string varName = current.value;
@@ -2311,25 +2311,27 @@ class Parser {
             return new ForeachStmt(varName, iterable, forInBody, startLine, startColumn);
         }
 
-        ASTNode initializer = null;
+        ASTNode[] initializers;
         ASTNode condition = null;
         ASTNode update = null;
 
         // init
-        if (!check(TokenType.Comma)) {
-            if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
-                initializer = letDecl();
-            } else {
-                initializer = new ExprStmt(expression());
-            }
+        if (!check(TokenType.Semicolon)) {
+            do {
+                if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
+                    initializers ~= letDecl();
+                } else {
+                    initializers ~= new ExprStmt(expression());
+                }
+            } while (match(TokenType.Comma));
         }
-        expect(TokenType.Comma);
+        expect(TokenType.Semicolon);
 
         // condition
-        if (!check(TokenType.Comma)) {
+        if (!check(TokenType.Semicolon)) {
             condition = expression();
         }
-        expect(TokenType.Comma);
+        expect(TokenType.Semicolon);
 
         // update
         if (!check(TokenType.LeftBrace)) {
@@ -2337,7 +2339,7 @@ class Parser {
         }
 
         Block body_ = block();
-        return new ForStmt(initializer, condition, update, body_);
+        return new ForStmt(initializers, condition, update, body_);
     }
 
     // The old `foreach let x in iterable { ... }` spelling has been removed;

@@ -151,7 +151,7 @@ Fixed-size ring buffer with overwrite capability.
 ```swift
 let buffer: std::CircularBuffer<int> = new std::CircularBuffer<int>(5)
 
-for let i: int = 0, i < 5, i = i + 1 {
+for let i: int = 0; i < 5; i = i + 1 {
     buffer.push(i)  // [0, 1, 2, 3, 4]
 }
 

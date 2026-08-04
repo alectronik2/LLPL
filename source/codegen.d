@@ -992,7 +992,9 @@ class CodeGenerator {
             changed |= walkForReachableCalls(doWhileStmt.body_);
             changed |= walkForReachableCalls(doWhileStmt.condition);
         } else if (auto forStmt = cast(ForStmt)node) {
-            if (forStmt.initializer) changed |= walkForReachableCalls(forStmt.initializer);
+            foreach (init; forStmt.initializers) {
+                changed |= walkForReachableCalls(init);
+            }
             if (forStmt.condition) changed |= walkForReachableCalls(forStmt.condition);
             if (forStmt.update) changed |= walkForReachableCalls(forStmt.update);
             changed |= walkForReachableCalls(forStmt.body_);
@@ -1681,7 +1683,9 @@ class CodeGenerator {
             collectNodeEffects(dw.body_, effects);
             collectNodeEffects(dw.condition, effects);
         } else if (auto f = cast(ForStmt)node) {
-            collectNodeEffects(f.initializer, effects);
+            foreach (init; f.initializers) {
+                collectNodeEffects(init, effects);
+            }
             collectNodeEffects(f.condition, effects);
             collectNodeEffects(f.update, effects);
             collectNodeEffects(f.body_, effects);
@@ -6367,8 +6371,8 @@ class CodeGenerator {
         } else if (auto forStmt = cast(ForStmt)node) {
             code ~= indent() ~ "{\n";
             indentLevel++;
-            if (forStmt.initializer) {
-                code ~= generateStatement(forStmt.initializer, isDeferred);
+            foreach (init; forStmt.initializers) {
+                code ~= generateStatement(init, isDeferred);
             }
             code ~= indent() ~ "while (";
             if (forStmt.condition) {
@@ -6652,7 +6656,11 @@ class CodeGenerator {
             return new DoWhileStmt(cloneBlock(doWhileStmt.body_, subs, typeSubs),
                 cloneNode(doWhileStmt.condition, subs, typeSubs), doWhileStmt.line, doWhileStmt.column);
         } else if (auto forStmt = cast(ForStmt)node) {
-            return new ForStmt(cloneNode(forStmt.initializer, subs, typeSubs), cloneNode(forStmt.condition, subs, typeSubs),
+            ASTNode[] initializers;
+            foreach (init; forStmt.initializers) {
+                initializers ~= cloneNode(init, subs, typeSubs);
+            }
+            return new ForStmt(initializers, cloneNode(forStmt.condition, subs, typeSubs),
                 cloneNode(forStmt.update, subs, typeSubs), cloneBlock(forStmt.body_, subs, typeSubs));
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             return new ForeachStmt(foreachStmt.varName, cloneNode(foreachStmt.iterable, subs, typeSubs),
@@ -6872,8 +6880,11 @@ class CodeGenerator {
             return new DoWhileStmt(expandQuotedBlock(doWhileStmt.body_, subs),
                 expandQuotedNode(doWhileStmt.condition, subs), doWhileStmt.line, doWhileStmt.column);
         } else if (auto forStmt = cast(ForStmt)node) {
-            return new ForStmt(expandQuotedNode(forStmt.initializer, subs),
-                expandQuotedNode(forStmt.condition, subs), expandQuotedNode(forStmt.update, subs),
+            ASTNode[] initializers;
+            foreach (init; forStmt.initializers) {
+                initializers ~= expandQuotedNode(init, subs);
+            }
+            return new ForStmt(initializers, expandQuotedNode(forStmt.condition, subs), expandQuotedNode(forStmt.update, subs),
                 expandQuotedBlock(forStmt.body_, subs));
         } else if (auto foreachStmt = cast(ForeachStmt)node) {
             return new ForeachStmt(foreachStmt.varName, expandQuotedNode(foreachStmt.iterable, subs),

@@ -201,7 +201,7 @@ namespace IDT {
     }
 
     func init() {
-        for let i: i64 = 0, i < 256, i = i + 1 {
+        for let i: i64 = 0; i < 256; i = i + 1 {
             set_gate(i, 0, 0, 0)
         }
 

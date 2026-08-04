@@ -135,72 +135,116 @@ class Lexer {
     }
 
     func keyword_kind(text: String) -> string {
-        match text.c_str() {
-            case "import" => { return "Import" }
-            case "namespace" => { return "Namespace" }
-            case "func" => { return "Function" }
-            case "class" => { return "Class" }
-            case "struct" => { return "Struct" }
-            case "union" => { return "Union" }
-            case "ui" => { return "Ui" }
-            case "grammar" => { return "Grammar" }
-            case "packed" => { return "Packed" }
-            case "interrupt" => { return "Interrupt" }
-            case "constructor" => { return "Constructor" }
-            case "destructor" => { return "Destructor" }
-            case "let" => { return "Let" }
-            case "const" => { return "Const" }
-            case "volatile" => { return "Volatile" }
-            case "private" => { return "Private" }
-            case "public" => { return "Public" }
-            case "static" => { return "Static" }
-            case "inline" => { return "Inline" }
-            case "virtual" => { return "Virtual" }
-            case "override" => { return "Override" }
-            case "if" => { return "If" }
-            case "else" => { return "Else" }
-            case "while" => { return "While" }
-            case "do" => { return "Do" }
-            case "until" => { return "Until" }
-            case "for" => { return "For" }
-            case "foreach" => { return "Foreach" }
-            case "in" => { return "In" }
-            case "return" => { return "Return" }
-            case "continue" => { return "Continue" }
-            case "break" => { return "Break" }
-            case "defer" => { return "Defer" }
-            case "asm" => { return "Asm" }
-            case "new" => { return "New" }
-            case "true" => { return "True" }
-            case "false" => { return "False" }
-            case "null" => { return "Null" }
-            case "extern" => { return "Extern" }
-            case "as" => { return "As" }
-            case "from" => { return "From" }
-            case "using" => { return "Using" }
-            case "match" => { return "Match" }
-            case "case" => { return "Case" }
-            case "default" => { return "Default" }
-            case "alias" => { return "Alias" }
-            case "operator" => { return "Operator" }
-            case "enum" => { return "Enum" }
-            case "macro" => { return "Macro" }
-            case "unless" => { return "Unless" }
-            case "quote" => { return "Quote" }
-            case "unquote" => { return "Unquote" }
-            case "sizeof" => { return "Sizeof" }
-            case "trait" => { return "Trait" }
-            case "impl" => { return "Impl" }
-            case "try" => { return "Try" }
-            case "catch" => { return "Catch" }
-            case "finally" => { return "Finally" }
-            case "throw" => { return "Throw" }
-            case "delete" => { return "Delete" }
-            case "assert" => { return "Assert" }
-            case "unittest" => { return "UnitTest" }
-            case "with" => { return "With" }
+        if text.byte_len() == 0 {
+            return "Identifier"
+        }
+        match text.byte_at(0) {
+            case 'a' => {
+                if text == "alias" { return "Alias" }
+                if text == "asm" { return "Asm" }
+                if text == "as" { return "As" }
+                if text == "assert" { return "Assert" }
+            }
+            case 'b' => {
+                if text == "break" { return "Break" }
+            }
+            case 'c' => {
+                if text == "case" { return "Case" }
+                if text == "catch" { return "Catch" }
+                if text == "class" { return "Class" }
+                if text == "const" { return "Const" }
+                if text == "constructor" { return "Constructor" }
+                if text == "continue" { return "Continue" }
+            }
+            case 'd' => {
+                if text == "default" { return "Default" }
+                if text == "defer" { return "Defer" }
+                if text == "delete" { return "Delete" }
+                if text == "destructor" { return "Destructor" }
+                if text == "do" { return "Do" }
+            }
+            case 'e' => {
+                if text == "else" { return "Else" }
+                if text == "enum" { return "Enum" }
+                if text == "extern" { return "Extern" }
+            }
+            case 'f' => {
+                if text == "false" { return "False" }
+                if text == "finally" { return "Finally" }
+                if text == "for" { return "For" }
+                if text == "foreach" { return "Foreach" }
+                if text == "from" { return "From" }
+                if text == "func" { return "Function" }
+            }
+            case 'g' => {
+                if text == "grammar" { return "Grammar" }
+            }
+            case 'i' => {
+                if text == "if" { return "If" }
+                if text == "impl" { return "Impl" }
+                if text == "import" { return "Import" }
+                if text == "in" { return "In" }
+                if text == "inline" { return "Inline" }
+                if text == "interrupt" { return "Interrupt" }
+            }
+            case 'l' => {
+                if text == "let" { return "Let" }
+            }
+            case 'm' => {
+                if text == "macro" { return "Macro" }
+                if text == "match" { return "Match" }
+            }
+            case 'n' => {
+                if text == "namespace" { return "Namespace" }
+                if text == "new" { return "New" }
+                if text == "null" { return "Null" }
+            }
+            case 'o' => {
+                if text == "operator" { return "Operator" }
+                if text == "override" { return "Override" }
+            }
+            case 'p' => {
+                if text == "packed" { return "Packed" }
+                if text == "private" { return "Private" }
+                if text == "public" { return "Public" }
+            }
+            case 'q' => {
+                if text == "quote" { return "Quote" }
+            }
+            case 'r' => {
+                if text == "return" { return "Return" }
+            }
+            case 's' => {
+                if text == "sizeof" { return "Sizeof" }
+                if text == "static" { return "Static" }
+                if text == "struct" { return "Struct" }
+            }
+            case 't' => {
+                if text == "throw" { return "Throw" }
+                if text == "trait" { return "Trait" }
+                if text == "true" { return "True" }
+                if text == "try" { return "Try" }
+            }
+            case 'u' => {
+                if text == "ui" { return "Ui" }
+                if text == "union" { return "Union" }
+                if text == "unless" { return "Unless" }
+                if text == "unquote" { return "Unquote" }
+                if text == "unittest" { return "UnitTest" }
+                if text == "until" { return "Until" }
+                if text == "using" { return "Using" }
+            }
+            case 'v' => {
+                if text == "virtual" { return "Virtual" }
+                if text == "volatile" { return "Volatile" }
+            }
+            case 'w' => {
+                if text == "while" { return "While" }
+                if text == "with" { return "With" }
+            }
             default => { return "Identifier" }
         }
+        return "Identifier"
     }
 
     func skip_ignored() {
@@ -536,6 +580,19 @@ class Parser {
         return tok
     }
 
+    func is_identifier_like() -> bool {
+        return self.check("Identifier") || self.check("Interrupt")
+    }
+
+    func expect_name() -> Token {
+        if self.is_identifier_like() {
+            let tok: Token = self.current
+            self.advance()
+            return tok
+        }
+        return self.expect("Identifier")
+    }
+
     func line(depth: i64, text: string) {
         print_indent(depth)
         puts(text)
@@ -590,11 +647,32 @@ class Parser {
             self.parse_ui(depth, is_public)
         } else if self.check("Grammar") {
             self.parse_grammar(depth, is_public)
+        } else if self.check("Identifier") && self.current.value == "comptime" {
+            self.parse_comptime_decl(depth)
         } else if self.check("Const") || self.check("Let") || self.check("Volatile") {
             self.parse_var_decl(depth)
         } else {
             self.line(depth, "SkippedDecl")
             self.skip_until_decl_boundary()
+        }
+    }
+
+    func parse_comptime_decl(depth: i64) {
+        self.advance()
+        self.line(depth, "Comptime")
+        if self.match("For") {
+            self.line(depth + 1, "For")
+            self.parse_expr_until(depth + 2, "header", "LeftBrace")
+            self.expect("LeftBrace")
+            self.line(depth + 2, "Block")
+            while !self.check("RightBrace") && !self.check("EOF") {
+                self.parse_decl(depth + 3)
+            }
+            self.expect("RightBrace")
+        } else if self.check("If") {
+            self.parse_stmt(depth + 1)
+        } else {
+            self.parse_decl(depth + 1)
         }
     }
 
@@ -941,7 +1019,7 @@ class Parser {
             if self.match("At") {
                 params.append_char('@')
             }
-            let pname: Token = self.expect("Identifier")
+            let pname: Token = self.expect_name()
             params.append_string(pname.value)
             self.expect("Colon")
             params.append_char(':')
@@ -980,6 +1058,14 @@ class Parser {
         } else {
             self.append_current_token_text(name)
             self.advance()
+        }
+        while self.check("Unknown") && self.current.value == "$" {
+            name.append_char('$')
+            self.advance()
+            if self.check("Identifier") {
+                let part: Token = self.expect("Identifier")
+                name.append_string(part.value)
+            }
         }
         let type_params: String = self.parse_type_params_text()
         name.append_string(type_params)
@@ -1020,7 +1106,7 @@ class Parser {
 
     func parse_alias(depth: i64, is_public: bool) {
         self.expect("Alias")
-        let name: Token = self.expect("Identifier")
+        let name: Token = self.expect_name()
         self.expect("Assign")
         let target: TextBuf = new TextBuf()
         self.parse_raw_line_or_balanced(target)
@@ -1033,7 +1119,7 @@ class Parser {
 
     func parse_macro(depth: i64, is_public: bool) {
         self.expect("Macro")
-        let name: Token = self.expect("Identifier")
+        let name: Token = self.expect_name()
         self.expect("LeftParen")
         let params: TextBuf = new TextBuf()
         let first: bool = true
@@ -1067,7 +1153,12 @@ class Parser {
 
     func parse_ui(depth: i64, is_public: bool) {
         self.expect("Ui")
-        let name: Token = self.expect("Identifier")
+        let name: Token = self.current
+        if self.is_identifier_like() {
+            self.advance()
+        } else {
+            name = self.expect("Identifier")
+        }
         let root_type: String = new String("Window")
         if self.match("Colon") {
             root_type = self.parse_type_name()
@@ -1084,7 +1175,12 @@ class Parser {
 
     func parse_grammar(depth: i64, is_public: bool) {
         self.expect("Grammar")
-        let name: Token = self.expect("Identifier")
+        let name: Token = self.current
+        if self.is_identifier_like() {
+            self.advance()
+        } else {
+            name = self.expect("Identifier")
+        }
         print_indent(depth)
         if is_public {
             printf("Public ")
@@ -1143,7 +1239,7 @@ class Parser {
         let start_line: i64 = self.current.line
         while !self.check("EOF") {
             if parens == 0 && brackets == 0 && braces == 0 {
-                if self.is_boundary_token() || self.check("RightBrace") {
+                if (self.is_boundary_token() || self.check("RightBrace")) && out.length > 0 {
                     return
                 }
                 if self.current.line > start_line {
@@ -1164,7 +1260,12 @@ class Parser {
 
     func parse_enum(depth: i64, is_public: bool) {
         self.expect("Enum")
-        let name: Token = self.expect("Identifier")
+        let name: Token = self.current
+        if self.check("Identifier") || self.check("Interrupt") {
+            self.advance()
+        } else {
+            name = self.expect("Identifier")
+        }
         let backing: String = new String("")
         if self.match("Colon") {
             backing = self.parse_type_name()
@@ -1189,7 +1290,12 @@ class Parser {
     }
 
     func parse_enum_member(depth: i64) {
-        let name: Token = self.expect("Identifier")
+        let name: Token = self.current
+        if self.check("Identifier") || self.check("Interrupt") {
+            self.advance()
+        } else {
+            name = self.expect("Identifier")
+        }
         print_indent(depth)
         printf("Variant %s", name.value.c_str())
         if self.match("LeftParen") {
@@ -1354,8 +1460,11 @@ class Parser {
             self.parse_destructor(depth, modifiers.to_string())
         } else if self.check("Function") || self.check("Inline") || self.check("Interrupt") {
             self.parse_method(depth, modifiers.to_string(), true)
-        } else if modifiers.to_string() == "Property " && self.check("Identifier") {
+        } else if (modifiers.to_string() == "Property " ||
+                modifiers.to_string() == "Inline Property ") && self.check("Identifier") {
             self.parse_method(depth, modifiers.to_string(), false)
+        } else if self.check("Struct") || self.check("Union") || self.check("Class") {
+            self.parse_anonymous_aggregate_member(depth, modifiers.to_string())
         } else if self.check("Let") || self.check("Const") || self.check("Volatile") ||
                 (self.check("Identifier") && self.lexer.peek(0) != '\0') {
             self.parse_member_field(depth, modifiers.to_string())
@@ -1364,6 +1473,18 @@ class Parser {
             printf("SkippedMember %s %s\n", self.current.kind, self.current.value.c_str())
             self.skip_until_decl_boundary()
         }
+    }
+
+    func parse_anonymous_aggregate_member(depth: i64, modifiers: String) {
+        let kind: string = self.current.kind
+        self.advance()
+        print_indent(depth)
+        printf("%s%s <anonymous>\n", modifiers.c_str(), kind)
+        self.expect("LeftBrace")
+        while !self.check("RightBrace") && !self.check("EOF") {
+            self.parse_aggregate_member(depth + 1)
+        }
+        self.expect("RightBrace")
     }
 
     func parse_constructor(depth: i64, modifiers: String) {
@@ -1416,10 +1537,33 @@ class Parser {
         if !is_const && !is_volatile {
             self.match("Let")
         }
+        if self.check("Interrupt") {
+            self.current = new Token("Identifier", self.current.value, self.current.line, self.current.column)
+        }
         let name: Token = self.expect("Identifier")
+        if self.check("LeftBrace") {
+            let pattern: TextBuf = new TextBuf()
+            pattern.append_string(name.value)
+            pattern.append_char(' ')
+            self.parse_brace_pattern_text(pattern)
+            print_indent(depth)
+            printf("FieldDestructure %s: <inferred>\n", pattern.to_string().c_str())
+            if self.match("Assign") {
+                self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            }
+            return
+        }
         let ty: String = new String("<inferred>")
         if self.match("Colon") {
             ty = self.parse_type_name()
+            if self.match("Colon") {
+                let width: Token = self.expect("Integer")
+                let bit_ty: TextBuf = new TextBuf()
+                bit_ty.append_string(ty)
+                bit_ty.append_char(':')
+                bit_ty.append_string(width.value)
+                ty = bit_ty.to_string()
+            }
         }
         print_indent(depth)
         printf("%sField %s: %s\n", modifiers.c_str(), name.value.c_str(), ty.c_str())
@@ -1436,25 +1580,32 @@ class Parser {
         }
         if self.match("LeftParen") {
             let names: TextBuf = new TextBuf()
-            let first_name: bool = true
-            while !self.check("RightParen") && !self.check("EOF") {
-                if !first_name {
-                    names.append_string(new String(", "))
-                }
-                let part: Token = self.expect("Identifier")
-                names.append_string(part.value)
-                self.match("Comma")
-                first_name = false
-            }
-            self.expect("RightParen")
+            names.append_char('(')
+            self.parse_destructure_pattern_text(names)
+            names.append_char(')')
             print_indent(depth)
-            printf("FieldTuple (%s): <inferred>\n", names.to_string().c_str())
+            printf("FieldTuple %s: <inferred>\n", names.to_string().c_str())
             if self.match("Assign") {
                 self.parse_expr_until(depth + 1, "expr", "RightBrace")
             }
             return
         }
+        if self.check("Interrupt") {
+            self.current = new Token("Identifier", self.current.value, self.current.line, self.current.column)
+        }
         let name: Token = self.expect("Identifier")
+        if self.check("LeftBrace") {
+            let pattern: TextBuf = new TextBuf()
+            pattern.append_string(name.value)
+            pattern.append_char(' ')
+            self.parse_brace_pattern_text(pattern)
+            print_indent(depth)
+            printf("FieldDestructure %s: <inferred>\n", pattern.to_string().c_str())
+            if self.match("Assign") {
+                self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            }
+            return
+        }
         let ty: String = new String("<inferred>")
         if self.match("Colon") {
             ty = self.parse_type_name()
@@ -1469,6 +1620,50 @@ class Parser {
         }
         if self.match("Assign") {
             self.parse_expr_until(depth + 1, "expr", "RightBrace")
+        }
+    }
+
+    func parse_brace_pattern_text(out: TextBuf) {
+        let braces: i64 = 0
+        let done: bool = false
+        while !done && !self.check("EOF") {
+            if self.check("LeftBrace") {
+                braces = braces + 1
+            }
+            self.append_current_token_text(out)
+            if self.check("RightBrace") {
+                braces = braces - 1
+                if braces == 0 {
+                    self.advance()
+                    done = true
+                } else {
+                    out.append_char(' ')
+                    self.advance()
+                }
+            } else {
+                out.append_char(' ')
+                self.advance()
+            }
+        }
+    }
+
+    func parse_destructure_pattern_text(out: TextBuf) {
+        let parens: i64 = 1
+        while parens > 0 && !self.check("EOF") {
+            if self.check("LeftParen") {
+                parens = parens + 1
+            } else if self.check("RightParen") {
+                parens = parens - 1
+                if parens == 0 {
+                    self.advance()
+                    return
+                }
+            }
+            self.append_current_token_text(out)
+            if parens > 0 {
+                out.append_char(' ')
+            }
+            self.advance()
         }
     }
 
@@ -1515,15 +1710,25 @@ class Parser {
         } else if self.match("Defer") {
             self.line(depth, "Defer")
             self.parse_stmt(depth + 1)
+        } else if self.check("Identifier") && self.current.value == "comptime" {
+            self.advance()
+            self.line(depth, "Comptime")
+            self.parse_stmt(depth + 1)
         } else if self.match("If") {
             self.line(depth, "If")
             self.parse_expr_until(depth + 1, "condition", "LeftBrace")
-            self.parse_block(depth + 1)
+            if self.check("LeftBrace") {
+                self.parse_block(depth + 1)
+            } else {
+                self.parse_stmt(depth + 1)
+            }
             if self.match("Else") {
                 if self.check("If") {
                     self.parse_stmt(depth + 1)
-                } else {
+                } else if self.check("LeftBrace") {
                     self.parse_block(depth + 1)
+                } else {
+                    self.parse_stmt(depth + 1)
                 }
             }
         } else if self.match("While") {
@@ -1606,12 +1811,24 @@ class Parser {
         return false
     }
 
+    func is_header_continuation_token(kind: string) -> bool {
+        return kind == "And" || kind == "Or" || kind == "BitwiseAnd" ||
+            kind == "BitwiseOr" || kind == "BitwiseXor" || kind == "Equal" ||
+            kind == "NotEqual" || kind == "Less" || kind == "Greater" ||
+            kind == "LessEqual" || kind == "GreaterEqual" || kind == "Plus" ||
+            kind == "Minus" || kind == "Star" || kind == "Slash" ||
+            kind == "Percent" || kind == "Assign" || kind == "Comma" ||
+            kind == "Dot" || kind == "Not" || kind == "LeftParen" ||
+            kind == "LeftBracket"
+    }
+
     func parse_expr_until(depth: i64, label: string, stop: string) {
         let text: TextBuf = new TextBuf()
         let parens: i64 = 0
         let brackets: i64 = 0
         let braces: i64 = 0
         let start_line: i64 = self.current.line
+        let previous_kind: string = ""
         let done: bool = false
         while !done {
             if self.check("EOF") {
@@ -1624,17 +1841,22 @@ class Parser {
                 } else if stop == "FatArrow" && self.check("FatArrow") {
                     done = true
                 }
-                if stop != "LeftBrace" && self.current.line > start_line {
+                if (stop == "LeftBrace" || stop == "FatArrow") && self.current.line > start_line &&
+                        !self.is_header_continuation_token(previous_kind) &&
+                        !self.is_header_continuation_token(self.current.kind) {
+                    done = true
+                }
+                if stop != "LeftBrace" && stop != "FatArrow" && self.current.line > start_line {
                     done = true
                 }
                 if stop != "LeftBrace" &&
-                        (self.is_boundary_token() || self.check("Return") || self.check("If")) {
+                        ((self.is_boundary_token() && !self.check("Interrupt")) || self.check("Return")) {
                     done = true
                 }
             }
 
             if !done {
-                if text.length > 4096 {
+                if text.length > 65536 {
                     printf("parse error: raw expression too long near %s at %lld:%lld\n",
                         self.current.kind, self.current.line, self.current.column)
                     done = true
@@ -1658,6 +1880,7 @@ class Parser {
                     text.append_char(' ')
                 }
                 text.append_char(' ')
+                previous_kind = self.current.kind
                 self.advance()
             }
         }

@@ -26,14 +26,14 @@ class TrieNode {
         self.is_end_of_word = false
         self.value = 0
 
-        for let i: i64 = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+        for let i: i64 = 0; i < TRIE_ALPHABET_SIZE; i = i + 1 {
             self.children[i] = null
         }
     }
 
     destructor() {
         if self.children != null {
-            for let i: i64 = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+            for let i: i64 = 0; i < TRIE_ALPHABET_SIZE; i = i + 1 {
                 if self.children[i] != null {
                     // A real child TrieNode instance (see this class's
                     // own comment) - `delete`, not llpl_free, so its own
@@ -81,7 +81,7 @@ class Trie {
             len = len + 1
         }
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let index: i64 = word[i] as i64
 
             if (*current).children[index] == null {
@@ -106,7 +106,7 @@ class Trie {
             len = len + 1
         }
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let index: i64 = word[i] as i64
 
             if (*current).children[index] == null {
@@ -133,7 +133,7 @@ class Trie {
             len = len + 1
         }
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let index: i64 = word[i] as i64
 
             if (*current).children[index] == null {
@@ -156,7 +156,7 @@ class Trie {
             len = len + 1
         }
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let index: i64 = word[i] as i64
 
             if (*current).children[index] == null {
@@ -185,7 +185,7 @@ class Trie {
             len = len + 1
         }
 
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let index: i64 = prefix[i] as i64
 
             if (*current).children[index] == null {
@@ -251,7 +251,7 @@ class Trie {
     }
 
     func has_no_children(node: TrieNode*) -> bool {
-        for let i: i64 = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+        for let i: i64 = 0; i < TRIE_ALPHABET_SIZE; i = i + 1 {
             if (*node).children[i] != null {
                 return false
             }
@@ -270,7 +270,7 @@ class Trie {
         }
 
         // Navigate to prefix
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             let index: i64 = prefix[i] as i64
 
             if (*current).children[index] == null {
@@ -282,7 +282,7 @@ class Trie {
 
         // Collect all words with this prefix
         let current_word: char[256]
-        for let i: i64 = 0, i < len, i = i + 1 {
+        for let i: i64 = 0; i < len; i = i + 1 {
             current_word[i] = prefix[i]
         }
         current_word[len] = '\0'
@@ -302,7 +302,7 @@ class Trie {
             result.push(new String(current_word))
         }
 
-        for let i: i64 = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+        for let i: i64 = 0; i < TRIE_ALPHABET_SIZE; i = i + 1 {
             if (*node).children[i] != null {
                 current_word[len] = i as char
                 self.collect_words((*node).children[i], current_word, len + 1, result)
@@ -339,7 +339,7 @@ class Trie {
             let child_count: i64 = 0
             let next_char: i64 = -1
 
-            for let i: i64 = 0, i < TRIE_ALPHABET_SIZE, i = i + 1 {
+            for let i: i64 = 0; i < TRIE_ALPHABET_SIZE; i = i + 1 {
                 if (*current).children[i] != null {
                     child_count = child_count + 1
                     next_char = i

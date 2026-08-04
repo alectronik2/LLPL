@@ -20,7 +20,7 @@ func main() -> i64 {
         i = i + 1
     }
 
-    for let j: i64 = 0, j < 10, j++ {
+    for let j: i64 = 0; j < 10; j++ {
         if j == 2 {
             break
         }
@@ -29,8 +29,8 @@ func main() -> i64 {
 
     // break only affects the innermost loop.
     let outerCount: i64 = 0
-    for let a: i64 = 0, a < 3, a++ {
-        for let b: i64 = 0, b < 3, b++ {
+    for let a: i64 = 0; a < 3; a++ {
+        for let b: i64 = 0; b < 3; b++ {
             if b == 1 {
                 break
             }

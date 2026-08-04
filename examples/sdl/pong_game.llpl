@@ -144,7 +144,7 @@ class Ball {
 }
 
 func draw_dotted_line(renderer: Renderer, x: i64) {
-    for let y: i64 = 0, y < WINDOW_HEIGHT, y = y + 20 {
+    for let y: i64 = 0; y < WINDOW_HEIGHT; y = y + 20 {
         let rect: SDL_Rect = new SDL_Rect(x, y, 5, 10)
         renderer.fill_rect(rect)
     }

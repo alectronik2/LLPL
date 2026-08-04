@@ -38,7 +38,7 @@ func test_loops() {
     }
 
     // Test for loop
-    for let j: i64 = 0, j < 5, j = j + 1 {
+    for let j: i64 = 0; j < 5; j = j + 1 {
         sum = sum + j
     }
 }

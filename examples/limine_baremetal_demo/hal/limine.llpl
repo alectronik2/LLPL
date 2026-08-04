@@ -45,7 +45,7 @@ packed struct LimineMemmapRequest {
 packed struct LimineMemmapResponse {
     let revision: u64
     let entry_count: u64
-    let entries: u64
+    let entries: LimineMemmapEntry*
 }
 
 packed struct LimineHhdmRequest {

@@ -1194,14 +1194,14 @@ class DoWhileStmt : ASTNode {
 }
 
 class ForStmt : ASTNode {
-    ASTNode initializer;
+    ASTNode[] initializers;
     ASTNode condition;
     ASTNode update;
     Block body_;
 
-    this(ASTNode initializer, ASTNode condition, ASTNode update, Block body_) {
+    this(ASTNode[] initializers, ASTNode condition, ASTNode update, Block body_) {
         super(NodeType.ForStmt);
-        this.initializer = initializer;
+        this.initializers = initializers;
         this.condition = condition;
         this.update = update;
         this.body_ = body_;

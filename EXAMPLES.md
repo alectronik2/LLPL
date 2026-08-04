@@ -103,7 +103,7 @@ func main() -> i64 {
 ```swift
 func sum_array(arr: i64*, len: i64) -> i64 {
     let sum: i64 = 0
-    for let i: i64 = 0, i < len, i = i + 1 {
+    for let i: i64 = 0; i < len; i = i + 1 {
         sum = sum + arr[i]
     }
     return sum
@@ -587,8 +587,8 @@ pointer, so that's what the value itself actually is at runtime.
 
 ```swift
 func print_multiplication_table(size: i64) {
-    for let i: i64 = 1, i <= size, i = i + 1 {
-        for let j: i64 = 1, j <= size, j = j + 1 {
+    for let i: i64 = 1; i <= size; i = i + 1 {
+        for let j: i64 = 1; j <= size; j = j + 1 {
             let product: i64 = i * j
             // Print product
         }
@@ -607,7 +607,7 @@ the full runnable version this is taken from:
 
 ```swift
 func main() -> i64 {
-    for let i: i64 = 0, i < 10, i++ {
+    for let i: i64 = 0; i < 10; i++ {
         if i == 2 {
             continue
         }
@@ -1738,7 +1738,7 @@ func count_bits(n: u64) -> i64 {
 
 func reverse_bits(n: u64) -> u64 {
     let result: u64 = 0
-    for let i: i64 = 0, i < 64, i = i + 1 {
+    for let i: i64 = 0; i < 64; i = i + 1 {
         result = result << 1
         result = result | (n & 1)
         n = n >> 1
@@ -1874,7 +1874,7 @@ func vga_put_char(x: i64, y: i64, c: char, color: u8) {
 
 func vga_clear_screen() {
     let buffer: u8* = VGA_BUFFER as u8*
-    for let i: i64 = 0, i < 80 * 25 * 2, i = i + 2 {
+    for let i: i64 = 0; i < 80 * 25 * 2; i = i + 2 {
         buffer[i] = 0
         buffer[i + 1] = 15
     }

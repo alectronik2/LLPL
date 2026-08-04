@@ -149,7 +149,7 @@ while count < 10 {
 }
 
 // For loops (init, condition, update)
-for let i: i64 = 0, i < 10, i = i + 1 {
+for let i: i64 = 0; i < 10; i = i + 1 {
     print(".")
 }
 ```

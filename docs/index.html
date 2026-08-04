@@ -276,7 +276,7 @@
   <div class="wrap hero-inner">
     <div>
       <span class="eyebrow">source → AST → C → binary</span>
-      <h1 class="headline">Classes, generics, and pattern&nbsp;matching —<br>compiled straight to <span class="accent">C</span>.</h1>
+      <h1 class="headline">Familiar syntax with modern features - compiled straight to C</h1>
       <p class="sub">LLPL is a systems language that transpiles to plain C. Write with reference-counted classes, traits, and tagged enums; run anywhere from a <code>Vector&lt;T&gt;</code> down to a VGA text buffer at <code>0xB8000</code>.</p>
       <div class="cta-row">
         <a class="btn btn-primary" href="#start">Read the syntax</a>
@@ -284,22 +284,23 @@
       </div>
     </div>
     <div class="code-card">
-      <div class="titlebar"><span class="chip"></span> calc.llpl — grammar { } parser generator</div>
-      <pre><span class="ln">1</span><span class="kw">grammar</span> Calc {
-<span class="ln">2</span>    expr   : expr <span class="str">'+'</span> term
-<span class="ln">3</span>           | expr <span class="str">'-'</span> term
-<span class="ln">4</span>           | term
-<span class="ln">5</span>           ;
-<span class="ln">6</span>    term   : term <span class="str">'*'</span> factor
-<span class="ln">7</span>           | term <span class="str">'/'</span> factor
-<span class="ln">8</span>           | factor
-<span class="ln">9</span>           ;
-<span class="ln">10</span>    factor : <span class="str">'('</span> expr <span class="str">')'</span> | NUMBER ;
-<span class="ln">11</span>    NUMBER : [0-9]+ ;
-<span class="ln">12</span>}
-<span class="ln">13</span>
-<span class="ln">14</span><span class="ty">let</span> tree: ParseNode = Calc(<span class="kw">new</span> String(<span class="str">"1 + 2 * 3"</span>))</pre>
-      <div class="note"><span class="gutter">note:</span> <b>direct left recursion</b> in <code>expr</code>/<code>term</code> — resolved into a precedence-climbing parse at compile time, with ambiguous grammars rejected before they ever run.</div>
+      <div class="titlebar"><span class="chip"></span> hal/cpu.llpl — port I/O without libc</div>
+      <pre><span class="ln">1</span><span class="kw">namespace</span> HAL {
+<span class="ln">2</span>    <span class="kw">func</span> outb(port: <span class="ty">u64</span>, value: <span class="ty">u8</span>) {
+<span class="ln">3</span>        asm(<span class="str">"outb %0, %w1"</span> : : <span class="str">"a"</span>(value), <span class="str">"Nd"</span>(port))
+<span class="ln">4</span>    }
+<span class="ln">5</span>
+<span class="ln">6</span>    <span class="kw">func</span> inb(port: <span class="ty">u64</span>) -&gt; <span class="ty">u8</span> {
+<span class="ln">7</span>        <span class="kw">let</span> value: <span class="ty">u8</span> = 0
+<span class="ln">8</span>        asm(<span class="str">"inb %w1, %0"</span> : <span class="str">"=a"</span>(value) : <span class="str">"Nd"</span>(port))
+<span class="ln">9</span>        value
+<span class="ln">10</span>    }
+<span class="ln">11</span>
+<span class="ln">12</span>    <span class="kw">func</span> halt() {
+<span class="ln">13</span>        asm(<span class="str">"hlt"</span>)
+<span class="ln">14</span>    }
+<span class="ln">15</span>}</pre>
+      <div class="note"><span class="gutter">note:</span> <b>bare-metal primitives</b> compile straight through to C with GCC-style inline assembly, so low-level code can still name its types, modules, and hardware boundaries clearly.</div>
     </div>
   </div>
 </section>
