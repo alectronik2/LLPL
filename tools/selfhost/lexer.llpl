@@ -1,5 +1,6 @@
 import std.io.file
 import ast
+import symbols
 
 using namespace std.io
 
@@ -523,11 +524,13 @@ class Parser {
     let lexer: Lexer
     let current: Token
     let decls: Vector
+    let symtab: SymbolTable
 
     constructor(source: String) {
         self.lexer = new Lexer(source)
         self.current = self.lexer.next()
         self.decls = new Vector()
+        self.symtab = new SymbolTable()
     }
 
     func advance() {
@@ -2008,6 +2011,30 @@ class Parser {
         return (self.decls) as Vector*
     }
 
+    func get_symtab() -> SymbolTable* {
+        return (self.symtab) as SymbolTable*
+    }
+
+    func build_program() -> Program* {
+        return new Program((self.decls) as Vector*)
+    }
+
+    func register_declarations() {
+        // Register all parsed declarations (inlined to avoid pointer method issues)
+        let i: i64 = 0
+        let len: i64 = self.decls.len()
+        while i < len {
+            let decl_ptr: char* = self.decls.get(i)
+            let decl: FunctionDecl* = decl_ptr as FunctionDecl*
+            if self.symtab.isFunctionDeclared(decl.name) {
+                printf("error: function '%s' already declared\n", decl.name.c_str())
+            } else {
+                self.symtab.functions.push(decl_ptr)
+            }
+            i = i + 1
+        }
+    }
+
     func print_ast() {
         let i: i64 = 0
         let len: i64 = self.decls.len()
@@ -2036,7 +2063,18 @@ func dump_ast(source: String) {
     let parser: Parser = new Parser(source)
     rc_retain(parser as char*)
     parser.parse_program()
+    parser.register_declarations()
     parser.print_ast()
+    // Print registered functions inline to avoid pointer method issues
+    printf("Registered functions:\n")
+    let i: i64 = 0
+    let len: i64 = parser.symtab.functions.len()
+    while i < len {
+        let func_decl: char* = parser.symtab.functions.get(i)
+        let fd: FunctionDecl* = func_decl as FunctionDecl*
+        printf("  %s() -> %s\n", fd.name.c_str(), fd.returnType.name.c_str())
+        i = i + 1
+    }
 }
 
 func main(args: string[]) -> i64 {

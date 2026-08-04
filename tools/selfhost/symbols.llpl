@@ -1,0 +1,211 @@
+// Symbol Table and Scope Management for LLPL Selfhost
+// Phase 3: Track declarations, enable name resolution
+
+import ast
+
+using namespace std.io
+
+extern func printf(fmt: char*, ...) -> i32
+
+// Single scope level: tracks local variables and their types
+class Scope {
+    let vars: Vector       // Vector<VarDecl*>
+
+    constructor() {
+        self.vars = new Vector()
+    }
+
+    func declare(name: String, typeRef: Type*) {
+        let var_decl: VarDecl* = new VarDecl(name, typeRef, null as Expr*)
+        self.vars.push((var_decl) as char*)
+    }
+
+    func lookup(name: String) -> VarDecl* {
+        let i: i64 = 0
+        let len: i64 = self.vars.len()
+        while i < len {
+            let var_decl: char* = self.vars.get(i)
+            let vd: VarDecl* = var_decl as VarDecl*
+            if vd.name == name {
+                return vd
+            }
+            i = i + 1
+        }
+        return null as VarDecl*
+    }
+}
+
+// Global symbol table: functions, classes, structs, globals
+class SymbolTable {
+    let functions: Vector     // Vector<FunctionDecl*>
+    let classes: Vector       // Vector<ClassDecl*>
+    let structs: Vector       // Vector<StructDecl*>
+    let globals: Vector       // Vector<VarDecl*>
+    let scopes: Vector        // Vector<Scope*> - scope stack
+    let current_scope_depth: i64
+
+    constructor() {
+        self.functions = new Vector()
+        self.classes = new Vector()
+        self.structs = new Vector()
+        self.globals = new Vector()
+        self.scopes = new Vector()
+        self.current_scope_depth = -1
+    }
+
+    func pushScope() {
+        let new_scope: Scope* = new Scope()
+        self.scopes.push((new_scope) as char*)
+        self.current_scope_depth = self.current_scope_depth + 1
+    }
+
+    func popScope() {
+        if self.current_scope_depth > -1 {
+            self.current_scope_depth = self.current_scope_depth - 1
+        }
+    }
+
+    func getCurrentScope() -> Scope* {
+        if self.current_scope_depth < 0 || self.current_scope_depth >= self.scopes.len() {
+            return null as Scope*
+        }
+        let scope_ptr: char* = self.scopes.get(self.current_scope_depth)
+        return scope_ptr as Scope*
+    }
+
+    // Register a declaration globally (function, class, struct)
+    func registerDecl(decl: Decl*) {
+        // Check type and add to appropriate registry
+        // TODO: Type checking to determine actual type
+        // For now, assume it's a FunctionDecl
+        let func_decl: FunctionDecl* = decl as FunctionDecl*
+        self.functions.push(decl as char*)
+    }
+
+    // Declare a local variable in current scope
+    func declareLocal(name: String, typeRef: Type*) {
+        let scope: Scope* = self.getCurrentScope()
+        if scope != null {
+            let var_decl: VarDecl* = new VarDecl(name, typeRef, null as Expr*)
+            scope.vars.push((var_decl) as char*)
+        }
+    }
+
+    // Lookup: check local scopes first, then globals
+    func lookup(name: String) -> Decl* {
+        // Check current scope
+        let scope: Scope* = self.getCurrentScope()
+        if scope != null {
+            let i: i64 = 0
+            let len: i64 = scope.vars.len()
+            while i < len {
+                let var_decl: char* = scope.vars.get(i)
+                let vd: VarDecl* = var_decl as VarDecl*
+                if vd.name == name {
+                    return (vd) as Decl*
+                }
+                i = i + 1
+            }
+        }
+
+        // Check global functions
+        let i: i64 = 0
+        let flen: i64 = self.functions.len()
+        while i < flen {
+            let func_decl: char* = self.functions.get(i)
+            let fd: FunctionDecl* = func_decl as FunctionDecl*
+            if fd.name == name {
+                return (fd) as Decl*
+            }
+            i = i + 1
+        }
+
+        // Check global classes
+        i = 0
+        let clen: i64 = self.classes.len()
+        while i < clen {
+            let class_decl: char* = self.classes.get(i)
+            let cd: ClassDecl* = class_decl as ClassDecl*
+            if cd.name == name {
+                return (cd) as Decl*
+            }
+            i = i + 1
+        }
+
+        return null as Decl*
+    }
+
+    // Lookup function by name
+    func lookupFunction(name: String) -> FunctionDecl* {
+        let decl: Decl* = self.lookup(name)
+        if decl != null {
+            return (decl) as FunctionDecl*
+        }
+        return null as FunctionDecl*
+    }
+
+    // Check if name already exists in current scope (for duplicate detection)
+    func isDeclaredInCurrentScope(name: String) -> bool {
+        let scope: Scope* = self.getCurrentScope()
+        if scope == null {
+            return false
+        }
+        let i: i64 = 0
+        let len: i64 = scope.vars.len()
+        while i < len {
+            let var_decl: char* = scope.vars.get(i)
+            let vd: VarDecl* = var_decl as VarDecl*
+            if vd.name == name {
+                return true
+            }
+            i = i + 1
+        }
+        return false
+    }
+
+    // Check if global function exists (for duplicate detection)
+    func isFunctionDeclared(name: String) -> bool {
+        let i: i64 = 0
+        let len: i64 = self.functions.len()
+        while i < len {
+            let func_decl: char* = self.functions.get(i)
+            let fd: FunctionDecl* = func_decl as FunctionDecl*
+            if fd.name == name {
+                return true
+            }
+            i = i + 1
+        }
+        return false
+    }
+
+    // Registration pass: walk AST and populate symbol table
+    func registerProgram(program: Program*) {
+        let i: i64 = 0
+        let len: i64 = program.decls.len()
+        while i < len {
+            let decl_ptr: char* = program.decls.get(i)
+            let decl: FunctionDecl* = decl_ptr as FunctionDecl*
+
+            // Check for duplicate
+            if self.isFunctionDeclared(decl.name) {
+                printf("error: function '%s' already declared\n", decl.name.c_str())
+            } else {
+                self.functions.push(decl_ptr)
+            }
+            i = i + 1
+        }
+    }
+
+    // Print all registered functions (debug)
+    func printFunctions() {
+        printf("Registered functions:\n")
+        let i: i64 = 0
+        let len: i64 = self.functions.len()
+        while i < len {
+            let func_decl: char* = self.functions.get(i)
+            let fd: FunctionDecl* = func_decl as FunctionDecl*
+            printf("  %s() -> %s\n", fd.name.c_str(), fd.returnType.name.c_str())
+            i = i + 1
+        }
+    }
+}
