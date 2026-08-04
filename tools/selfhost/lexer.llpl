@@ -1,4 +1,5 @@
 import std.io.file
+import ast
 
 using namespace std.io
 
@@ -521,10 +522,12 @@ func print_indent(depth: i64) {
 class Parser {
     let lexer: Lexer
     let current: Token
+    let decls: Vector
 
     constructor(source: String) {
         self.lexer = new Lexer(source)
         self.current = self.lexer.next()
+        self.decls = new Vector()
     }
 
     func advance() {
@@ -1102,6 +1105,15 @@ class Parser {
         if self.check("LeftBrace") {
             self.parse_block(depth + 1)
         }
+
+        // Build AST node
+        let param_vec: Vector* = new Vector()
+        // TODO: parse params string into VarDecl nodes
+        let ret_type: Type* = new Type(ret, 0, false, 0)
+        let body: Block* = null as Block*
+        // TODO: parse body into Block node when we have stmt parsing
+        let func_decl: FunctionDecl* = new FunctionDecl(name, param_vec, ret_type, body)
+        self.decls.push((func_decl) as char*)
     }
 
     func parse_alias(depth: i64, is_public: bool) {
@@ -1991,6 +2003,25 @@ class Parser {
             self.check("At") || self.check("Const") || self.check("Let") ||
             self.check("Volatile")
     }
+
+    func get_decls() -> Vector* {
+        return (self.decls) as Vector*
+    }
+
+    func print_ast() {
+        let i: i64 = 0
+        let len: i64 = self.decls.len()
+        while i < len {
+            let decl: char* = self.decls.get(i)
+            // Cast to FunctionDecl and print
+            let func_decl: FunctionDecl* = decl as FunctionDecl*
+            if func_decl != null {
+                printf("FunctionDecl(name=\"%s\", params=[], returnType=\"%s\", body=null)\n",
+                    func_decl.name.c_str(), func_decl.returnType.name.c_str())
+            }
+            i = i + 1
+        }
+    }
 }
 
 func dump_parse(source: String) {
@@ -2001,17 +2032,32 @@ func dump_parse(source: String) {
     parser.parse_program()
 }
 
+func dump_ast(source: String) {
+    let parser: Parser = new Parser(source)
+    rc_retain(parser as char*)
+    parser.parse_program()
+    parser.print_ast()
+}
+
 func main(args: string[]) -> i64 {
     if args[0] == null {
-        puts("usage: selfhost-lexer [--parse] <file>")
+        puts("usage: selfhost-lexer [--parse|--ast] <file>")
         return 1
     }
     let path: string = args[0]
     let parse_mode: bool = false
+    let ast_mode: bool = false
     if args[0] == "--parse" {
         parse_mode = true
         if args[1] == null {
             puts("usage: selfhost-lexer --parse <file>")
+            return 1
+        }
+        path = args[1]
+    } else if args[0] == "--ast" {
+        ast_mode = true
+        if args[1] == null {
+            puts("usage: selfhost-lexer --ast <file>")
             return 1
         }
         path = args[1]
@@ -2021,7 +2067,10 @@ func main(args: string[]) -> i64 {
         puts(result.get_err())
         return 1
     }
-    if parse_mode {
+    if ast_mode {
+        dump_ast(result.get_ok())
+        exit(0)
+    } else if parse_mode {
         dump_parse(result.get_ok())
         exit(0)
     } else {

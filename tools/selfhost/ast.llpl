@@ -1,0 +1,357 @@
+// AST Node Definitions for LLPL Selfhost Compiler
+// Phase 1: Structured AST representation
+
+import std.io.file
+
+using namespace std.io
+
+extern func printf(fmt: char*, ...) -> i32
+extern func exit(code: i32)
+extern func llpl_alloc(size: u64) -> char*
+extern func llpl_free(ptr: char*)
+extern func llpl_memcpy(dst: char*, src: char*, size: u64)
+
+// Base AST Node class
+class ASTNode {
+}
+
+// ============================================================================
+// TYPE SYSTEM
+// ============================================================================
+
+class Type: ASTNode {
+    let name: String          // "i64", "String", "Optional", etc
+    let pointerDepth: i64     // 0=T, 1=T*, 2=T**
+    let isArray: bool         // true for T[]
+    let arraySize: i64        // for T[N], 0 for dynamic
+
+    constructor(name: String, pointerDepth: i64, isArray: bool, arraySize: i64) {
+        self.name = new String(name.c_str())
+        self.pointerDepth = pointerDepth
+        self.isArray = isArray
+        self.arraySize = arraySize
+    }
+
+    func to_string() -> String {
+        let buf: char* = llpl_alloc(256 as u64)
+        let result = buf
+
+        // Copy base name
+        let i: i64 = 0
+        while i < self.name.byte_len() {
+            buf[i] = self.name.byte_at(i)
+            i = i + 1
+        }
+
+        // Add array notation
+        if self.isArray {
+            buf[i] = '['
+            i = i + 1
+            if self.arraySize > 0 {
+                // TODO: convert arraySize to string
+            }
+            buf[i] = ']'
+            i = i + 1
+        }
+
+        // Add pointer notation
+        let j: i64 = 0
+        while j < self.pointerDepth {
+            buf[i] = '*'
+            i = i + 1
+            j = j + 1
+        }
+
+        buf[i] = '\0'
+        return new String(result)
+    }
+}
+
+// ============================================================================
+// EXPRESSIONS
+// ============================================================================
+
+class Expr: ASTNode {
+}
+
+class IntLiteral: Expr {
+    let value: i64
+
+    constructor(value: i64) {
+        self.value = value
+    }
+}
+
+class StringLiteral: Expr {
+    let value: String
+
+    constructor(value: String) {
+        self.value = new String(value.c_str())
+    }
+}
+
+class BoolLiteral: Expr {
+    let value: bool
+
+    constructor(value: bool) {
+        self.value = value
+    }
+}
+
+class Identifier: Expr {
+    let name: String
+
+    constructor(name: String) {
+        self.name = new String(name.c_str())
+    }
+}
+
+class BinaryExpr: Expr {
+    let op: String        // "+", "-", "*", "/", "==", etc
+    let left: Expr*
+    let right: Expr*
+
+    constructor(op: String, left: Expr*, right: Expr*) {
+        self.op = new String(op.c_str())
+        self.left = left
+        self.right = right
+    }
+}
+
+class UnaryExpr: Expr {
+    let op: String        // "!", "-", "~", etc
+    let operand: Expr*
+
+    constructor(op: String, operand: Expr*) {
+        self.op = new String(op.c_str())
+        self.operand = operand
+    }
+}
+
+class CallExpr: Expr {
+    let callee: Expr*
+    let args: Vector*     // Vector<Expr*>
+
+    constructor(callee: Expr*, args: Vector*) {
+        self.callee = callee
+        self.args = args
+    }
+}
+
+class FieldExpr: Expr {
+    let object: Expr*
+    let field: String
+
+    constructor(object: Expr*, field: String) {
+        self.object = object
+        self.field = new String(field.c_str())
+    }
+}
+
+class IndexExpr: Expr {
+    let object: Expr*
+    let index: Expr*
+
+    constructor(object: Expr*, index: Expr*) {
+        self.object = object
+        self.index = index
+    }
+}
+
+class AssignExpr: Expr {
+    let target: Expr*
+    let value: Expr*
+
+    constructor(target: Expr*, value: Expr*) {
+        self.target = target
+        self.value = value
+    }
+}
+
+// ============================================================================
+// STATEMENTS
+// ============================================================================
+
+class Stmt: ASTNode {
+}
+
+class ExprStmt: Stmt {
+    let expr: Expr*
+
+    constructor(expr: Expr*) {
+        self.expr = expr
+    }
+}
+
+class VarDecl: Stmt {
+    let name: String
+    let typeRef: Type*     // nullable for type inference
+    let init: Expr*        // nullable for no initializer
+
+    constructor(name: String, typeRef: Type*, init: Expr*) {
+        self.name = new String(name.c_str())
+        self.typeRef = typeRef
+        self.init = init
+    }
+}
+
+class Block: Stmt {
+    let stmts: Vector*    // Vector<Stmt*>
+
+    constructor(stmts: Vector*) {
+        self.stmts = stmts
+    }
+}
+
+class ReturnStmt: Stmt {
+    let value: Expr*      // nullable for no return value
+
+    constructor(value: Expr*) {
+        self.value = value
+    }
+}
+
+class IfStmt: Stmt {
+    let condition: Expr*
+    let thenBranch: Stmt*
+    let elseBranch: Stmt*  // nullable for no else
+
+    constructor(condition: Expr*, thenBranch: Stmt*, elseBranch: Stmt*) {
+        self.condition = condition
+        self.thenBranch = thenBranch
+        self.elseBranch = elseBranch
+    }
+}
+
+class WhileStmt: Stmt {
+    let condition: Expr*
+    let body: Stmt*
+
+    constructor(condition: Expr*, body: Stmt*) {
+        self.condition = condition
+        self.body = body
+    }
+}
+
+class ForStmt: Stmt {
+    let init: Stmt*       // nullable
+    let condition: Expr*  // nullable
+    let update: Expr*     // nullable
+    let body: Stmt*
+
+    constructor(init: Stmt*, condition: Expr*, update: Expr*, body: Stmt*) {
+        self.init = init
+        self.condition = condition
+        self.update = update
+        self.body = body
+    }
+}
+
+class BreakStmt: Stmt {
+}
+
+class ContinueStmt: Stmt {
+}
+
+// ============================================================================
+// DECLARATIONS
+// ============================================================================
+
+class Decl: ASTNode {
+}
+
+class FunctionDecl: Decl {
+    let name: String
+    let params: Vector*   // Vector<VarDecl*>
+    let returnType: Type* // nullable
+    let body: Block*      // nullable for extern functions
+
+    constructor(name: String, params: Vector*, returnType: Type*, body: Block*) {
+        self.name = new String(name.c_str())
+        self.params = params
+        self.returnType = returnType
+        self.body = body
+    }
+}
+
+class ClassDecl: Decl {
+    let name: String
+    let fields: Vector*   // Vector<VarDecl*>
+    let methods: Vector*  // Vector<FunctionDecl*>
+
+    constructor(name: String, fields: Vector*, methods: Vector*) {
+        self.name = new String(name.c_str())
+        self.fields = fields
+        self.methods = methods
+    }
+}
+
+class StructDecl: Decl {
+    let name: String
+    let fields: Vector*   // Vector<VarDecl*>
+
+    constructor(name: String, fields: Vector*) {
+        self.name = new String(name.c_str())
+        self.fields = fields
+    }
+}
+
+// ============================================================================
+// PROGRAM
+// ============================================================================
+
+class Program: ASTNode {
+    let decls: Vector*    // Vector<Decl*>
+
+    constructor(decls: Vector*) {
+        self.decls = decls
+    }
+}
+
+// ============================================================================
+// UTILITIES
+// ============================================================================
+
+// Simple vector implementation for AST nodes
+class Vector {
+    let data: char*
+    let length: i64
+    let capacity: i64
+
+    constructor() {
+        self.length = 0
+        self.capacity = 16
+        self.data = llpl_alloc((self.capacity * 8) as u64)  // 8 bytes per pointer
+    }
+
+    func push(item: char*) {
+        if self.length >= self.capacity {
+            let new_capacity: i64 = self.capacity * 2
+            let new_data: char* = llpl_alloc((new_capacity * 8) as u64)
+            llpl_memcpy(new_data, self.data, (self.length * 8) as u64)
+            llpl_free(self.data)
+            self.data = new_data
+            self.capacity = new_capacity
+        }
+
+        let ptr_array: char** = self.data as char**
+        ptr_array[self.length] = item
+        self.length = self.length + 1
+    }
+
+    func get(index: i64) -> char* {
+        if index < 0 || index >= self.length {
+            return null as char*
+        }
+        let ptr_array: char** = self.data as char**
+        return ptr_array[index]
+    }
+
+    func len() -> i64 {
+        return self.length
+    }
+
+    destructor() {
+        llpl_free(self.data)
+    }
+}
