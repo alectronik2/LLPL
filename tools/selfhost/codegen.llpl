@@ -1,0 +1,194 @@
+// Code Generator for LLPL Selfhost
+// Phase 5: AST-to-C code generation
+
+import ast
+
+using namespace std.io
+
+extern func printf(fmt: char*, ...) -> i32
+extern func llpl_alloc(size: u64) -> char*
+extern func llpl_free(ptr: char*)
+
+// Buffer for accumulating C code
+class CodeBuffer {
+    let data: char*
+    let length: i64
+    let capacity: i64
+
+    constructor() {
+        self.length = 0
+        self.capacity = 4096
+        self.data = llpl_alloc(self.capacity as u64)
+        self.data[0] = '\0'
+    }
+
+    destructor() {
+        llpl_free(self.data)
+    }
+
+    func append(s: String) {
+        let i: i64 = 0
+        while i < s.byte_len() {
+            self.append_char(s.byte_at(i))
+            i = i + 1
+        }
+    }
+
+    func append_char(c: char) {
+        if self.length + 2 >= self.capacity {
+            let new_capacity: i64 = self.capacity * 2
+            let new_data: char* = llpl_alloc(new_capacity as u64)
+            llpl_memcpy(new_data, self.data, (self.length + 1) as u64)
+            llpl_free(self.data)
+            self.data = new_data
+            self.capacity = new_capacity
+        }
+        self.data[self.length] = c
+        self.length = self.length + 1
+        self.data[self.length] = '\0'
+    }
+
+    func append_cstr(s: char*) {
+        let i: i64 = 0
+        while s[i] != '\0' {
+            self.append_char(s[i])
+            i = i + 1
+        }
+    }
+
+    func to_string() -> String {
+        return new String(self.data)
+    }
+}
+
+// C code generator
+class CodeGen {
+    let output: CodeBuffer
+    let indent_level: i64
+
+    constructor() {
+        self.output = new CodeBuffer()
+        self.indent_level = 0
+    }
+
+    func indent() {
+        let i: i64 = 0
+        while i < self.indent_level {
+            self.output.append_char(' ')
+            self.output.append_char(' ')
+            i = i + 1
+        }
+    }
+
+    func emit_line(s: String) {
+        self.indent()
+        self.output.append(s)
+        self.output.append_char('\n')
+    }
+
+    func emit(s: String) {
+        self.output.append(s)
+    }
+
+    func emit_char(c: char) {
+        self.output.append_char(c)
+    }
+
+    func emit_newline() {
+        self.output.append_char('\n')
+    }
+
+    // Map LLPL type to C type (simplified - just return base type)
+    func typeToC(type_ref: Type*) -> String {
+        if type_ref == null {
+            return new String("void")
+        }
+
+        if type_ref.name == "i64" { return new String("int64_t") }
+        if type_ref.name == "i32" { return new String("int32_t") }
+        if type_ref.name == "i8" { return new String("int8_t") }
+        if type_ref.name == "char" { return new String("char") }
+        if type_ref.name == "bool" { return new String("bool") }
+        if type_ref.name == "void" { return new String("void") }
+
+        return new String(type_ref.name.c_str())
+    }
+
+    // Generate preamble (includes, externs)
+    func emitPreamble() {
+        self.emit_line(new String("#include <stdint.h>"))
+        self.emit_line(new String("#include <stdbool.h>"))
+        self.emit_newline()
+    }
+
+    // Generate forward declarations for functions
+    func emitForwardDecls(program: Program*) {
+        let i: i64 = 0
+        let len: i64 = program.decls.len()
+        while i < len {
+            let decl_ptr: char* = program.decls.get(i)
+            let func_decl: FunctionDecl* = decl_ptr as FunctionDecl*
+            if func_decl != null {
+                self.emitFunctionSignature(func_decl)
+                self.emit_char(';')
+                self.emit_newline()
+            }
+            i = i + 1
+        }
+        self.emit_newline()
+    }
+
+    // Generate function signature
+    func emitFunctionSignature(func_decl: FunctionDecl*) {
+        let return_type: String = self.typeToC(func_decl.returnType)
+        self.emit(return_type)
+        self.emit_char(' ')
+        self.emit(func_decl.name)
+        self.emit_char('(')
+        // TODO: emit parameter list
+        self.emit_char(')')
+    }
+
+    // Generate function implementation
+    func emitFunction(func_decl: FunctionDecl*) {
+        self.emitFunctionSignature(func_decl)
+        self.emit_char(' ')
+        self.emit_char('{')
+        self.emit_newline()
+        self.indent_level = self.indent_level + 1
+
+        // TODO: emit function body
+        // For now, just return 0 as placeholder
+        self.indent()
+        self.emit(new String("return 0;"))
+        self.emit_newline()
+
+        self.indent_level = self.indent_level - 1
+        self.emit_line(new String("}"))
+    }
+
+    // Generate code for entire program
+    func generate(program: Program*) -> String {
+        self.emitPreamble()
+        self.emitForwardDecls(program)
+
+        // Emit all functions
+        let i: i64 = 0
+        let len: i64 = program.decls.len()
+        while i < len {
+            let decl_ptr: char* = program.decls.get(i)
+            let func_decl: FunctionDecl* = decl_ptr as FunctionDecl*
+            if func_decl != null {
+                self.emitFunction(func_decl)
+                self.emit_newline()
+            }
+            i = i + 1
+        }
+
+        return self.output.to_string()
+    }
+
+    func get_output() -> String {
+        return self.output.to_string()
+    }
+}

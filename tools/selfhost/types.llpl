@@ -1,0 +1,271 @@
+// Type Checker for LLPL Selfhost
+// Phase 4: Infer and validate types
+
+import ast
+import symbols
+
+using namespace std.io
+
+extern func printf(fmt: char*, ...) -> i32
+
+// Type inference and checking pass
+class TypeChecker {
+    let symtab: SymbolTable
+    let error_count: i64
+
+    constructor(symtab: SymbolTable*) {
+        // Copy pointer to direct reference - won't work, need different approach
+        // For now, create dummy symtab
+        self.symtab = new SymbolTable()
+        self.error_count = 0
+    }
+
+    // Check if two types are compatible
+    func typesMatch(t1: Type*, t2: Type*) -> bool {
+        if t1 == null || t2 == null {
+            return false
+        }
+        if t1.name != t2.name {
+            return false
+        }
+        if t1.pointerDepth != t2.pointerDepth {
+            return false
+        }
+        if t1.isArray != t2.isArray {
+            return false
+        }
+        return true
+    }
+
+    // Infer type of an expression
+    func inferType(expr: Expr*) -> Type* {
+        if expr == null {
+            return null as Type*
+        }
+
+        // Integer literal: i64
+        let int_lit: IntLiteral* = expr as IntLiteral*
+        if int_lit != null {
+            return new Type(new String("i64"), 0, false, 0)
+        }
+
+        // String literal: char* (pointer to char)
+        let str_lit: StringLiteral* = expr as StringLiteral*
+        if str_lit != null {
+            return new Type(new String("char"), 1, false, 0)
+        }
+
+        // Boolean literal: bool
+        let bool_lit: BoolLiteral* = expr as BoolLiteral*
+        if bool_lit != null {
+            return new Type(new String("bool"), 0, false, 0)
+        }
+
+        // Identifier: look up in symbol table
+        let ident: Identifier* = expr as Identifier*
+        if ident != null {
+            let decl: Decl* = self.symtab.lookup(ident.name)
+            if decl != null {
+                let var_decl: VarDecl* = decl as VarDecl*
+                if var_decl != null && var_decl.typeRef != null {
+                    return var_decl.typeRef
+                }
+            }
+            // Unknown identifier - error handled elsewhere
+            return null as Type*
+        }
+
+        // Binary expression: infer from operator and operands
+        let bin_expr: BinaryExpr* = expr as BinaryExpr*
+        if bin_expr != null {
+            let left_type: Type* = self.inferType(bin_expr.left)
+            let right_type: Type* = self.inferType(bin_expr.right)
+
+            // Arithmetic operators: result type matches operands
+            if bin_expr.op == "+" || bin_expr.op == "-" ||
+               bin_expr.op == "*" || bin_expr.op == "/" ||
+               bin_expr.op == "%" {
+                if left_type != null && self.typesMatch(left_type, right_type) {
+                    return left_type
+                }
+            }
+
+            // Comparison operators: result is bool
+            if bin_expr.op == "==" || bin_expr.op == "!=" ||
+               bin_expr.op == "<" || bin_expr.op == ">" ||
+               bin_expr.op == "<=" || bin_expr.op == ">=" {
+                return new Type(new String("bool"), 0, false, 0)
+            }
+
+            // Logical operators: result is bool
+            if bin_expr.op == "&&" || bin_expr.op == "||" {
+                return new Type(new String("bool"), 0, false, 0)
+            }
+
+            return left_type
+        }
+
+        // Unary expression
+        let unary_expr: UnaryExpr* = expr as UnaryExpr*
+        if unary_expr != null {
+            // Logical NOT: bool
+            if unary_expr.op == "!" {
+                return new Type(new String("bool"), 0, false, 0)
+            }
+            // Unary minus, bitwise NOT: same as operand
+            let op_type: Type* = self.inferType(unary_expr.operand)
+            return op_type
+        }
+
+        // Function call: return type of function
+        let call_expr: CallExpr* = expr as CallExpr*
+        if call_expr != null {
+            let ident_expr: Identifier* = call_expr.callee as Identifier*
+            if ident_expr != null {
+                let func_decl: FunctionDecl* = self.symtab.lookupFunction(ident_expr.name)
+                if func_decl != null && func_decl.returnType != null {
+                    return func_decl.returnType
+                }
+            }
+            return null as Type*
+        }
+
+        // Field access: type of field
+        let field_expr: FieldExpr* = expr as FieldExpr*
+        if field_expr != null {
+            // TODO: lookup field type from class definition
+            return null as Type*
+        }
+
+        // Index expression: element type of array
+        let index_expr: IndexExpr* = expr as IndexExpr*
+        if index_expr != null {
+            let obj_type: Type* = self.inferType(index_expr.object)
+            if obj_type != null && obj_type.isArray {
+                // Return element type (same as array base type)
+                return obj_type
+            }
+            return null as Type*
+        }
+
+        // Assignment: type of RHS
+        let assign_expr: AssignExpr* = expr as AssignExpr*
+        if assign_expr != null {
+            return self.inferType(assign_expr.value)
+        }
+
+        return null as Type*
+    }
+
+    // Check if variable declaration type matches initializer
+    func checkVarDecl(var_decl: VarDecl*) {
+        if var_decl == null {
+            return
+        }
+
+        // If both type and init present, check compatibility
+        if var_decl.typeRef != null && var_decl.init != null {
+            let init_type: Type* = self.inferType(var_decl.init)
+            if init_type != null && !self.typesMatch(var_decl.typeRef, init_type) {
+                printf("error: type mismatch in variable '%s'\n", var_decl.name.c_str())
+                self.error_count = self.error_count + 1
+            }
+        }
+    }
+
+    // Check function call: args match parameters
+    func checkFunctionCall(call_expr: CallExpr*) {
+        if call_expr == null {
+            return
+        }
+
+        let ident_expr: Identifier* = call_expr.callee as Identifier*
+        if ident_expr != null {
+            let func_decl: FunctionDecl* = self.symtab.lookupFunction(ident_expr.name)
+            if func_decl == null {
+                printf("error: undefined function '%s'\n", ident_expr.name.c_str())
+                self.error_count = self.error_count + 1
+                return
+            }
+
+            // Check argument count matches parameter count
+            let arg_count: i64 = 0
+            if call_expr.args != null {
+                arg_count = call_expr.args.len()
+            }
+            let param_count: i64 = 0
+            if func_decl.params != null {
+                param_count = func_decl.params.len()
+            }
+
+            if arg_count != param_count {
+                printf("error: function '%s' expects %lld args, got %lld\n",
+                    ident_expr.name.c_str(), param_count, arg_count)
+                self.error_count = self.error_count + 1
+            }
+
+            // TODO: Check argument types against parameter types
+        }
+    }
+
+    // Check return statement: type matches function return type
+    func checkReturnStmt(ret_stmt: ReturnStmt*, func_return_type: Type*) {
+        if ret_stmt == null {
+            return
+        }
+
+        // If return has value, check type
+        if ret_stmt.value != null {
+            let val_type: Type* = self.inferType(ret_stmt.value)
+            if func_return_type != null && val_type != null &&
+               !self.typesMatch(func_return_type, val_type) {
+                printf("error: return type mismatch\n")
+                self.error_count = self.error_count + 1
+            }
+        } else if func_return_type != null && func_return_type.name != "void" {
+            printf("error: function must return value\n")
+            self.error_count = self.error_count + 1
+        }
+    }
+
+    // Check all declarations in program
+    func checkProgram(program: Program*) {
+        if program == null {
+            return
+        }
+
+        let i: i64 = 0
+        let len: i64 = program.decls.len()
+        while i < len {
+            let decl_ptr: char* = program.decls.get(i)
+            let func_decl: FunctionDecl* = decl_ptr as FunctionDecl*
+            if func_decl != null {
+                self.checkFunction(func_decl)
+            }
+            i = i + 1
+        }
+    }
+
+    // Check single function: body types match signature
+    func checkFunction(func_decl: FunctionDecl*) {
+        if func_decl == null {
+            return
+        }
+
+        // TODO: Check parameter types
+        // TODO: Walk function body and check all statements
+        // For now, just validate it exists
+    }
+
+    func getErrorCount() -> i64 {
+        return self.error_count
+    }
+
+    func printErrors() {
+        if self.error_count == 0 {
+            printf("Type checking passed.\n")
+        } else {
+            printf("Type checking failed with %lld errors.\n", self.error_count)
+        }
+    }
+}
