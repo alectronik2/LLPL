@@ -1,0 +1,246 @@
+// Expression Parser for LLPL Selfhost
+// Pratt parser: replaces RawExpr with structured AST
+
+import ast
+
+using namespace std.io
+
+extern func printf(fmt: char*, ...) -> i32
+
+// Precedence levels (higher = tighter binding)
+class Precedence {
+    let level: i64
+
+    constructor(level: i64) {
+        self.level = level
+    }
+}
+
+class ExprParser {
+    let lexer: Lexer*
+    let current: Token*
+
+    constructor(lexer: Lexer*) {
+        self.lexer = lexer
+        self.current = (new Token("EOF", new String(""), 0, 0)) as Token*
+    }
+
+    func advance() {
+        if self.lexer != null {
+            self.current = self.lexer.next()
+        }
+    }
+
+    func check(kind: string) -> bool {
+        if self.current == null {
+            return kind == "EOF"
+        }
+        return self.current.kind == kind
+    }
+
+    func match(kind: string) -> bool {
+        if self.check(kind) {
+            self.advance()
+            return true
+        }
+        return false
+    }
+
+    func precedenceOf(op: string) -> i64 {
+        if op == "=" { return 1 }
+        if op == "||" { return 2 }
+        if op == "&&" { return 3 }
+        if op == "==" || op == "!=" { return 4 }
+        if op == "<" || op == ">" || op == "<=" || op == ">=" { return 5 }
+        if op == "+" || op == "-" { return 10 }
+        if op == "*" || op == "/" || op == "%" { return 11 }
+        if op == "!" || op == "~" { return 12 }  // unary
+        if op == "." || op == "[" || op == "(" || op == "as" { return 13 }
+        return 0  // non-operator
+    }
+
+    func isUnaryOp(op: string) -> bool {
+        return op == "!" || op == "-" || op == "~"
+    }
+
+    func isBinaryOp(op: string) -> bool {
+        let prec: i64 = self.precedenceOf(op)
+        return prec > 1 && !self.isUnaryOp(op)
+    }
+
+    // Parse primary expression (literal, identifier, grouped expr, etc)
+    func parsePrefix() -> Expr* {
+        // Integer literal: 123
+        if self.check("IntLiteral") {
+            let val: i64 = 0  // TODO: parse value from token
+            self.advance()
+            return self.parseIntLiteral(val)
+        }
+
+        // String literal: "hello"
+        if self.check("StringLiteral") {
+            let val: String = self.current.value
+            self.advance()
+            return self.parseStringLiteral(val)
+        }
+
+        // Identifier: name
+        if self.check("Identifier") {
+            let name: String = self.current.value
+            self.advance()
+            return self.parseIdentifier(name)
+        }
+
+        // Unary operator: -expr, !expr, ~expr
+        if self.isUnaryOp(self.current.kind) {
+            let op: string = self.current.kind
+            self.advance()
+            return self.parseUnaryExpr(op)
+        }
+
+        // Grouped expression: (expr)
+        if self.check("LeftParen") {
+            self.advance()
+            let expr: Expr* = self.parseExpr(0)
+            // TODO: expect "RightParen"
+            if self.check("RightParen") {
+                self.advance()
+            }
+            return expr
+        }
+
+        // Fallback: return null for unparseable expression
+        return null as Expr*
+    }
+
+    // Parse infix operator and right operand
+    func parseInfix(left: Expr*) -> Expr* {
+        let op: string = self.current.kind
+
+        // Binary operator: left + right, etc
+        if self.isBinaryOp(op) {
+            self.advance()
+            return self.parseBinaryExpr(left, op)
+        }
+
+        // Function call: func(args)
+        if self.check("LeftParen") {
+            self.advance()
+            return self.parseCallExpr(left)
+        }
+
+        // Field access: obj.field
+        if self.check("Dot") {
+            self.advance()
+            let field: String = self.current.value
+            self.advance()
+            return self.parseFieldExpr(left, field)
+        }
+
+        // Array indexing: arr[index]
+        if self.check("LeftBracket") {
+            self.advance()
+            let index: Expr* = self.parseExpr(0)
+            // TODO: expect "RightBracket"
+            if self.check("RightBracket") {
+                self.advance()
+            }
+            return self.parseIndexExpr(left, index)
+        }
+
+        // Assignment: target = value
+        if self.check("Assign") {
+            self.advance()
+            let value: Expr* = self.parseExpr(0)
+            return self.parseAssignExpr(left, value)
+        }
+
+        // Fallback: return left unchanged
+        return left
+    }
+
+    // Main entry point: parse expression with given precedence floor
+    // Uses precedence climbing algorithm
+    func parseExpr(minPrec: i64) -> Expr* {
+        // Parse primary expression
+        let left: Expr* = self.parsePrefix()
+        if left == null {
+            return null as Expr*
+        }
+
+        // Handle infix operators while precedence allows
+        while minPrec < self.precedenceOf(self.current.kind) {
+            left = self.parseInfix(left)
+            if left == null {
+                return null as Expr*
+            }
+        }
+
+        return left
+    }
+
+    // Parse integer literal
+    func parseIntLiteral(value: i64) -> Expr* {
+        return (new IntLiteral(value)) as Expr*
+    }
+
+    // Parse string literal
+    func parseStringLiteral(value: String) -> Expr* {
+        return (new StringLiteral(value)) as Expr*
+    }
+
+    // Parse identifier
+    func parseIdentifier(name: String) -> Expr* {
+        return (new Identifier(name)) as Expr*
+    }
+
+    // Parse grouped expression
+    func parseGroupedExpr() -> Expr* {
+        // Consume '('
+        // expr = parseExpr(0)
+        // Expect ')'
+        return null as Expr*
+    }
+
+    // Parse unary expression
+    func parseUnaryExpr(op: string) -> Expr* {
+        let prec: i64 = self.precedenceOf(op)
+        let operand: Expr* = self.parseExpr(prec)
+        if operand == null {
+            return null as Expr*
+        }
+        return (new UnaryExpr(new String(op), operand)) as Expr*
+    }
+
+    // Parse binary expression
+    func parseBinaryExpr(left: Expr*, op: string) -> Expr* {
+        let prec: i64 = self.precedenceOf(op)
+        let right: Expr* = self.parseExpr(prec + 1)
+        if right == null {
+            return left
+        }
+        return (new BinaryExpr(new String(op), left, right)) as Expr*
+    }
+
+    // Parse call expression: func(arg1, arg2, ...)
+    func parseCallExpr(callee: Expr*) -> Expr* {
+        let args: Vector* = new Vector()
+        // TODO: parse argument list
+        return (new CallExpr(callee, args)) as Expr*
+    }
+
+    // Parse field access: obj.field
+    func parseFieldExpr(object: Expr*, field: String) -> Expr* {
+        return (new FieldExpr(object, field)) as Expr*
+    }
+
+    // Parse indexing: arr[index]
+    func parseIndexExpr(object: Expr*, index: Expr*) -> Expr* {
+        return (new IndexExpr(object, index)) as Expr*
+    }
+
+    // Parse assignment: target = value
+    func parseAssignExpr(target: Expr*, value: Expr*) -> Expr* {
+        return (new AssignExpr(target, value)) as Expr*
+    }
+}
