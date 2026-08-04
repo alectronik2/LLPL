@@ -1747,7 +1747,7 @@ class Parser {
             }
         } else if self.match("For") {
             self.line(depth, "For")
-            self.parse_expr_until(depth + 1, "header", "LeftBrace")
+            self.parse_for_header(depth + 1)
             self.parse_block(depth + 1)
         } else if self.match("Foreach") {
             self.line(depth, "Foreach")
@@ -1803,11 +1803,74 @@ class Parser {
         self.expect("RightBrace")
     }
 
+    func parse_for_header(depth: i64) {
+        if !self.header_has_semicolon() {
+            self.parse_expr_until(depth, "header", "LeftBrace")
+            return
+        }
+        // C-style for clauses use semicolons. The initializer expression may
+        // contain comma-separated declarations, so keep it as one clause for
+        // now and leave its eventual AST split to the structured parser.
+        if !self.check("Semicolon") {
+            self.parse_expr_until(depth, "initializer", "Semicolon")
+        }
+        self.expect("Semicolon")
+        if !self.check("Semicolon") {
+            self.parse_expr_until(depth, "condition", "Semicolon")
+        }
+        self.expect("Semicolon")
+        if !self.check("LeftBrace") {
+            self.parse_expr_until(depth, "update", "LeftBrace")
+        }
+    }
+
+    func header_has_semicolon() -> bool {
+        let p: i64 = self.lexer.pos
+        let parens: i64 = 0
+        let brackets: i64 = 0
+        let braces: i64 = 0
+        let delimiter: char = '\0'
+        while p < self.lexer.len() {
+            let c: char = self.lexer.source.byte_at(p)
+            if delimiter != '\0' {
+                if c == '\\' {
+                    p = p + 2
+                    continue
+                }
+                if c == delimiter {
+                    delimiter = '\0'
+                }
+            } else if c == '\'' || c == '"' {
+                delimiter = c
+            } else if c == '(' {
+                parens = parens + 1
+            } else if c == ')' {
+                parens = parens - 1
+            } else if c == '[' {
+                brackets = brackets + 1
+            } else if c == ']' {
+                brackets = brackets - 1
+            } else if c == '{' {
+                if parens == 0 && brackets == 0 && braces == 0 {
+                    return false
+                }
+                braces = braces + 1
+            } else if c == '}' {
+                braces = braces - 1
+            } else if c == ';' && parens == 0 && brackets == 0 && braces == 0 {
+                return true
+            }
+            p = p + 1
+        }
+        return false
+    }
+
     func is_expr_stop(stop: string) -> bool {
         if self.check("EOF") { return true }
         if stop == "LeftBrace" && self.check("LeftBrace") { return true }
         if stop == "RightBrace" && self.check("RightBrace") { return true }
         if stop == "FatArrow" && self.check("FatArrow") { return true }
+        if stop == "Semicolon" && self.check("Semicolon") { return true }
         return false
     }
 
@@ -1840,16 +1903,19 @@ class Parser {
                     done = true
                 } else if stop == "FatArrow" && self.check("FatArrow") {
                     done = true
+                } else if stop == "Semicolon" && self.check("Semicolon") {
+                    done = true
                 }
                 if (stop == "LeftBrace" || stop == "FatArrow") && self.current.line > start_line &&
                         !self.is_header_continuation_token(previous_kind) &&
                         !self.is_header_continuation_token(self.current.kind) {
                     done = true
                 }
-                if stop != "LeftBrace" && stop != "FatArrow" && self.current.line > start_line {
+                if stop != "LeftBrace" && stop != "FatArrow" && stop != "Semicolon" &&
+                        self.current.line > start_line {
                     done = true
                 }
-                if stop != "LeftBrace" &&
+                if stop != "LeftBrace" && stop != "FatArrow" && stop != "Semicolon" &&
                         ((self.is_boundary_token() && !self.check("Interrupt")) || self.check("Return")) {
                     done = true
                 }

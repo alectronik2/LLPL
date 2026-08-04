@@ -1,0 +1,10 @@
+Program
+  Function loop() -> void
+    Block
+      For
+        RawExpr initializer let i = 0 , let j = 1 
+        RawExpr condition i < 2 
+        RawExpr update i ++ 
+        Block
+          ExprStmt
+            RawExpr expr puts ( i ) 

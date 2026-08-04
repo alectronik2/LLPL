@@ -11,6 +11,7 @@ DSL_OUT="${TMPDIR:-/tmp}/llpl-selfhost-dsl-sample.out"
 DSL_PARSE_OUT="${TMPDIR:-/tmp}/llpl-selfhost-dsl-parser-sample.out"
 RECOVERY_PARSE_OUT="${TMPDIR:-/tmp}/llpl-selfhost-recovery-parser-sample.out"
 MODERN_PARSE_OUT="${TMPDIR:-/tmp}/llpl-selfhost-modern-parser-sample.out"
+FOR_PARSE_OUT="${TMPDIR:-/tmp}/llpl-selfhost-for-parser-sample.out"
 
 smoke_parse() {
   src="$1"
@@ -70,6 +71,8 @@ diff -u "$ROOT/test/selfhost_dsl_parser_sample.expected" "$DSL_PARSE_OUT"
 diff -u "$ROOT/test/selfhost_recovery_parser_sample.expected" "$RECOVERY_PARSE_OUT"
 "$BIN" --parse "$ROOT/test/fixtures/selfhost_modern_syntax_sample.input" > "$MODERN_PARSE_OUT"
 diff -u "$ROOT/test/selfhost_modern_syntax_parser_sample.expected" "$MODERN_PARSE_OUT"
+"$BIN" --parse "$ROOT/test/fixtures/selfhost_for_sample.input" > "$FOR_PARSE_OUT"
+diff -u "$ROOT/test/selfhost_for_parser_for_sample.expected" "$FOR_PARSE_OUT"
 
 smoke_parse "$ROOT/prelude.llpl" prelude
 smoke_parse "$ROOT/stdlib/text/string_utils.llpl" string-utils
