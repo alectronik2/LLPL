@@ -1,0 +1,35 @@
+Program
+  Import hal
+  Alias SerialAlias = HAL . Serial 
+  Comptime
+    For
+      RawExpr header i in 0 .. 2 
+      Block
+        Extern Function isr$i() -> void
+  Namespace Demo
+    Alias Handler = func ( void * ) 
+    Packed Struct Bits
+      Field present: u8:1
+      Field available: u8:3
+      Union <anonymous>
+        Field raw: uint
+        Field next: Bits*
+    Packed Union Entry
+      Field raw: uint
+      Inline Property Method pfn() -> uint
+        Block
+          Return
+            RawExpr expr self . raw >> 12 
+    Struct Point
+      Field x: int
+      Field y: int
+    Function run(interrupt: int) -> int
+      Block
+        FieldDestructure Point { x , y }: <inferred>
+          RawExpr expr Point { x : 1 , y : 2 } 
+        FieldTuple (( a , b ) , c ): <inferred>
+          RawExpr expr ( ( 3 , 4 ) , 5 ) 
+        Return
+          RawExpr expr 0 if interrupt == 0 
+        Return
+          RawExpr expr x + y + a + b + c 

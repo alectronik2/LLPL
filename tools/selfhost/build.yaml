@@ -1,0 +1,36 @@
+# Build the LLPL selfhost lexer/parser as a hosted executable.
+# Run from this directory with:
+#   ../llplbuild/llplbuild build
+# Then execute:
+#   ./llpl-selfhost-lexer <file>
+
+project: llpl-selfhost-lexer
+entry: lexer.llpl
+llpl_compiler: ../../llpl
+
+toolchain:
+  cc: tcc
+  ld: tcc
+
+common_cflags:
+  - -m64
+  - -I.
+
+default_config: debug
+configurations:
+  debug:
+    cflags: [-O0, -g]
+  final:
+    cflags: [-O2]
+
+c_sources:
+  - path: lexer.c
+    output: lexer.o
+    include_dirs: [../../runtime]
+  - path: ../../runtime/runtime.c
+    output: runtime.o
+    include_dirs: [../../runtime]
+
+link:
+  output: llpl-selfhost-lexer
+  objects: [lexer.o, runtime.o]

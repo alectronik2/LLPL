@@ -1,0 +1,40 @@
+import hal
+
+alias SerialAlias = HAL.Serial
+
+comptime for i in 0..2 {
+    extern func isr$i()
+}
+
+namespace Demo {
+    alias Handler = func(void*)
+
+    packed struct Bits {
+        present: u8:1
+        available: u8:3
+        union {
+            raw: uint
+            next: Bits*
+        }
+    }
+
+    packed union Entry {
+        let raw: uint
+
+        inline property pfn() -> uint {
+            return self.raw >> 12
+        }
+    }
+
+    struct Point {
+        x: int
+        y: int
+    }
+
+    func run(interrupt: int) -> int {
+        let Point { x, y } = Point { x: 1, y: 2 }
+        let ((a, b), c) = ((3, 4), 5)
+        return 0 if interrupt == 0
+        return x + y + a + b + c
+    }
+}
