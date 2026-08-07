@@ -251,7 +251,7 @@
     "For": {
         "prefix": "for",
         "body": [
-            "for let ${1:i}: int = 0, ${1:i} < ${2:count}, ${1:i} = ${1:i} + 1 {",
+            "for let ${1:i}: int = 0; ${1:i} < ${2:count}; ${1:i} = ${1:i} + 1 {",
             "\t$0",
             "}"
         ],
@@ -284,6 +284,25 @@
             "}"
         ],
         "description": "With block - leading-dot members are resolved against the target"
+    },
+    "With Binding": {
+        "prefix": "withbind",
+        "body": [
+            "with ${1:name} = ${2:expression} {",
+            "\t.${3:member}",
+            "\t$0",
+            "}"
+        ],
+        "description": "Bind an expression for a with block"
+    },
+    "Holding": {
+        "prefix": "holding",
+        "body": [
+            "holding ${1:lock} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Acquire a lock and release it when the block exits"
     },
     "Defer": {
         "prefix": "defer",

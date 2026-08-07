@@ -23,6 +23,7 @@
         { "include": "#unittest-declaration" },
         { "include": "#alias-declaration" },
         { "include": "#macro-declaration" },
+        { "include": "#with-binding" },
         { "include": "#control-keywords" },
         { "include": "#other-keywords" },
         { "include": "#modifier-keywords" },
@@ -256,8 +257,18 @@
                 "2": { "name": "keyword.operator.macro.llpl" }
             }
         },
+        "with-binding": {
+            "comment": "with name = expression { ... } and legacy with let name = expression { ... } binding forms.",
+            "match": "\\b(with)(?:\\s+(let)\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*(=)",
+            "captures": {
+                "1": { "name": "keyword.control.llpl" },
+                "2": { "name": "keyword.other.llpl" },
+                "3": { "name": "variable.other.binding.llpl" },
+                "4": { "name": "keyword.operator.assignment.llpl" }
+            }
+        },
         "control-keywords": {
-            "match": "\\b(if|else|while|do|until|for|foreach|in|with|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw|assert)\\b",
+            "match": "\\b(if|else|while|do|until|for|foreach|in|with|holding|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw|assert)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {

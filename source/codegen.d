@@ -885,6 +885,8 @@ class CodeGenerator {
                 string key = mangleFreeFunctionName(funcDecl);
                 if (funcDecl.isExtern || funcDecl.name == "main" ||
                     funcDecl.name == "_start" || funcDecl.name == "kernel_main" ||
+                    funcDecl.name == "llpl_panic_putc" ||
+                    funcDecl.name == "llpl_panic_halt" ||
                     funcDecl.isInterrupt ||
                     isExternalAbiRoot(key)) {
                     markFunctionReachable(key);
@@ -1230,13 +1232,18 @@ class CodeGenerator {
     // hex *digits* to 16, then still shows "0x" in front - the natural
     // reading for e.g. a zero-padded 64-bit address). `spec.width`/
     // `zeroPad` come from a `:016`-style suffix (see
-    // Parser.splitInterpolationFormat); only integers accept either.
+    // Parser.splitInterpolationFormat); integers and pointers accept either.
     private string interpFormatSpecifier(ASTNode expr, InterpFormat spec) {
         Type t = inferType(expr);
         resolveType(t);
 
         bool isPlainInt = isIntegerType(t);
-        bool isUnsigned = isUnsignedIntegerType(t);
+        // Radix formatting prints the numeric address represented by a
+        // pointer. Treat pointers as unsigned integer-like values here; the
+        // interpolation emitter casts them to uintptr_t before passing them
+        // to ksnprintf, so the generated format argument has the right ABI.
+        bool isIntegerLike = isPlainInt || t.isPointer;
+        bool isUnsigned = t.isPointer || isUnsignedIntegerType(t);
         bool isFloat = !t.isPointer && !t.isArray && (t.name == "f32" || t.name == "f64");
 
         if (spec.precision >= 0) {
@@ -1250,10 +1257,10 @@ class CodeGenerator {
         }
 
         if (spec.radix.length > 0 || spec.width > 0) {
-            if (!isPlainInt) {
+            if (!isIntegerLike) {
                 string what = spec.radix.length > 0 ? format("':%s'", spec.radix) : "width";
                 throw new CompileError(
-                    format("Cannot use %s formatting on a value of type '%s' - only integers support it",
+                    format("Cannot use %s formatting on a value of type '%s' - only integers and pointers support it",
                         what, t.toString()),
                     currentModulePath, expr.line, expr.column);
             }
@@ -1345,7 +1352,13 @@ class CodeGenerator {
                     args ~= ", " ~ generateAsStringValue(asStringType, expr, expr.line, expr.column);
                 } else {
                     fmt ~= interpFormatSpecifier(expr, spec);
-                    args ~= ", " ~ variadicPromote(expr, generateExpression(expr));
+                    string argCode = generateExpression(expr);
+                    Type exprType = inferType(expr);
+                    resolveType(exprType);
+                    if ((spec.radix.length > 0 || spec.width > 0) && exprType.isPointer) {
+                        argCode = format("((uintptr_t)(%s))", argCode);
+                    }
+                    args ~= ", " ~ variadicPromote(expr, argCode);
                 }
             }
         }
@@ -1951,6 +1964,14 @@ class CodeGenerator {
                 moduleUsingNamespaces[modulePath] ~= usingStmt.namespacePath;
                 // Don't include in result - these are processed during name resolution
             } else if (auto ns = cast(NamespaceDecl)decl) {
+                if (ns.enumBackingType !is null) {
+                    auto enumAlias = new AliasDecl(ns.name, [ns.enumBackingType.name],
+                        ns.enumBackingType.pointerDepth, ns.enumBackingType.isArray,
+                        ns.enumBackingType.arraySize, ns.line, ns.column);
+                    enumAlias.namespaceSegments = segments;
+                    enumAlias.isPublic = effectivePublic;
+                    result ~= enumAlias;
+                }
                 result ~= flattenNamespaces(ns.declarations, segments ~ ns.name, modulePath, effectivePublic);
             } else if (auto funcDecl = cast(FunctionDecl)decl) {
                 funcDecl.namespaceSegments = segments;
@@ -5660,10 +5681,10 @@ class CodeGenerator {
         return code;
     }
 
-    private string deferredCleanupCode() {
+    private string deferredCleanupCode(DeferInfo[] statements) {
         string code = "";
-        if (deferredStatements.length > 0) {
-            foreach_reverse (deferInfo; deferredStatements) {
+        if (statements.length > 0) {
+            foreach_reverse (deferInfo; statements) {
                 code ~= indent() ~ format("if (%s) {\n", deferInfo.activeVarName);
                 indentLevel++;
                 code ~= indent() ~ format("%s = 0;\n", deferInfo.activeVarName);
@@ -5674,6 +5695,10 @@ class CodeGenerator {
             }
         }
         return code;
+    }
+
+    private string deferredCleanupCode() {
+        return deferredCleanupCode(deferredStatements);
     }
 
     private string deferFrameDeclarations() {
@@ -6467,8 +6492,16 @@ class CodeGenerator {
         } else if (auto block = cast(Block)node) {
             code ~= indent() ~ "{\n";
             indentLevel++;
+            size_t deferStart = deferredStatements.length;
             foreach (stmt; block.statements) {
                 code ~= generateStatement(stmt, isDeferred);
+            }
+            if (block.isHolding && deferredStatements.length > deferStart) {
+                // A holding block owns every defer registered while its
+                // body is generated. Keep the entries in the function-wide
+                // list so their frame declarations are emitted, but run
+                // only this block's defers at its normal closing brace.
+                code ~= deferredCleanupCode(deferredStatements[deferStart .. $]);
             }
             indentLevel--;
             code ~= indent() ~ "}\n";
@@ -6668,7 +6701,7 @@ class CodeGenerator {
         } else if (auto withStmt = cast(WithStmt)node) {
             return new WithStmt(cloneNode(withStmt.object, subs, typeSubs),
                 cloneBlock(withStmt.body_, subs, typeSubs), withStmt.contextName,
-                withStmt.line, withStmt.column);
+                withStmt.line, withStmt.column, withStmt.bindingName);
         } else if (auto rangeExpr = cast(RangeExpr)node) {
             return new RangeExpr(cloneNode(rangeExpr.start, subs, typeSubs), cloneNode(rangeExpr.end, subs, typeSubs),
                 rangeExpr.line, rangeExpr.column);
@@ -6692,7 +6725,9 @@ class CodeGenerator {
                 cloneType(tryStmt.catchType, typeSubs), cloneBlock(tryStmt.catchBlock, subs, typeSubs),
                 cloneBlock(tryStmt.finallyBlock, subs, typeSubs), tryStmt.line, tryStmt.column);
         } else if (auto block = cast(Block)node) {
-            return cloneBlock(block, subs, typeSubs);
+            auto cloned = cloneBlock(block, subs, typeSubs);
+            cloned.isHolding = block.isHolding;
+            return cloned;
         } else if (auto exprStmt = cast(ExprStmt)node) {
             return new ExprStmt(cloneNode(exprStmt.expression, subs, typeSubs));
         } else if (auto asmStmt = cast(AsmStmt)node) {
@@ -6892,7 +6927,7 @@ class CodeGenerator {
         } else if (auto withStmt = cast(WithStmt)node) {
             return new WithStmt(expandQuotedNode(withStmt.object, subs),
                 expandQuotedBlock(withStmt.body_, subs), withStmt.contextName,
-                withStmt.line, withStmt.column);
+                withStmt.line, withStmt.column, withStmt.bindingName);
         } else if (auto rangeExpr = cast(RangeExpr)node) {
             return new RangeExpr(expandQuotedNode(rangeExpr.start, subs), expandQuotedNode(rangeExpr.end, subs),
                 rangeExpr.line, rangeExpr.column);
@@ -7935,6 +7970,21 @@ class CodeGenerator {
         resolveType(objectType);
         Type contextType = objectType;
         string initializer = generateExpression(withStmt.object);
+        if (withStmt.bindingName.length > 0) {
+            // The named form keeps its binding in the surrounding scope so
+            // later statements can continue to use it.
+            variableTypes[withStmt.bindingName] = objectType;
+            string code = indent() ~ format("%s %s = %s;\n",
+                typeToC(objectType), withStmt.bindingName, initializer);
+            code ~= indent() ~ "{\n";
+            indentLevel++;
+            foreach (stmt; withStmt.body_.statements) {
+                code ~= generateStatement(stmt, isDeferred);
+            }
+            indentLevel--;
+            code ~= indent() ~ "}\n";
+            return code;
+        }
         if (shouldBindWithByAddress(withStmt.object, objectType)) {
             contextType = cloneType(objectType);
             contextType.pointerDepth++;
@@ -8708,7 +8758,8 @@ class CodeGenerator {
         return GenericCallResolution(mangledName, resolvedArgs);
     }
 
-    // Resolves a possibly-unqualified class type name to its mangled form
+    // Resolves a possibly-unqualified class, struct, or union type name to
+    // its mangled form
     // in place, the same way resolveName does for functions/variables, so a
     // namespaced class can be referenced unqualified (or partially qualified)
     // from sibling code in that namespace. No-op for primitives or names that
@@ -8798,7 +8849,7 @@ class CodeGenerator {
         }
 
         if (isPrimitiveTypeName(t.name)) return;
-        if (t.name in classRegistry || t.name in structRegistry) {
+        if (t.name in classRegistry || t.name in structRegistry || t.name in unionRegistry) {
             if (!isSymbolVisibleFromCurrentModule(t.name)) {
                 throw new CompileError(format("Cannot access private type '%s'", t.name),
                     currentModulePath, 0, 0);
@@ -8806,7 +8857,7 @@ class CodeGenerator {
             return;
         }
         foreach (candidate; enclosingQualifications(t.name)) {
-            if (candidate in classRegistry || candidate in structRegistry) {
+            if (candidate in classRegistry || candidate in structRegistry || candidate in unionRegistry) {
                 if (!isSymbolVisibleFromCurrentModule(candidate)) {
                     throw new CompileError(format("Cannot access private type '%s'", t.name),
                         currentModulePath, 0, 0);
@@ -9430,7 +9481,11 @@ class CodeGenerator {
         indentLevel++;
         code ~= indent() ~ format("%s %s = %s;\n", primitiveToC("int"), endName, generateExpression(range.end));
         code ~= indent() ~ format("%s %s = %s;\n", primitiveToC("int"), foreachStmt.varName, generateExpression(range.start));
-        code ~= indent() ~ format("while (%s < %s) {\n", foreachStmt.varName, endName);
+        // Put the increment in the loop's third clause so `continue` still
+        // advances the range variable instead of jumping back to the test
+        // with the same value forever.
+        code ~= indent() ~ format("for (; %s < %s; %s = %s + 1) {\n",
+            foreachStmt.varName, endName, foreachStmt.varName, foreachStmt.varName);
         indentLevel++;
 
         variableTypes[foreachStmt.varName] = new Type("int");
@@ -9439,7 +9494,6 @@ class CodeGenerator {
         }
         variableTypes.remove(foreachStmt.varName);
 
-        code ~= indent() ~ format("%s = %s + 1;\n", foreachStmt.varName, foreachStmt.varName);
         indentLevel--;
         code ~= indent() ~ "}\n";
         indentLevel--;
@@ -10942,6 +10996,17 @@ class CodeGenerator {
             rejectInInterrupt(lambdaExpr, "Lambda allocation");
             return generateLambdaExpr(lambdaExpr);
         } else if (auto sizeofExpr = cast(SizeofExpr)node) {
+            // `sizeof(name)` is ambiguous in the parser: a bare identifier
+            // is valid in a type position and in a value position. Resolve
+            // value names first so arrays and other variables get C's native
+            // expression-size semantics; if it is not a variable, retain the
+            // existing `sizeof(Type)` path below.
+            string valueName = resolveName(sizeofExpr.type.name,
+                (n) => (n in variableTypes) !is null || (n in globalVarRegistry) !is null);
+            if ((valueName in variableTypes) !is null || (valueName in globalVarRegistry) !is null) {
+                return format("sizeof(%s)", generateExpression(
+                    new Identifier(sizeofExpr.type.name, sizeofExpr.line, sizeofExpr.column)));
+            }
             resolveType(sizeofExpr.type);
             // Not typeToC: that auto-adds a `*` for a bare class type
             // (classes are always accessed by pointer), but `sizeof(Foo)`
@@ -11164,8 +11229,30 @@ class CodeGenerator {
                     // isPointer false too.
                     className = mangleTypeArg(inferType(memberExpr.object));
                 } catch (Exception e) {
-                    // fall through - className stays "", falls back to the
-                    // CLASS_ placeholder below
+                // fall through - className stays "", falls back to the
+                // CLASS_ placeholder below
+                }
+
+                Type receiverType = inferType(memberExpr.object);
+                resolveType(receiverType);
+                bool structValueReceiver = false;
+                bool unionValueReceiver = false;
+                // Struct and union methods are emitted with a by-value self
+                // parameter. A pointer to one must therefore dispatch to
+                // the pointee's method symbol and pass `*receiver`; treating
+                // the pointer spelling as a distinct owner previously
+                // produced unresolved names such as `PageFrame_ptr_release`.
+                if (receiverType.pointerDepth > 0) {
+                    Type pointeeType = cloneType(receiverType);
+                    pointeeType.pointerDepth--;
+                    string pointeeName = mangleTypeArg(pointeeType);
+                    if (className !in structRegistry && pointeeName in structRegistry) {
+                        className = pointeeName;
+                        structValueReceiver = true;
+                    } else if (className !in unionRegistry && pointeeName in unionRegistry) {
+                        className = pointeeName;
+                        unionValueReceiver = true;
+                    }
                 }
 
                 // Find the target method's own FunctionDecl(s) (if the class
@@ -11272,6 +11359,9 @@ class CodeGenerator {
                 string args = "";
                 if (methodDecl is null || !methodDecl.isStatic) {
                     string receiverExpr = objectExpr;
+                    if (structValueReceiver || unionValueReceiver) {
+                        receiverExpr = format("(*(%s))", objectExpr);
+                    }
                     if (methodDecl !is null && cd !is null) {
                         string ownerName = mangledClass(owner);
                         if (ownerName != className) {

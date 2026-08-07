@@ -50,9 +50,9 @@ cd examples/limine_baremetal_demo
 
 Commands:
 
-- `build`: run the full compile, assemble, link, package pipeline.
+- `build`: run the compile, assemble, link, and package pipeline, except packages marked `run_only`.
 - `check`: run compile/assemble steps only; skip link/package.
-- `run`: run `build`, then launch the configured QEMU command.
+- `run`: run `build`, including `run_only` packages, then launch the configured QEMU command.
 - `clean`: remove generated outputs declared by `build.yaml`.
 - `configs`: print available configurations and the default.
 - `test`: run LLPL test files from the repo root; does not need `build.yaml`.
@@ -314,9 +314,13 @@ Packaging is an ordered action list guarded by one package output. If the
 package output is newer than all package inputs, all package actions are
 skipped.
 
+Set `run_only: true` to skip package actions during `llplbuild build` and
+run them only as part of `llplbuild run`.
+
 ```yaml
 package:
   output: kernel.iso
+  run_only: true
   actions:
     - require_file:
         path: "${LIMINE_DIR}/limine-bios.sys"

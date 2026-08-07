@@ -598,7 +598,7 @@ class Parser {
             members ~= new VarDecl(memberName, memberType, new IntLiteral(value, memberLines[i], memberColumns[i]),
                 true, memberLines[i], memberColumns[i]);
         }
-        return new NamespaceDecl(name, members, startLine, startColumn);
+        return new NamespaceDecl(name, members, startLine, startColumn, backingType);
     }
 
     // `macro NAME(param, ...) { statements }` - params are plain names (no
@@ -1973,6 +1973,8 @@ class Parser {
             return breakStmt();
         } else if (check(TokenType.Defer)) {
             return deferStmt();
+        } else if (check(TokenType.Identifier) && current.value == "holding") {
+            return holdingStmt();
         } else if (check(TokenType.Try)) {
             return tryStmt();
         } else if (check(TokenType.Throw)) {
@@ -2357,12 +2359,18 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
         expect(TokenType.With);
+        string bindingName = "";
+        if (match(TokenType.Let) || (check(TokenType.Identifier) && peek(1).type == TokenType.Assign)) {
+            bindingName = expect(TokenType.Identifier, "Expected a name after 'with'").value;
+            expect(TokenType.Assign, "Expected '=' after with binding name");
+        }
         ASTNode object = expressionNoStructLiteral();
-        string contextName = format("__llpl_with%d", withContextCounter++);
+        string contextName = bindingName.length > 0 ? bindingName :
+            format("__llpl_with%d", withContextCounter++);
         withContextNames ~= contextName;
         Block body_ = block();
         withContextNames = withContextNames[0 .. $ - 1];
-        return new WithStmt(object, body_, contextName, startLine, startColumn);
+        return new WithStmt(object, body_, contextName, startLine, startColumn, bindingName);
     }
 
     private ReturnStmt returnStmt() {
@@ -2428,6 +2436,25 @@ class Parser {
         expect(TokenType.Defer);
         ASTNode stmt = statement();
         return new DeferStmt(stmt);
+    }
+
+    // `holding lock { ... }` expands to a block containing the acquire,
+    // an early defer registration, and the user's statements. Registering
+    // the defer before the body is essential: it must run when this block
+    // exits, including an exit caused by return.
+    private Block holdingStmt() {
+        int line = current.line;
+        int column = current.column;
+        expect(TokenType.Identifier);
+        ASTNode lock = expressionNoStructLiteral();
+        Block body = block();
+        ASTNode acquire = new ExprStmt(new CallExpr(
+            new MemberExpr(lock, "acquire", line, column), []));
+        ASTNode release = new DeferStmt(new ExprStmt(new CallExpr(
+            new MemberExpr(lock, "release", line, column), [])));
+        ASTNode[] statements = [acquire, release];
+        statements ~= body.statements;
+        return new Block(statements, true);
     }
 
     // `try { ... } [catch (e) { ... }] [finally { ... }]` - catch and

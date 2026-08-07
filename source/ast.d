@@ -145,11 +145,17 @@ class UsingNamespaceStmt : ASTNode {
 class NamespaceDecl : ASTNode {
     string name;
     ASTNode[] declarations;
+    // Non-null only for a plain enum lowered to this namespace. The code
+    // generator uses it to preserve the enum name as a backing-type alias
+    // alongside the generated constants.
+    Type enumBackingType;
 
-    this(string name, ASTNode[] declarations, int line = 0, int column = 0) {
+    this(string name, ASTNode[] declarations, int line = 0, int column = 0,
+         Type enumBackingType = null) {
         super(NodeType.NamespaceDecl, line, column);
         this.name = name;
         this.declarations = declarations;
+        this.enumBackingType = enumBackingType;
     }
 }
 
@@ -1124,10 +1130,12 @@ class DestructuringStmt : ASTNode {
 
 class Block : ASTNode {
     ASTNode[] statements;
+    bool isHolding;
 
-    this(ASTNode[] statements) {
+    this(ASTNode[] statements, bool isHolding = false) {
         super(NodeType.Block);
         this.statements = statements;
+        this.isHolding = isHolding;
     }
 }
 
@@ -1234,12 +1242,15 @@ class WithStmt : ASTNode {
     ASTNode object;
     Block body_;
     string contextName;
+    string bindingName;
 
-    this(ASTNode object, Block body_, string contextName, int line = 0, int column = 0) {
+    this(ASTNode object, Block body_, string contextName, int line = 0, int column = 0,
+         string bindingName = "") {
         super(NodeType.WithStmt, line, column);
         this.object = object;
         this.body_ = body_;
         this.contextName = contextName;
+        this.bindingName = bindingName;
     }
 }
 

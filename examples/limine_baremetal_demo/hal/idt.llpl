@@ -86,19 +86,23 @@ namespace HAL {
         
         func init() {
             comptime for i in 0..NUM_VECTORS {
-                set_gate(i, isr$i as int, 0x08, 0x8E, 0)
+                set_gate( i, isr$i as int, 0x08, 0x8E, 0 )
             }
 
-            pointer.limit = (256 * 16) - 1
+            pointer.limit = entries.sizeof
             pointer.base = entries as u64
 
-            asm("lidt (%0)" : : "r"(&pointer))
+            asm( "lidt (%0)" : : "r"(&pointer) )
         }
     }
 }
 
 func isr_handler( ctx: HAL.IDT.Context* ) {
-    hs.write("Interrupt received: vector=\(ctx.vector)\n")
+    hs.write( "Interrupt received: vector=\(ctx.vector). Halt.\n" )
     // Linked from hal/isr.m64. Dispatching through HAL.interrupts can be
     // filled in once the interrupt context layout is consumed on the LLPL side.
+
+    while true {
+        HAL.halt()
+    }
 }

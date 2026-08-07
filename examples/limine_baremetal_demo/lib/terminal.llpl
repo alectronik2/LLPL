@@ -1,0 +1,30 @@
+import hal
+import lib
+
+namespace Terminal {
+    let width: uint
+    let height: uint
+    let pitch: uint
+    let bpp: uint
+    let buffer: uint*
+
+    func init( l: LimineFramebuffer* ) {
+        let fb = l
+        let width = fb.width
+        let height = fb.height
+        let pitch = fb.pitch
+        let bpp = fb.bpp
+
+        if bpp != 32 {
+            hs.write_str("Unsupported framebuffer format: ")
+            hs.write_int(bpp)
+            hs.write_str("bpp\n")
+            while true {
+                HAL.halt()
+            }
+        }
+
+        let buffer = fb.address as uint*
+        let size = (pitch * height) / 4
+    }
+}

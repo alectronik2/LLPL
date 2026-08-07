@@ -14,7 +14,7 @@ find-references) for LLPL (`.llpl`) files.
   operator overloads like `func operator+`), `let`/`const`, `alias`,
   `unittest { ... }`,
   `ui Name: Window { ... }` declarations, control flow
-  (`if`/`else`/`while`/`do`/`for`/`foreach`/`with`/`return`/`defer`/`try`/
+  (`if`/`else`/`while`/`do`/`for`/`foreach`/`with`/`holding`/`return`/`defer`/`try`/
   `catch`/`finally`/`throw`/`delete`/`assert`/`match`/`case`/`default`/
   `unless`/`until`),
   range-based `for i in 0..5 { }`, `import`/`from`, `extern`,
@@ -38,7 +38,7 @@ find-references) for LLPL (`.llpl`) files.
   `class`, `struct`, `union`,
   `namespace`, `using namespace`, `enum`, `macro`, `match`, `alias`,
   `property` getters/setters, `unless`, `if`, `while`, `for`, range-based
-  `for`, `foreach`, `with`, `defer`, `delete`,
+  `for`, `foreach`, `with` bindings, `holding lock { ... }`, `defer`, `delete`,
   `try`/`catch`/`finally`, `extern`, `import`, `#link`, `#flags`, `asm`,
   `bitfield`), plus UI snippets (`uiapp`, `ui`, `uibutton`,
   `uiprogress`, `uislider`, `uicheck`, `uiselect`, `uihover`).

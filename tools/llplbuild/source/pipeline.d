@@ -189,7 +189,7 @@ private string[] packageActionInputs(const PackageAction[] actions) {
     return result;
 }
 
-private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config) {
+private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config, bool includePackage = true) {
     PlanStep[] plan;
 
     string[] cflags = cfg.commonCflags.dup;
@@ -324,7 +324,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config)
             PackageAction.init, "", "", false, 0);
     }
 
-    if (cfg.hasPackage) {
+    if (includePackage && cfg.hasPackage) {
         // The whole package (ISO/etc.) is one incremental unit, same
         // granularity Make gave it - its inputs are every binary this
         // config just linked, not each individual copy/write/run action.
@@ -405,10 +405,12 @@ private bool actionIsUpToDate(PackageAction action) {
         case ActionKind.copy:
             return copyIsUpToDate(action.copyFrom, action.copyTo);
         case ActionKind.mkdir:
+            return exists(action.mkdirPath) && isDir(action.mkdirPath);
         case ActionKind.write:
         case ActionKind.run:
-        case ActionKind.requireFile:
             return false;
+        case ActionKind.requireFile:
+            return exists(action.requireFilePath);
     }
 }
 
@@ -670,6 +672,16 @@ private void runPlan(PlanStep[] plan, string configPath, RunOptions opts) {
                 cargoLine(stepVerb(plan[i]), plan[i].description);
                 markProgress("packaging " ~ plan[i].description);
                 i++;
+                while (i < plan.length && plan[i].kind == StepKind.action) {
+                    if (actionIsUpToDate(plan[i].pkgAction)) {
+                        markProgress("up to date " ~ plan[i].description);
+                    } else {
+                        cargoLine(stepVerb(plan[i]), plan[i].description);
+                        executeStep(plan[i]);
+                        markProgress("finished " ~ plan[i].description);
+                    }
+                    i++;
+                }
             }
             continue;
         }
@@ -722,7 +734,7 @@ void build(BuildConfig cfg, string configName, RunOptions opts) {
     auto config = resolveConfiguration(cfg, configName);
     touchConfigStamp(config !is null ? config.name : "");
 
-    auto plan = buildPlan(cfg, config);
+    auto plan = buildPlan(cfg, config, !cfg.packageOnRunOnly);
     runPlan(plan, cfg.configPath, opts);
 
     cargoLine("Finished", format("%s target(s) in %s",
@@ -750,7 +762,10 @@ void check(BuildConfig cfg, string configName, RunOptions opts) {
 }
 
 void run(BuildConfig cfg, string configName, RunOptions opts) {
+    bool oldPackageOnRunOnly = cfg.packageOnRunOnly;
+    cfg.packageOnRunOnly = false;
     build(cfg, configName, opts);
+    cfg.packageOnRunOnly = oldPackageOnRunOnly;
     if (!cfg.hasRun) {
         throw new BuildError("this build.yaml has no 'run:' section");
     }

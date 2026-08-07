@@ -115,6 +115,7 @@ struct BuildConfig {
 
     bool hasPackage;
     PackageSpec pkg;
+    bool packageOnRunOnly;
 
     PersistentFile[] persistentFiles;
 
@@ -319,6 +320,7 @@ BuildConfig loadConfig(string path) {
     if (auto v = "package" in root) {
         cfg.hasPackage = true;
         cfg.pkg.output = requireStr(*v, "output", absPath ~ ".package");
+        cfg.packageOnRunOnly = getBool(*v, "run_only");
         if (auto actions = "actions" in *v) {
             foreach (Node entry; *actions) {
                 cfg.pkg.actions ~= parseAction(entry, absPath ~ ".package.actions[]");

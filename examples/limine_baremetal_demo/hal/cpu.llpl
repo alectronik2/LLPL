@@ -16,4 +16,14 @@ namespace HAL {
     func disable_interrupts() {
         asm("cli")
     }
+
+    func enable_interrupts() {
+        asm("sti")
+    }
+
+    func read_cr3() -> u64 {
+        let cr3: u64
+        asm("mov %%cr3, %0" : "=r"(cr3))
+        cr3
+    }
 }

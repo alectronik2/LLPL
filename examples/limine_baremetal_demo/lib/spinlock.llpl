@@ -1,0 +1,16 @@
+struct SpinLock {
+    let locked: bool
+
+    func acquire() {
+        while true {
+            if !locked {
+                locked = true
+                return
+            }
+        }
+    }
+
+    func release() {
+        locked = false
+    }
+}

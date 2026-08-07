@@ -1,3 +1,7 @@
-func rrad_cr3() -> uint {
-    
+namespace Mm {
+    func read_cr3() -> uint {
+        let cr3: uint
+        asm( "mov %%cr3, %0" : "=r"(cr3) )
+        return cr3
+    }
 }

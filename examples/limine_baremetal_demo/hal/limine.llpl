@@ -33,7 +33,7 @@ packed struct LimineFramebufferResponse {
 packed struct LimineMemmapEntry {
     let base: u64
     let length: u64
-    let entry_type: u64
+    let type: u64
 }
 
 packed struct LimineMemmapRequest {

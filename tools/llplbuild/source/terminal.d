@@ -37,6 +37,19 @@ private bool progressActive;
 private size_t progressLineLen;
 
 private size_t terminalWidth() {
+    version (Posix) {
+        import core.sys.posix.sys.ioctl : ioctl, TIOCGWINSZ, winsize;
+        import core.sys.posix.unistd : isatty;
+
+        auto fd = fileno(stdout.getFP());
+        if (isatty(fd) != 0) {
+            winsize size;
+            if (ioctl(fd, TIOCGWINSZ, &size) == 0 && size.ws_col > 0) {
+                return size.ws_col;
+            }
+        }
+    }
+
     try {
         string columns = environment.get("COLUMNS", "");
         if (columns.length > 0) {
@@ -46,7 +59,7 @@ private size_t terminalWidth() {
     } catch (Exception) {
         // Ignore malformed COLUMNS and use a conservative fallback below.
     }
-    return 80;
+    return 120;
 }
 
 private string truncateProgressMessage(string message) {
@@ -56,12 +69,26 @@ private string truncateProgressMessage(string message) {
     return message[0 .. maxMessageLen - 3] ~ "...";
 }
 
+private string truncateWithMarker(string text, size_t limit, string marker) {
+    if (text.length <= limit) return text;
+    if (limit <= marker.length) return text[0 .. limit];
+    return text[0 .. limit - marker.length] ~ marker;
+}
+
 private string fitProgressLine(string line) {
     size_t width = terminalWidth();
     if (width <= 1 || line.length < width) return line;
     size_t limit = width - 1; // keep the cursor off the terminal's wrap column
-    if (limit <= 3) return line[0 .. limit];
-    return line[0 .. limit - 3] ~ "...";
+    return truncateWithMarker(line, limit, "...");
+}
+
+private string fitCargoMessage(string verb, string message) {
+    string prefix = format("%12s ", verb);
+    size_t width = terminalWidth();
+    if (width <= prefix.length + 1) return message;
+    size_t limit = width - 1; // keep the cursor off the terminal's wrap column
+    if (prefix.length + message.length <= limit) return message;
+    return truncateWithMarker(message, limit - prefix.length, "(...)");
 }
 
 private void clearProgressLine() {
@@ -112,7 +139,7 @@ void progressFinish() {
 // failure color for a verb like "error" without a separate helper.
 void cargoLine(string verb, string message, string color = Color.green) {
     clearProgressLine();
-    writefln("%s %s", paint(format("%12s", verb), color), message);
+    writefln("%s %s", paint(format("%12s", verb), color), fitCargoMessage(verb, message));
     stdout.flush();
 }
 

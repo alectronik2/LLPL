@@ -11,6 +11,18 @@ import mm
 
 alias hs = HAL.Serial
 
+// Strong freestanding runtime hooks: the default runtime panic hooks are
+// intentionally silent, so route assertion failures through COM1.
+func llpl_panic_putc(c: char) {
+    HAL.Serial.write_char(c)
+}
+
+func llpl_panic_halt() {
+    while true {
+        HAL.halt()
+    }
+}
+
 @section(".limine_requests_start") @used
 let limine_requests_start_marker: u64[4] = limine_start_marker_id
 
@@ -132,18 +144,6 @@ func draw_demo(fb: LimineFramebuffer*) {
     }
 }
 
-func print_memmap(memmap: LimineMemmapResponse*) {
-    hs.write("Limine memory map entries: \(memmap.entry_count)\n")
-
-    let entries = memmap.entries as u64*
-    let i = 0
-    while i < memmap.entry_count {
-        let entry = entries[i] as LimineMemmapEntry*
-        hs.write("  \(entry.base:hex) - \(entry.base + entry.length:hex) \(memmap_type_name(entry.entry_type))\n")
-        i = i + 1
-    }
-}
-
 func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
     let entries = memmap.entries as u64*
     let max_end = 0
@@ -181,7 +181,7 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
         if w == 0 {
             w = 1
         }
-        fb |> fill_rect(x0, plot_y, w, 12, memmap_type_color(entry.entry_type))
+        fb |> fill_rect(x0, plot_y, w, 12, memmap_type_color(entry.type))
         i++
     }
 
@@ -194,7 +194,7 @@ func draw_memmap(fb: LimineFramebuffer*, memmap: LimineMemmapResponse*) {
 }
 
 func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
-    hs.write("Limine HHDM offset: \(hhdm.offset:hex)\n")
+    "Limine HHDM offset: \(hhdm.offset:hex)\n" |> hs.write
 
     let entries= memmap.entries as u64*
     let probe_phys = 0
@@ -202,7 +202,7 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
     let i = 0
     while i < memmap.entry_count && !found {
         let entry = entries[i] as LimineMemmapEntry*
-        if entry.entry_type == MemMapType.Usable && entry.length > 0 {
+        if entry.type == MemMapType.Usable && entry.length > 0 {
             probe_phys = entry.base
             if probe_phys < 0x1000 && entry.length > 0x1000 {
                 probe_phys = 0x1000
@@ -218,52 +218,42 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
         let probe_virt = hhdm.offset + probe_phys
         let p = probe_virt as u8*
         let value = p[0] as u64
-        hs.write("HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n")
+        "HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n" |> hs.write
     } else {
-        hs.write("No usable memory region available for HHDM probe\n")
+        "No usable memory region available for HHDM probe\n" |> hs.write
     }
 }
 
 func kernel_main() {
     HAL.disable_interrupts()
     hs.init()
-    hs.write("LLPL Limine bare-metal demo bootingd\n")
+    "LLPL Limine bare-metal demo booting\n" |> hs.write
 
     let fb      = limine_get_framebuffer()
     let memmap  = limine_get_memmap()
     let hhdm    = limine_get_hhdm()
 
+    assert( memmap != null, "No Limine memory map response" )
+    assert( hhdm != null, "No Limine HHDM response" )
+    assert( fb != null, "No Limine framebuffer response" )
+
     HAL.GDT.init()
     HAL.IDT.init()
     HAL.PIC.init()
 
-    PFDB.init( memmap, hhdm )
-    VMM.init()
+    HAL.enable_interrupts()
 
-    if memmap == null {
-        hs.write("No Limine memory map response\n")
-    } else {
-        print_memmap(memmap)
-    }
+    MM.init( memmap, hhdm )
 
-    if hhdm == null {
-        hs.write("No Limine HHDM response\n")
-    } else if memmap != null {
-        demo_hhdm(memmap, hhdm)
-    }
+    demo_hhdm( memmap, hhdm )
 
-    if fb == null {
-        hs.write("No Limine framebuffer response\n")
-    } else {
-        hs.write("Drawing into Limine framebuffer\n")
-        draw_demo(fb)
-        if memmap != null {
-            draw_memmap(fb, memmap)
-        }
-    }
-
+    draw_demo(fb)
+    draw_memmap(fb, memmap)
+    
     let x = kmalloc<u64>()
+    "kmalloc<u64>() returned \(x:hex)\n" |> hs.write
 
+    "Kernel initialization complete. Halting.\n" |> hs.write
     while true {
         HAL.halt()
     }
