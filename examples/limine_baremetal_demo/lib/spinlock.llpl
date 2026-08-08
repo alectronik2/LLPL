@@ -1,13 +1,26 @@
+import hal
+
 struct SpinLock {
     volatile let locked: u8
+    volatile let owner: u64
+    volatile let depth: u32
 
     func acquire() {
+        let me = HAL.cpu_id() + 1
+
+        if self.locked != 0 && self.owner == me {
+            self.depth++
+            return
+        }
+
         while true {
             let value: u8 = 1
-            // xchg is implicitly locked when one operand is memory. The
-            // old byte is returned in value, so zero means we acquired it.
+            // xchg is implicitly locked when one operand is memory. The old
+            // byte is returned in value, so zero means we acquired it.
             asm("xchgb %0, %1" : "+q"(value) : "m"(self.locked) : "memory")
             if value == 0 {
+                self.owner = me
+                self.depth = 1
                 return
             }
 
@@ -16,6 +29,18 @@ struct SpinLock {
     }
 
     func release() {
+        let me = HAL.cpu_id() + 1
+        if self.owner != me {
+            panic("SpinLock.release: lock is not owned by this CPU")
+        }
+
+        if self.depth > 1 {
+            self.depth--
+            return
+        }
+
+        self.depth = 0
+        self.owner = 0
         // A byte store is atomic; the memory clobber prevents prior critical
         // section stores from being reordered after the unlock.
         asm("movb $0, %0" : "=m"(self.locked) : : "memory")

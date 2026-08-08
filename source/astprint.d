@@ -103,6 +103,7 @@ private final class AstPrinter {
     void printFunction(string kind, FunctionDecl fn, int depth) {
         string flags;
         if (fn.isPrivate) flags ~= " private";
+        if (fn.isProtected) flags ~= " protected";
         if (fn.isInline) flags ~= " inline";
         if (fn.isVirtual) flags ~= " virtual";
         if (fn.isOverride) flags ~= " override";

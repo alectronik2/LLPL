@@ -43,6 +43,7 @@ find-references) for LLPL (`.llpl`) files.
   `bitfield`), plus UI snippets (`uiapp`, `ui`, `uibutton`,
   `uiprogress`, `uislider`, `uicheck`, `uiselect`, `uihover`).
 - Completion includes LLPL keywords plus common `std.ui` widget names
+- Visibility modifiers `public`, `private`, and `protected` are highlighted and offered by completion
   (`Window`, `Panel`, `Card`, `ProgressBar`, `Slider`, `Checkbox`,
   `SelectableText`, `Badge`) and widget properties before compiler-backed
   project symbols are available.

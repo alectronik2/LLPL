@@ -15,6 +15,10 @@
 // readability alias, not a distinct type.
 alias string = char*
 
+const EINVAL = -1
+const EEXIST = -2
+const ENOMEM = -3
+
 // Minimal printf-style formatter, always available without an `extern
 // func` declaration of your own. Backed by runtime/runtime.c; see that
 // file's header comment (runtime.h) for the exact contract - supported
@@ -424,7 +428,7 @@ class Regex {
 // not `String` - LLPL has no function/method overloading, so a single
 // parameter type has to serve both a raw literal (`s + "!"`) and another
 // String (`s + other.c_str()`).
-class String {
+class String : Object {
     let buf: char*
     let length: i64
     let iter_pos: i64 // foreach cursor - see iter_has_next/iter_next/iter_reset
@@ -2001,4 +2005,27 @@ func roundup<T>( val: T, to: T ) -> T {
 
 func rounddown<T>( val: T, to: T ) -> T {
     return ((val % to) + to) % to
+}
+
+class Object {
+    let refcount: uint
+
+    constructor() {
+        refcount = 1
+    }
+
+    func get() {
+        // The lock prefix gives the increment acquire/release ordering and
+        // prevents concurrent references from losing an update.
+        asm("lock; incq %0" : "+m"(self.refcount) : : "memory")
+    }
+
+    func put() {
+        // xadd returns the count before subtracting one. Checking that value
+        // avoids a separate, racy load after the atomic decrement.
+        let previous: uint
+        asm("lock; xaddq %0, %1" : "+q"(previous), "+m"(self.refcount) : : "memory")
+
+        delete self if previous == 1
+    }
 }

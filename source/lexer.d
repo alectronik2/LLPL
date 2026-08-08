@@ -39,6 +39,7 @@ enum TokenType {
     Volatile,
     Private,
     Public,
+    Protected,
     Static,
     Inline,
     Virtual,
@@ -234,6 +235,7 @@ class Lexer {
             "volatile": "Volatile",
             "private": "Private",
             "public": "Public",
+            "protected": "Protected",
             "static": "Static",
             "inline": "Inline",
             "virtual": "Virtual",
@@ -777,6 +779,7 @@ class Lexer {
                 case "Volatile": type = TokenType.Volatile; break;
                 case "Private": type = TokenType.Private; break;
                 case "Public": type = TokenType.Public; break;
+                case "Protected": type = TokenType.Protected; break;
                 case "Static": type = TokenType.Static; break;
                 case "Inline": type = TokenType.Inline; break;
                 case "Virtual": type = TokenType.Virtual; break;

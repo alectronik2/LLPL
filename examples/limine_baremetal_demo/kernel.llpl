@@ -244,6 +244,7 @@ func kernel_main() {
     HAL.enable_interrupts()
 
     MM.init( memmap, hhdm )
+    MM.adpace_init()
     let m = MM.kmalloc<u64>( 64 )
     let m2 = MM.kmalloc<u64>( 128 )
     "m = \(m:hex) | m2 = \(m2:hex)" |> hs.write

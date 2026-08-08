@@ -1,0 +1,473 @@
+import hal
+import lib
+
+alias hs = HAL.Serial
+
+namespace MM {
+    enum RbColor {
+        Red,
+        Black
+    }
+
+    const MAP_FIXED = 1 << 0
+    const MAP_USER  = 1 << 1
+
+    class VmArea : Object {
+        start: uint
+        end:   uint
+
+        flags: uint
+
+        left:  VmArea*
+        right: VmArea*
+        parent: VmArea*
+        color: RbColor
+
+        name: String
+
+        constructor( @start: uint, @end: uint ) { }
+
+        destructor() {
+            //name.put() if name
+        }
+    }
+
+    class AddressSpace : Object {
+        root: VmArea*
+        pml4: uint*
+
+        start: uint
+        end:   uint
+
+        num_areas: uint
+
+        lock: SpinLock
+
+        constructor( start: uint, end: uint ) {
+            self.start = start
+            self.end   = end
+            self.root = null
+        }
+
+        func find( addr: uint ) -> VmArea* {
+            holding self.lock {
+                let curr = self.root
+
+                while curr != null {
+                    if addr >= curr.start && addr < curr.end {
+                        return curr
+                    } 
+                    if addr < curr.start {
+                        curr = curr.left
+                    } else {
+                        curr = curr.right
+                    }
+                }
+                return null
+            }
+        }
+
+        func overlaps( start: uint, end: uint ) -> bool {
+            let curr = self.root
+
+            while curr != null {
+                if !(end <= curr.start || start >= curr.end) {
+                    return true
+                }
+                if start < curr.start {
+                    curr = curr.left
+                } else {
+                    curr = curr.right
+                }
+            }
+            return false
+        }
+
+        func find_free( length: uint ) -> uint {
+            let addr = self.start
+            let curr = self.root
+
+            return addr if curr == null
+
+            // Find the leftmost node
+            while curr.left {
+                curr = curr.left
+            }
+            
+            // Try before first VMA
+            if curr.start - self.start >= length {
+                return self.start
+            }
+            
+            // Try gap between nodes
+            while curr != null {
+                let next = curr
+
+                // Find successor
+                if next.right {
+                    next = next.right
+                    while next.left {
+                        next = next.left
+                    }
+                } else {
+                    let p = next.parent
+                    while p != null && next == p.right {
+                        next = p
+                        p = p.parent
+                    }
+                    next = p
+                }
+
+                if !next {
+                    // Try afer rhe last VMA
+                    if self.end - curr.end >= length {
+                        return curr.end
+                    }
+                    break
+                }
+
+                if next.start - curr.end >= length {
+                    return curr.end
+                }
+                
+                curr = next
+            }
+
+            // no space found
+            return 0
+        }
+
+        func map( addr: uint, length: uint, name: String = null, flags: uint = 0 ) -> Result<uint, uint> {
+            if !length {
+                throw EINVAL
+            }
+
+            let start: uint
+            let end: uint
+
+            // Align length to page boundaries (assuming 4K pages).
+            length = (length + 0xFFF) & ~0xFFF
+
+            holding self.lock {
+                if flags & MAP_FIXED {
+                    start = addr
+                    if start < self.start || start + length > self.end {
+                        throw EINVAL
+                    }
+                    if self.overlaps(start, start + length) {
+                        throw EEXIST
+                    }
+                } else if addr != 0 {
+                    start = addr
+                    if start < self.start || start + length > self.end || self.overlaps(start, start + length) {
+                        start = self.find_free(length)
+                    }
+                    if start == 0 {
+                        throw ENOMEM
+                    }
+                } else {
+                    start = self.find_free(length)
+                    if start == 0 {
+                        throw ENOMEM
+                    }
+                }
+
+                end = start + length
+                let vma = new VmArea(start, end)
+
+                if !name {
+                    vma.name = new String("anonymous")
+                } else {
+                    name.get()
+                    vma.name = name
+                }
+
+                rb_insert(self, vma)
+                let result = new Result<uint,uint>()
+                result.set_ok(start)
+                return result
+            }
+        }
+    }
+
+    func unmap() {
+        // TODO
+    }
+
+    func rb_grandparent( area: VmArea* ) -> VmArea* {
+        if area != null && area.parent != null {
+            return area.parent.parent
+        }
+
+        return null
+    }
+
+    func rb_uncle( area: VmArea* ) -> VmArea* {
+        let g = rb_grandparent( area )
+
+        if !g {
+            return null
+        }
+
+        if area.parent == g.left {
+            return g.right
+        }
+
+        return g.left
+    }
+
+    func rb_rotate_left( space: AddressSpace*, n: VmArea* ) {
+        let r = n.right
+        n.right = r.left
+
+        if r.left {
+            r.left.parent = n
+        }
+        r.parent = n.parent
+
+        if !n.parent {
+            space.root = r
+        } else if n == n.parent.left {
+            n.parent.left = r
+        } else {
+            n.parent.right = r
+        }
+
+        r.left = n
+        n.parent = r
+    }
+
+    func rb_rotate_right( space: AddressSpace*, n: VmArea* ) {
+        let l = n.left
+        n.left = l.right
+
+        if l.right {
+            l.right.parent = n
+        }
+        l.parent = n.parent
+
+        if !n.parent {
+            space.root = l
+        } else if n == n.parent.right {
+            n.parent.right = l
+        } else {
+            n.parent.left = l
+        }
+
+        l.right = n
+        n.parent = l
+    }
+
+    func rb_insert_fixup( space: AddressSpace*, n: VmArea* ) {
+        while n.parent && n.parent.color == RbColor.Red {
+            let u = rb_uncle( n )
+            let g = rb_grandparent( n )
+
+            if u && u.color == RbColor.Red {
+                n.parent.color = RbColor.Black
+                u.color = RbColor.Black
+                g.color = RbColor.Red
+                n = g
+            } else {
+                if n.parent == g.left {
+                    if n == n.parent.right {
+                        n = n.parent
+                        rb_rotate_left( space, n )
+                    }
+                    n.parent.color = RbColor.Black
+                    g.color = RbColor.Red
+                    rb_rotate_right( space, g )
+                } else {
+                    if n == n.parent.left {
+                        n = n.parent
+                        rb_rotate_right( space, n )
+                    }
+                    n.parent.color = RbColor.Black
+                    g.color = RbColor.Red
+                    rb_rotate_left( space, g )
+                }
+            }
+        }
+
+        space.root.color = RbColor.Black
+    }
+
+    func rb_insert( space: AddressSpace*, vma: VmArea* ) {
+        let parent: VmArea* = null
+        let curr = space.root
+
+        while curr {
+            parent = curr
+            if vma.start < curr.start {
+                curr = curr.left
+            } else {
+                curr = curr.right
+            }
+        }
+
+        vma.parent = parent
+        vma.color = RbColor.Red
+
+        if !parent {
+            space.root = vma
+        } else if vma.start < parent.start {
+            parent.left = vma
+        } else {
+            parent.right = vma
+        }
+
+        rb_insert_fixup( space, vma )
+        space.num_areas++
+    }
+
+    func rb_minimum( n: VmArea* ) -> VmArea* {
+        while n && n.left {
+            n = n.left
+        }
+
+        return n
+    }
+
+    func rb_transplant( space: AddressSpace*, u: VmArea*, v: VmArea* ) {
+        if !u.parent {
+            space.root = v
+        } else if u == u.parent.left {
+            u.parent.left = v
+        } else {
+            u.parent.right = v
+        }
+
+        if v {
+            v.parent = u.parent
+        }
+    }
+
+    func rb_delete_fixup( space: AddressSpace*, n: VmArea*, parent: VmArea* ) {
+        while n != space.root && (!n || n.color == RbColor.Black) {
+            if n == parent.left {
+                let w = parent.right
+                if w && w.color == RbColor.Red {
+                    w.color = RbColor.Black
+                    parent.color = RbColor.Red
+                    rb_rotate_left( space, parent )
+                    w = parent.right
+                }
+                if w && (!w.left || w.left.color == RbColor.Black) && (!w.right || w.right.color == RbColor.Black) {
+                    w.color = RbColor.Red
+                    n = parent
+                    parent = n.parent
+                } else {
+                    if w && (!w.right || w.right.color == RbColor.Black) {
+                        if w.left {
+                            w.left.color = RbColor.Black
+                        }
+                        w.color = RbColor.Red
+                        rb_rotate_right( space, w )
+                        w = parent.right
+                    }
+                    if w {
+                        w.color = parent.color
+                        if w.right {
+                            w.right.color = RbColor.Black
+                        }
+                    }
+                    parent.color = RbColor.Black
+                    rb_rotate_left( space, parent )
+                    n = space.root
+                }
+            } else {
+                let w = parent.left
+                if w && w.color == RbColor.Red {
+                    w.color = RbColor.Black
+                    parent.color = RbColor.Red
+                    rb_rotate_right( space, parent )
+                    w = parent.left
+                }
+                if w && (!w.right || w.right.color == RbColor.Black) && (!w.left || w.left.color == RbColor.Black) {
+                    w.color = RbColor.Red
+                    n = parent
+                    parent = n.parent
+                } else {
+                    if w && (!w.left || w.left.color == RbColor.Black) {
+                        if w.right {
+                            w.right.color = RbColor.Black
+                        }
+                        w.color = RbColor.Red
+                        rb_rotate_left( space, w )
+                        w = parent.left
+                    }
+                    if w {
+                        w.color = parent.color
+                        if w.left {
+                            w.left.color = RbColor.Black
+                        }
+                    }
+                    parent.color = RbColor.Black
+                    rb_rotate_right( space, parent )
+                    n = space.root
+                }
+            }
+        }
+
+        if n {
+            n.color = RbColor.Black
+        }
+    }
+
+    func rb_delete( space: AddressSpace*, vma: VmArea* ) {
+        let y = vma
+        let x: VmArea*
+        let x_parent: VmArea*
+        let orig_color = y.color
+
+        if !vma.left {
+            x = vma.right
+            x_parent = vma.parent
+            rb_transplant( space, vma, vma.right )
+        } else if !vma.right {
+            x = vma.left
+            x_parent = vma.parent
+            rb_transplant( space, vma, vma.left )
+        } else {
+            y = rb_minimum( vma.right )
+            orig_color = y.color
+            x = y.right
+            if y.parent == vma {
+                x_parent = y
+                if x {
+                    x.parent = y
+                }
+            } else {
+                x_parent = y.parent
+                rb_transplant( space, y, y.right )
+                y.right = vma.right
+                y.right.parent = y
+            }
+            rb_transplant( space, vma, y )
+            y.left = vma.left
+            y.left.parent = y
+            y.color = vma.color
+        }
+
+        if orig_color == RbColor.Black {
+            rb_delete_fixup( space, x, x_parent )
+        }
+
+        space.num_areas--
+    }
+
+    func adpace_init() {
+        let kas = new AddressSpace(0xFFFF800000000000, 0xFFFFFFFFFFFFFFFF)
+        try {
+            let res = kas.map( 0, 4096 )
+            "res = \(res.unwrap():hex)\n" |> hs.write
+            res = kas.map( 0, 4096*4096 )
+            "res = \(res.unwrap():hex)\n" |> hs.write
+            res = kas.map( 0xFFFF800FF0000000, 4096 )
+            "res = \(res.unwrap():hex)\n" |> hs.write
+        } catch e: int {
+            panic("Error mapping")
+        }
+        
+    }
+}

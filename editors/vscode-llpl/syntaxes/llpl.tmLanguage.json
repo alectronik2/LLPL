@@ -276,7 +276,7 @@
             "name": "keyword.other.llpl"
         },
         "modifier-keywords": {
-            "match": "\\b(packed|interrupt|volatile|private|static|inline|virtual|override|property)\\b",
+            "match": "\\b(packed|interrupt|volatile|public|private|protected|static|inline|virtual|override|property)\\b",
             "name": "storage.modifier.llpl"
         },
         "sizeof-keyword": {

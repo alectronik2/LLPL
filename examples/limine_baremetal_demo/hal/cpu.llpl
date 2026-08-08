@@ -26,4 +26,14 @@ namespace HAL {
         asm("mov %%cr3, %0" : "=r"(cr3))
         cr3
     }
+
+    // CPUID leaf 1 exposes the processor's initial local APIC ID. It is a
+    // stable owner token for kernel locks until a real per-CPU subsystem is
+    // installed.
+    func cpu_id() -> u64 {
+        let eax: u32 = 1
+        let ebx: u32
+        asm("cpuid" : "+a"(eax), "=b"(ebx) : : "ecx", "edx")
+        (ebx >> 24) as u64
+    }
 }

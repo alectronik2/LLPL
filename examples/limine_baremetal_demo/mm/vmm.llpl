@@ -309,7 +309,6 @@ namespace MM {
         let free_fn: (char*) -> void = MM.kfree_wrapper
         llpl_set_allocator(alloc_fn, free_fn)
     }
-
 }
 
 unittest {

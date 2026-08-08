@@ -270,6 +270,8 @@ class Parser {
             case TokenType.Hash:
             case TokenType.At:
             case TokenType.Public:
+            case TokenType.Private:
+            case TokenType.Protected:
             case TokenType.Import:
             case TokenType.Using:
             case TokenType.Namespace:
@@ -318,8 +320,19 @@ class Parser {
 
     private ASTNode declaration() {
         bool isPublic = match(TokenType.Public);
+        bool isPrivate = match(TokenType.Private);
+        bool isProtected = match(TokenType.Protected);
+        if (isPrivate && isProtected) {
+            error("a declaration cannot be both private and protected");
+        }
+        if (isProtected) {
+            error("protected is only valid for class members");
+        }
+        if (isPrivate && isPublic) {
+            error("a declaration cannot be both public and private");
+        }
         if (check(TokenType.Hash)) {
-            if (isPublic) error("Compiler directives cannot be marked public");
+            if (isPublic || isPrivate) error("Compiler directives cannot have visibility modifiers");
             return hashDirective();
         }
         VarAttribute[] attrs = parseAttributes();
@@ -343,6 +356,7 @@ class Parser {
             decl = aliasDecl();
         } else if (check(TokenType.Inline) || check(TokenType.Interrupt) || check(TokenType.Function)) {
             decl = functionDecl();
+            (cast(FunctionDecl)decl).isPrivate = isPrivate;
         } else if (check(TokenType.Class)) {
             decl = classDecl(attrs);
         } else if (check(TokenType.Struct) || (check(TokenType.Packed) && peek(1).type == TokenType.Struct)) {
@@ -373,6 +387,9 @@ class Parser {
         if (isPublic && (cast(ImportStmt)decl !is null || cast(UsingNamespaceStmt)decl !is null ||
                 cast(ImplDecl)decl !is null || cast(UnitTestDecl)decl !is null)) {
             error("public can only mark exported declarations");
+        }
+        if (isPrivate && cast(FunctionDecl)decl is null) {
+            error("private can only mark functions or class members");
         }
         decl.isPublic = isPublic;
         return decl;
@@ -1014,11 +1031,15 @@ class Parser {
         FunctionDecl[] methods;
 
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
-            // `private func`/`private let`/`private x: T` - only a method
-            // or field can be private (see FunctionDecl/VarDecl.isPrivate);
+            // `private`/`protected func` and fields are class-member
+            // visibility modifiers (see FunctionDecl/VarDecl flags);
             // a constructor/destructor always needs to be reachable via
             // `new`/automatic cleanup, so `private` isn't offered there.
             bool isPrivateMember = match(TokenType.Private);
+            bool isProtectedMember = match(TokenType.Protected);
+            if (isPrivateMember && isProtectedMember) {
+                error("a class member cannot be both private and protected");
+            }
             bool isStaticMember = match(TokenType.Static);
             // `virtual func`/`override func` - see FunctionDecl.isVirtual/
             // isOverride's own comment. Order-independent relative to
@@ -1034,6 +1055,7 @@ class Parser {
             } else if (check(TokenType.Inline) || check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
                 auto method = check(TokenType.Function) ? functionDecl() : propertyMethodDecl();
                 method.isPrivate = isPrivateMember;
+                method.isProtected = isProtectedMember;
                 method.isStatic = isStaticMember;
                 method.isInline = isInlineMember || method.isInline;
                 method.isVirtual = isVirtualMember;
@@ -1046,12 +1068,14 @@ class Parser {
             } else if (check(TokenType.Let) || check(TokenType.Const) || check(TokenType.Volatile)) {
                 auto field = varDecl();
                 field.isPrivate = isPrivateMember;
+                field.isProtected = isProtectedMember;
                 fields ~= field;
             } else if (check(TokenType.Identifier) && peek(1).type == TokenType.Colon) {
                 int declLine = current.line;
                 int declColumn = current.column;
                 auto field = varDeclBody(declLine, declColumn, false, false);
                 field.isPrivate = isPrivateMember;
+                field.isProtected = isProtectedMember;
                 fields ~= field;
             } else {
                 error("Expected field or method declaration");

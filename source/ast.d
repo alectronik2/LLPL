@@ -587,12 +587,12 @@ class FunctionDecl : ASTNode {
     // reader of .typeParams (LSP signatures, cloning, mangling) needed no
     // changes when trait bounds were added.
     string[] typeParamBounds;
-    // `private func` - a method only callable/referenceable from within
-    // the same class's own body (any of its own methods/constructors,
-    // not just via `self`) - see codegen.d's checkMemberAccess. Only
-    // meaningful for a method (set by classDecl() in parser.d); a plain
-    // top-level function is never marked private.
+    // `private func` - a top-level function is module-private; a method is
+    // callable/referenceable only from within its declaring class.
     bool isPrivate;
+    // `protected func` - a method callable/referenceable from the declaring
+    // class and any subclass body.
+    bool isProtected;
     // `static func` - a class method that doesn't receive a `self` parameter
     // and can be called on the class itself rather than on instances.
     bool isStatic;
@@ -1030,6 +1030,9 @@ class VarDecl : ASTNode {
     // Only meaningful for a class field (set by classDecl() in parser.d);
     // a local variable or global is never marked private.
     bool isPrivate;
+    // `protected let`/`protected const` - a field accessible from the
+    // declaring class and any subclass body.
+    bool isProtected;
 
     this(string name, Type type, ASTNode initializer = null, bool isConst = false, int line = 0, int column = 0,
          int bitWidth = -1, bool isVolatile = false, VarAttribute[] attributes = []) {

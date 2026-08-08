@@ -2078,6 +2078,9 @@ class CodeGenerator {
     }
 
     private bool shouldExportDecl(string modulePath, ASTNode decl) {
+        if (auto fn = cast(FunctionDecl)decl) {
+            if (fn.isPrivate) return false;
+        }
         return (modulePath !in moduleHasExplicitExports) || decl.isPublic;
     }
 
@@ -4938,6 +4941,8 @@ class CodeGenerator {
 
         string bodyCode = "";
         bodyCode ~= generateFieldDefaultInitializers(classDecl.fields);
+        bodyCode ~= generateConstructorParameterInitializers(constructor.params, classDecl.fields,
+            constructor.line, constructor.column);
         foreach (stmt; statements[bodyStart .. $]) {
             bodyCode ~= generateBodyStatement(stmt, false);
         }
@@ -6892,6 +6897,7 @@ class CodeGenerator {
             fn.line, fn.column);
         clone.namespaceSegments = [];
         clone.isPrivate = fn.isPrivate;
+        clone.isProtected = fn.isProtected;
         clone.isStatic = fn.isStatic;
         clone.isVirtual = fn.isVirtual;
         clone.isOverride = fn.isOverride;
@@ -6906,6 +6912,8 @@ class CodeGenerator {
             auto field = new VarDecl(f.name, cloneType(f.type, typeSubs),
                 cloneNode(f.initializer, null, typeSubs), f.isConst,
                 f.line, f.column, f.bitWidth, f.isVolatile);
+            field.isPrivate = f.isPrivate;
+            field.isProtected = f.isProtected;
             fields ~= field;
         }
         FunctionDecl[] ctors;
@@ -7849,21 +7857,25 @@ class CodeGenerator {
         }
     }
 
-    // Rejects a `private` field/method access from outside its declaring
-    // class - `currentClassName` (set for the entire span of generateClass,
-    // covering every constructor/destructor/method body belonging to that
-    // class) is compared against the *member's own* declaring class, not
-    // whether the receiver expression is literally `self`: `private`
-    // is scoped to the class as a whole, so one of Foo's own methods
-    // accessing `other.field` on a *different* Foo instance is exactly as
-    // allowed as `self.field` is, matching every mainstream language's
-    // access-control model (class-scoped, not instance-scoped).
-    private void checkMemberAccess(bool isPrivate, string ownerClassName, string memberDescription,
+    // Enforces class-member visibility. Private members are class-scoped;
+    // protected members are accessible from the declaring class and any
+    // derived class body, including through another instance of that type.
+    private void checkMemberAccess(bool isPrivate, bool isProtected, string ownerClassName,
+            string memberDescription,
             int line, int column) {
         if (isPrivate && currentClassName != ownerClassName) {
             throw new CompileError(
                 format("%s is private - only accessible from within '%s'", memberDescription, ownerClassName),
                 currentModulePath, line, column);
+        }
+        if (isProtected && currentClassName != ownerClassName) {
+            auto currentClass = currentClassName in classRegistry;
+            if (currentClass is null || !classInheritsFrom(*currentClass, ownerClassName)) {
+                throw new CompileError(
+                    format("%s is protected - only accessible from '%s' or its subclasses",
+                        memberDescription, ownerClassName),
+                    currentModulePath, line, column);
+            }
         }
     }
 
@@ -10308,7 +10320,7 @@ class CodeGenerator {
                 }
                 auto matched = resolveOverload(setters, [valueExpr], [],
                     format("property '%s' setter", memberExpr.member), memberExpr.line, memberExpr.column);
-                checkMemberAccess(matched.isPrivate, mangledClass(methodOwner),
+                checkMemberAccess(matched.isPrivate, matched.isProtected, mangledClass(methodOwner),
                     format("method '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
                 return generateExpression(new CallExpr(
                     new MemberExpr(memberExpr.object, memberExpr.member, memberExpr.line, memberExpr.column),
@@ -11301,7 +11313,7 @@ class CodeGenerator {
                             FunctionDecl methodDecl = resolveOverload(staticCandidates, callExpr.args, callExpr.argNames,
                                 calleeDescription, callExpr.line, callExpr.column);
                             string ownerName = mangledClass(staticOwner);
-                            checkMemberAccess(methodDecl.isPrivate, ownerName, calleeDescription,
+                            checkMemberAccess(methodDecl.isPrivate, methodDecl.isProtected, ownerName, calleeDescription,
                                 callExpr.line, callExpr.column);
                             ASTNode[] resolvedArgs = applyImplicitArgumentConversions(
                                 resolveCallArguments(methodDecl.params, false, callExpr.args,
@@ -11410,7 +11422,7 @@ class CodeGenerator {
                 } else if (candidates.length > 0) {
                     methodDecl = resolveOverload(candidates, callExpr.args, callExpr.argNames,
                         calleeDescription, callExpr.line, callExpr.column);
-                    checkMemberAccess(methodDecl.isPrivate, mangledClass(owner), calleeDescription,
+                    checkMemberAccess(methodDecl.isPrivate, methodDecl.isProtected, mangledClass(owner), calleeDescription,
                         callExpr.line, callExpr.column);
                     resolvedArgs = applyImplicitArgumentConversions(
                         resolveCallArguments(methodDecl.params, false, callExpr.args,
@@ -11706,7 +11718,7 @@ class CodeGenerator {
                     ClassDecl fieldOwner;
                     VarDecl matchedField = findFieldOnHierarchy(*classDecl, memberExpr.member, fieldOwner);
                     if (matchedField !is null) {
-                        checkMemberAccess(matchedField.isPrivate, mangledClass(fieldOwner),
+                        checkMemberAccess(matchedField.isPrivate, matchedField.isProtected, mangledClass(fieldOwner),
                             format("field '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
                     } else {
                         ClassDecl methodOwner;
@@ -11720,7 +11732,7 @@ class CodeGenerator {
                         }
                         if (properties.length == 1) {
                             string methodOwnerName = mangledClass(methodOwner);
-                            checkMemberAccess(properties[0].isPrivate, methodOwnerName,
+                            checkMemberAccess(properties[0].isPrivate, properties[0].isProtected, methodOwnerName,
                                 format("method '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
                             return generateExpression(new CallExpr(
                                 new MemberExpr(memberExpr.object, memberExpr.member,
@@ -11736,7 +11748,7 @@ class CodeGenerator {
                         }
                         if (candidates.length == 1) {
                             string methodOwnerName = mangledClass(methodOwner);
-                            checkMemberAccess(candidates[0].isPrivate, methodOwnerName,
+                            checkMemberAccess(candidates[0].isPrivate, candidates[0].isProtected, methodOwnerName,
                                 format("method '%s'", memberExpr.member), memberExpr.line, memberExpr.column);
                             return mangleMethodName(methodOwner, methodOwnerName, candidates[0]);
                         }
