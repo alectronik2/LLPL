@@ -4,6 +4,8 @@ import std.stdio;
 import std.string;
 import std.format;
 import std.file;
+import std.algorithm : min;
+import std.path : baseName, dirName, buildNormalizedPath;
 
 private string[string] expandedSourcesByFile;
 
@@ -19,12 +21,21 @@ class CompileError : Exception {
     string filePath;
     int line;
     int column;
+    int endLine;
+    int endColumn;
+    string[] notes;
+    string suggestion;
 
-    this(string message, string filePath, int line, int column) {
+    this(string message, string filePath, int line, int column,
+         int endLine = 0, int endColumn = 0, string[] notes = [], string suggestion = "") {
         super(message);
         this.filePath = filePath;
         this.line = line;
         this.column = column;
+        this.endLine = endLine > 0 ? endLine : line;
+        this.endColumn = endColumn > 0 ? endColumn : column + 1;
+        this.notes = notes;
+        this.suggestion = suggestion;
     }
 }
 
@@ -50,6 +61,16 @@ private string spaces(size_t n) {
     string result;
     foreach (i; 0 .. n) result ~= " ";
     return result;
+}
+
+// Keep terminal diagnostics readable while retaining the source directory
+// that identifies a module, e.g. `mm/heap.llpl` instead of an absolute path.
+private string displaySourcePath(string path) {
+    if (path.length == 0) return path;
+    string file = baseName(path);
+    string directory = baseName(dirName(path));
+    if (directory.length == 0 || directory == ".") return file;
+    return buildNormalizedPath(directory, file);
 }
 
 // ANSI color codes
@@ -93,7 +114,8 @@ string formatCompileError(CompileError err) {
         return header;
     }
 
-    string location = format("  %s %s:%d:%d\n", blue("-->"), err.filePath, err.line, err.column);
+    string location = format("  %s %s:%d:%d\n", blue("-->"), displaySourcePath(err.filePath),
+        err.line, err.column);
 
     string[] lines;
     bool haveSource = false;
@@ -132,14 +154,30 @@ string formatCompileError(CompileError err) {
             string sourceLine = lines[i - 1];
             result ~= format(" %s %s %s\n", red(paddedNum), red("|"), sourceLine);
 
-            // Add caret pointer
+            // Add a span pointer. Single-column diagnostics remain a single
+            // caret; parsers can provide an end column for token spans.
             int caretPos = err.column > 0 ? err.column - 1 : 0;
-            result ~= format(" %s %s %s%s\n", gutter, red("|"), spaces(caretPos), red("^"));
+            int spanEnd = err.endLine == errorLine ? err.endColumn : err.column + 1;
+            int spanWidth = spanEnd > err.column ? spanEnd - err.column : 1;
+            if (sourceLine.length > 0) {
+                spanWidth = min(spanWidth, cast(int)sourceLine.length - caretPos);
+                if (spanWidth < 1) spanWidth = 1;
+            }
+            string marker = "^" ~ (spanWidth > 1 ? spaces(spanWidth - 1).replace(" ", "~") : "");
+            result ~= format(" %s %s %s%s\n", gutter, red("|"), spaces(caretPos), red(marker));
         } else {
             // Context lines in dim color
             string sourceLine = lines[i - 1];
             result ~= format(" %s %s %s\n", dim(paddedNum), dim("|"), dim(sourceLine));
         }
+    }
+
+    foreach (note; err.notes) {
+        result ~= format(" %s %s %s\n", gutter, blue("="), note);
+    }
+    string suggestion = err.suggestion.length > 0 ? err.suggestion : diagnosticSuggestion(err.msg);
+    if (suggestion.length > 0) {
+        result ~= format(" %s %s %s\n", gutter, bold("help:"), suggestion);
     }
 
     string marker = findComptimeTraceMarker(lines, errorLine);
@@ -148,6 +186,25 @@ string formatCompileError(CompileError err) {
     }
 
     return result;
+}
+
+private string diagnosticSuggestion(string message) {
+    if (message.indexOf("Expected RightParen") >= 0) {
+        return "check for a missing ')' or an unterminated argument list";
+    }
+    if (message.indexOf("Expected RightBrace") >= 0) {
+        return "check for a missing '}' or an unterminated block";
+    }
+    if (message.indexOf("unknown variable") >= 0 || message.indexOf("undeclared") >= 0) {
+        return "check the spelling, scope, and imports for this name";
+    }
+    if (message.indexOf("unknown function") >= 0) {
+        return "check the function name and import the module that defines it";
+    }
+    if (message.indexOf("Cannot infer type") >= 0) {
+        return "add an explicit type annotation or make the expression's type unambiguous";
+    }
+    return "";
 }
 
 private string findComptimeTraceMarker(string[] lines, int errorLine) {

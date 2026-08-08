@@ -4,6 +4,8 @@ import lib
 alias hs = HAL.Serial
 
 namespace MM {
+    const PAGE_SIZE = 4096
+
     let max_phys_addr: uint
     let available_mem: uint
 
@@ -49,7 +51,7 @@ namespace MM {
             self.refcount--
 
             if self.refcount == 0 {
-                free_pageframe(&self)
+                free_pageframe(self)
             }
         }
     }
@@ -121,7 +123,7 @@ namespace MM {
     const PAGE_SHIFT = 12
 
     inline func pages_num( v: uint ) -> uint {
-        roundup( v, PAGE_SIZE ) >> PAGE_SHIFT
+        roundup( v, MM.PAGE_SIZE ) >> MM.PAGE_SHIFT
     }
 
     func v2p( pgdir: uint, vaddr: uint ) -> uint {
@@ -160,6 +162,16 @@ namespace MM {
         }
 
         l1[idx.l1].paddr
+    }
+
+    func pf2v( pf: PageFrame* ) -> uint {
+        let idx = ((pf as uint) - (pfdb as uint)) / sizeof(PageFrame)
+        MM.p2v( idx << MM.PAGE_SHIFT )
+    }
+
+    func v2pf( vaddr: void* ) -> PageFrame* {
+        let paddr = (vaddr as uint) - hhdm_offset
+        pfdb + (paddr >> MM.PAGE_SHIFT)
     }
 
     inline func p2v( paddr: uint ) -> uint {
@@ -224,7 +236,7 @@ namespace MM {
     }
 
     func free_pageframe( frame: PageFrame* ) {
-        assert( frame.tag != FrameType.Free, "free_pageframe: frame is already free" )
+        check( frame.tag != FrameType.Free, "free_pageframe: frame is already free" )
         assert( frame.refcount == 0, "free_pageframe: frame refcount is not zero" )
 
         holding lock {
@@ -234,14 +246,29 @@ namespace MM {
         }
     }
 
+    // Alocates a page and returns the index of the page frame in the PFDB. 
     func alloc_page( type: FrameType ) -> uint {
         let frame = alloc_pageframe( type )
-        frame - pfdb 
+        ((frame as uint) - (pfdb as uint)) / sizeof(PageFrame)
+    }
+
+    func kmalloc_wrapper( size: u64 ) -> char* {
+        MM.kmalloc<void>( size )
+    }
+
+    func kfree_wrapper( ptr: char* ) {
+        MM.kfree( ptr as void* )
     }
 
     func init( memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse* ) {
         "VMM init: Limine HHDM offset: \(hhdm.offset:hex), entries: \(memmap.entry_count)\n" |> hs.write
         limine_memmap = memmap
+
+        hhdm_offset = hhdm.offset
+        "Limine HHDM offset: \(hhdm_offset:hex)\n" |> hs.write
+
+        kernel_pml4 = HAL.read_cr3() & PADDR_4K_MASK
+        "Kernel PML4 = \(kernel_pml4:hex)\n" |> hs.write
 
         for let i = 0, let entries = memmap.entries as u64*; i < memmap.entry_count; i++ {
             let e = entries[i] as LimineMemmapEntry*
@@ -260,7 +287,7 @@ namespace MM {
         pfdb_bytes = num_frames * sizeof(PageFrame)
         "PFDB init: max_phys_addr \(max_phys_addr:hex) = \(max_phys_addr / 1024 / 1024)M, num_frames = \(num_frames), pfdb_bytes = \(pfdb_bytes), available_mem = \(MM.available_mem / 1024 / 1024)M\n" |> hs.write
 
-        pfdb = p2v( boot_alloc(pfdb_bytes, PAGE_SIZE) as PageFrame* )
+        pfdb = (p2v(boot_alloc(pfdb_bytes, PAGE_SIZE)) as PageFrame*)
         memset( pfdb, 0, pfdb_bytes )
         "PFDB init: pfdb = \(pfdb:hex)\n" |> hs.write
 
@@ -274,25 +301,15 @@ namespace MM {
 
             break if rbase >= max_phys_addr 
             rend = max_phys_addr if rend > max_phys_addr
-            
+
             mark_range_free( rbase, rend )
         }
 
-        hhdm_offset = hhdm.offset
-        "Limine HHDM offset: \(hhdm_offset:hex)\n" |> hs.write
-
-        kernel_pml4 -= HAL.read_cr3() & PADDR_4K_MASK
-        "Kernel PML4 = \(kernel_pml4:hex)\n" |> hs.write
-
-        let p1 = alloc_pageframe(FrameType.Kernel)
-        let p2 = alloc_pageframe(FrameType.Kernel)
-        "Alloc pageframe: \(p1:hex)\n" |> hs.write
-        "Alloc pageframe: \(p2:hex)\n" |> hs.write
-
-        p1.release()
-        let p3 = alloc_pageframe(FrameType.Kernel)
-        "Alloc pageframe: \(p3:hex)\n" |> hs.write
+        let alloc_fn: (u64) -> char* = MM.kmalloc_wrapper
+        let free_fn: (char*) -> void = MM.kfree_wrapper
+        llpl_set_allocator(alloc_fn, free_fn)
     }
+
 }
 
 unittest {

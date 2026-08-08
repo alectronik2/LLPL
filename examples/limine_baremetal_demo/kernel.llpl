@@ -244,14 +244,21 @@ func kernel_main() {
     HAL.enable_interrupts()
 
     MM.init( memmap, hhdm )
+    let m = MM.kmalloc<u64>( 64 )
+    let m2 = MM.kmalloc<u64>( 128 )
+    "m = \(m:hex) | m2 = \(m2:hex)" |> hs.write
 
     demo_hhdm( memmap, hhdm )
 
     draw_demo(fb)
     draw_memmap(fb, memmap)
     
-    let x = kmalloc<u64>()
+    let x = MM.kmalloc<u64>()
     "kmalloc<u64>() returned \(x:hex)\n" |> hs.write
+    let x2 = MM.kmalloc<u64>()
+    MM.kfree( x2 )
+    let x3 = MM.kmalloc<u64>()
+    "x = \(x) | x2 = \(x2) | x3 = \(x3)\n" |> hs.write
 
     "Kernel initialization complete. Halting.\n" |> hs.write
     while true {

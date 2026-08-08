@@ -1,16 +1,23 @@
 struct SpinLock {
-    let locked: bool
+    volatile let locked: u8
 
     func acquire() {
         while true {
-            if !locked {
-                locked = true
+            let value: u8 = 1
+            // xchg is implicitly locked when one operand is memory. The
+            // old byte is returned in value, so zero means we acquired it.
+            asm("xchgb %0, %1" : "+q"(value) : "m"(self.locked) : "memory")
+            if value == 0 {
                 return
             }
+
+            asm("pause")
         }
     }
 
     func release() {
-        locked = false
+        // A byte store is atomic; the memory clobber prevents prior critical
+        // section stores from being reordered after the unlock.
+        asm("movb $0, %0" : "=m"(self.locked) : : "memory")
     }
 }

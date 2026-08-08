@@ -105,7 +105,7 @@ const KEYWORDS = [
     'import', 'from', 'namespace', 'using', 'class', 'struct', 'union', 'packed', 'enum', 'macro',
     'constructor', 'destructor', 'func', 'inline', 'let', 'const', 'volatile', 'private', 'static', 'virtual',
     'override', 'if', 'else', 'while', 'do', 'for', 'foreach', 'in', 'with', 'holding', 'return', 'continue', 'break', 'defer',
-    'until', 'unless', 'try', 'catch', 'finally', 'throw', 'delete', 'assert', 'asm', 'new', 'true', 'false', 'null',
+    'until', 'unless', 'try', 'catch', 'finally', 'throw', 'delete', 'assert', 'check', 'asm', 'new', 'true', 'false', 'null',
     'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait', 'ui',
     'impl', 'quote', 'unquote', 'interrupt', 'property', 'unittest',
     'sizeof', 'self', 'super', 'int', 'uint', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32',

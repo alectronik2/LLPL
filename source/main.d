@@ -182,7 +182,11 @@ void main(string[] args) {
 
         // Resolve modules and dependencies (prelude.llpl first, if present)
         phaseTime.start();
-        auto programs = resolveWithPrelude(inputFile, verbose);
+        CompileError[] parseDiagnostics;
+        auto programs = resolveWithPreludeRecovering(inputFile, parseDiagnostics, projectConfig);
+        if (parseDiagnostics.length > 0) {
+            throw new MultiCompileError(parseDiagnostics);
+        }
         phaseTime.stop();
 
         if (verbose) {
@@ -387,8 +391,10 @@ private string buildDiagnosticsJson(CompileError[] errors) {
     foreach (i, err; errors) {
         if (i > 0) json ~= ",\n";
         json ~= format("  { \"severity\": \"error\", \"message\": \"%s\", \"file\": \"%s\", " ~
-            "\"line\": %d, \"column\": %d }",
-            jsonEscape(err.msg), jsonEscape(err.filePath), err.line, err.column);
+            "\"line\": %d, \"column\": %d, \"end_line\": %d, \"end_column\": %d, " ~
+            "\"suggestion\": \"%s\" }",
+            jsonEscape(err.msg), jsonEscape(err.filePath), err.line, err.column,
+            err.endLine, err.endColumn, jsonEscape(err.suggestion));
     }
     json ~= "\n]\n";
     return json;

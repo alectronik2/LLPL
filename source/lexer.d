@@ -84,6 +84,7 @@ enum TokenType {
     Throw,
     Delete,
     Assert,
+    Check,
     UnitTest,
     With,
 
@@ -277,6 +278,7 @@ class Lexer {
             "throw": "Throw",
             "delete": "Delete",
             "assert": "Assert",
+            "check": "Check",
             "unittest": "UnitTest",
             "with": "With"
         ];
@@ -820,6 +822,7 @@ class Lexer {
                 case "Throw": type = TokenType.Throw; break;
                 case "Delete": type = TokenType.Delete; break;
                 case "Assert": type = TokenType.Assert; break;
+                case "Check": type = TokenType.Check; break;
                 case "UnitTest": type = TokenType.UnitTest; break;
                 case "With": type = TokenType.With; break;
                 default: type = TokenType.Identifier; break;

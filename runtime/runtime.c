@@ -3,6 +3,7 @@
 #if __STDC_HOSTED__
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #endif
 
 #define LLPL_EH_MAX_ERROR_SIZE 256
@@ -1160,6 +1161,16 @@ static void llpl_panic_write(char* s) {
 #endif
 }
 
+static bool llpl_panic_use_color(void) {
+#if __STDC_HOSTED__
+    return isatty(fileno(stderr)) != 0;
+#else
+    // Freestanding targets route this output to their console hook, which
+    // is expected to be an ANSI-capable serial/terminal output path.
+    return true;
+#endif
+}
+
 static void llpl_panic_backtrace_from(uint64_t frame_addr) {
     char buf[256];
     int64_t depth = 0;
@@ -1222,13 +1233,25 @@ void llpl_panic_backtrace(void) {
 #endif
 }
 
-void llpl_panic(char* msg) {
+void llpl_panic_at(char* msg, char* file, int64_t line) {
     if (llpl_panic_handler) {
         llpl_panic_handler(msg);
     }
 
     char buf[512];
-    ksnprintf(buf, sizeof(buf), "PANIC: %s\n", msg);
+    if (file && file[0]) {
+        if (llpl_panic_use_color()) {
+            ksnprintf(buf, sizeof(buf), "\x1b[1;31mPANIC:\x1b[0m %s at %s:%d\n", msg, file, line);
+        } else {
+            ksnprintf(buf, sizeof(buf), "PANIC: %s at %s:%d\n", msg, file, line);
+        }
+    } else {
+        if (llpl_panic_use_color()) {
+            ksnprintf(buf, sizeof(buf), "\x1b[1;31mPANIC:\x1b[0m %s\n", msg);
+        } else {
+            ksnprintf(buf, sizeof(buf), "PANIC: %s\n", msg);
+        }
+    }
 
 #if __STDC_HOSTED__
     llpl_panic_write(buf);
@@ -1239,6 +1262,22 @@ void llpl_panic(char* msg) {
     llpl_panic_backtrace();
     llpl_panic_halt();
 #endif
+}
+
+void llpl_panic(char* msg) {
+    llpl_panic_at(msg, NULL, 0);
+}
+
+// Non-fatal diagnostic support. Unlike llpl_panic, this reports the message
+// through the same hosted/freestanding output path and then returns.
+void llpl_check(char* msg) {
+    char buf[512];
+    if (llpl_panic_use_color()) {
+        ksnprintf(buf, sizeof(buf), "\x1b[1;33mCHECK FAILED:\x1b[0m %s\n", msg);
+    } else {
+        ksnprintf(buf, sizeof(buf), "CHECK FAILED: %s\n", msg);
+    }
+    llpl_panic_write(buf);
 }
 
 void* __llpl_check_index(void* arr, int64_t idx, int64_t size, uint64_t elem_size, char* file, int64_t line) {

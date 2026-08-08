@@ -1143,12 +1143,14 @@ class IfStmt : ASTNode {
     ASTNode condition;
     Block thenBlock;
     Block elseBlock;
+    bool isPostfix;
 
-    this(ASTNode condition, Block thenBlock, Block elseBlock = null) {
+    this(ASTNode condition, Block thenBlock, Block elseBlock = null, bool isPostfix = false) {
         super(NodeType.IfStmt);
         this.condition = condition;
         this.thenBlock = thenBlock;
         this.elseBlock = elseBlock;
+        this.isPostfix = isPostfix;
     }
 }
 
@@ -1352,17 +1354,18 @@ class DeleteStmt : ASTNode {
     }
 }
 
-// `assert(condition)` or `assert(condition, "message")` - built-in statement
-// that aborts with a panic if the condition is false. Lowered to an
-// `if (!(condition)) llpl_panic(...)` by the code generator.
+// `assert(condition)`/`check(condition)` (optionally with a message) - built-in
+// diagnostic statements. `assert` aborts while `check` reports and continues.
 class AssertStmt : ASTNode {
     ASTNode condition;
     ASTNode message; // optional string expression
+    bool fatal;
 
-    this(ASTNode condition, ASTNode message = null, int line = 0, int column = 0) {
+    this(ASTNode condition, ASTNode message = null, int line = 0, int column = 0, bool fatal = true) {
         super(NodeType.AssertStmt, line, column);
         this.condition = condition;
         this.message = message;
+        this.fatal = fatal;
     }
 }
 

@@ -1,5 +1,6 @@
 import hal
-import lib
+
+alias hs = HAL.Serial
 
 namespace Terminal {
     let width: uint

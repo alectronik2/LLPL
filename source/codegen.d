@@ -894,6 +894,17 @@ class CodeGenerator {
             }
         }
 
+        // Generic functions are cloned lazily, after this pass has started.
+        // Walk their templates as well so a concrete function called only
+        // from an instantiation is retained (for example alloc_page from
+        // kmalloc<T>).
+        foreach (key, template_; genericFunctionTemplates) {
+            if (template_.body_ is null) continue;
+            currentModulePath = genericTemplateModulePath[key];
+            currentNamespaceSegments = template_.namespaceSegments;
+            walkForReachableCalls(template_.body_);
+        }
+
         // Iteratively walk reachable function bodies to find more free calls.
         // Classes and their methods are kept conservatively by DCE, so method
         // bodies must take part in reachability too. Otherwise a free helper
@@ -1155,6 +1166,16 @@ class CodeGenerator {
             result ~= "    ";
         }
         return result;
+    }
+
+    // Keep runtime panic locations readable while retaining the source
+    // directory that identifies a module (for example, `mm/heap.llpl`).
+    private string shortSourcePath(string path) {
+        if (path.length == 0) return "";
+        string file = baseName(path);
+        string directory = baseName(dirName(path));
+        if (directory.length == 0 || directory == ".") return file;
+        return buildNormalizedPath(directory, file);
     }
 
     private string sourceLineDirective(ASTNode node) {
@@ -1730,7 +1751,7 @@ class CodeGenerator {
             addEffect(effects, "alloc");
             collectNodeEffects(d.value, effects);
         } else if (auto a = cast(AssertStmt)node) {
-            addEffect(effects, "panic");
+            if (a.fatal) addEffect(effects, "panic");
             collectNodeEffects(a.condition, effects);
             collectNodeEffects(a.message, effects);
         } else if (auto m = cast(MatchStmt)node) {
@@ -2937,10 +2958,9 @@ class CodeGenerator {
                             earlyDeclCode ~= format("%s %s(%s);\n", sName, mangleConstructorName(structDecl, sName, ctor), params);
                         }
                     }
-                    // Method forward declaration(s) - `self` is an
-                    // ordinary-by-value first parameter here (see
-                    // generateStructMethod's own comment), not a pointer
-                    // like a class method's.
+                    // Method forward declaration(s) - struct methods receive
+                    // a pointer receiver, like class methods, so mutations
+                    // and address-taking operate on the caller's value.
                     if (structDecl.methods.length > 0) {
                         currentNamespaceSegments = structDecl.namespaceSegments;
                         string sName = mangledStruct(structDecl);
@@ -2953,7 +2973,7 @@ class CodeGenerator {
                             }
                             Type returnTypeForFwd = cloneType(method.returnType);
                             resolveType(returnTypeForFwd);
-                            string params = format("%s self", sName);
+                            string params = format("%s* self", sName);
                             foreach (param; method.params) {
                                 resolveType(param.type);
                                 params ~= ", " ~ parameterDeclaration(param);
@@ -2992,7 +3012,7 @@ class CodeGenerator {
                             }
                             Type returnTypeForFwd = cloneType(method.returnType);
                             resolveType(returnTypeForFwd);
-                            string params = format("%s self", uName);
+                            string params = format("%s* self", uName);
                             foreach (param; method.params) {
                                 resolveType(param.type);
                                 params ~= ", " ~ parameterDeclaration(param);
@@ -3425,6 +3445,61 @@ class CodeGenerator {
                     namespaceAliases[mangledName] = flatTarget;
                 }
             }
+            foreach (decl; prog.declarations) {
+                if (auto funcDecl = cast(FunctionDecl)decl) {
+                    collectLocalNamespaceAliases(funcDecl.body_);
+                } else if (auto classDecl = cast(ClassDecl)decl) {
+                    foreach (ctor; classDecl.constructors) collectLocalNamespaceAliases(ctor.body_);
+                    if (classDecl.destructor !is null) collectLocalNamespaceAliases(classDecl.destructor.body_);
+                    foreach (method; classDecl.methods) collectLocalNamespaceAliases(method.body_);
+                } else if (auto structDecl = cast(StructDecl)decl) {
+                    foreach (ctor; structDecl.constructors) collectLocalNamespaceAliases(ctor.body_);
+                    foreach (method; structDecl.methods) collectLocalNamespaceAliases(method.body_);
+                } else if (auto unionDecl = cast(UnionDecl)decl) {
+                    foreach (ctor; unionDecl.constructors) collectLocalNamespaceAliases(ctor.body_);
+                    foreach (method; unionDecl.methods) collectLocalNamespaceAliases(method.body_);
+                }
+            }
+        }
+    }
+
+    private void collectLocalNamespaceAliases(ASTNode node) {
+        if (node is null) return;
+        if (auto aliasDecl = cast(AliasDecl)node) {
+            string flatTarget = aliasDecl.targetPath.join("_");
+            bool isTypeAlias = aliasDecl.targetType !is null ||
+                aliasDecl.targetPointerDepth > 0 || aliasDecl.targetIsArray ||
+                (aliasDecl.targetPath.length == 1 &&
+                    (isPrimitiveTypeName(aliasDecl.targetPath[0]) ||
+                     isKnownTypeName(aliasDecl.targetPath[0]))) ||
+                isKnownTypeName(flatTarget);
+            if (!isTypeAlias && !isKnownSymbolForAlias(flatTarget) && isNamespacePrefix(flatTarget)) {
+                namespaceAliases[aliasDecl.name] = flatTarget;
+            }
+        } else if (auto block = cast(Block)node) {
+            foreach (stmt; block.statements) collectLocalNamespaceAliases(stmt);
+        } else if (auto ifStmt = cast(IfStmt)node) {
+            collectLocalNamespaceAliases(ifStmt.thenBlock);
+            collectLocalNamespaceAliases(ifStmt.elseBlock);
+        } else if (auto whileStmt = cast(WhileStmt)node) {
+            collectLocalNamespaceAliases(whileStmt.body_);
+        } else if (auto doWhileStmt = cast(DoWhileStmt)node) {
+            collectLocalNamespaceAliases(doWhileStmt.body_);
+        } else if (auto forStmt = cast(ForStmt)node) {
+            foreach (init; forStmt.initializers) collectLocalNamespaceAliases(init);
+            collectLocalNamespaceAliases(forStmt.body_);
+        } else if (auto foreachStmt = cast(ForeachStmt)node) {
+            collectLocalNamespaceAliases(foreachStmt.body_);
+        } else if (auto withStmt = cast(WithStmt)node) {
+            collectLocalNamespaceAliases(withStmt.body_);
+        } else if (auto deferStmt = cast(DeferStmt)node) {
+            collectLocalNamespaceAliases(deferStmt.statement);
+        } else if (auto tryStmt = cast(TryStmt)node) {
+            collectLocalNamespaceAliases(tryStmt.tryBlock);
+            collectLocalNamespaceAliases(tryStmt.catchBlock);
+            collectLocalNamespaceAliases(tryStmt.finallyBlock);
+        } else if (auto matchStmt = cast(MatchStmt)node) {
+            foreach (case_; matchStmt.cases) collectLocalNamespaceAliases(case_.body_);
         }
     }
 
@@ -3872,17 +3947,13 @@ class CodeGenerator {
     }
 
     // A struct method (`func`/`func operator...` in the struct body - see
-    // ast.StructDecl.methods). `self` is an explicit, ordinary first
-    // parameter here (registered with pointerDepth 0, exactly like a
-    // constructor's own `self` at generateStructConstructor) rather than
-    // implicit-and-a-pointer the way a class method's is - there's no
-    // "struct reference" in this language, so self.field below already
-    // generates the right "." (not "->") via memberAccessor's own plain
-    // value-type check, with no special-casing needed here at all.
+    // ast.StructDecl.methods). Structs are values, but methods need a stable
+    // receiver so mutations and `&self` refer to the caller's object rather
+    // than a temporary copy on the stack.
     private string generateStructMethod(StructDecl structDecl, FunctionDecl method) {
         string sName = mangledStruct(structDecl);
         string code = "";
-        string params = format("%s self", sName);
+        string params = format("%s* self", sName);
 
         string prevClassName = currentClassName;
         currentClassName = sName;
@@ -3893,7 +3964,7 @@ class CodeGenerator {
         currentReturnType = method.returnType;
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
         currentReturnTypeAsWritten = cloneType(method.returnType);
-        variableTypes["self"] = new Type(sName);
+        variableTypes["self"] = new Type(sName, 1);
         recordLocal("self", variableTypes["self"], method.line, method.column, "self");
         variableCNames = null;
         pointerIndexBounds = null;
@@ -3989,7 +4060,7 @@ class CodeGenerator {
     private string generateUnionMethod(UnionDecl unionDecl, FunctionDecl method) {
         string uName = mangledUnion(unionDecl);
         string code = "";
-        string params = format("%s self", uName);
+        string params = format("%s* self", uName);
 
         string prevClassName = currentClassName;
         currentClassName = uName;
@@ -4000,7 +4071,7 @@ class CodeGenerator {
         currentReturnType = method.returnType;
         Type prevReturnTypeAsWritten = currentReturnTypeAsWritten;
         currentReturnTypeAsWritten = cloneType(method.returnType);
-        variableTypes["self"] = new Type(uName);
+        variableTypes["self"] = new Type(uName, 1);
         recordLocal("self", variableTypes["self"], method.line, method.column, "self");
         variableCNames = null;
         pointerIndexBounds = null;
@@ -4636,7 +4707,27 @@ class CodeGenerator {
         if (returnType is null || returnType.name == "void") return statements;
         if (statements.length == 0) return statements;
         auto exprStmt = cast(ExprStmt)statements[$ - 1];
-        if (exprStmt is null) return statements;
+        if (exprStmt is null) {
+            // `value if condition else other` is parsed as a postfix IfStmt
+            // so ordinary statement modifiers keep their existing behavior.
+            // At the end of a value-returning body, both branches are return
+            // values rather than discarded expression statements.
+            auto postfix = cast(IfStmt)statements[$ - 1];
+            if (postfix is null || !postfix.isPostfix) return statements;
+
+            Block returnBlock(Block body) {
+                if (body is null || body.statements.length != 1) return body;
+                auto branchExpr = cast(ExprStmt)body.statements[0];
+                if (branchExpr is null) return body;
+                return new Block([new ReturnStmt(branchExpr.expression,
+                    branchExpr.line, branchExpr.column)]);
+            }
+
+            auto result = statements.dup;
+            result[$ - 1] = new IfStmt(postfix.condition,
+                returnBlock(postfix.thenBlock), returnBlock(postfix.elseBlock), true);
+            return result;
+        }
         auto result = statements.dup;
         result[$ - 1] = new ReturnStmt(exprStmt.expression, exprStmt.line, exprStmt.column);
         return result;
@@ -5607,6 +5698,7 @@ class CodeGenerator {
             case "rc_alloc":
             case "rc_release":
             case "llpl_panic":
+            case "panic":
                 rejectInInterrupt(callExpr, format("Call to '%s'", ident.name));
                 break;
             default:
@@ -6075,7 +6167,8 @@ class CodeGenerator {
         } else {
             message = format("\"assertion failed at %s:%d\"", currentModulePath, stmt.line);
         }
-        return indent() ~ format("if (!(%s)) llpl_panic(%s);\n", condition, message);
+        string call = stmt.fatal ? "llpl_panic" : "llpl_check";
+        return indent() ~ format("if (!(%s)) %s(%s);\n", condition, call, message);
     }
 
     private string generatePropagateExpr(PropagateExpr propExpr) {
@@ -6359,6 +6452,11 @@ class CodeGenerator {
                 }
                 trackRcLocal(emitName, varDecl.type);
             }
+        } else if (auto aliasDecl = cast(AliasDecl)node) {
+            // Local aliases are compile-time-only. Register them at the
+            // point they occur so later expressions in this scope can use
+            // namespace-qualified names such as `alias f = Foo.Bar`.
+            code ~= generateAlias(aliasDecl);
         } else if (auto destructStmt = cast(DestructuringStmt)node) {
             code ~= generateDestructuringStmt(destructStmt);
         } else if (auto ifStmt = cast(IfStmt)node) {
@@ -6608,6 +6706,11 @@ class CodeGenerator {
                 return cloneNode(*sub, null, typeSubs); // substitution itself is never re-substituted
             }
             return new Identifier(ident.name, ident.line, ident.column);
+        } else if (auto aliasDecl = cast(AliasDecl)node) {
+            return new AliasDecl(aliasDecl.name, aliasDecl.targetPath.dup,
+                aliasDecl.targetPointerDepth, aliasDecl.targetIsArray,
+                aliasDecl.targetArraySize, aliasDecl.line, aliasDecl.column,
+                cloneType(aliasDecl.targetType, typeSubs));
         } else if (auto intLit = cast(IntLiteral)node) {
             return new IntLiteral(intLit.value, intLit.line, intLit.column);
         } else if (auto floatLit = cast(FloatLiteral)node) {
@@ -6682,7 +6785,7 @@ class CodeGenerator {
                 patternExpr.line, patternExpr.column);
         } else if (auto ifStmt = cast(IfStmt)node) {
             return new IfStmt(cloneNode(ifStmt.condition, subs, typeSubs), cloneBlock(ifStmt.thenBlock, subs, typeSubs),
-                cloneBlock(ifStmt.elseBlock, subs, typeSubs));
+                cloneBlock(ifStmt.elseBlock, subs, typeSubs), ifStmt.isPostfix);
         } else if (auto whileStmt = cast(WhileStmt)node) {
             return new WhileStmt(cloneNode(whileStmt.condition, subs, typeSubs), cloneBlock(whileStmt.body_, subs, typeSubs));
         } else if (auto doWhileStmt = cast(DoWhileStmt)node) {
@@ -6720,6 +6823,10 @@ class CodeGenerator {
         } else if (auto deleteStmt = cast(DeleteStmt)node) {
             return new DeleteStmt(cloneNode(deleteStmt.value, subs, typeSubs),
                 deleteStmt.line, deleteStmt.column);
+        } else if (auto assertStmt = cast(AssertStmt)node) {
+            return new AssertStmt(cloneNode(assertStmt.condition, subs, typeSubs),
+                cloneNode(assertStmt.message, subs, typeSubs), assertStmt.line, assertStmt.column,
+                assertStmt.fatal);
         } else if (auto tryStmt = cast(TryStmt)node) {
             return new TryStmt(cloneBlock(tryStmt.tryBlock, subs, typeSubs), tryStmt.catchVar,
                 cloneType(tryStmt.catchType, typeSubs), cloneBlock(tryStmt.catchBlock, subs, typeSubs),
@@ -11036,6 +11143,13 @@ class CodeGenerator {
             if (isEmbedCall(callExpr)) {
                 return generateEmbedCall(callExpr);
             }
+            if (auto panicIdent = cast(Identifier)callExpr.callee) {
+                if (panicIdent.name == "panic" && callExpr.args.length == 1) {
+                    string file = escapeCString(shortSourcePath(currentModulePath));
+                    return format("llpl_panic_at(%s, \"%s\", %d)",
+                        generateExpression(callExpr.args[0]), file, callExpr.line);
+                }
+            }
             // Closure call: if the callee's own type resolves to a closure
             // type (a closure-typed variable, parameter, or field - never a
             // plain function/method name, which has no Type of its own),
@@ -11235,23 +11349,21 @@ class CodeGenerator {
 
                 Type receiverType = inferType(memberExpr.object);
                 resolveType(receiverType);
-                bool structValueReceiver = false;
-                bool unionValueReceiver = false;
-                // Struct and union methods are emitted with a by-value self
-                // parameter. A pointer to one must therefore dispatch to
-                // the pointee's method symbol and pass `*receiver`; treating
-                // the pointer spelling as a distinct owner previously
-                // produced unresolved names such as `PageFrame_ptr_release`.
+                bool structPointerReceiver = false;
+                bool unionPointerReceiver = false;
+                // Struct and union methods receive pointer self parameters.
+                // A pointer receiver dispatches directly; a value receiver
+                // is passed by address so mutations affect the original.
                 if (receiverType.pointerDepth > 0) {
                     Type pointeeType = cloneType(receiverType);
                     pointeeType.pointerDepth--;
                     string pointeeName = mangleTypeArg(pointeeType);
                     if (className !in structRegistry && pointeeName in structRegistry) {
                         className = pointeeName;
-                        structValueReceiver = true;
+                        structPointerReceiver = true;
                     } else if (className !in unionRegistry && pointeeName in unionRegistry) {
                         className = pointeeName;
-                        unionValueReceiver = true;
+                        unionPointerReceiver = true;
                     }
                 }
 
@@ -11306,10 +11418,9 @@ class CodeGenerator {
                         methodDecl.params);
                     methodSymbol = mangleMethodName(owner, mangledClass(owner), methodDecl);
                 } else if (structCandidates.length > 0) {
-                    // Struct method - self is passed by value (see
-                    // generateStructMethod), so objectExpr below needs no
-                    // address-of; structs have no `private` concept yet, so
-                    // no checkMemberAccess call to mirror the class path's.
+                    // Struct methods receive a pointer to self; structs have
+                    // no `private` concept yet, so no checkMemberAccess call
+                    // is needed here.
                     methodDecl = resolveOverload(structCandidates, callExpr.args, callExpr.argNames,
                         calleeDescription, callExpr.line, callExpr.column);
                     resolvedArgs = applyImplicitArgumentConversions(
@@ -11317,9 +11428,10 @@ class CodeGenerator {
                             callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
                         methodDecl.params);
                     methodSymbol = mangleMethodName(sd, className, methodDecl);
+                    structPointerReceiver = true;
                 } else {
-                    // Union method - same by-value receiver convention as
-                    // struct methods.
+                    // Union methods use the same pointer receiver convention
+                    // as struct methods.
                     methodDecl = resolveOverload(unionCandidates, callExpr.args, callExpr.argNames,
                         calleeDescription, callExpr.line, callExpr.column);
                     resolvedArgs = applyImplicitArgumentConversions(
@@ -11327,6 +11439,7 @@ class CodeGenerator {
                             callExpr.argNames, calleeDescription, callExpr.line, callExpr.column),
                         methodDecl.params);
                     methodSymbol = mangleMethodName(ud, className, methodDecl);
+                    unionPointerReceiver = true;
                 }
 
                 // A virtual/overridden method dispatches through the
@@ -11359,8 +11472,9 @@ class CodeGenerator {
                 string args = "";
                 if (methodDecl is null || !methodDecl.isStatic) {
                     string receiverExpr = objectExpr;
-                    if (structValueReceiver || unionValueReceiver) {
-                        receiverExpr = format("(*(%s))", objectExpr);
+                    if (structPointerReceiver || unionPointerReceiver) {
+                        receiverExpr = receiverType.pointerDepth > 0
+                            ? objectExpr : format("&(%s)", objectExpr);
                     }
                     if (methodDecl !is null && cd !is null) {
                         string ownerName = mangledClass(owner);

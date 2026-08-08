@@ -39,6 +39,11 @@ extern func puts(s: char*) -> i64
 // call site, matching how many of this codebase's other "this should be
 // unreachable in valid input" cases already fail loudly instead.
 extern func llpl_panic(msg: char*)
+extern func llpl_panic_at(msg: char*, file: char*, line: i64)
+// Builtin panic: the compiler supplies the source file and line of this call.
+extern func panic(msg: char*)
+// Prints "CHECK FAILED: <msg>\n" and continues execution.
+extern func llpl_check(msg: char*)
 
 // Heap-allocation and raw-buffer primitives String is built on - see
 // runtime.h's comment on why these are separate wrappers rather than
@@ -70,6 +75,42 @@ extern func llpl_free(ptr: char*)
 extern func llpl_memcpy(dest: char*, src: char*, count: u64)
 extern func llpl_set_allocator(alloc_fn: (u64) -> char*, free_fn: (char*) -> void)
 extern func llpl_reset_allocator()
+
+// Allocator is the common interface for user-provided allocation policies.
+// Trait dispatch is static/monomorphized; ClosureAllocator is the adapter for
+// installing closure-backed policies into the runtime's global allocator.
+trait Allocator {
+    func allocate(size: u64) -> char*
+    func deallocate(ptr: char*)
+}
+
+class ClosureAllocator {
+    let alloc_fn: (u64) -> char*
+    let free_fn: (char*) -> void
+
+    constructor(alloc_fn: (u64) -> char*, free_fn: (char*) -> void) {
+        self.alloc_fn = alloc_fn
+        self.free_fn = free_fn
+    }
+
+    func install() {
+        llpl_set_allocator(self.alloc_fn, self.free_fn)
+    }
+
+    func reset() {
+        llpl_reset_allocator()
+    }
+}
+
+impl Allocator for ClosureAllocator {
+    func allocate(size: u64) -> char* {
+        self.alloc_fn(size)
+    }
+
+    func deallocate(ptr: char*) {
+        self.free_fn(ptr)
+    }
+}
 // Weak<T>'s own building blocks - see runtime.h/runtime.c's own comments
 // on RefCount.weak_count. `ptr` is always a class instance's own address
 // (its RefCount header is its first field), cast to char* the same way

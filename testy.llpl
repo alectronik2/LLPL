@@ -84,7 +84,7 @@ impl Foo for Klass {
 namespace Foo {
     namespace Bar {
         func bar() -> i64 {
-            99
+            5 if true else 10
         }
     }
 }
@@ -176,6 +176,10 @@ func main( args: string[] ) -> u32 {
         puts(m)  // "123", then "4567"
     }
 
+    puts("Foo.Bar.bar() = \(Foo.Bar.bar())")
+
+    alias f = Foo.Bar
+    f.bar()
 
     return 0 if true else return 1
 }

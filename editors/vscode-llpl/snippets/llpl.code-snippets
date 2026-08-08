@@ -309,6 +309,11 @@
         "body": "defer ${1:statement}",
         "description": "Defer a statement to run at scope exit (LIFO order)"
     },
+    "Check": {
+        "prefix": "check",
+        "body": "check(${1:condition}, \"${2:message}\")",
+        "description": "Report a failed condition and continue execution"
+    },
     "Delete": {
         "prefix": "delete",
         "body": "delete ${1:instance}",

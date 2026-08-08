@@ -125,11 +125,14 @@ class Parser {
     }
 
     private void error(string message) {
-        throw new CompileError(message, filePath, current.line, current.column);
+        int width = current.value.length > 0 ? cast(int)current.value.length : 1;
+        throw new CompileError(message, filePath, current.line, current.column,
+            current.line, current.column + width);
     }
 
     private void errorAt(int line, int column, string message) {
-        throw new CompileError(message, filePath, line, column);
+        int width = current.value.length > 0 ? cast(int)current.value.length : 1;
+        throw new CompileError(message, filePath, line, column, line, column + width);
     }
 
     // Strips a trailing `:radix` and/or `:width` format hint off one
@@ -1945,7 +1948,7 @@ class Parser {
                 ASTNode elseStmt = statementInner();
                 elseBlock = new Block([elseStmt]);
             }
-            return new IfStmt(condition, new Block([stmt]), elseBlock);
+            return new IfStmt(condition, new Block([stmt]), elseBlock, true);
         }
         return stmt;
     }
@@ -1982,7 +1985,11 @@ class Parser {
         } else if (check(TokenType.Delete)) {
             return deleteStmt();
         } else if (check(TokenType.Assert)) {
-            return assertStmt();
+            return diagnosticStmt(true);
+        } else if (check(TokenType.Check)) {
+            return diagnosticStmt(false);
+        } else if (check(TokenType.Alias)) {
+            return aliasDecl();
         } else if (check(TokenType.Asm)) {
             return asmStmt();
         } else if (check(TokenType.Match)) {
@@ -2418,18 +2425,23 @@ class Parser {
         return new DeleteStmt(expression(), startLine, startColumn);
     }
 
-    private AssertStmt assertStmt() {
+    private AssertStmt diagnosticStmt(bool fatal) {
         int startLine = current.line;
         int startColumn = current.column;
-        expect(TokenType.Assert);
-        expect(TokenType.LeftParen, "Expected '(' after 'assert'");
+        string keyword = current.value;
+        if (fatal) {
+            expect(TokenType.Assert);
+        } else {
+            expect(TokenType.Check);
+        }
+        expect(TokenType.LeftParen, "Expected '(' after '" ~ keyword ~ "'");
         ASTNode condition = expression();
         ASTNode message = null;
         if (match(TokenType.Comma)) {
             message = expression();
         }
-        expect(TokenType.RightParen, "Expected ')' after assert condition");
-        return new AssertStmt(condition, message, startLine, startColumn);
+        expect(TokenType.RightParen, "Expected ')' after " ~ keyword ~ " condition");
+        return new AssertStmt(condition, message, startLine, startColumn, fatal);
     }
 
     private DeferStmt deferStmt() {
