@@ -16,6 +16,7 @@ namespace MM {
 
     let hhdm_offset:   uint
     let kernel_pml4:   uint
+    let kernel_reserve_start: uint
 
     let free_list:     PageFrame*
 
@@ -170,14 +171,30 @@ namespace MM {
     }
 
     func v2pf( vaddr: void* ) -> PageFrame* {
-        let paddr = (vaddr as uint) - hhdm_offset
-        pfdb + (paddr >> MM.PAGE_SHIFT)
+        let addr = vaddr as uint
+        let paddr: uint
+
+        // HHDM addresses can be translated arithmetically. Allocations in
+        // other virtual regions, such as kas.map()'s HugeMalloc range, must
+        // be resolved through the active page tables instead.
+        if addr >= hhdm_offset && addr - hhdm_offset < max_phys_addr {
+            paddr = addr - hhdm_offset
+        } else {
+            paddr = v2p( kernel_pml4, addr )
+        }
+
+        assert( paddr != 0, "v2pf: virtual address is not mapped" )
+        (pfdb as uint + (paddr >> MM.PAGE_SHIFT) * sizeof(PageFrame)) as PageFrame*
     }
 
     inline func p2v( paddr: uint ) -> uint {
         // The HHDM covers physical addresses outside the usable PFDB range too,
         // including the kernel's page tables and bootloader-owned regions.
         hhdm_offset + paddr
+    }
+
+    func pf2p( pf: PageFrame* ) -> uint {
+        (((pf as uint) - (pfdb as uint)) / sizeof(PageFrame)) << MM.PAGE_SHIFT
     }
 
     func boot_alloc( size: uint, alignment: uint = PAGE_SIZE ) -> uint {
@@ -189,14 +206,16 @@ namespace MM {
                 let entry = entries[i] as LimineMemmapEntry*
 
                 if entry.type == MemMapType.Usable {
+                    let region_end = entry.base + entry.length
                     let base = roundup(entry.base, alignment)
-                    let length = roundup(entry.length, alignment)
+                    let length = region_end - base
 
                     if length < size {
                         continue
                     }
 
                     entry.base = base + size
+                    entry.length = region_end - entry.base
                     return base
                 }
             }
@@ -213,7 +232,8 @@ namespace MM {
         let end_frame = end >> PAGE_SHIFT
 
         for i in start_frame..end_frame {
-            with frame = (pfdb + i) as PageFrame* {
+            continue if (i << PAGE_SHIFT) >= kernel_reserve_start
+            with frame = (pfdb as uint + i * sizeof(PageFrame)) as PageFrame* {
                 .tag = FrameType.Free
                 .refcount = 0
                 .next = free_list
@@ -318,6 +338,7 @@ namespace MM {
 
         kernel_pml4 = HAL.read_cr3() & PADDR_4K_MASK
         "Kernel PML4 = \(kernel_pml4:hex)\n" |> hs.write
+        kernel_reserve_start = v2p( kernel_pml4, MM.buckets as uint ) - 0x300000
 
         for let i = 0, let entries = memmap.entries as u64*; i < memmap.entry_count; i++ {
             let e = entries[i] as LimineMemmapEntry*
@@ -364,7 +385,7 @@ namespace MM {
         *x = 0xDEADBABE
         "map_page: 0x5000000 = \(*x:hex)\n" |> hs.write
 
-        let kas = new MM.AddressSpace( 0, -1 )
+        let kas = new AddressSpace( 0xffff900000000000, 0xffffa00000000000 )
     }
 }
 

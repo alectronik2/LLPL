@@ -189,6 +189,7 @@ int64_t llpl_symbol_line(char* symbol);
 // then halt. An optional handler is called first so user code can log/cleanup.
 void llpl_set_panic_handler(void (*handler)(char*));
 void llpl_panic_backtrace(void);
+void llpl_panic_backtrace_from_frame(uint64_t frame_addr);
 void llpl_panic(char* msg);
 void llpl_panic_at(char* msg, char* file, int64_t line);
 void llpl_check(char* msg);

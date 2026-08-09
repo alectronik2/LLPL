@@ -89,7 +89,11 @@ namespace HAL {
                 set_gate( i, isr$i as int, 0x08, 0x8E, 0 )
             }
 
-            pointer.limit = entries.sizeof
+            // Double faults use the dedicated IST1 stack configured in the
+            // TSS so stack exhaustion cannot recursively fault.
+            set_gate( 8, isr8 as int, 0x08, 0x8E, 1 )
+
+            pointer.limit = (sizeof(Entry) * NUM_VECTORS) - 1
             pointer.base = entries as u64
 
             asm( "lidt (%0)" : : "r"(&pointer) )
@@ -98,10 +102,24 @@ namespace HAL {
 }
 
 func isr_handler( ctx: HAL.IDT.Context* ) {
-    hs.write( "Interrupt received: vector=\(ctx.vector). Halt.\n" )
+    if ctx.vector == 8 {
+        double_fault_handler(ctx)
+        return
+    }
+
+    hs.write( "\x1b[1;31mEXCEPTION:\x1b[0m vector=\(ctx.vector:hex) err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
+    llpl_panic_backtrace_from_frame( ctx.rbp )
     // Linked from hal/isr.m64. Dispatching through HAL.interrupts can be
     // filled in once the interrupt context layout is consumed on the LLPL side.
 
+    while true {
+        HAL.halt()
+    }
+}
+
+func double_fault_handler( ctx: HAL.IDT.Context* ) {
+    hs.write( "\x1b[1;31mDOUBLE FAULT:\x1b[0m err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
+    llpl_panic_backtrace_from_frame( ctx.rbp )
     while true {
         HAL.halt()
     }

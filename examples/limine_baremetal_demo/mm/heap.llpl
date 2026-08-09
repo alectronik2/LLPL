@@ -71,7 +71,7 @@ namespace MM {
     ]
 
     struct Bucket {
-        mem:   void*
+        mem:   uint
         elems: uint
         pages: uint
         size:  uint
@@ -84,19 +84,18 @@ namespace MM {
             let pages = MM.pages_num(size)
             let length = pages << MM.PAGE_SHIFT
 
-            let vaddr: uint
-            let ret = MM.kas.map( 0, length, "HugeMalloc")
-            
+            let vaddr = MM.kas.map( 0, length, "HugeMalloc" )
+
             for let i = 0; i < pages; i++ {
                 let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.HugeMalloc )
 
                 pf.tag = MM.FrameType.HugeMalloc
                 pf.size = pages
 
-                // TODO map_page( MM.kernel_pml4, vaddr + (i << MM.PAGE_SHIFT), (pf as uint) - (MM.pfdb as uint), MM.PAGE_PRESENT | MM.PAGE_RW | MM.PAGE_USER )
-                // TODO: map_page
-                
+                MM.map_page( MM.kernel_pml4, vaddr + (i << MM.PAGE_SHIFT), MM.pf2p(pf), MM.PG_PRESENT | MM.PG_WRITABLE | MM.PG_USER )
             }
+
+            return vaddr as T*
         }
 
         let addr = 0
@@ -113,16 +112,16 @@ namespace MM {
             }
 
             b.size = 1 << bucket
-            let p = MM.pf2v( pf )
+            let p = MM.pf2v( pf ) as void*
             for let i = 0; i < MM.PAGE_SIZE; i += b.size {
                 *((p + i) as void**) = b.mem
-                b.mem = p + i
+                b.mem = (p + i) as uint
             }
             b.pages++
         }
 
-        addr = b.mem as uint
-        b.mem = *((b.mem) as void**)
+        addr = b.mem
+        b.mem = *((b.mem as void**)) as uint
 
         memset( addr as void*, 0, b.size )
 
@@ -160,13 +159,19 @@ namespace MM {
 
         let pf = MM.v2pf( ptr )
 
+        "Entering with pf \(pf:hex)" |> hs.write()
+
         holding MM.lock {
             if pf.tag == MM.FrameType.Malloc {
+                "Normal" |> hs.write()
+
                 let b = &MM.buckets[pf.size]
 
-                *((ptr) as void**) = b.mem
-                b.mem = ptr
+                *((ptr) as void**) = b.mem as void*
+                b.mem = ptr as uint
             } else if pf.tag == MM.FrameType.HugeMalloc {
+                "HugeMalloc release" |> hs.write()
+
                 let pages = MM.pages_num( pf.size << MM.PAGE_SHIFT )
 
                 for let i = 0; i < pages; i++ {
@@ -174,7 +179,7 @@ namespace MM {
                     let paddr = MM.v2p( MM.kernel_pml4, vaddr )
 
                     MM.v2pf(vaddr as void*).release()
-                    "kfree: huge alloc unmapping page frame paddr \(paddr:hex) from vaddr \(vaddr as uint:hex)\n" |> hs.write
+                    //"kfree: huge alloc unmapping page frame paddr \(paddr:hex) from vaddr \(vaddr as uint:hex)\n" |> hs.write
                 }
             } else {
                 panic( "Invalid pointer in kfree" )

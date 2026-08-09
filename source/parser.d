@@ -682,7 +682,8 @@ class Parser {
         int pointerDepth = 0;
         bool isArray = false;
         int arraySize = 0;
-        while (match(TokenType.Star)) {
+        while (check(TokenType.Star) && !newlineBeforeCurrent()) {
+            advance();
             pointerDepth++;
         }
         if (match(TokenType.LeftBracket)) {
@@ -1868,7 +1869,8 @@ class Parser {
         bool isArray = false;
         int arraySize = 0;
 
-        while (match(TokenType.Star)) {
+        while (check(TokenType.Star) && !newlineBeforeCurrent()) {
+            advance();
             pointerDepth++;
         }
 

@@ -45,6 +45,7 @@ namespace HAL {
 
         extern func get_tss() -> u64
         extern func get_kernel_stack_top() -> u64
+        extern func get_double_fault_stack_top() -> u64
         extern func load_tss(selector: u16)
 
         let entries: Entry[7]
@@ -88,7 +89,7 @@ namespace HAL {
             tss.rsp1 = 0
             tss.rsp2 = 0
             tss.reserved1 = 0
-            tss.ist1 = 0
+            tss.ist1 = get_double_fault_stack_top()
             tss.ist2 = 0
             tss.ist3 = 0
             tss.ist4 = 0

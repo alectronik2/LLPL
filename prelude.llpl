@@ -136,6 +136,7 @@ extern func llpl_symbol_name(symbol: char*) -> char*
 extern func llpl_symbol_file(symbol: char*) -> char*
 extern func llpl_symbol_line(symbol: char*) -> i64
 extern func llpl_panic_backtrace()
+extern func llpl_panic_backtrace_from_frame(frame: u64)
 
 // Prints "PANIC: <msg>\n" and halts - stderr+abort() on a hosted target,
 // or (freestanding) whatever a kernel/port wired up via

@@ -249,6 +249,9 @@ func kernel_main() {
     let m2 = MM.kmalloc<u64>( 128 )
     "m = \(m:hex) | m2 = \(m2:hex)" |> hs.write
 
+    let big = MM.kmalloc<u64>( 0x10000 )
+    "big = \(big:hex)" |> hs.write
+
     demo_hhdm( memmap, hhdm )
 
     draw_demo(fb)
@@ -258,8 +261,9 @@ func kernel_main() {
     "kmalloc<u64>() returned \(x:hex)\n" |> hs.write
     let x2 = MM.kmalloc<u64>()
     MM.kfree( x2 )
-    let x3 = MM.kmalloc<u64>()
+    let x3 = MM.kmalloc<u64>( 0x100000 )
     "x = \(x) | x2 = \(x2) | x3 = \(x3)\n" |> hs.write
+    MM.kfree( x3 )
 
     "Kernel initialization complete. Halting.\n" |> hs.write
     while true {

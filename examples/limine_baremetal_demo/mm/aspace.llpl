@@ -552,7 +552,10 @@ namespace MM {
     }
 
     func adpace_init() {
-        kas = new AddressSpace(0xFFFF800000000000, 0xFFFFFFFFFFFFFFFF)
+        // Keep kernel allocations outside the HHDM range. The HHDM already
+        // contains bootloader-installed large-page mappings and must not be
+        // reused as a virtual allocation arena.
+        kas = new AddressSpace(0xFFFF900000000000, 0xFFFFA00000000000)
         try {
             let res = kas.map( 0, 4096 )
             "res = \(res:hex)\n" |> hs.write

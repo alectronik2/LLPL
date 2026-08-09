@@ -1185,7 +1185,11 @@ static void llpl_panic_backtrace_from(uint64_t frame_addr) {
     char buf[256];
     int64_t depth = 0;
 
-    llpl_panic_write("Backtrace:\n");
+    if (llpl_panic_use_color()) {
+        llpl_panic_write("\x1b[1;36mBacktrace:\x1b[0m\n");
+    } else {
+        llpl_panic_write("Backtrace:\n");
+    }
     while (frame_addr != 0 && depth < 16) {
         uint64_t* frame = (uint64_t*)(uintptr_t)frame_addr;
         uint64_t next = frame[0];
@@ -1196,7 +1200,16 @@ static void llpl_panic_backtrace_from(uint64_t frame_addr) {
         }
 
         char* sym = llpl_resolve_symbol(rip > 0 ? rip - 1 : rip);
-        if (sym) {
+        if (llpl_panic_use_color() && sym) {
+            ksnprintf(buf, sizeof(buf),
+                "\x1b[36m  #%02d\x1b[0m rbp=\x1b[33m0x%016x\x1b[0m rip=\x1b[33m0x%016x\x1b[0m \x1b[1;32m%s\x1b[0m (\x1b[2m%s:%d\x1b[0m)\n",
+                depth, frame_addr, rip,
+                llpl_symbol_name(sym), llpl_symbol_file(sym), llpl_symbol_line(sym));
+        } else if (llpl_panic_use_color()) {
+            ksnprintf(buf, sizeof(buf),
+                "\x1b[36m  #%02d\x1b[0m rbp=\x1b[33m0x%016x\x1b[0m rip=\x1b[33m0x%016x\x1b[0m \x1b[1;31m<unknown>\x1b[0m\n",
+                depth, frame_addr, rip);
+        } else if (sym) {
             ksnprintf(buf, sizeof(buf),
                 "  #%02d rbp=0x%016x rip=0x%016x %s (%s:%d)\n",
                 depth, frame_addr, rip,
@@ -1212,15 +1225,27 @@ static void llpl_panic_backtrace_from(uint64_t frame_addr) {
             break;
         }
         if (next <= frame_addr) {
-            llpl_panic_write("  <stopped: non-increasing frame pointer>\n");
+            if (llpl_panic_use_color()) {
+                llpl_panic_write("\x1b[33m  <stopped: non-increasing frame pointer>\x1b[0m\n");
+            } else {
+                llpl_panic_write("  <stopped: non-increasing frame pointer>\n");
+            }
             break;
         }
         if ((next & 7) != 0) {
-            llpl_panic_write("  <stopped: unaligned frame pointer>\n");
+            if (llpl_panic_use_color()) {
+                llpl_panic_write("\x1b[33m  <stopped: unaligned frame pointer>\x1b[0m\n");
+            } else {
+                llpl_panic_write("  <stopped: unaligned frame pointer>\n");
+            }
             break;
         }
         if (next - frame_addr > 16384) {
-            llpl_panic_write("  <stopped: frame pointer jump too large>\n");
+            if (llpl_panic_use_color()) {
+                llpl_panic_write("\x1b[33m  <stopped: frame pointer jump too large>\x1b[0m\n");
+            } else {
+                llpl_panic_write("  <stopped: frame pointer jump too large>\n");
+            }
             break;
         }
 
@@ -1229,7 +1254,11 @@ static void llpl_panic_backtrace_from(uint64_t frame_addr) {
     }
 
     if (depth == 16) {
-        llpl_panic_write("  <stopped: frame limit reached>\n");
+        if (llpl_panic_use_color()) {
+            llpl_panic_write("\x1b[33m  <stopped: frame limit reached>\x1b[0m\n");
+        } else {
+            llpl_panic_write("  <stopped: frame limit reached>\n");
+        }
     }
 }
 
@@ -1239,8 +1268,16 @@ void llpl_panic_backtrace(void) {
     __asm__ volatile("movq %%rbp, %0" : "=r"(rbp));
     llpl_panic_backtrace_from(rbp);
 #else
-    llpl_panic_write("Backtrace: unavailable on this architecture\n");
+    if (llpl_panic_use_color()) {
+        llpl_panic_write("\x1b[1;36mBacktrace:\x1b[0m \x1b[33munavailable on this architecture\x1b[0m\n");
+    } else {
+        llpl_panic_write("Backtrace: unavailable on this architecture\n");
+    }
 #endif
+}
+
+void llpl_panic_backtrace_from_frame(uint64_t frame_addr) {
+    llpl_panic_backtrace_from(frame_addr);
 }
 
 void llpl_panic_at(char* msg, char* file, int64_t line) {
