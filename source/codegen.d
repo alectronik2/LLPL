@@ -5989,8 +5989,8 @@ class CodeGenerator {
         string code = "";
         string tmp = format("__llpl_throw_value%d", tryCounter++);
         code ~= indent() ~ format("%s %s = %s;\n", typeToC(thrownType), tmp, valueCode);
-        code ~= indent() ~ format("llpl_eh_throw(%s, &%s, sizeof(%s));\n",
-            typeId(thrownType), tmp, typeToC(thrownType));
+        code ~= indent() ~ format("llpl_eh_throw(%s, &%s, sizeof(%s), \"%s\", %d);\n",
+            typeId(thrownType), tmp, typeToC(thrownType), escapeCString(baseName(currentModulePath)), stmt.line);
         code ~= indent() ~ "__builtin_unreachable();\n";
         return code;
     }
@@ -11370,7 +11370,9 @@ class CodeGenerator {
                     Type pointeeType = cloneType(receiverType);
                     pointeeType.pointerDepth--;
                     string pointeeName = mangleTypeArg(pointeeType);
-                    if (className !in structRegistry && pointeeName in structRegistry) {
+                    if (className !in classRegistry && pointeeName in classRegistry) {
+                        className = pointeeName;
+                    } else if (className !in structRegistry && pointeeName in structRegistry) {
                         className = pointeeName;
                         structPointerReceiver = true;
                     } else if (className !in unionRegistry && pointeeName in unionRegistry) {

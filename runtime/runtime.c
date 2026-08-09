@@ -12,6 +12,8 @@ static __LLPL_EH_Frame* llpl_eh_top = NULL;
 static char* llpl_eh_pending_type = NULL;
 static uint64_t llpl_eh_pending_size = 0;
 static uint8_t llpl_eh_pending_error[LLPL_EH_MAX_ERROR_SIZE];
+static char* llpl_eh_pending_file = NULL;
+static int64_t llpl_eh_pending_line = 0;
 
 #if defined(__x86_64__)
 __asm__(
@@ -89,15 +91,23 @@ static void llpl_eh_deliver_pending(void) {
         }
         frame = llpl_eh_top;
     }
+    if (llpl_eh_pending_file) {
+        char buf[256];
+        ksnprintf(buf, sizeof(buf), "uncaught LLPL exception thrown at %s:%d",
+            llpl_eh_pending_file, (long long)llpl_eh_pending_line);
+        llpl_panic(buf);
+    }
     llpl_panic("uncaught LLPL exception");
 }
 
-void llpl_eh_throw(char* type_id, void* error, uint64_t error_size) {
+void llpl_eh_throw(char* type_id, void* error, uint64_t error_size, char* file, int64_t line) {
     if (error_size > LLPL_EH_MAX_ERROR_SIZE) {
         llpl_panic("LLPL exception payload too large");
     }
     llpl_eh_pending_type = type_id;
     llpl_eh_pending_size = error_size;
+    llpl_eh_pending_file = file;
+    llpl_eh_pending_line = line;
     memcpy(llpl_eh_pending_error, error, (size_t)error_size);
     llpl_eh_deliver_pending();
 }

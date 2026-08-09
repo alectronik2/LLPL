@@ -175,7 +175,8 @@ namespace MM {
     }
 
     inline func p2v( paddr: uint ) -> uint {
-        assert( paddr < max_phys_addr, "p2v: paddr \(paddr:hex) is too high" )
+        // The HHDM covers physical addresses outside the usable PFDB range too,
+        // including the kernel's page tables and bootloader-owned regions.
         hhdm_offset + paddr
     }
 
@@ -246,6 +247,54 @@ namespace MM {
         }
     }
 
+    func map_page( pgdir: uint, vaddr: uint, paddr: uint, flags: uint ) -> bool {
+        let idx = PageFrameIndexer( vaddr )
+        let pml4 = p2v( pgdir ) as Pte*
+
+        if !pml4[idx.l4].pte.present {
+            let new_page = MM.alloc_page( MM.FrameType.Other )
+            let new_paddr = new_page << MM.PAGE_SHIFT
+            memset( p2v(new_paddr) as void*, 0, PAGE_SIZE )
+            pml4[idx.l4].raw = new_paddr | flags | PG_PRESENT
+        } else {
+            pml4[idx.l4].raw = pml4[idx.l4].raw | flags | PG_PRESENT
+        }
+
+        let pdpt = p2v( pml4[idx.l4].paddr ) as Pte*
+        if !pdpt[idx.l3].pte.present {
+            let new_page = MM.alloc_page( MM.FrameType.Other )
+            let new_paddr = new_page << MM.PAGE_SHIFT
+            memset( p2v(new_paddr) as void*, 0, PAGE_SIZE )
+            pdpt[idx.l3].raw = new_paddr | flags | PG_PRESENT
+        } else {
+            pdpt[idx.l3].raw = pdpt[idx.l3].raw | flags | PG_PRESENT
+        }
+        if pdpt[idx.l3].pte.ps {
+            "map_page: 1G page at \(vaddr:hex) - l4=\(idx.l4) l3=\(idx.l3) l2=\(idx.l2) l1=\(idx.l1)\n" |> hs.write
+            return false
+        }
+
+        let pd = p2v( pdpt[idx.l3].paddr ) as Pte*
+        if !pd[idx.l2].pte.present {
+            let new_page = MM.alloc_page( MM.FrameType.Other )
+            let new_paddr = new_page << MM.PAGE_SHIFT
+            memset( p2v(new_paddr) as void*, 0, PAGE_SIZE )
+            pd[idx.l2].raw = new_paddr | flags | PG_PRESENT
+        } else {
+            pd[idx.l2].raw = pd[idx.l2].raw | flags | PG_PRESENT
+        }
+
+        if pd[idx.l2].pte.ps {
+            "map_page: 2M page at \(vaddr:hex) - l4=\(idx.l4) l3=\(idx.l3) l2=\(idx.l2) l1=\(idx.l1)\n" |> hs.write
+            return false
+        }
+
+        let pt = p2v( pd[idx.l2].paddr ) as Pte*
+        pt[idx.l1].raw = paddr | flags | PG_PRESENT
+
+        return true
+    }
+
     // Alocates a page and returns the index of the page frame in the PFDB. 
     func alloc_page( type: FrameType ) -> uint {
         let frame = alloc_pageframe( type )
@@ -308,6 +357,14 @@ namespace MM {
         let alloc_fn: (u64) -> char* = MM.kmalloc_wrapper
         let free_fn: (char*) -> void = MM.kfree_wrapper
         llpl_set_allocator(alloc_fn, free_fn)
+
+        let ret =map_page( kernel_pml4, 0x5000000, 0x400000, PG_PRESENT | PG_WRITABLE )
+        "map_page: 0x5000000 -> 0x400000 = \(ret)\n" |> hs.write
+        let x = 0x5000000 as u64*
+        *x = 0xDEADBABE
+        "map_page: 0x5000000 = \(*x:hex)\n" |> hs.write
+
+        let kas = new MM.AddressSpace( 0, -1 )
     }
 }
 

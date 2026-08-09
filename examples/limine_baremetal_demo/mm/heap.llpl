@@ -85,7 +85,18 @@ namespace MM {
             let length = pages << MM.PAGE_SHIFT
 
             let vaddr: uint
-            // TODO
+            let ret = MM.kas.map( 0, length, "HugeMalloc")
+            
+            for let i = 0; i < pages; i++ {
+                let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.HugeMalloc )
+
+                pf.tag = MM.FrameType.HugeMalloc
+                pf.size = pages
+
+                // TODO map_page( MM.kernel_pml4, vaddr + (i << MM.PAGE_SHIFT), (pf as uint) - (MM.pfdb as uint), MM.PAGE_PRESENT | MM.PAGE_RW | MM.PAGE_USER )
+                // TODO: map_page
+                
+            }
         }
 
         let addr = 0
@@ -95,7 +106,7 @@ namespace MM {
         let b = &MM.buckets[bucket]
 
         if b.mem == null {
-            let pf = MM.alloc_pageframe( MM.FrameType.Kernel )
+            let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.Kernel )
             with pf {
                 .tag = MM.FrameType.Malloc
                 .size = bucket
@@ -123,9 +134,9 @@ namespace MM {
             return MM.kmalloc<T>( new_size )
         }
 
-        let pf = MM.v2pf( p )
+        let pf: MM.PageFrame* = MM.v2pf( p )
         if pf.tag == MM.FrameType.Malloc {
-            let old_size = 1 << pf.size
+            let old_size: uint = 1 << pf.size
             if new_size <= old_size {
                 return p as T*
             }
@@ -147,7 +158,7 @@ namespace MM {
             return
         }
 
-        let pf = v2pf( ptr )
+        let pf = MM.v2pf( ptr )
 
         holding MM.lock {
             if pf.tag == MM.FrameType.Malloc {

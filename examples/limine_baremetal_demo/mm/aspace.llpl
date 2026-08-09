@@ -12,6 +12,12 @@ namespace MM {
     const MAP_FIXED = 1 << 0
     const MAP_USER  = 1 << 1
 
+    let kas: AddressSpace*
+
+    func vm_drop_memory(addr: uint, end: uint) {
+        // TODO: remove page-table mappings and release page frames for [addr, end).
+    }
+
     class VmArea : Object {
         start: uint
         end:   uint
@@ -28,7 +34,7 @@ namespace MM {
         constructor( @start: uint, @end: uint ) { }
 
         destructor() {
-            //name.put() if name
+            name.put() if name
         }
     }
 
@@ -137,7 +143,7 @@ namespace MM {
             return 0
         }
 
-        func map( addr: uint, length: uint, name: String = null, flags: uint = 0 ) -> Result<uint, uint> {
+        func map( addr: uint, length: uint, name: String = null, flags: uint = 0 ) -> uint {
             if !length {
                 throw EINVAL
             }
@@ -183,16 +189,105 @@ namespace MM {
                 }
 
                 rb_insert(self, vma)
-                let result = new Result<uint,uint>()
-                result.set_ok(start)
-                return result
+                return start
             }
+        }
+
+        func unmap(addr: uint, length: uint) -> int {
+            if !length {
+                return EINVAL
+            }
+
+            length = (length + 0xFFF) & ~0xFFF
+            let unmap_start = addr
+            let unmap_end = addr + length
+
+            let stack = MM.kmalloc<MM.VmArea*>(64 * sizeof(MM.VmArea*))
+            let to_process = MM.kmalloc<MM.VmArea*>(64 * sizeof(MM.VmArea*))
+            let process_count = 0
+
+            if stack == null || to_process == null {
+                panic("[VM] unmap: out of memory")
+            }
+
+            defer MM.kfree(stack as void*)
+            defer MM.kfree(to_process as void*)
+
+            let stack_ptr = 0
+            let stack_limit = 64
+            let process_limit = 64
+            let curr = self.root
+
+            holding self.lock {
+                while curr != null || stack_ptr > 0 {
+                    while curr != null {
+                        if stack_ptr == stack_limit - 1 {
+                            stack = MM.krealloc<MM.VmArea*>(stack, (stack_limit + 64) * sizeof(MM.VmArea*))
+                            if stack == null {
+                                panic("[VM] unmap: out of memory")
+                            }
+                            stack_limit = stack_limit + 64
+                        }
+
+                        stack[stack_ptr] = curr
+                        stack_ptr = stack_ptr + 1
+                        curr = curr.left
+                    }
+
+                    stack_ptr = stack_ptr - 1
+                    curr = stack[stack_ptr]
+
+                    if process_count == process_limit - 1 {
+                        to_process = MM.krealloc<MM.VmArea*>(to_process, (process_limit + 64) * sizeof(MM.VmArea*))
+                        if to_process == null {
+                            panic("[VM] unmap: out of memory")
+                        }
+                        process_limit = process_limit + 64
+                    }
+
+                    if !(curr.end <= unmap_start || curr.start >= unmap_end) {
+                        to_process[process_count] = curr
+                        process_count = process_count + 1
+                    }
+
+                    curr = curr.right
+                }
+
+                if !process_count {
+                    return ENOENT
+                }
+
+                for i in 0..process_count {
+                    let vma = to_process[i]
+
+                    if unmap_start <= vma.start && unmap_end >= vma.end {
+                        MM.rb_delete(self, vma)
+                        vma.put()
+                    } else if unmap_start > vma.start && unmap_end < vma.end {
+                        let right_vma = new MM.VmArea(unmap_end, vma.end)
+                        if !right_vma {
+                            return ENOMEM
+                        }
+
+                        right_vma.name = new String("split")
+                        right_vma.flags = vma.flags
+
+                        vma.end = unmap_start
+                        MM.rb_insert(self, right_vma)
+                    } else if unmap_start <= vma.start && unmap_end < vma.end {
+                        vma.start = unmap_end
+                    } else if unmap_start > vma.start && unmap_end >= vma.end {
+                        vma.end = unmap_start
+                    }
+                }
+            }
+            MM.vm_drop_memory(addr, addr + length)
+
+            return EOK
         }
     }
 
-    func unmap() {
-        // TODO
-    }
+    
 
     func rb_grandparent( area: VmArea* ) -> VmArea* {
         if area != null && area.parent != null {
@@ -457,17 +552,22 @@ namespace MM {
     }
 
     func adpace_init() {
-        let kas = new AddressSpace(0xFFFF800000000000, 0xFFFFFFFFFFFFFFFF)
+        kas = new AddressSpace(0xFFFF800000000000, 0xFFFFFFFFFFFFFFFF)
         try {
             let res = kas.map( 0, 4096 )
-            "res = \(res.unwrap():hex)\n" |> hs.write
+            "res = \(res:hex)\n" |> hs.write
             res = kas.map( 0, 4096*4096 )
-            "res = \(res.unwrap():hex)\n" |> hs.write
+            "res = \(res:hex)\n" |> hs.write
             res = kas.map( 0xFFFF800FF0000000, 4096 )
-            "res = \(res.unwrap():hex)\n" |> hs.write
+            "res = \(res:hex)\n" |> hs.write
+
+            kas.unmap( res, 4096 )
+            hs.write("unmapped \(res:hex)\n")
+
+            res = kas.map( 0xFFFF800FF0000000, 4096 )
+            "res = \(res:hex)\n" |> hs.write
         } catch e: int {
             panic("Error mapping")
         }
-        
     }
 }

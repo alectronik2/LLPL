@@ -52,9 +52,27 @@ class MultiCompileError : Exception {
     CompileError[] errors;
 
     this(CompileError[] errors) {
-        super(format("%d error(s)", errors.length));
-        this.errors = errors;
+        auto uniqueErrors = deduplicateCompileErrors(errors);
+        super(format("%d error(s)", uniqueErrors.length));
+        this.errors = uniqueErrors;
     }
+}
+
+private string compileErrorKey(CompileError err) {
+    return format("%s\0%s\0%d\0%d\0%d\0%d",
+        err.msg, err.filePath, err.line, err.column, err.endLine, err.endColumn);
+}
+
+CompileError[] deduplicateCompileErrors(CompileError[] errors) {
+    CompileError[] uniqueErrors;
+    bool[string] seen;
+    foreach (err; errors) {
+        string key = compileErrorKey(err);
+        if (key in seen) continue;
+        seen[key] = true;
+        uniqueErrors ~= err;
+    }
+    return uniqueErrors;
 }
 
 private string spaces(size_t n) {

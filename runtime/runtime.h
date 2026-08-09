@@ -98,7 +98,7 @@ int llpl_eh_setjmp(__LLPL_EH_JumpBuf* env);
 void llpl_eh_longjmp(__LLPL_EH_JumpBuf* env, int value);
 void llpl_eh_push(__LLPL_EH_Frame* frame);
 void llpl_eh_pop(__LLPL_EH_Frame* frame);
-void llpl_eh_throw(char* type_id, void* error, uint64_t error_size);
+void llpl_eh_throw(char* type_id, void* error, uint64_t error_size, char* file, int64_t line);
 void llpl_eh_resume(void);
 
 typedef char* (*LLPL_AllocFn)(uint64_t size);

@@ -15,9 +15,11 @@
 // readability alias, not a distinct type.
 alias string = char*
 
+const EOK = 0
 const EINVAL = -1
 const EEXIST = -2
 const ENOMEM = -3
+const ENOENT = -4
 
 // Minimal printf-style formatter, always available without an `extern
 // func` declaration of your own. Backed by runtime/runtime.c; see that
