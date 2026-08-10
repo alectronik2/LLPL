@@ -159,8 +159,6 @@ namespace MM {
 
         let pf = MM.v2pf( ptr )
 
-        "Entering with pf \(pf:hex)" |> hs.write()
-
         holding MM.lock {
             if pf.tag == MM.FrameType.Malloc {
                 "Normal" |> hs.write()

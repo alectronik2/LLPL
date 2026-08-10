@@ -1,13 +1,302 @@
-import hal
+import hal.serial
+import ttf
 
 alias hs = HAL.Serial
 
+func console_tag_matches(text: string, pos: uint, tag: string) -> bool {
+    let i: uint = 0
+    while tag[i] != 0 {
+        if text[pos + i] != tag[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+func console_tag_length(text: string, pos: uint) -> uint {
+    if text[pos] != 60 {
+        return 0
+    }
+    if console_tag_matches(text, pos, "</>") { return 3 }
+    if console_tag_matches(text, pos, "<black>") { return 7 }
+    if console_tag_matches(text, pos, "<red>") { return 5 }
+    if console_tag_matches(text, pos, "<green>") { return 7 }
+    if console_tag_matches(text, pos, "<yellow>") { return 8 }
+    if console_tag_matches(text, pos, "<blue>") { return 6 }
+    if console_tag_matches(text, pos, "<magenta>") { return 9 }
+    if console_tag_matches(text, pos, "<cyan>") { return 6 }
+    if console_tag_matches(text, pos, "<white>") { return 7 }
+    if console_tag_matches(text, pos, "<bright-red>") { return 12 }
+    if console_tag_matches(text, pos, "<bright-green>") { return 14 }
+    if console_tag_matches(text, pos, "<bright-yellow>") { return 15 }
+    if console_tag_matches(text, pos, "<bright-blue>") { return 13 }
+    if console_tag_matches(text, pos, "<bright-magenta>") { return 16 }
+    if console_tag_matches(text, pos, "<bright-cyan>") { return 13 }
+    if console_tag_matches(text, pos, "<bright-white>") { return 14 }
+    0
+}
+
+func console_tag_code(text: string, pos: uint) -> u16 {
+    if console_tag_matches(text, pos, "</>") { return 0 }
+    if console_tag_matches(text, pos, "<black>") { return 30 }
+    if console_tag_matches(text, pos, "<red>") { return 31 }
+    if console_tag_matches(text, pos, "<green>") { return 32 }
+    if console_tag_matches(text, pos, "<yellow>") { return 33 }
+    if console_tag_matches(text, pos, "<blue>") { return 34 }
+    if console_tag_matches(text, pos, "<magenta>") { return 35 }
+    if console_tag_matches(text, pos, "<cyan>") { return 36 }
+    if console_tag_matches(text, pos, "<white>") { return 37 }
+    if console_tag_matches(text, pos, "<bright-red>") { return 91 }
+    if console_tag_matches(text, pos, "<bright-green>") { return 92 }
+    if console_tag_matches(text, pos, "<bright-yellow>") { return 93 }
+    if console_tag_matches(text, pos, "<bright-blue>") { return 94 }
+    if console_tag_matches(text, pos, "<bright-magenta>") { return 95 }
+    if console_tag_matches(text, pos, "<bright-cyan>") { return 96 }
+    if console_tag_matches(text, pos, "<bright-white>") { return 97 }
+    0
+}
+
 namespace Terminal {
-    let width: uint
-    let height: uint
-    let pitch: uint
-    let bpp: uint
-    let buffer: uint*
+    let console_font_asset = embed("console.ttf")
+    let console_font: TtfFont
+    let active_console: LimineFramebufferConsole*
+
+    class Console {
+        let width: uint
+        let height: uint
+        let pitch: uint
+        let bpp: uint
+        let buffer: uint*
+
+        virtual func scroll( lines: uint ) {}
+        virtual func set_cursor( x: uint, y: uint ) {}
+        virtual func puts( text: string ) {}
+    }
+
+    class LimineFramebufferConsole: Console {
+        let fb: LimineFramebuffer*
+        let cursor_x: uint
+        let cursor_y: uint
+        let fg: u32
+        let bg: u32
+        let ansi_state: u8
+        let ansi_value: u16
+        let ansi_have_value: bool
+
+        constructor( l: LimineFramebuffer* ) {
+            fb = l
+            cursor_x = 0
+            cursor_y = 0
+            fg = 0x00E6EDF3
+            bg = 0x000B0F14
+            ansi_state = 0
+            ansi_value = 0
+            ansi_have_value = false
+        }
+
+        func color_from_sgr(code: u16, bright: bool) -> u32 {
+            match code {
+                case 30 => { return 0x00101820 }
+                case 31 => { return 0x00F85149 }
+                case 32 => { return 0x003FB950 }
+                case 33 => { return 0x00D29922 }
+                case 34 => { return 0x0058A6FF }
+                case 35 => { return 0x00BC8CFF }
+                case 36 => { return 0x0039D0D8 }
+                case 37 => { return 0x00C9D1D9 }
+                case 90 => { return 0x006E7681 }
+                case 91 => { return 0x00FF7B72 }
+                case 92 => { return 0x0056D364 }
+                case 93 => { return 0x00E3B341 }
+                case 94 => { return 0x0079C0FF }
+                case 95 => { return 0x00D2A8FF }
+                case 96 => { return 0x0056D4DD }
+                case 97 => { return 0x00F0F6FC }
+                default => { return fg }
+            }
+        }
+
+        func apply_sgr(code: u16) {
+            if code == 0 {
+                fg = 0x00E6EDF3
+                bg = 0x000B0F14
+            } else if code == 39 {
+                fg = 0x00E6EDF3
+            } else if code == 49 {
+                bg = 0x000B0F14
+            } else if code >= 30 && code <= 37 {
+                fg = self.color_from_sgr(code, false)
+            } else if code >= 90 && code <= 97 {
+                fg = self.color_from_sgr(code, true)
+            } else if code >= 40 && code <= 47 {
+                bg = self.color_from_sgr(code - 10, false)
+            } else if code >= 100 && code <= 107 {
+                bg = self.color_from_sgr(code - 10, true)
+            }
+        }
+
+        func put_pixel(x: uint, y: uint, color: u32) {
+            if x < fb.width && y < fb.height {
+                let pixels = fb.address as u32*
+                pixels[(y * (fb.pitch / 4)) + x] = color
+            }
+        }
+
+        func draw_glyph(c: char) -> uint {
+            let glyph: u8[640]
+            let clear_pos: u16 = 0
+            while clear_pos < 640 {
+                glyph[clear_pos] = 0
+                clear_pos = clear_pos + 1
+            }
+            let glyph_index = ttf_get_glyph_index(console_font, c as u32)
+            if c == 32 {
+                let space_metrics = ttf_get_glyph_metrics(console_font, glyph_index)
+                let space_advance = ((space_metrics.advance_width as u64) * 16) / (console_font.units_per_em as u64)
+                if space_advance < 4 { return 4 }
+                return space_advance as uint
+            }
+            let found = ttf_render_glyph(console_font, glyph_index, 16, glyph as u8*, 32, 20)
+            if !found {
+                // The current compact rasterizer skips composite glyphs.
+                // Keep the common lowercase i legible until composite
+                // component transforms are supported.
+                if c == 105 {
+                    let y: uint = 5
+                    while y < 16 {
+                        self.put_pixel(cursor_x + 2, cursor_y + y, fg)
+                        self.put_pixel(cursor_x + 3, cursor_y + y, fg)
+                        y = y + 1
+                    }
+                    self.put_pixel(cursor_x + 2, cursor_y + 2, fg)
+                    self.put_pixel(cursor_x + 3, cursor_y + 2, fg)
+                    return 6
+                }
+                return 8
+            }
+
+            let base_x = cursor_x
+            let base_y = cursor_y
+            let y: u16 = 0
+            while y < 20 {
+                let x: u16 = 0
+                while x < 32 {
+                    let alpha = glyph[(y * 32) + x]
+                    if alpha != 0 {
+                        self.put_pixel(base_x + x, base_y + y, fg)
+                    }
+                    x = x + 1
+                }
+                y = y + 1
+            }
+
+            let metrics = ttf_get_glyph_metrics(console_font, glyph_index)
+            let advance = ((metrics.advance_width as u64) * 16) / (console_font.units_per_em as u64)
+            if advance < 4 { return 4 }
+            advance as uint
+        }
+
+        func scroll() {
+            if fb.height <= 20 {
+                cursor_y = 0
+                return
+            }
+
+            let pixels = fb.address as u32*
+            let stride = fb.pitch / 4
+            let y: uint = 20
+            while y < fb.height {
+                let x: uint = 0
+                while x < fb.width {
+                    pixels[((y - 20) * stride) + x] = pixels[(y * stride) + x]
+                    x = x + 1
+                }
+                y = y + 1
+            }
+
+            let clear_y: uint = fb.height - 20
+            while clear_y < fb.height {
+                let x: uint = 0
+                while x < fb.width {
+                    pixels[(clear_y * stride) + x] = bg
+                    x = x + 1
+                }
+                clear_y = clear_y + 1
+            }
+            cursor_y = fb.height - 20
+        }
+
+        func newline() {
+            cursor_x = 0
+            cursor_y = cursor_y + 20
+            if cursor_y + 20 >= fb.height {
+                self.scroll()
+            }
+        }
+
+        func render( text: string ) {
+            let width = fb.width
+            let height = fb.height
+            let pitch = fb.pitch
+            let bpp = fb.bpp
+
+            let buffer = fb.address as uint*
+            let size = (pitch * height) / 4
+
+            let i = 0
+            while text[i] != 0 {
+                let c = text[i]
+                if c == 60 {
+                    let tag_length = console_tag_length(text, i)
+                    if tag_length != 0 {
+                        self.apply_sgr(console_tag_code(text, i))
+                        i = i + tag_length
+                        continue
+                    }
+                }
+                if ansi_state == 0 {
+                    if c == 27 {
+                        ansi_state = 1
+                    } else if c == 10 {
+                        self.newline()
+                    } else if c == 13 {
+                        cursor_x = 0
+                    } else if c == 8 {
+                        if cursor_x >= 8 { cursor_x = cursor_x - 8 }
+                    } else {
+                        cursor_x = cursor_x + self.draw_glyph(c)
+                        if cursor_x + 8 >= fb.width { self.newline() }
+                    }
+                } else if ansi_state == 1 {
+                    if c == 91 {
+                        ansi_state = 2
+                        ansi_value = 0
+                        ansi_have_value = false
+                    } else {
+                        ansi_state = 0
+                    }
+                } else {
+                    if c >= 48 && c <= 57 {
+                        ansi_value = ansi_value * 10 + (c - 48)
+                        ansi_have_value = true
+                    } else if c == 59 {
+                        if ansi_have_value { self.apply_sgr(ansi_value) }
+                        ansi_value = 0
+                        ansi_have_value = false
+                    } else if c == 109 {
+                        if ansi_have_value { self.apply_sgr(ansi_value) } else { self.apply_sgr(0) }
+                        ansi_state = 0
+                    } else {
+                        ansi_state = 0
+                    }
+                }
+                i++
+            }
+        }
+    }
+
+
 
     func init( l: LimineFramebuffer* ) {
         let fb = l
@@ -16,16 +305,18 @@ namespace Terminal {
         let pitch = fb.pitch
         let bpp = fb.bpp
 
-        if bpp != 32 {
-            hs.write_str("Unsupported framebuffer format: ")
-            hs.write_int(bpp)
-            hs.write_str("bpp\n")
-            while true {
-                HAL.halt()
-            }
-        }
+        assert( bpp == 32, "Unsupported framebuffer format" )
 
         let buffer = fb.address as uint*
         let size = (pitch * height) / 4
+        console_font = ttf_init(console_font_asset.data as u8*)
+        active_console = new LimineFramebufferConsole(l)
+
+    }
+
+    func write( text: string ) {
+        if active_console != null {
+            active_console.render(text)
+        }
     }
 }

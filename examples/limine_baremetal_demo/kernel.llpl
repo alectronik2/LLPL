@@ -8,6 +8,8 @@
 
 import hal
 import mm
+import terminal
+import lib
 
 alias hs = HAL.Serial
 
@@ -241,29 +243,20 @@ func kernel_main() {
     HAL.IDT.init()
     HAL.PIC.init()
 
+    Terminal.init( fb )
+
     HAL.enable_interrupts()
 
     MM.init( memmap, hhdm )
     MM.adpace_init()
-    let m = MM.kmalloc<u64>( 64 )
-    let m2 = MM.kmalloc<u64>( 128 )
-    "m = \(m:hex) | m2 = \(m2:hex)" |> hs.write
-
-    let big = MM.kmalloc<u64>( 0x10000 )
-    "big = \(big:hex)" |> hs.write
-
-    demo_hhdm( memmap, hhdm )
-
-    draw_demo(fb)
-    draw_memmap(fb, memmap)
     
-    let x = MM.kmalloc<u64>()
-    "kmalloc<u64>() returned \(x:hex)\n" |> hs.write
-    let x2 = MM.kmalloc<u64>()
-    MM.kfree( x2 )
-    let x3 = MM.kmalloc<u64>( 0x100000 )
-    "x = \(x) | x2 = \(x2) | x3 = \(x3)\n" |> hs.write
-    MM.kfree( x3 )
+    //demo_hhdm( memmap, hhdm )
+
+    //draw_demo(fb)
+    //draw_memmap(fb, memmap)
+    Terminal.write( "<bright-green>LLPL framebuffer console</>: TrueType + <cyan>ANSI</>\n" )
+    Terminal.write( "Limine framebuffer: \(fb.address:hex) \(fb.width)x\(fb.height) pitch=\(fb.pitch) bpp=\(fb.bpp)\n" )
+    Terminal.write( "Limine memory map: <magenta>\(memmap.entry_count)</> entries\n" )
 
     "Kernel initialization complete. Halting.\n" |> hs.write
     while true {
