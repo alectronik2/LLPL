@@ -2017,10 +2017,11 @@ class Object {
         refcount = 1
     }
 
-    func get() {
+    func get() -> void* {
         // The lock prefix gives the increment acquire/release ordering and
         // prevents concurrent references from losing an update.
         asm("lock; incq %0" : "+m"(self.refcount) : : "memory")
+        return &self as void*
     }
 
     func put() {

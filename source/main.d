@@ -21,6 +21,7 @@ import errors;
 import lspquery;
 import astprint;
 import comptime;
+import async_layout;
 
 void main(string[] args) {
     bool auditMode = false;
@@ -67,6 +68,7 @@ void main(string[] args) {
     string auditDir;
     string diagnosticsJsonFile;
     bool emitAst = false;
+    bool emitAsyncLayoutFlag = false;
 
     auto helpInfo = getopt(
         args,
@@ -96,6 +98,8 @@ void main(string[] args) {
             &diagnosticsJsonFile,
         "emit-ast", "Parse <input.llpl> and emit a canonical AST golden-test dump",
             &emitAst,
+        "emit-async-layout", "Analyze async functions and emit planned frame/state layout",
+            &emitAsyncLayoutFlag,
         "emit-provenance", "Write generated-C to LLPL source provenance JSON to <file>",
             &provenanceFile,
         "emit-effects", "Write conservative per-function capability/effect JSON to <file>",
@@ -151,7 +155,7 @@ void main(string[] args) {
         binaryMode = true;
     }
 
-    if (outputFile.length == 0 && !emitAst) {
+    if (outputFile.length == 0 && !emitAst && !emitAsyncLayoutFlag) {
         outputFile = runMode ? temporaryRunOutputPath(inputFile)
             : (binaryMode ? stripExtension(inputFile) : setExtension(inputFile, "c"));
     }
@@ -196,6 +200,17 @@ void main(string[] args) {
                     writefln("  - %s", prog.modulePath);
                 }
             }
+        }
+
+        if (emitAsyncLayoutFlag) {
+            string report = emitAsyncLayout(programs);
+            if (outputFile.length > 0) {
+                std.file.write(outputFile, report);
+                if (verbose) writefln("Wrote async layout to %s", outputFile);
+            } else {
+                write(report);
+            }
+            return;
         }
 
         // Code generation for all modules

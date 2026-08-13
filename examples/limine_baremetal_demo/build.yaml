@@ -8,6 +8,7 @@
 
 project: llpl-limine-baremetal-demo
 entry: kernel.llpl
+generated_c: build/kernel.c
 llpl_compiler: ../../llpl
 
 variables:
@@ -28,7 +29,7 @@ common_cflags:
   - -fno-stack-protector
   - -fno-omit-frame-pointer
   - -fno-optimize-sibling-calls
-  - -I.
+  - -Ibuild/include
   - -mcmodel=kernel
   - -fno-pie
   - -mno-red-zone
@@ -49,9 +50,11 @@ configurations:
     cflags: [-O2]
 
 c_sources:
-  - path: kernel.c
+  - path: build/kernel.c
+    output: build/kernel.o
     include_dirs: [../../runtime]
   - path: ../../runtime/runtime.c
+    output: build/runtime.o
     include_dirs: [../../runtime]
 
 m64_sources:
@@ -62,7 +65,7 @@ link:
   output: kernel.elf
   script: linker.ld
   ldflags: [-m, elf_x86_64, -nostdlib]
-  objects: [kernel.o, runtime.o, build/isr.o]
+  objects: [build/kernel.o, build/runtime.o, build/isr.o]
 
 package:
   output: kernel.iso

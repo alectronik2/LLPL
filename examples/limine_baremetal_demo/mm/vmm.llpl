@@ -322,11 +322,13 @@ namespace MM {
     }
 
     func kmalloc_wrapper( size: u64 ) -> char* {
-        MM.kmalloc<void>( size )
+        hs.write("kmalloc_wrapper: size=\(size)\n")
+        MM.malloc<void>( size )
     }
 
     func kfree_wrapper( ptr: char* ) {
-        MM.kfree( ptr as void* )
+        hs.write("kfree_wrapper: ptr=\(ptr:hex)\n")
+        MM.free( ptr as void* )
     }
 
     func init( memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse* ) {
@@ -378,12 +380,6 @@ namespace MM {
         let alloc_fn: (u64) -> char* = MM.kmalloc_wrapper
         let free_fn: (char*) -> void = MM.kfree_wrapper
         llpl_set_allocator(alloc_fn, free_fn)
-
-        let ret =map_page( kernel_pml4, 0x5000000, 0x400000, PG_PRESENT | PG_WRITABLE )
-        "map_page: 0x5000000 -> 0x400000 = \(ret)\n" |> hs.write
-        let x = 0x5000000 as u64*
-        *x = 0xDEADBABE
-        "map_page: 0x5000000 = \(*x:hex)\n" |> hs.write
 
         let kas = new AddressSpace( 0xffff900000000000, 0xffffa00000000000 )
     }

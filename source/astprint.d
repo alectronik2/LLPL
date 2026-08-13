@@ -105,6 +105,7 @@ private final class AstPrinter {
         if (fn.isPrivate) flags ~= " private";
         if (fn.isProtected) flags ~= " protected";
         if (fn.isInline) flags ~= " inline";
+        if (fn.isAsync) flags ~= " async";
         if (fn.isVirtual) flags ~= " virtual";
         if (fn.isOverride) flags ~= " override";
         line(depth, format("%s %s(%s) -> %s%s", kind, fn.name, paramsText(fn.params),
@@ -168,6 +169,9 @@ private final class AstPrinter {
         } else if (auto un = cast(UnaryExpr)node) {
             line(depth, (un.isPostfix ? "Postfix " : "Unary ") ~ un.op);
             printExpr(un.operand, depth + 1);
+        } else if (auto awaitExpr = cast(AwaitExpr)node) {
+            line(depth, "Await");
+            printExpr(awaitExpr.expression, depth + 1);
         } else if (auto member = cast(MemberExpr)node) {
             line(depth, "Member " ~ member.member);
             printExpr(member.object, depth + 1);

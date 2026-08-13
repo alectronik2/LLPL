@@ -509,6 +509,8 @@ class CodeGenerator {
     private UnionDecl[string] unionRegistry; // Unions, by mangled (namespace-prefixed) name
     private MacroDecl[string] macroRegistry; // Macros, by mangled (namespace-prefixed) name
     private VarDecl[string] globalVarRegistry; // Global lets/consts (incl. enum members), by mangled name
+    private long[string] foldedIntegerConsts; // Numeric global const values, by mangled name
+    private bool[string] foldingIntegerConsts; // Recursion guard for const folding
     private VariantInfo[string] variantRegistry; // Tagged-enum variant constructors, by mangled function name
     private Type[string] typeAliases; // Type aliases (`alias string = char*`), by mangled alias name
     // Named array literals (`alias NAME = [ ... ]`, see ArrayAliasDecl), by
@@ -1436,6 +1438,7 @@ class CodeGenerator {
         string sig = "";
         if (fn.isExtern) sig ~= "extern ";
         if (fn.isInterrupt) sig ~= "interrupt ";
+        if (fn.isAsync) sig ~= "async ";
         if (fn.isVirtual) sig ~= "virtual ";
         if (fn.isOverride) sig ~= "override ";
         sig ~= "func " ~ displayName ~ "(";
@@ -1766,6 +1769,9 @@ class CodeGenerator {
         } else if (auto u = cast(UnaryExpr)node) {
             if (u.op == "*") addEffect(effects, "unsafe");
             collectNodeEffects(u.operand, effects);
+        } else if (auto a = cast(AwaitExpr)node) {
+            addEffect(effects, "await");
+            collectNodeEffects(a.expression, effects);
         } else if (auto c = cast(CallExpr)node) {
             addCallEffects(c, effects);
         } else if (auto m = cast(MemberExpr)node) {
@@ -3954,6 +3960,12 @@ class CodeGenerator {
     // receiver so mutations and `&self` refer to the caller's object rather
     // than a temporary copy on the stack.
     private string generateStructMethod(StructDecl structDecl, FunctionDecl method) {
+        if (method.isAsync) {
+            throw new CompileError(
+                "async method lowering is not implemented yet: parser and AST support are enabled, but the C backend still needs the state-machine transform",
+                currentModulePath, method.line, method.column);
+        }
+
         string sName = mangledStruct(structDecl);
         string code = "";
         string params = format("%s* self", sName);
@@ -4061,6 +4073,12 @@ class CodeGenerator {
     // is an ordinary by-value first parameter, and field access uses `.`
     // through the existing value-type member access path.
     private string generateUnionMethod(UnionDecl unionDecl, FunctionDecl method) {
+        if (method.isAsync) {
+            throw new CompileError(
+                "async method lowering is not implemented yet: parser and AST support are enabled, but the C backend still needs the state-machine transform",
+                currentModulePath, method.line, method.column);
+        }
+
         string uName = mangledUnion(unionDecl);
         string code = "";
         string params = format("%s* self", uName);
@@ -4245,11 +4263,87 @@ class CodeGenerator {
             if (auto structLit = cast(StructLiteral)varDecl.initializer) {
                 code ~= " = " ~ generateStructLiteralValue(structLit, declaredTypeAsWritten);
             } else {
-                code ~= " = " ~ generateExpression(varDecl.initializer);
+                long constValue;
+                if (varDecl.isConst && tryEvalGlobalIntegerConst(varDecl.initializer, constValue)) {
+                    code ~= " = " ~ to!string(constValue);
+                } else {
+                    code ~= " = " ~ generateExpression(varDecl.initializer);
+                }
             }
+        }
+        long foldedValue;
+        if (varDecl.isConst && varDecl.initializer !is null &&
+                tryEvalGlobalIntegerConst(varDecl.initializer, foldedValue)) {
+            foldedIntegerConsts[cName] = foldedValue;
         }
         code ~= ";\n";
         return code;
+    }
+
+    private bool tryEvalGlobalIntegerConst(ASTNode node, out long value) {
+        if (auto intLit = cast(IntLiteral)node) {
+            value = intLit.value;
+            return true;
+        }
+        if (auto ident = cast(Identifier)node) {
+            string resolved = resolveName(ident.name, (n) => (n in globalVarRegistry) !is null);
+            return tryEvalGlobalIntegerConstByName(resolved, value);
+        }
+        if (auto unaryExpr = cast(UnaryExpr)node) {
+            long inner;
+            if (!tryEvalGlobalIntegerConst(unaryExpr.operand, inner)) return false;
+            switch (unaryExpr.op) {
+                case "+": value = inner; return true;
+                case "-": value = -inner; return true;
+                case "~": value = ~inner; return true;
+                default: return false;
+            }
+        }
+        if (auto binExpr = cast(BinaryExpr)node) {
+            long left;
+            long right;
+            if (!tryEvalGlobalIntegerConst(binExpr.left, left) ||
+                    !tryEvalGlobalIntegerConst(binExpr.right, right)) {
+                return false;
+            }
+            switch (binExpr.op) {
+                case "+": value = left + right; return true;
+                case "-": value = left - right; return true;
+                case "*": value = left * right; return true;
+                case "/":
+                    if (right == 0) return false;
+                    value = left / right;
+                    return true;
+                case "%":
+                    if (right == 0) return false;
+                    value = left % right;
+                    return true;
+                case "<<": value = left << right; return true;
+                case ">>": value = left >> right; return true;
+                case "&": value = left & right; return true;
+                case "^": value = left ^ right; return true;
+                case "|": value = left | right; return true;
+                default: return false;
+            }
+        }
+        return false;
+    }
+
+    private bool tryEvalGlobalIntegerConstByName(string name, out long value) {
+        if (auto folded = name in foldedIntegerConsts) {
+            value = *folded;
+            return true;
+        }
+        auto declPtr = name in globalVarRegistry;
+        if (declPtr is null || !declPtr.isConst || declPtr.initializer is null) return false;
+        if ((name in foldingIntegerConsts) !is null) return false;
+
+        foldingIntegerConsts[name] = true;
+        scope(exit) foldingIntegerConsts.remove(name);
+
+        if (!tryEvalGlobalIntegerConst(declPtr.initializer, value)) return false;
+        foldedIntegerConsts[name] = value;
+        return true;
     }
 
     private string escapeCAttrString(string s) {
@@ -5131,6 +5225,12 @@ class CodeGenerator {
     }
 
     private string generateMethod(ClassDecl classDecl, FunctionDecl method) {
+        if (method.isAsync) {
+            throw new CompileError(
+                "async method lowering is not implemented yet: parser and AST support are enabled, but the C backend still needs the state-machine transform",
+                currentModulePath, method.line, method.column);
+        }
+
         string cName = mangledClass(classDecl);
         string code = "";
         string params = "";
@@ -5236,6 +5336,12 @@ class CodeGenerator {
 
         if (funcDecl.isInterrupt) {
             return generateInterruptFunction(funcDecl);
+        }
+
+        if (funcDecl.isAsync) {
+            throw new CompileError(
+                "async function lowering is not implemented yet: parser and AST support are enabled, but the C backend still needs the state-machine transform",
+                currentModulePath, funcDecl.line, funcDecl.column);
         }
 
         string code = "";
@@ -5626,6 +5732,8 @@ class CodeGenerator {
     private int numericCoercionCost(Type source, Type target) {
         if (sameErrorType(source, target)) return 0;
         if (source is null || target is null) return -1;
+        if (target.name == "String" && target.pointerDepth == 0 && !target.isArray &&
+                source.name == "char" && source.pointerDepth == 1 && !source.isArray) return 1;
         if (source.isPointer || source.isArray || target.isPointer || target.isArray) return -1;
 
         // Limited implicit numeric conversions: integer values can flow to
@@ -6741,6 +6849,9 @@ class CodeGenerator {
         } else if (auto unaryExpr = cast(UnaryExpr)node) {
             return new UnaryExpr(unaryExpr.op, cloneNode(unaryExpr.operand, subs, typeSubs),
                 unaryExpr.line, unaryExpr.column, unaryExpr.isPostfix);
+        } else if (auto awaitExpr = cast(AwaitExpr)node) {
+            return new AwaitExpr(cloneNode(awaitExpr.expression, subs, typeSubs),
+                awaitExpr.line, awaitExpr.column);
         } else if (auto callExpr = cast(CallExpr)node) {
             return new CallExpr(cloneNode(callExpr.callee, subs, typeSubs), cloneNodes(callExpr.args, subs, typeSubs),
                 callExpr.line, callExpr.column, callExpr.argNames.dup,
@@ -6903,6 +7014,7 @@ class CodeGenerator {
         clone.isOverride = fn.isOverride;
         clone.isProperty = fn.isProperty;
         clone.isInline = fn.isInline;
+        clone.isAsync = fn.isAsync;
         return clone;
     }
 
@@ -9190,11 +9302,29 @@ class CodeGenerator {
         ASTNode[] result = args.dup;
         foreach (i, param; params) {
             if (i >= result.length) break;
+            result[i] = insertStringConstructorIfNeeded(result[i], param.type);
             result[i] = insertUpcastIfNeeded(result[i], param.type);
             result[i] = insertNumericCoercionIfNeeded(result[i], param.type);
             result[i] = insertImplicitConversionCastIfNeeded(result[i], param.type);
         }
         return result;
+    }
+
+    // Materialize an owning String at a call boundary when a raw string is
+    // passed to a String parameter: `use("text")` is `use(new String("text"))`.
+    private ASTNode insertStringConstructorIfNeeded(ASTNode arg, Type targetType) {
+        Type target = cloneType(targetType);
+        Type source;
+        try {
+            resolveType(target);
+            source = inferType(arg);
+            resolveType(source);
+        } catch (Exception e) {
+            return arg;
+        }
+        if (target.name != "String" || target.pointerDepth != 0 || target.isArray) return arg;
+        if (source.name != "char" || source.pointerDepth != 1 || source.isArray) return arg;
+        return new NewExpr(new Type("String"), [arg], arg.line, arg.column);
     }
 
     // Same idea as insertUpcastIfNeeded/insertNumericCoercionIfNeeded just
@@ -11111,6 +11241,9 @@ class CodeGenerator {
                 return unaryExpr.op ~ generateExpression(unaryExpr.operand);
             }
             return unaryExpr.op ~ generateExpression(unaryExpr.operand);
+        } else if (auto awaitExpr = cast(AwaitExpr)node) {
+            throw new CompileError("'await' can only be generated after async state-machine lowering",
+                currentModulePath, awaitExpr.line, awaitExpr.column);
         } else if (auto lambdaExpr = cast(LambdaExpr)node) {
             rejectInInterrupt(lambdaExpr, "Lambda allocation");
             return generateLambdaExpr(lambdaExpr);
@@ -12260,6 +12393,14 @@ class CodeGenerator {
                 return new Type(inner.name, inner.pointerDepth - 1, inner.isArray, inner.arraySize);
             }
             return inferType(unaryExpr.operand);
+        } else if (auto awaitExpr = cast(AwaitExpr)expr) {
+            Type futureType = inferType(awaitExpr.expression);
+            if (futureType.typeArgs.length == 1 && futureType.name == "Future") {
+                return cloneType(futureType.typeArgs[0]);
+            }
+            resolveType(futureType);
+            throw inferError(expr, format("Cannot infer await result type from '%s'; expected Future<T>",
+                futureType.toString()));
         } else if (auto indexExpr = cast(IndexExpr)expr) {
             Type arrType = inferType(indexExpr.array);
             // Indexing consumes exactly one level of indirection: an

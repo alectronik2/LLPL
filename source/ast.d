@@ -39,6 +39,7 @@ enum NodeType {
     ExprStmt,
     BinaryExpr,
     UnaryExpr,
+    AwaitExpr,
     CallExpr,
     MemberExpr,
     IndexExpr,
@@ -599,6 +600,9 @@ class FunctionDecl : ASTNode {
     // `inline func` - emitted as a C `static inline` definition/prototype.
     // This is a backend hint/linkage choice, not AST-level substitution.
     bool isInline;
+    // `async func` - lowers to a pollable state machine instead of a direct
+    // call-return C function.
+    bool isAsync;
     // `virtual func` - establishes a new dispatchable vtable slot (only
     // meaningful on a class with no base, or one introducing a method its
     // own subclasses may override); `override func` - provides this
@@ -1475,6 +1479,17 @@ class UnaryExpr : ASTNode {
         this.op = op;
         this.operand = operand;
         this.isPostfix = isPostfix;
+    }
+}
+
+// `await expr` - suspends the enclosing async function until expr's future is
+// ready. The backend lowering pass rewrites this into a state-machine poll.
+class AwaitExpr : ASTNode {
+    ASTNode expression;
+
+    this(ASTNode expression, int line = 0, int column = 0) {
+        super(NodeType.AwaitExpr, line, column);
+        this.expression = expression;
     }
 }
 

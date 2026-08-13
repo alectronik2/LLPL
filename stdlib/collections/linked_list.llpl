@@ -214,6 +214,34 @@ class LinkedList<T> {
         return result
     }
 
+    func remove_item(value: T) -> bool {
+        let current: ListNode<T>* = self.head
+        let prev: ListNode<T>* = null
+
+        while current != null {
+            if (*current).value == value {
+                if prev == null {
+                    self.head = (*current).next
+                } else {
+                    (*prev).next = (*current).next
+                }
+
+                if current == self.tail {
+                    self.tail = prev
+                }
+
+                llpl_free(current as char*)
+                self.count = self.count - 1
+                return true
+            }
+
+            prev = current
+            current = (*current).next
+        }
+
+        return false
+    }
+
     func clear() {
         while self.head != null {
             self.pop_front()
@@ -383,6 +411,38 @@ class DoublyLinkedList<T> {
 
         result.set_ok((*self.tail).value)
         return result
+    }
+
+    func remove(value: T) -> bool {
+        let current: DListNode<T>* = self.head
+
+        while current != null {
+            if (*current).value == value {
+                if (*current).prev == null {
+                    self.head = (*current).next
+                } else {
+                    (*(*current).prev).next = (*current).next
+                }
+
+                if (*current).next == null {
+                    self.tail = (*current).prev
+                } else {
+                    (*(*current).next).prev = (*current).prev
+                }
+
+                llpl_free(current as char*)
+                self.count = self.count - 1
+                return true
+            }
+
+            current = (*current).next
+        }
+
+        return false
+    }
+
+    func remove_item(value: T) -> bool {
+        return self.remove(value)
     }
 
     func clear() {

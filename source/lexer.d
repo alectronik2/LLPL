@@ -42,6 +42,7 @@ enum TokenType {
     Protected,
     Static,
     Inline,
+    Async,
     Virtual,
     Override,
     If,
@@ -88,6 +89,7 @@ enum TokenType {
     Check,
     UnitTest,
     With,
+    Await,
 
     // Operators
     Plus,
@@ -238,6 +240,7 @@ class Lexer {
             "protected": "Protected",
             "static": "Static",
             "inline": "Inline",
+            "async": "Async",
             "virtual": "Virtual",
             "override": "Override",
             "if": "If",
@@ -282,7 +285,8 @@ class Lexer {
             "assert": "Assert",
             "check": "Check",
             "unittest": "UnitTest",
-            "with": "With"
+            "with": "With",
+            "await": "Await"
         ];
     }
 
@@ -782,6 +786,7 @@ class Lexer {
                 case "Protected": type = TokenType.Protected; break;
                 case "Static": type = TokenType.Static; break;
                 case "Inline": type = TokenType.Inline; break;
+                case "Async": type = TokenType.Async; break;
                 case "Virtual": type = TokenType.Virtual; break;
                 case "Override": type = TokenType.Override; break;
                 case "If": type = TokenType.If; break;
@@ -828,6 +833,7 @@ class Lexer {
                 case "Check": type = TokenType.Check; break;
                 case "UnitTest": type = TokenType.UnitTest; break;
                 case "With": type = TokenType.With; break;
+                case "Await": type = TokenType.Await; break;
                 default: type = TokenType.Identifier; break;
             }
             return Token(type, id, startLine, startColumn);

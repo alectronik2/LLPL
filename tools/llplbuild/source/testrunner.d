@@ -60,6 +60,7 @@ private TestResult runOne(string srcPath, TestOptions opts) {
     string expectedFailPath = buildPath(testDir, base ~ ".expected_fail");
     string compileFailExpectedPath = buildPath(testDir, base ~ ".compile_fail.expected");
     string astExpectedPath = buildPath(testDir, base ~ ".ast.expected");
+    string asyncLayoutExpectedPath = buildPath(testDir, base ~ ".async-layout.expected");
     string flagsPath = buildPath(testDir, base ~ ".flags");
     string tmpBin = buildPath(tempDir(), "llplbuild-test-" ~ base);
     string tmpC = buildPath(tempDir(), "llplbuild-test-" ~ base ~ ".c");
@@ -85,6 +86,22 @@ private TestResult runOne(string srcPath, TestOptions opts) {
         return TestResult(base, false, "", format(
             "AST output differs from %s\n--- expected\n%s\n--- actual\n%s",
             astExpectedPath, expected, actual));
+    }
+
+    if (exists(asyncLayoutExpectedPath)) {
+        string[] layoutCmd = [opts.compiler] ~ flags ~ [srcPath, "-o", tmpAst];
+        auto layoutResult = execute(layoutCmd);
+        if (layoutResult.status != 0) {
+            return TestResult(base, false, "", format("async layout emit failed\n%s", layoutResult.output));
+        }
+        string actual = readText(tmpAst);
+        string expected = readText(asyncLayoutExpectedPath);
+        if (actual == expected) {
+            return TestResult(base, true, "(async layout golden)", "");
+        }
+        return TestResult(base, false, "", format(
+            "async layout output differs from %s\n--- expected\n%s\n--- actual\n%s",
+            asyncLayoutExpectedPath, expected, actual));
     }
 
     if (exists(compileFailExpectedPath)) {

@@ -195,7 +195,7 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config,
     string[] cflags = cfg.commonCflags.dup;
     if (config !is null) cflags ~= config.cflags;
 
-    string generatedC = stripExtension(cfg.entry) ~ ".c";
+    string generatedC = cfg.generatedC;
     string[] llplDeps = allLlplSources(".", cfg.llplCompiler);
     llplDeps ~= llplProjectConfigInputs(cfg.entry);
     llplDeps ~= embeddedAssetInputsForSources(llplDeps);
@@ -787,7 +787,7 @@ void clean(BuildConfig cfg) {
     string[] dirs;
 
     files ~= configStampPath;
-    files ~= stripExtension(cfg.entry) ~ ".c";
+    files ~= cfg.generatedC;
     foreach (src; cfg.cSources) files ~= objPathFor(src.path, src.objOutput);
     foreach (a; cfg.asmSources) files ~= a.output;
     foreach (a; cfg.m64Sources) files ~= a.output;

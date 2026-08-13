@@ -181,9 +181,10 @@ namespace MM {
                 end = start + length
                 let vma = new VmArea(start, end)
 
-                if !name {
-                    vma.name = new String("anonymous")
-                } else {
+                // An unnamed VMA needs no heap-backed label. Besides avoiding
+                // needless allocation, this keeps map() usable during early
+                // heap bootstrap.
+                if name {
                     name.get()
                     vma.name = name
                 }
@@ -202,16 +203,16 @@ namespace MM {
             let unmap_start = addr
             let unmap_end = addr + length
 
-            let stack = MM.kmalloc<MM.VmArea*>(64 * sizeof(MM.VmArea*))
-            let to_process = MM.kmalloc<MM.VmArea*>(64 * sizeof(MM.VmArea*))
+            let stack = MM.malloc<MM.VmArea*>(64 * sizeof(MM.VmArea*))
+            let to_process = MM.malloc<MM.VmArea*>(64 * sizeof(MM.VmArea*))
             let process_count = 0
 
             if stack == null || to_process == null {
                 panic("[VM] unmap: out of memory")
             }
 
-            defer MM.kfree(stack as void*)
-            defer MM.kfree(to_process as void*)
+            defer MM.free(stack as void*)
+            defer MM.free(to_process as void*)
 
             let stack_ptr = 0
             let stack_limit = 64
@@ -222,7 +223,7 @@ namespace MM {
                 while curr != null || stack_ptr > 0 {
                     while curr != null {
                         if stack_ptr == stack_limit - 1 {
-                            stack = MM.krealloc<MM.VmArea*>(stack, (stack_limit + 64) * sizeof(MM.VmArea*))
+                            stack = MM.realloc<MM.VmArea*>(stack, (stack_limit + 64) * sizeof(MM.VmArea*))
                             if stack == null {
                                 panic("[VM] unmap: out of memory")
                             }
@@ -238,7 +239,7 @@ namespace MM {
                     curr = stack[stack_ptr]
 
                     if process_count == process_limit - 1 {
-                        to_process = MM.krealloc<MM.VmArea*>(to_process, (process_limit + 64) * sizeof(MM.VmArea*))
+                        to_process = MM.realloc<MM.VmArea*>(to_process, (process_limit + 64) * sizeof(MM.VmArea*))
                         if to_process == null {
                             panic("[VM] unmap: out of memory")
                         }
@@ -286,8 +287,6 @@ namespace MM {
             return EOK
         }
     }
-
-    
 
     func rb_grandparent( area: VmArea* ) -> VmArea* {
         if area != null && area.parent != null {
@@ -551,26 +550,10 @@ namespace MM {
         space.num_areas--
     }
 
-    func adpace_init() {
+    func aspace_init() {
         // Keep kernel allocations outside the HHDM range. The HHDM already
         // contains bootloader-installed large-page mappings and must not be
         // reused as a virtual allocation arena.
         kas = new AddressSpace(0xFFFF900000000000, 0xFFFFA00000000000)
-        try {
-            let res = kas.map( 0, 4096 )
-            "res = \(res:hex)\n" |> hs.write
-            res = kas.map( 0, 4096*4096 )
-            "res = \(res:hex)\n" |> hs.write
-            res = kas.map( 0xFFFF800FF0000000, 4096 )
-            "res = \(res:hex)\n" |> hs.write
-
-            kas.unmap( res, 4096 )
-            hs.write("unmapped \(res:hex)\n")
-
-            res = kas.map( 0xFFFF800FF0000000, 4096 )
-            "res = \(res:hex)\n" |> hs.write
-        } catch e: int {
-            panic("Error mapping")
-        }
     }
 }

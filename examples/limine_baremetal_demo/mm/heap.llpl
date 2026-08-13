@@ -79,12 +79,12 @@ namespace MM {
 
     let buckets: Bucket[12]
 
-    func kmalloc<T>(size: int = sizeof(T)) -> T* {
+    func malloc<T>(size: int = sizeof(T)) -> T* {
         if size > MM.PAGE_SIZE / 2 {
             let pages = MM.pages_num(size)
             let length = pages << MM.PAGE_SHIFT
 
-            let vaddr = MM.kas.map( 0, length, "HugeMalloc" )
+            let vaddr = MM.kas.map( 0, length )
 
             for let i = 0; i < pages; i++ {
                 let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.HugeMalloc )
@@ -128,9 +128,9 @@ namespace MM {
         return addr as T*
     }
 
-    func krealloc<T>( p: void*, new_size: int = sizeof(T) ) -> T* {
+    func realloc<T>( p: void*, new_size: int = sizeof(T) ) -> T* {
         if p == null {
-            return MM.kmalloc<T>( new_size )
+            return MM.malloc<T>( new_size )
         }
 
         let pf: MM.PageFrame* = MM.v2pf( p )
@@ -140,9 +140,9 @@ namespace MM {
                 return p as T*
             }
 
-            let new_p = MM.kmalloc<T>( new_size )
+            let new_p = MM.malloc<T>( new_size )
             memcpy( new_p as void*, p as void*, old_size )
-            MM.kfree( p )
+            MM.free( p )
 
             return new_p
         } else if pf.tag == MM.FrameType.HugeMalloc { // TODO
@@ -152,7 +152,7 @@ namespace MM {
         }
     }
 
-    func kfree( ptr: void* ) {
+    func free( ptr: void* ) {
         if ptr == null {
             return
         }
@@ -161,8 +161,6 @@ namespace MM {
 
         holding MM.lock {
             if pf.tag == MM.FrameType.Malloc {
-                "Normal" |> hs.write()
-
                 let b = &MM.buckets[pf.size]
 
                 *((ptr) as void**) = b.mem as void*

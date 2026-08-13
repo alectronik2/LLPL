@@ -31,12 +31,15 @@ class Parser {
     private string[] withContextNames;
     private int withContextCounter;
     private bool parsedWithLeadingDotPrimary;
+    private long[string][] integerConstScopes;
+    private int asyncFunctionDepth;
 
     this(Token[] tokens, string filePath = "") {
         this.tokens = tokens;
         this.pos = 0;
         this.current = tokens.length > 0 ? tokens[0] : Token(TokenType.EOF, "", 0, 0);
         this.filePath = filePath;
+        enterIntegerConstScope();
     }
 
     private void advance() {
@@ -233,6 +236,90 @@ class Parser {
         return cast(long) to!ulong(numStr);
     }
 
+    private void enterIntegerConstScope() {
+        long[string] scope_;
+        integerConstScopes ~= scope_;
+    }
+
+    private void leaveIntegerConstScope() {
+        if (integerConstScopes.length > 0) {
+            integerConstScopes.length = integerConstScopes.length - 1;
+        }
+    }
+
+    private bool lookupIntegerConst(string name, out long value) {
+        foreach_reverse (scope_; integerConstScopes) {
+            if (auto found = name in scope_) {
+                value = *found;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void recordIntegerConst(string name, long value) {
+        if (integerConstScopes.length == 0) enterIntegerConstScope();
+        integerConstScopes[$ - 1][name] = value;
+    }
+
+    private bool tryEvalIntegerConst(ASTNode node, out long value) {
+        if (auto intLit = cast(IntLiteral)node) {
+            value = intLit.value;
+            return true;
+        }
+        if (auto ident = cast(Identifier)node) {
+            return lookupIntegerConst(ident.name, value);
+        }
+        if (auto unaryExpr = cast(UnaryExpr)node) {
+            long inner;
+            if (!tryEvalIntegerConst(unaryExpr.operand, inner)) return false;
+            switch (unaryExpr.op) {
+                case "+": value = inner; return true;
+                case "-": value = -inner; return true;
+                case "~": value = ~inner; return true;
+                default: return false;
+            }
+        }
+        if (auto binExpr = cast(BinaryExpr)node) {
+            long left;
+            long right;
+            if (!tryEvalIntegerConst(binExpr.left, left) ||
+                    !tryEvalIntegerConst(binExpr.right, right)) {
+                return false;
+            }
+            switch (binExpr.op) {
+                case "+": value = left + right; return true;
+                case "-": value = left - right; return true;
+                case "*": value = left * right; return true;
+                case "/":
+                    if (right == 0) return false;
+                    value = left / right;
+                    return true;
+                case "%":
+                    if (right == 0) return false;
+                    value = left % right;
+                    return true;
+                case "<<": value = left << right; return true;
+                case ">>": value = left >> right; return true;
+                case "&": value = left & right; return true;
+                case "^": value = left ^ right; return true;
+                case "|": value = left | right; return true;
+                default: return false;
+            }
+        }
+        return false;
+    }
+
+    private int parseArraySizeConstExpr() {
+        ASTNode sizeExpr = expression();
+        long value;
+        if (!tryEvalIntegerConst(sizeExpr, value)) {
+            errorAt(sizeExpr.line, sizeExpr.column,
+                "Expected an integer constant expression for fixed array size");
+        }
+        return to!int(value);
+    }
+
     Program parse() {
         ASTNode[] declarations;
         while (!check(TokenType.EOF)) {
@@ -354,7 +441,8 @@ class Parser {
             decl = macroDecl();
         } else if (check(TokenType.Alias)) {
             decl = aliasDecl();
-        } else if (check(TokenType.Inline) || check(TokenType.Interrupt) || check(TokenType.Function)) {
+        } else if (check(TokenType.Inline) || check(TokenType.Async) ||
+                check(TokenType.Interrupt) || check(TokenType.Function)) {
             decl = functionDecl();
             (cast(FunctionDecl)decl).isPrivate = isPrivate;
         } else if (check(TokenType.Class)) {
@@ -422,6 +510,7 @@ class Parser {
     private bool matchPropertyModifier() {
         if (check(TokenType.Identifier) && current.value == "property" && (
                 peek(1).type == TokenType.Function ||
+                peek(1).type == TokenType.Async ||
                 (peek(1).type == TokenType.Identifier && peek(2).type == TokenType.LeftParen))) {
             advance();
             return true;
@@ -481,6 +570,9 @@ class Parser {
             segments ~= expectName("Expected namespace path segment after '.'").value;
         }
         expect(TokenType.LeftBrace);
+
+        enterIntegerConstScope();
+        scope(exit) leaveIntegerConstScope();
 
         ASTNode[] declarations = recoveryMode ? declarationList(TokenType.RightBrace) : null;
         while (!recoveryMode && !check(TokenType.RightBrace) && !check(TokenType.EOF)) {
@@ -946,6 +1038,7 @@ class Parser {
         int startLine = current.line;
         int startColumn = current.column;
         bool isInline = match(TokenType.Inline);
+        bool isAsync = match(TokenType.Async);
         bool isInterrupt = match(TokenType.Interrupt);
         expect(TokenType.Function);
 
@@ -987,6 +1080,10 @@ class Parser {
             returnType = parseType();
         }
 
+        if (isAsync) asyncFunctionDepth++;
+        scope(exit) {
+            if (isAsync) asyncFunctionDepth--;
+        }
         Block body_ = block();
 
         if (isOperator) {
@@ -1003,6 +1100,7 @@ class Parser {
         auto decl = new FunctionDecl(name, params, returnType, body_, false, isInterrupt, isVariadic,
             startLine, startColumn, typeParams, typeParamBounds);
         decl.isInline = isInline;
+        decl.isAsync = isAsync;
         return decl;
     }
 
@@ -1053,8 +1151,10 @@ class Parser {
                 constructors ~= constructorDecl(name);
             } else if (check(TokenType.Destructor)) {
                 destructor = destructorDecl(name);
-            } else if (check(TokenType.Inline) || check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
-                auto method = check(TokenType.Function) ? functionDecl() : propertyMethodDecl();
+            } else if (check(TokenType.Inline) || check(TokenType.Async) ||
+                    check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
+                auto method = (check(TokenType.Function) || check(TokenType.Async)) ?
+                    functionDecl() : propertyMethodDecl();
                 method.isPrivate = isPrivateMember;
                 method.isProtected = isProtectedMember;
                 method.isStatic = isStaticMember;
@@ -1111,11 +1211,13 @@ class Parser {
                 fields ~= varDecl();
             } else if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
-            } else if (check(TokenType.Inline) || check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
+            } else if (check(TokenType.Inline) || check(TokenType.Async) ||
+                    check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
                 // `func`/`func operator...` - see ast.StructDecl.methods'
                 // own comment on why `self` still ends up passed by value,
                 // same as a constructor's.
-                auto method = check(TokenType.Function) ? functionDecl() : propertyMethodDecl();
+                auto method = (check(TokenType.Function) || check(TokenType.Async)) ?
+                    functionDecl() : propertyMethodDecl();
                 method.isInline = isInlineMember || method.isInline;
                 method.isProperty = isPropertyMember;
                 if (method.isProperty && method.params.length > 1) {
@@ -1190,8 +1292,10 @@ class Parser {
                 fields ~= varDeclBody(declLine, declColumn, false, false);
             } else if (check(TokenType.Constructor)) {
                 constructors ~= constructorDecl(name);
-            } else if (check(TokenType.Inline) || check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
-                auto method = check(TokenType.Function) ? functionDecl() : propertyMethodDecl();
+            } else if (check(TokenType.Inline) || check(TokenType.Async) ||
+                    check(TokenType.Function) || (isPropertyMember && check(TokenType.Identifier))) {
+                auto method = (check(TokenType.Function) || check(TokenType.Async)) ?
+                    functionDecl() : propertyMethodDecl();
                 method.isInline = isInlineMember || method.isInline;
                 method.isProperty = isPropertyMember;
                 if (method.isProperty && method.params.length > 1) {
@@ -1577,6 +1681,11 @@ class Parser {
                 format("Cannot infer type of '%s': declare a type or provide an initializer", name));
         }
 
+        long constValue;
+        if (isConst && initializer !is null && tryEvalIntegerConst(initializer, constValue)) {
+            recordIntegerConst(name, constValue);
+        }
+
         return new VarDecl(name, type, initializer, isConst, declLine, declColumn, bitWidth, isVolatile);
     }
 
@@ -1666,6 +1775,10 @@ class Parser {
             if (type is null && initializer is null) {
                 errorAt(bind.line, bind.column,
                     format("Cannot infer type of '%s': declare a type or provide an initializer", bind.name));
+            }
+            long constValue;
+            if (isConst && initializer !is null && tryEvalIntegerConst(initializer, constValue)) {
+                recordIntegerConst(bind.name, constValue);
             }
             return new VarDecl(bind.name, type, initializer, isConst, declLine, declColumn,
                 bitWidth, isVolatile);
@@ -1877,9 +1990,8 @@ class Parser {
         int[] extraDims;
         if (match(TokenType.LeftBracket)) {
             isArray = true;
-            if (check(TokenType.Integer)) {
-                arraySize = to!int(current.value);
-                advance();
+            if (!check(TokenType.RightBracket)) {
+                arraySize = parseArraySizeConstExpr();
             }
             expect(TokenType.RightBracket);
             // `T[2][3]` - each further `[N]` group nests one more
@@ -1888,9 +2000,8 @@ class Parser {
             // pair on a dynamic array has nothing to nest inside.
             while (match(TokenType.LeftBracket)) {
                 int dim = 0;
-                if (check(TokenType.Integer)) {
-                    dim = to!int(current.value);
-                    advance();
+                if (!check(TokenType.RightBracket)) {
+                    dim = parseArraySizeConstExpr();
                 }
                 expect(TokenType.RightBracket);
                 extraDims ~= dim;
@@ -1917,6 +2028,9 @@ class Parser {
 
     private Block block() {
         expect(TokenType.LeftBrace);
+        enterIntegerConstScope();
+        scope(exit) leaveIntegerConstScope();
+
         ASTNode[] statements;
 
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
@@ -2239,17 +2353,19 @@ class Parser {
     private MatchCase matchCase() {
         if (match(TokenType.Default)) {
             expect(TokenType.FatArrow);
-            Block body_ = block();
+            Block body_ = statementBody("match arm");
             return new MatchCase([], body_);
         }
 
-        expect(TokenType.Case);
+        // `case` is optional for compact arms, so both forms are accepted:
+        // `case 0 => { ... }` and `0 => expression`.
+        match(TokenType.Case);
         ASTNode[] patterns = [matchPattern()];
         while (match(TokenType.Comma)) {
             patterns ~= matchPattern();
         }
         expect(TokenType.FatArrow);
-        Block body_ = block();
+        Block body_ = statementBody("match arm");
         return new MatchCase(patterns, body_);
     }
 
@@ -2841,6 +2957,15 @@ class Parser {
     }
 
     private ASTNode unary() {
+        if (match(TokenType.Await)) {
+            int opLine = tokens[pos - 1].line;
+            int opColumn = tokens[pos - 1].column;
+            if (asyncFunctionDepth == 0) {
+                errorAt(opLine, opColumn, "'await' is only valid inside an async function");
+            }
+            ASTNode operand = unary();
+            return new AwaitExpr(operand, opLine, opColumn);
+        }
         if (match(TokenType.PlusPlus, TokenType.MinusMinus)) {
             int opLine = tokens[pos - 1].line;
             int opColumn = tokens[pos - 1].column;

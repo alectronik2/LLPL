@@ -43,13 +43,12 @@ namespace HAL {
 
         }
 
-        func pit_init() {
+        func init() {
             let cnt = PIT_CLOCK / TIMER_FREQ
             HAL.outb( TMR_CTRL, TMR_CH0 + TMR_BOTH + TMR_MD3 )
             HAL.outb( TMR_CNT0, (cnt & 0xFF) as u8 )
             HAL.outb( TMR_CNT0, (cnt >> 8) as u8)
 
-            
         }
     }
 }

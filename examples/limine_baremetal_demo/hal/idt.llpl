@@ -1,5 +1,5 @@
-import hal.cpu
-import hal.serial
+import hal
+import lib
 
 alias hs = HAL.Serial
 
@@ -11,7 +11,10 @@ namespace HAL {
     alias proc = func(void*)
     const NUM_VECTORS = 256
 
-    struct Interrupt {
+    let interrupts: Interrupt[256]
+    let lock: SpinLock
+
+    class Interrupt {
         next:    Interrupt*
         flags:   int
         intrno:  int
@@ -21,6 +24,39 @@ namespace HAL {
         func register( vector: int, f: proc, arg: void* = null) {
             assert( vector < NUM_VECTORS )
 
+            holding lock {
+                with self {
+                    .handler = f
+                    .arg = arg
+                    .intrno = vector
+                    .flags = 0
+                    .next = interrupts[vector]
+                }
+                interrupts[vector] = self
+            }
+        }
+
+        func unregister() {
+            let vector = self.intrno
+            assert( vector < NUM_VECTORS )
+
+            holding lock {
+                let prev = null as Interrupt*
+                let curr = interrupts[vector]
+
+                while curr != null {
+                    if curr == self {
+                        if prev == null {
+                            interrupts[vector] = curr.next
+                        } else {
+                            prev.next = curr.next
+                        }
+                        return
+                    }
+                    prev = curr
+                    curr = curr.next
+                }
+            }
         }
     }
 
@@ -75,13 +111,22 @@ namespace HAL {
         func set_gate(vector: int, handler_addr: int, selector: int, flags: u8, ist: u8) {
             assert( vector < NUM_VECTORS )
 
-            entries[vector].offset_low  = (handler_addr & 0xFFFF) as u16
-            entries[vector].selector    = selector as u16
-            entries[vector].ist         = ist
-            entries[vector].type_attr   = flags
-            entries[vector].offset_mid  = ((handler_addr >> 16) & 0xFFFF) as u16
-            entries[vector].offset_high = ((handler_addr >> 32) & 0xFFFF_FFFF) as u32
-            entries[vector].zero        = 0
+            // Keep casts out of the with block. The parser otherwise treats
+            // the following field assignment as part of the cast expression.
+            let offset_low: u16 = (handler_addr & 0xFFFF) as u16
+            let offset_mid: u16 = ((handler_addr >> 16) & 0xFFFF) as u16
+            let offset_high: u32 = ((handler_addr >> 32) & 0xFFFF_FFFF) as u32
+            let gate_selector: u16 = selector as u16
+
+            with entries[vector] {
+                .offset_low  = offset_low
+                .selector    = gate_selector
+                .ist         = ist
+                .type_attr   = flags
+                .offset_mid  = offset_mid
+                .offset_high = offset_high
+                .zero        = 0
+            }
         }
         
         func init() {
@@ -102,12 +147,25 @@ namespace HAL {
 }
 
 func isr_handler( ctx: HAL.IDT.Context* ) {
+    match ctx.vector {
+        0  => hs.write( "\x1b[1;31mDIVIDE BY ZERO:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 
+        6  => hs.write( "\x1b[1;31mINVALID OPCODE:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 
+        13 => hs.write( "\x1b[1;31mGENERAL PROTECTION FAULT:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
+        14 => hs.write( "\x1b[1;31mPAGE FAULT:\x1b[0m err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
+        _  => hs.write( "\x1b[1;31mEXCEPTION:\x1b[0m vector=\(ctx.vector:hex) err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
+    }
+
+    let intr = HAL.interrupts[ctx.vector]
+    while intr != null {
+        intr.handler( intr.arg )
+        intr = intr.next
+    }
+
     if ctx.vector == 8 {
         double_fault_handler(ctx)
         return
     }
 
-    hs.write( "\x1b[1;31mEXCEPTION:\x1b[0m vector=\(ctx.vector:hex) err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
     llpl_panic_backtrace_from_frame( ctx.rbp )
     // Linked from hal/isr.m64. Dispatching through HAL.interrupts can be
     // filled in once the interrupt context layout is consumed on the LLPL side.

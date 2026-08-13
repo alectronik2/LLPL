@@ -50,6 +50,9 @@ cd examples/limine_baremetal_demo
 
 Commands:
 
+- `new <directory>`: create a small hosted LLPL project template. The target
+  must not already contain `build.yaml` or `main.llpl`.
+
 - `build`: run the compile, assemble, link, and package pipeline, except packages marked `run_only`.
 - `check`: run compile/assemble steps only; skip link/package.
 - `run`: run `build`, including `run_only` packages, then launch the configured QEMU command.

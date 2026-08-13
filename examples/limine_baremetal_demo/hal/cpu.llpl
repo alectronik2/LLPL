@@ -1,3 +1,5 @@
+import kern
+
 namespace HAL { 
     func outb(port: u64, value: u8) {
         asm("outb %0, %w1" : : "a"(value), "Nd"(port))
@@ -27,13 +29,58 @@ namespace HAL {
         cr3
     }
 
+    func write_msr(msr: u32, value: uint) {
+        let low = value as u32
+        let high = (value >> 32) as u32
+        asm("wrmsr" : : "c"(msr), "a"(low), "d"(high))
+    }
+
     // CPUID leaf 1 exposes the processor's initial local APIC ID. It is a
     // stable owner token for kernel locks until a real per-CPU subsystem is
     // installed.
-    func cpu_id() -> u64 {
+    func cpu_id() -> uint {
         let eax: u32 = 1
         let ebx: u32
         asm("cpuid" : "+a"(eax), "=b"(ebx) : : "ecx", "edx")
-        (ebx >> 24) as u64
+        (ebx >> 24) as uint
+    }
+
+    struct PerCpu {
+        this:   PerCpu*
+        cpuid:  uint
+        thread: Kern.Thread
+    }
+
+    let percpu: PerCpu[16]  
+
+    func cpuid_num() -> uint {
+        let ebx: u32
+
+        asm( "mov $1, %%eax\n"
+             "cpuid\n"
+             "mov %%ebx, %0\n"
+             : "=r"(ebx)
+             :
+             : "eax", "ecx", "edx")
+        (ebx >> 24) as uint
+    }
+
+    func set_gs_base( base: uint ) {
+        write_msr( 0xC000_0101, base )
+    }
+
+    func percpu_init() {
+        let cpu = cpuid_num()
+
+        percpu[cpu].this = &percpu[cpu]
+        percpu[cpu].cpuid = cpu
+
+        set_gs_base( (&percpu[cpu]) as uint )
+    }
+
+    func current() -> PerCpu* {
+        let base: u64
+        asm( "mov %%gs:0, %0" : "=r"(base) )
+        base as PerCpu*
     }
 }

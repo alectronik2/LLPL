@@ -37,6 +37,9 @@ let value: Result<int, char*> = list.get(0)  // Returns 2
 // Insert at index
 list.insert(1, 5)  // [2, 5, 3]
 
+// Remove first matching value
+let removed_item: bool = list.remove_item(5)  // [2, 3]
+
 // Convert to vector
 let vec: Vector<int> = list.to_vector()
 ```
@@ -50,6 +53,7 @@ let vec: Vector<int> = list.to_vector()
 - `get(index)` - Get element at index
 - `insert(index, value)` - Insert at index
 - `remove(index)` - Remove at index
+- `remove_item(value)` - Remove first matching value
 - `size()` - Get number of elements
 - `is_empty()` - Check if empty
 - `clear()` - Remove all elements
@@ -65,6 +69,7 @@ let list: std::DoublyLinkedList<int> = new std::DoublyLinkedList<int>()
 list.push_front(1)
 list.push_back(2)
 list.pop_back()  // O(1) unlike singly linked list
+list.remove(1)   // Remove first matching value
 
 // Iterate backwards
 let reversed: Vector<int> = list.reverse_iterate()
@@ -72,6 +77,8 @@ let reversed: Vector<int> = list.reverse_iterate()
 
 **Additional Methods:**
 - `pop_back()` - Remove from end (O(1))
+- `remove(value)` - Remove first matching value
+- `remove_item(value)` - Remove first matching value
 - `reverse_iterate()` - Get elements in reverse order
 
 ### Stack\<T\>

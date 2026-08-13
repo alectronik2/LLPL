@@ -91,6 +91,7 @@ struct Configuration {
 struct BuildConfig {
     string project;
     string entry;
+    string generatedC;
     string llplCompiler = "../../llpl";
     string[string] variables;
 
@@ -256,6 +257,7 @@ BuildConfig loadConfig(string path) {
 
     cfg.project = requireStr(root, "project", absPath);
     cfg.entry = requireStr(root, "entry", absPath);
+    cfg.generatedC = getStr(root, "generated_c", stripExtension(cfg.entry) ~ ".c");
     cfg.llplCompiler = getStr(root, "llpl_compiler", "../../llpl");
 
     if (auto v = "variables" in root) {
@@ -383,6 +385,7 @@ private string[] substituteList(string[] list, const string[string] vars) {
 // pipeline stage only ever sees already-substituted, real paths/commands.
 void substituteVariables(ref BuildConfig cfg, const string[string] vars) {
     cfg.commonCflags = substituteList(cfg.commonCflags, vars);
+    cfg.generatedC = substitute(cfg.generatedC, vars);
     foreach (name, ref c; cfg.configurations) {
         c.cflags = substituteList(c.cflags, vars);
     }
