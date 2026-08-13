@@ -1,3 +1,5 @@
+import kern.timer
+
 namespace HAL {
     namespace PIT {
         const TMR_CTRL         = 0x43
@@ -23,10 +25,12 @@ namespace HAL {
         let ticks              = 0
         let clocks             = 0
         let systemclock: timeval
+        let timer_interrupt: HAL.Interrupt = null
 
-        func timer_handler( arg: void* ) -> Status {
+        func timer_handler( arg: void* ) {
             clocks += CLOCKS_PER_TICK
             ticks += 1
+            Timer.on_pit_tick()
 
             systemclock.usec += USECS_PER_TICK
             while systemclock.usec >= 1_000_000 {
@@ -35,8 +39,6 @@ namespace HAL {
             }
 
             run_timer_list()
-
-            return STATUS.Ok
         }
 
         func run_timer_list() {
@@ -49,6 +51,12 @@ namespace HAL {
             HAL.outb( TMR_CNT0, (cnt & 0xFF) as u8 )
             HAL.outb( TMR_CNT0, (cnt >> 8) as u8)
 
+            timer_interrupt = new HAL.Interrupt()
+            let handler: HAL.proc = func(arg: void*) {
+                timer_handler( arg )
+            }
+            timer_interrupt.register( 0x20, handler )
+            HAL.PIC.enable_irq( 0 )
         }
     }
 }

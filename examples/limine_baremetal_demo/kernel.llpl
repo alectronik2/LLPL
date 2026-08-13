@@ -243,6 +243,7 @@ func kernel_main() {
     HAL.GDT.init()
     HAL.IDT.init()
     HAL.PIC.init()
+    Timer.init()
     HAL.PIT.init()
 
     MM.init( memmap, hhdm )

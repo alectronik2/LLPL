@@ -147,18 +147,23 @@ namespace HAL {
 }
 
 func isr_handler( ctx: HAL.IDT.Context* ) {
+    if ctx.vector >= 32 && ctx.vector < 48 {
+        let intr = HAL.interrupts[ctx.vector]
+        while intr != null {
+            intr.handler( intr.arg )
+            intr = intr.next
+        }
+
+        HAL.PIC.eoi( (ctx.vector - 32) as uint )
+        return
+    }
+
     match ctx.vector {
         0  => hs.write( "\x1b[1;31mDIVIDE BY ZERO:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 
         6  => hs.write( "\x1b[1;31mINVALID OPCODE:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 
         13 => hs.write( "\x1b[1;31mGENERAL PROTECTION FAULT:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
         14 => hs.write( "\x1b[1;31mPAGE FAULT:\x1b[0m err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
         _  => hs.write( "\x1b[1;31mEXCEPTION:\x1b[0m vector=\(ctx.vector:hex) err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
-    }
-
-    let intr = HAL.interrupts[ctx.vector]
-    while intr != null {
-        intr.handler( intr.arg )
-        intr = intr.next
     }
 
     if ctx.vector == 8 {

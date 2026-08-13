@@ -5519,6 +5519,25 @@ class CodeGenerator {
         return varDecl.type;
     }
 
+    private bool asyncFutureHasStateField(Type futureType) {
+        if (auto structDecl = futureType.name in structRegistry) {
+            foreach (field; structDecl.fields) {
+                if (field.name == "state") return true;
+            }
+        }
+        return false;
+    }
+
+    private string generateAsyncAwaitReadinessCheck(int awaitIndex, int resumeState, Type awaitType) {
+        if (!asyncFutureHasStateField(awaitType)) return "";
+        return format(
+            "        if (self->__await%d.state == 0) {\n" ~
+            "            self->state = %d;\n" ~
+            "            return __poll;\n" ~
+            "        }\n",
+            awaitIndex, resumeState);
+    }
+
     private string generateAsyncFunction(FunctionDecl funcDecl) {
         checkRestrictedAsyncFunction(funcDecl);
 
@@ -5628,6 +5647,7 @@ class CodeGenerator {
                 if (auto awaitExpr = cast(AwaitExpr)varDecl.initializer) {
                     code ~= format("        self->__await%d = %s;\n", awaitIndex,
                         generateExpression(awaitExpr.expression));
+                    code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex]);
                     code ~= format("        self->%s = self->__await%d.value;\n", varDecl.name, awaitIndex);
                     code ~= format("        self->state = %d;\n", state + 1);
                     state++;
@@ -5641,6 +5661,7 @@ class CodeGenerator {
                 if (auto awaitExpr = cast(AwaitExpr)exprStmt.expression) {
                     code ~= format("        self->__await%d = %s;\n", awaitIndex,
                         generateExpression(awaitExpr.expression));
+                    code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex]);
                     code ~= format("        (void)self->__await%d.value;\n", awaitIndex);
                     code ~= format("        self->state = %d;\n", state + 1);
                     state++;

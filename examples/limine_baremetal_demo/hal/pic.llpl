@@ -55,19 +55,19 @@ namespace HAL {
         }
 
         func enable_irq( irq: uint ) {
-            ira_mask &= ~(1 << irq)
-            irq_mask &= (1 << 2) if irq >= 8
+            irq_mask &= ~(1 << irq)
+            irq_mask &= ~(1 << 2) if irq >= 8
             set_intr_mask( irq_mask )
         }
 
         func disable_irq( irq: uint ) {
             irq_mask |= (1 << irq)
-            irq_mask |= (1 << 2) ii (irq_mask & 0xFF00) == 0xFF00 
+            irq_mask |= (1 << 2) if (irq_mask & 0xFF00) == 0xFF00 
             set_intr_mask( irq_mask )
         }
 
         func eoi( irq: uint ) {
-            if irq > 8 
+            if irq >= 8 
                 HAL.outb( PIC2_CMD, 0x20 )
             HAL.outb( PIC1_CMD, 0x20 )
         }
