@@ -61,6 +61,7 @@ private TestResult runOne(string srcPath, TestOptions opts) {
     string compileFailExpectedPath = buildPath(testDir, base ~ ".compile_fail.expected");
     string astExpectedPath = buildPath(testDir, base ~ ".ast.expected");
     string asyncLayoutExpectedPath = buildPath(testDir, base ~ ".async-layout.expected");
+    string cContainsExpectedPath = buildPath(testDir, base ~ ".c.contains.expected");
     string flagsPath = buildPath(testDir, base ~ ".flags");
     string tmpBin = buildPath(tempDir(), "llplbuild-test-" ~ base);
     string tmpC = buildPath(tempDir(), "llplbuild-test-" ~ base ~ ".c");
@@ -112,6 +113,26 @@ private TestResult runOne(string srcPath, TestOptions opts) {
         }
         return compareExpectedPrefix(base, "(expected compile failure)",
             compileFailExpectedPath, compileResult.output);
+    }
+
+    if (exists(cContainsExpectedPath)) {
+        string[] compileCmd = [opts.compiler] ~ flags ~ [srcPath, "-o", tmpC];
+        auto compileResult = execute(compileCmd);
+        if (compileResult.status != 0) {
+            return TestResult(base, false, "", format("C emit failed\n%s", compileResult.output));
+        }
+
+        string actual = readText(tmpC);
+        foreach (line; readText(cContainsExpectedPath).splitLines()) {
+            string needle = line.strip();
+            if (needle.length == 0) continue;
+            if (!actual.canFind(needle)) {
+                return TestResult(base, false, "", format(
+                    "generated C did not contain expected text from %s\nmissing: %s",
+                    cContainsExpectedPath, needle));
+            }
+        }
+        return TestResult(base, true, "(generated C contains golden)", "");
     }
 
     string[] compileCmd = [opts.compiler] ~ flags ~ [srcPath, "-b", "-o", tmpBin];

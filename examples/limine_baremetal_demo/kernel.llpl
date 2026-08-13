@@ -254,6 +254,7 @@ func kernel_main() {
     Terminal.init( fb )
 
     HAL.percpu_init()
+    Kern.scheduler_start()
 
     HAL.enable_interrupts()
 
@@ -269,6 +270,7 @@ func kernel_main() {
 
     "Kernel initialization complete. Halting.\n" |> hs.write
     while true {
+        Kern.thread_poll()
         HAL.halt()
     }
 }

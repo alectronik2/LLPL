@@ -322,12 +322,10 @@ namespace MM {
     }
 
     func kmalloc_wrapper( size: u64 ) -> char* {
-        hs.write("kmalloc_wrapper: size=\(size)\n")
         MM.malloc<void>( size )
     }
 
     func kfree_wrapper( ptr: char* ) {
-        hs.write("kfree_wrapper: ptr=\(ptr:hex)\n")
         MM.free( ptr as void* )
     }
 

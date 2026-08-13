@@ -107,6 +107,13 @@ naked func isr_common {
     mov RDI, RSP
     call isr_handler
 
+    // The scheduler may return a different saved interrupt frame.  Resume
+    // from that frame by making it the active stack before restoring regs.
+    test RAX, RAX
+    jz .same_context
+    mov RSP, RAX
+.same_context:
+
     // Restore registers in reverse order.
     pop R15
     pop R14

@@ -879,7 +879,9 @@ class CodeGenerator {
     private void computeReachableFunctions(Program[] programs) {
         if (!enableDCE) return;
 
-        // Roots: main / kernel_main / extern functions.
+        // Roots: main / kernel_main / extern functions. Async functions also
+        // expose public start/poll ABI helpers, so keep their bodies even when
+        // the blocking wrapper is not called directly.
         foreach (prog; programs) {
             foreach (decl; prog.declarations) {
                 auto funcDecl = cast(FunctionDecl)decl;
@@ -889,6 +891,7 @@ class CodeGenerator {
                     funcDecl.name == "_start" || funcDecl.name == "kernel_main" ||
                     funcDecl.name == "llpl_panic_putc" ||
                     funcDecl.name == "llpl_panic_halt" ||
+                    funcDecl.isAsync ||
                     funcDecl.isInterrupt ||
                     isExternalAbiRoot(key)) {
                     markFunctionReachable(key);
@@ -5625,7 +5628,7 @@ class CodeGenerator {
             params ~= parameterDeclaration(param);
         }
 
-        code ~= format("static %s %s(%s) {\n", frameName, startName, params);
+        code ~= format("%s %s(%s) {\n", frameName, startName, params);
         code ~= format("    %s self;\n", frameName);
         code ~= "    self.state = 0;\n";
         foreach (param; funcDecl.params) {
@@ -5634,15 +5637,19 @@ class CodeGenerator {
         code ~= "    return self;\n";
         code ~= "}\n\n";
 
-        code ~= format("static %s %s(%s* self) {\n", pollName, pollFuncName, frameName);
+        code ~= format("%s %s(%s* self) {\n", pollName, pollFuncName, frameName);
         code ~= format("    %s __poll;\n", pollName);
         code ~= "    __poll.state = 0;\n";
         code ~= "    switch (self->state) {\n";
 
         int state = 0;
         int awaitIndex = 0;
+        bool needCaseLabel = true;
         foreach (stmt; funcDecl.body_.statements) {
-            code ~= format("    case %d:\n", state);
+            if (needCaseLabel) {
+                code ~= format("    case %d:\n", state);
+                needCaseLabel = false;
+            }
             if (auto varDecl = cast(VarDecl)stmt) {
                 if (auto awaitExpr = cast(AwaitExpr)varDecl.initializer) {
                     code ~= format("        self->__await%d = %s;\n", awaitIndex,
@@ -5652,6 +5659,7 @@ class CodeGenerator {
                     code ~= format("        self->state = %d;\n", state + 1);
                     state++;
                     awaitIndex++;
+                    needCaseLabel = true;
                 } else if (varDecl.initializer !is null) {
                     code ~= format("        self->%s = %s;\n", varDecl.name,
                         generateExpression(varDecl.initializer));
@@ -5666,6 +5674,7 @@ class CodeGenerator {
                     code ~= format("        self->state = %d;\n", state + 1);
                     state++;
                     awaitIndex++;
+                    needCaseLabel = true;
                 } else {
                     code ~= format("        %s;\n", generateDiscardedExpression(exprStmt.expression));
                 }
@@ -5679,6 +5688,7 @@ class CodeGenerator {
                 code ~= "        __poll.state = 1;\n";
                 code ~= "        return __poll;\n";
                 state++;
+                needCaseLabel = true;
             }
         }
 
@@ -5704,6 +5714,34 @@ class CodeGenerator {
         }
         code ~= "        }\n";
         code ~= "    }\n";
+        code ~= "}\n\n";
+
+        code ~= format("uintptr_t %s_async_frame_size() {\n", baseName);
+        code ~= format("    return sizeof(%s);\n", frameName);
+        code ~= "}\n\n";
+
+        code ~= format("void %s_async_start_into(void* __frame", baseName);
+        foreach (param; funcDecl.params) {
+            code ~= ", " ~ parameterDeclaration(param);
+        }
+        code ~= ") {\n";
+        code ~= format("    %s __tmp = %s(", frameName, startName);
+        foreach (i, param; funcDecl.params) {
+            if (i > 0) code ~= ", ";
+            code ~= param.name;
+        }
+        code ~= ");\n";
+        code ~= format("    memcpy(__frame, &__tmp, sizeof(%s));\n", frameName);
+        code ~= "}\n\n";
+
+        code ~= format("intptr_t %s_async_poll_erased(void* __frame, void* __out) {\n", baseName);
+        code ~= format("    %s __poll = %s((%s*)__frame);\n", pollName, pollFuncName, frameName);
+        if (funcDecl.returnType.name != "void" || funcDecl.returnType.isPointer) {
+            code ~= "    if (__poll.state == 1 && __out != ((void*)0)) {\n";
+            code ~= "        memcpy(__out, &__poll.value, sizeof(__poll.value));\n";
+            code ~= "    }\n";
+        }
+        code ~= "    return __poll.state;\n";
         code ~= "}\n\n";
 
         restoreDeferredRcState(savedDeferredRc);

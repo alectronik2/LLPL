@@ -52,9 +52,8 @@ namespace HAL {
             HAL.outb( TMR_CNT0, (cnt >> 8) as u8)
 
             timer_interrupt = new HAL.Interrupt()
-            let handler: HAL.proc = func(arg: void*) {
-                timer_handler( arg )
-            }
+            let handler: HAL.proc = timer_handler
+
             timer_interrupt.register( 0x20, handler )
             HAL.PIC.enable_irq( 0 )
         }
