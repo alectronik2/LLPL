@@ -13,9 +13,9 @@ func print_char(label: string, value: char) {
 }
 
 func main() -> int {
-    let a: string = "same"
-    let b: string = "same"
-    let c: string = "tail"
+    let a: String = new String("same")
+    let b: String = new String("same")
+    let c: String = new String("tail")
 
     if a == b {
         puts("same content")
@@ -30,17 +30,17 @@ func main() -> int {
         puts("lexicographic ge")
     }
 
-    print_int("len", llpl_strlen(a) as i64)
-    print_char("char", a[1])
+    print_int("len", a.byte_len())
+    print_char("char", a.byte_at(1))
 
     let map: HashMap<string, i64> = new HashMap<string, i64>()
-    map.insert(a, 1)
-    map.insert(b, 2)
-    map.insert(c, 3)
+    map.insert(a.c_str(), 1)
+    map.insert(b.c_str(), 2)
+    map.insert(c.c_str(), 3)
 
     print_int("map len", map.len())
-    print_int("same key", map.get(a).get())
-    print_int("tail key", map.get(c).get())
+    print_int("same key", map.get(a.c_str()).get())
+    print_int("tail key", map.get(c.c_str()).get())
 
     return 0
 }

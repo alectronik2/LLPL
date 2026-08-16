@@ -321,11 +321,11 @@ namespace MM {
         ((frame as uint) - (pfdb as uint)) / sizeof(PageFrame)
     }
 
-    func kmalloc_wrapper( size: u64 ) -> char* {
+    inline func kmalloc_wrapper( size: u64 ) -> char* {
         MM.malloc<void>( size )
     }
 
-    func kfree_wrapper( ptr: char* ) {
+    inline func kfree_wrapper( ptr: char* ) {
         MM.free( ptr as void* )
     }
 

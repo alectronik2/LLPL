@@ -148,6 +148,10 @@ namespace HAL {
 }
 
 func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
+    if ctx.vector == 0x80 {
+        return Kern.schedule_from_interrupt( ctx )
+    }
+
     if ctx.vector >= 32 && ctx.vector < 48 {
         let irq = (ctx.vector - 32) as uint
         let intr = HAL.interrupts[ctx.vector]

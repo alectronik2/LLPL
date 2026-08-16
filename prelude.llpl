@@ -20,6 +20,7 @@ const EINVAL = -1
 const EEXIST = -2
 const ENOMEM = -3
 const ENOENT = -4
+const ENAMETOOLONG = -5
 
 // Minimal printf-style formatter, always available without an `extern
 // func` declaration of your own. Backed by runtime/runtime.c; see that
@@ -427,10 +428,6 @@ class Regex {
 // codegen.d's ITER_HAS_NEXT et al.), so `for c in s { ... }` walks
 // Unicode codepoints.
 //
-// Every method that takes another string takes it as `string` (`char*`),
-// not `String` - LLPL has no function/method overloading, so a single
-// parameter type has to serve both a raw literal (`s + "!"`) and another
-// String (`s + other.c_str()`).
 class String : Object {
     let buf: char*
     let length: i64
@@ -1641,59 +1638,6 @@ impl Comparable for u8 {
         if self < other { return -1 }
         if self > other { return 1 }
         return 0
-    }
-}
-
-// Content-aware comparison operators for lowercase `string`/`char*`. The
-// compiler treats `string` as sugar for `char*`, so these overloads make
-// ordinary comparisons do string comparison rather than pointer comparison.
-trait StringOperators {
-    func operator==(other: Self) -> bool
-    func operator!=(other: Self) -> bool
-    func operator<(other: Self) -> bool
-    func operator>(other: Self) -> bool
-    func operator<=(other: Self) -> bool
-    func operator>=(other: Self) -> bool
-}
-
-impl StringOperators for char* {
-    func operator==(other: char*) -> bool {
-        let self_null: bool = (self as u64) == 0
-        let other_null: bool = (other as u64) == 0
-        if self_null || other_null {
-            return self_null && other_null
-        }
-        return llpl_strcmp(self, other) == 0
-    }
-
-    func operator!=(other: char*) -> bool {
-        return !(self == other)
-    }
-
-    func operator<(other: char*) -> bool {
-        let self_null: bool = (self as u64) == 0
-        let other_null: bool = (other as u64) == 0
-        if self_null || other_null {
-            return self_null && !other_null
-        }
-        return llpl_strcmp(self, other) < 0
-    }
-
-    func operator>(other: char*) -> bool {
-        let self_null: bool = (self as u64) == 0
-        let other_null: bool = (other as u64) == 0
-        if self_null || other_null {
-            return !self_null && other_null
-        }
-        return llpl_strcmp(self, other) > 0
-    }
-
-    func operator<=(other: char*) -> bool {
-        return !(self > other)
-    }
-
-    func operator>=(other: char*) -> bool {
-        return !(self < other)
     }
 }
 

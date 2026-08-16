@@ -1,3 +1,6 @@
+import std.reflection
+using namespace std
+
 extern func puts(s: string) -> i64
 
 func print_int(label: string, value: i64) {
@@ -14,7 +17,7 @@ func print_str(label: string, value: string) {
 
 @reflect
 struct User {
-    let id: i64
+    let id: int
     let name: string
 }
 

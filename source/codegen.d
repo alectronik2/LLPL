@@ -3061,22 +3061,18 @@ class CodeGenerator {
                     // qualifier as a conflicting redeclaration, not just a
                     // style nit.
                     string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
-                    bool isStructOrClassElement = !varDecl.type.isPointer &&
-                        (isStructTypeName(varDecl.type.name) || isClassTypeName(varDecl.type.name) ||
-                         isUnionTypeName(varDecl.type.name));
-                    if (varDecl.type.isArray && varDecl.type.arraySize > 0 && isStructOrClassElement) {
-                        // An array of struct/class values (not pointers) needs
+                    bool needsCompleteElement = !varDecl.type.isPointer &&
+                        (isStructTypeName(varDecl.type.name) || isUnionTypeName(varDecl.type.name));
+                    if (varDecl.type.isArray && varDecl.type.arraySize > 0 && needsCompleteElement) {
+                        // An array of struct/union values (not pointers) needs
                         // its element type *complete* even just to declare the
-                        // array's size - but struct/class bodies aren't defined
+                        // array's size - but aggregate bodies aren't defined
                         // until later in the file (after all these forward
-                        // declarations). Skip it: this only matters for a
-                        // global that's used by a file processed earlier than
-                        // the one declaring it, which none of these are (e.g.
-                        // GDT.entries/IDT.entries are only ever used from
-                        // within their own file).
+                        // declarations). Class-typed arrays are arrays of
+                        // pointers, so they can be declared with only the
+                        // earlier opaque typedef.
                     } else if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
-                        string baseType = primitiveToC(varDecl.type.name);
-                        baseType ~= pointerStars(varDecl.type);
+                        string baseType = fixedArrayElementCType(varDecl.type);
                         earlyDeclCode ~= format("extern %s%s %s[%d]%s;\n", constPrefix, baseType, cName,
                             varDecl.type.arraySize, extraDimsSuffix(varDecl.type));
                     } else {
@@ -3795,8 +3791,7 @@ class CodeGenerator {
             return format("    %s %s : %d;\n", typeToC(type), name, bitWidth);
         }
         if (type.isArray && type.arraySize > 0) {
-            string baseType = primitiveToC(type.name);
-            baseType ~= pointerStars(type);
+            string baseType = fixedArrayElementCType(type);
             return format("    %s %s[%d]%s;\n", baseType, name, type.arraySize, extraDimsSuffix(type));
         }
         return format("    %s %s;\n", typeToC(type), name);
@@ -4256,8 +4251,7 @@ class CodeGenerator {
         string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
         string code;
         if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
-            string baseType = primitiveToC(varDecl.type.name);
-            baseType ~= pointerStars(varDecl.type);
+            string baseType = fixedArrayElementCType(varDecl.type);
             code = format("%s%s%s %s[%d]%s", attrPrefix, constPrefix, baseType, cName, varDecl.type.arraySize,
                 extraDimsSuffix(varDecl.type));
         } else {
@@ -5652,6 +5646,10 @@ class CodeGenerator {
             }
             if (auto varDecl = cast(VarDecl)stmt) {
                 if (auto awaitExpr = cast(AwaitExpr)varDecl.initializer) {
+                    code ~= format("        self->state = %d;\n", state + 1);
+                    code ~= "        /* fallthrough */\n";
+                    state++;
+                    code ~= format("    case %d:\n", state);
                     code ~= format("        self->__await%d = %s;\n", awaitIndex,
                         generateExpression(awaitExpr.expression));
                     code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex]);
@@ -5667,6 +5665,10 @@ class CodeGenerator {
                 code ~= "        /* fallthrough */\n";
             } else if (auto exprStmt = cast(ExprStmt)stmt) {
                 if (auto awaitExpr = cast(AwaitExpr)exprStmt.expression) {
+                    code ~= format("        self->state = %d;\n", state + 1);
+                    code ~= "        /* fallthrough */\n";
+                    state++;
+                    code ~= format("    case %d:\n", state);
                     code ~= format("        self->__await%d = %s;\n", awaitIndex,
                         generateExpression(awaitExpr.expression));
                     code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex]);
@@ -6829,8 +6831,7 @@ class CodeGenerator {
             // Handle array declarations specially
             string constPrefix = (varDecl.isVolatile ? "volatile " : "") ~ (varDecl.isConst ? "const " : "");
             if (varDecl.type.isArray && varDecl.type.arraySize > 0) {
-                string baseType = primitiveToC(varDecl.type.name);
-                baseType ~= pointerStars(varDecl.type);
+                string baseType = fixedArrayElementCType(varDecl.type);
                 code ~= indent() ~ format("%s%s %s[%d]%s", constPrefix, baseType, emitName, varDecl.type.arraySize,
                     extraDimsSuffix(varDecl.type));
             } else {
@@ -8149,7 +8150,7 @@ class CodeGenerator {
             checkNestedArrayDims(arrLit, leftType.extraDims, "assignment target", leftType.name);
         }
 
-        string baseType = primitiveToC(leftType.name) ~ pointerStars(leftType);
+        string baseType = fixedArrayElementCType(leftType);
         string typeText = format("%s[%d]%s", baseType, leftType.arraySize, extraDimsSuffix(leftType));
         string targetCode = generateExpression(binExpr.left);
         string valueCode = generateExpression(arrLit);
@@ -10509,9 +10510,13 @@ class CodeGenerator {
         try {
             Type selfType = inferType(selfOperand);
             resolveType(selfType);
+            if (!isUnary && selfType.pointerDepth > 0 && isPointerComparisonOperator(op)) {
+                return null;
+            }
             // Inline class/struct/union operator methods only make sense on
             // aggregate values. Impl-generated operator functions also cover
-            // primitive and pointer targets such as `char*` string operators.
+            // primitive targets. Pointer comparisons are intentionally native
+            // identity/order comparisons, not overload dispatch.
             if (selfType.pointerDepth == 0 && !selfType.isArray) {
                 if (auto classDecl = selfType.name in classRegistry) {
                     ClassDecl owner;
@@ -10563,6 +10568,15 @@ class CodeGenerator {
             // fall through - not an overload
         }
         return null;
+    }
+
+    private bool isPointerComparisonOperator(string op) {
+        switch (op) {
+            case "==": case "!=": case "<": case ">": case "<=": case ">=":
+                return true;
+            default:
+                return false;
+        }
     }
 
     // The mangled C call name for findOperatorMethodDecl's match. Usually
@@ -10884,16 +10898,14 @@ class CodeGenerator {
 
     private string valueTypeForSizeof(Type type) {
         if (type.isArray && type.arraySize > 0) {
-            string baseType = primitiveToC(type.name);
-            baseType ~= pointerStars(type);
+            string baseType = fixedArrayElementCType(type);
             return format("%s[%d]%s", baseType, type.arraySize, extraDimsSuffix(type));
         }
         return typeToC(type);
     }
 
     private string pointerToValueCastType(Type type) {
-        string baseType = primitiveToC(type.name);
-        baseType ~= pointerStars(type);
+        string baseType = fixedArrayElementCType(type);
         if (type.isArray && type.arraySize > 0) {
             return format("%s (*)[%d]%s", baseType, type.arraySize, extraDimsSuffix(type));
         }
@@ -12834,10 +12846,25 @@ class CodeGenerator {
         return elemType;
     }
 
+    private string fixedArrayElementCType(Type type) {
+        string baseType = primitiveToC(type.name);
+
+        // A fixed array of class-typed values is an array of object
+        // references, not inline class structs: `Thing slots[4]` must become
+        // `Thing* slots[4]`. An explicit `Thing*[4]` already contributes the
+        // same single star through pointerStars(), matching typeToC's
+        // class-pointer collapse for scalar values.
+        if (!type.isPointer && isClassTypeName(type.name)) {
+            baseType ~= "*";
+        }
+
+        baseType ~= pointerStars(type);
+        return baseType;
+    }
+
     private string typedParameterDeclaration(Type type, string name) {
         if (type.isArray && type.arraySize > 0) {
-            string baseType = primitiveToC(type.name);
-            baseType ~= pointerStars(type);
+            string baseType = fixedArrayElementCType(type);
             return format("%s %s[%d]%s", baseType, name, type.arraySize, extraDimsSuffix(type));
         }
         return format("%s %s", typeToC(type), name);

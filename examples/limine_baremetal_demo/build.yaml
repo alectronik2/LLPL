@@ -69,6 +69,7 @@ link:
 
 package:
   output: kernel.iso
+  run_only: true
   actions:
     # Replaces the old Makefile's `check-limine` target - fails fast,
     # before doing any ISO work, if Limine's assets/tooling aren't where

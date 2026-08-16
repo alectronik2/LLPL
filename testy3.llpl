@@ -43,7 +43,7 @@ unittest {
     let e = Enum.C
     puts("Enum is \(e)")
 
-    if true 
+    if true
         puts("without braces")
     else
         puts("never mind")
