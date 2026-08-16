@@ -118,7 +118,7 @@ class Parser {
         // codegen.d's `.sizeof` property) are both unambiguous in that
         // position, so allow them there specifically.
         if (check(TokenType.Identifier) || check(TokenType.Match) || check(TokenType.Sizeof) ||
-                check(TokenType.Ui) || check(TokenType.Interrupt)) {
+                check(TokenType.Ui) || check(TokenType.Interrupt) || check(TokenType.Check)) {
             Token tok = current;
             advance();
             return tok;

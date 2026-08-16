@@ -84,6 +84,9 @@ extern func llpl_async_create(frame_size: u64, poll_fn: void*) -> char*
 extern func llpl_async_frame(task: char*) -> char*
 extern func llpl_async_poll(task: char*, out: char*) -> i64
 extern func llpl_async_block_on(task: char*, out: char*) -> i64
+extern func llpl_async_block_on_timeout(task: char*, out: char*, timeout_ms: u64) -> i64
+extern func llpl_async_cancel(task: char*) -> i64
+extern func llpl_async_is_cancelled(task: char*) -> i64
 extern func llpl_async_destroy(task: char*)
 extern func llpl_async_now_ms() -> u64
 extern func llpl_async_set_now_ms(now_ms: u64)
@@ -93,8 +96,48 @@ extern func llpl_async_executor_destroy(executor: char*)
 extern func llpl_async_executor_spawn(executor: char*, task: char*) -> i64
 extern func llpl_async_executor_poll(executor: char*) -> i64
 extern func llpl_async_executor_run_all(executor: char*) -> i64
+extern func llpl_async_executor_run_all_timeout(executor: char*, timeout_ms: u64) -> i64
+extern func llpl_async_executor_cancel_all(executor: char*) -> i64
+extern func llpl_irq_enter()
+extern func llpl_irq_exit()
+extern func llpl_in_irq() -> i64
+extern func llpl_atomic_i64_load(ptr: i64*) -> i64
+extern func llpl_atomic_i64_store(ptr: i64*, value: i64)
+extern func llpl_atomic_i64_exchange(ptr: i64*, value: i64) -> i64
+extern func llpl_atomic_i64_fetch_add(ptr: i64*, delta: i64) -> i64
+extern func llpl_atomic_i64_compare_exchange(ptr: i64*, expected: i64*, desired: i64) -> i64
+extern func llpl_atomic_u64_load(ptr: u64*) -> u64
+extern func llpl_atomic_u64_store(ptr: u64*, value: u64)
+extern func llpl_atomic_u64_exchange(ptr: u64*, value: u64) -> u64
+extern func llpl_atomic_u64_fetch_add(ptr: u64*, delta: u64) -> u64
+extern func llpl_atomic_u64_compare_exchange(ptr: u64*, expected: u64*, desired: u64) -> i64
+extern func llpl_mutex_lock(state: i64*)
+extern func llpl_mutex_try_lock(state: i64*) -> i64
+extern func llpl_mutex_unlock(state: i64*)
+extern func llpl_rwlock_read_lock(state: i64*)
+extern func llpl_rwlock_try_read_lock(state: i64*) -> i64
+extern func llpl_rwlock_read_unlock(state: i64*)
+extern func llpl_rwlock_write_lock(state: i64*)
+extern func llpl_rwlock_try_write_lock(state: i64*) -> i64
+extern func llpl_rwlock_write_unlock(state: i64*)
+extern func llpl_tls_alloc() -> i64
+extern func llpl_tls_set_i64(key: i64, value: i64)
+extern func llpl_tls_get_i64(key: i64) -> i64
+extern func llpl_tls_set_u64(key: i64, value: u64)
+extern func llpl_tls_get_u64(key: i64) -> u64
+extern func llpl_thread_spawn(entry: () -> void) -> char*
+extern func llpl_thread_join(thread: char*) -> i64
+extern func llpl_thread_detach(thread: char*) -> i64
+extern func llpl_thread_current_id() -> u64
+extern func llpl_thread_yield()
+extern func llpl_thread_sleep_ms(ms: u64)
 extern func llpl_set_allocator(alloc_fn: (u64) -> char*, free_fn: (char*) -> void)
 extern func llpl_reset_allocator()
+
+const TASK_PENDING = 0
+const TASK_RUNNING = 1
+const TASK_DONE = 2
+const TASK_CANCELLED = 3
 
 struct AsyncFuture<T> {
     state: int
@@ -123,6 +166,14 @@ func sleep_ms(ms: u64) -> SleepFuture {
     return async_sleep_until(llpl_async_now_ms() + ms)
 }
 
+func timeout_ms(ms: u64) -> SleepFuture {
+    return sleep_ms(ms)
+}
+
+func timeout_expired(deadline_ms: u64) -> AsyncFuture<bool> {
+    return async_ready(llpl_async_now_ms() >= deadline_ms)
+}
+
 func async_join(task: char*) -> i64 {
     let status = llpl_async_block_on(task, null)
     llpl_async_destroy(task)
@@ -132,11 +183,15 @@ func async_join(task: char*) -> i64 {
 class AsyncTask<T> {
     let handle: char*
     let done: bool
+    let cancelled: bool
+    let started: bool
     let value: T
 
     constructor(handle: char*) {
         self.handle = handle
         self.done = false
+        self.cancelled = false
+        self.started = false
     }
 
     destructor() {
@@ -149,7 +204,16 @@ class AsyncTask<T> {
         if self.done {
             return true
         }
-        if llpl_async_poll(self.handle, (&self.value) as char*) == 1 {
+        self.started = true
+        let state = llpl_async_poll(self.handle, (&self.value) as char*)
+        if state == -2 {
+            llpl_async_destroy(self.handle)
+            self.handle = null
+            self.done = true
+            self.cancelled = true
+            return true
+        }
+        if state == 1 {
             llpl_async_destroy(self.handle)
             self.handle = null
             self.done = true
@@ -159,8 +223,19 @@ class AsyncTask<T> {
     }
 
     func join() -> T {
+        if self.cancelled {
+            llpl_panic("cannot join cancelled async task")
+        }
         if !self.done {
-            llpl_async_block_on(self.handle, (&self.value) as char*)
+            self.started = true
+            let state = llpl_async_block_on(self.handle, (&self.value) as char*)
+            if state == -2 {
+                self.cancelled = true
+                self.done = true
+                llpl_async_destroy(self.handle)
+                self.handle = null
+                llpl_panic("cannot join cancelled async task")
+            }
             llpl_async_destroy(self.handle)
             self.handle = null
             self.done = true
@@ -168,8 +243,64 @@ class AsyncTask<T> {
         return self.value
     }
 
+    func join_timeout(timeout_ms: u64, out: T*) -> bool {
+        if self.done {
+            if !self.cancelled {
+                out[0] = self.value
+                return true
+            }
+            return false
+        }
+
+        let state = llpl_async_block_on_timeout(self.handle, (&self.value) as char*, timeout_ms)
+        self.started = true
+        if state == 1 {
+            llpl_async_destroy(self.handle)
+            self.handle = null
+            self.done = true
+            out[0] = self.value
+            return true
+        }
+        if state == -2 {
+            llpl_async_destroy(self.handle)
+            self.handle = null
+            self.done = true
+            self.cancelled = true
+        }
+        return false
+    }
+
+    func cancel() -> bool {
+        if self.done || self.handle == null {
+            return false
+        }
+        llpl_async_cancel(self.handle)
+        llpl_async_destroy(self.handle)
+        self.handle = null
+        self.done = true
+        self.cancelled = true
+        return true
+    }
+
     func is_done() -> bool {
         return self.done
+    }
+
+    func is_cancelled() -> bool {
+        return self.cancelled
+    }
+
+    func status() -> int {
+        if self.cancelled {
+            return TASK_CANCELLED
+        }
+        if self.done {
+            return TASK_DONE
+        }
+        if self.started {
+            return TASK_RUNNING
+        }
+        return TASK_PENDING
     }
 }
 
@@ -194,6 +325,375 @@ class AsyncExecutor {
 
     func run_all() -> i64 {
         return llpl_async_executor_run_all(self.handle)
+    }
+
+    func run_all_timeout(timeout_ms: u64) -> i64 {
+        return llpl_async_executor_run_all_timeout(self.handle, timeout_ms)
+    }
+
+    func cancel_all() -> i64 {
+        return llpl_async_executor_cancel_all(self.handle)
+    }
+}
+
+class AsyncChannel<T> {
+    let data: T[]
+    let capacity: i64
+    let head: i64
+    let tail: i64
+    let count: i64
+    let closed: bool
+
+    constructor(capacity: i64 = 16) {
+        if capacity <= 0 {
+            llpl_panic("AsyncChannel capacity must be positive")
+        }
+        self.capacity = capacity
+        self.data = llpl_alloc((capacity as u64) * sizeof(T)) as T[]
+        self.head = 0
+        self.tail = 0
+        self.count = 0
+        self.closed = false
+    }
+
+    destructor() {
+        llpl_free(self.data as char*)
+    }
+
+    func close() {
+        self.closed = true
+    }
+
+    func is_closed() -> bool {
+        return self.closed
+    }
+
+    func len() -> i64 {
+        return self.count
+    }
+
+    func is_empty() -> bool {
+        return self.count == 0
+    }
+
+    func is_full() -> bool {
+        return self.count >= self.capacity
+    }
+
+    func try_send(value: T) -> bool {
+        if self.closed || self.is_full() {
+            return false
+        }
+        self.data[self.tail] = value
+        self.tail = (self.tail + 1) % self.capacity
+        self.count = self.count + 1
+        return true
+    }
+
+    func try_recv(out: T*) -> bool {
+        if self.count == 0 {
+            return false
+        }
+        out[0] = self.data[self.head]
+        self.head = (self.head + 1) % self.capacity
+        self.count = self.count - 1
+        return true
+    }
+
+    func send(value: T) -> AsyncFuture<bool> {
+        return async_ready(self.try_send(value))
+    }
+
+    func recv(out: T*) -> AsyncFuture<bool> {
+        return async_ready(self.try_recv(out))
+    }
+}
+
+class AtomicI64 {
+    let value: i64
+
+    constructor(value: i64 = 0) {
+        self.value = value
+    }
+
+    func load() -> i64 {
+        return llpl_atomic_i64_load(&self.value)
+    }
+
+    func store(value: i64) {
+        llpl_atomic_i64_store(&self.value, value)
+    }
+
+    func exchange(value: i64) -> i64 {
+        return llpl_atomic_i64_exchange(&self.value, value)
+    }
+
+    func fetch_add(delta: i64) -> i64 {
+        return llpl_atomic_i64_fetch_add(&self.value, delta)
+    }
+
+    func compare_exchange(expected: i64*, desired: i64) -> bool {
+        return llpl_atomic_i64_compare_exchange(&self.value, expected, desired) != 0
+    }
+}
+
+class AtomicU64 {
+    let value: u64
+
+    constructor(value: u64 = 0) {
+        self.value = value
+    }
+
+    func load() -> u64 {
+        return llpl_atomic_u64_load(&self.value)
+    }
+
+    func store(value: u64) {
+        llpl_atomic_u64_store(&self.value, value)
+    }
+
+    func exchange(value: u64) -> u64 {
+        return llpl_atomic_u64_exchange(&self.value, value)
+    }
+
+    func fetch_add(delta: u64) -> u64 {
+        return llpl_atomic_u64_fetch_add(&self.value, delta)
+    }
+
+    func compare_exchange(expected: u64*, desired: u64) -> bool {
+        return llpl_atomic_u64_compare_exchange(&self.value, expected, desired) != 0
+    }
+}
+
+class AtomicBool {
+    let value: i64
+
+    constructor(value: bool = false) {
+        if value {
+            self.value = 1
+        } else {
+            self.value = 0
+        }
+    }
+
+    func load() -> bool {
+        return llpl_atomic_i64_load(&self.value) != 0
+    }
+
+    func store(value: bool) {
+        if value {
+            llpl_atomic_i64_store(&self.value, 1)
+        } else {
+            llpl_atomic_i64_store(&self.value, 0)
+        }
+    }
+
+    func exchange(value: bool) -> bool {
+        if value {
+            return llpl_atomic_i64_exchange(&self.value, 1) != 0
+        }
+        return llpl_atomic_i64_exchange(&self.value, 0) != 0
+    }
+
+    func compare_exchange(expected: bool, desired: bool) -> bool {
+        let expected_raw: i64 = 0
+        let desired_raw: i64 = 0
+        if expected {
+            expected_raw = 1
+        }
+        if desired {
+            desired_raw = 1
+        }
+        return llpl_atomic_i64_compare_exchange(&self.value, &expected_raw, desired_raw) != 0
+    }
+}
+
+class Mutex {
+    let state: i64
+
+    constructor() {
+        self.state = 0
+    }
+
+    func lock() {
+        llpl_mutex_lock(&self.state)
+    }
+
+    func acquire() {
+        self.lock()
+    }
+
+    func try_lock() -> bool {
+        return llpl_mutex_try_lock(&self.state) != 0
+    }
+
+    func unlock() {
+        llpl_mutex_unlock(&self.state)
+    }
+
+    func release() {
+        self.unlock()
+    }
+}
+
+class RwLock {
+    let state: i64
+
+    constructor() {
+        self.state = 0
+    }
+
+    func read_lock() {
+        llpl_rwlock_read_lock(&self.state)
+    }
+
+    func try_read_lock() -> bool {
+        return llpl_rwlock_try_read_lock(&self.state) != 0
+    }
+
+    func read_unlock() {
+        llpl_rwlock_read_unlock(&self.state)
+    }
+
+    func write_lock() {
+        llpl_rwlock_write_lock(&self.state)
+    }
+
+    func try_write_lock() -> bool {
+        return llpl_rwlock_try_write_lock(&self.state) != 0
+    }
+
+    func write_unlock() {
+        llpl_rwlock_write_unlock(&self.state)
+    }
+}
+
+class TaskLocalI64 {
+    let key: i64
+
+    constructor(initial: i64 = 0) {
+        self.key = llpl_tls_alloc()
+        self.set(initial)
+    }
+
+    func set(value: i64) {
+        llpl_tls_set_i64(self.key, value)
+    }
+
+    func get() -> i64 {
+        return llpl_tls_get_i64(self.key)
+    }
+}
+
+class TaskLocalU64 {
+    let key: i64
+
+    constructor(initial: u64 = 0) {
+        self.key = llpl_tls_alloc()
+        self.set(initial)
+    }
+
+    func set(value: u64) {
+        llpl_tls_set_u64(self.key, value)
+    }
+
+    func get() -> u64 {
+        return llpl_tls_get_u64(self.key)
+    }
+}
+
+func thread_yield() {
+    llpl_thread_yield()
+}
+
+func thread_sleep_ms(ms: u64) {
+    llpl_thread_sleep_ms(ms)
+}
+
+func thread_current_id() -> u64 {
+    return llpl_thread_current_id()
+}
+
+class ThreadStart<T> {
+    let entry: () -> T
+    let value: T
+
+    constructor(entry: () -> T) {
+        self.entry = entry
+    }
+
+    func run() {
+        self.value = self.entry()
+    }
+
+    func result() -> T {
+        return self.value
+    }
+}
+
+class Thread<T> {
+    let handle: char*
+    let start: ThreadStart<T>
+    let joined: bool
+    let detached: bool
+
+    constructor(entry: () -> T) {
+        self.start = new ThreadStart<T>(entry)
+        self.handle = llpl_thread_spawn(func[self]() -> void {
+            self.start.run()
+        })
+        if self.handle == null {
+            llpl_panic("failed to spawn thread")
+        }
+        self.joined = false
+        self.detached = false
+    }
+
+    destructor() {
+        if self.handle != null && !self.joined && !self.detached {
+            llpl_thread_detach(self.handle)
+            self.handle = null
+            self.detached = true
+        }
+        if self.joined && self.start != null {
+            delete self.start
+            self.start = null
+        }
+    }
+
+    func join() -> T {
+        if self.joined {
+            llpl_panic("cannot join thread twice")
+        }
+        if self.detached {
+            llpl_panic("cannot join detached thread")
+        }
+        if llpl_thread_join(self.handle) <= 0 {
+            llpl_panic("thread join failed")
+        }
+        self.handle = null
+        self.joined = true
+        return self.start.result()
+    }
+
+    func detach() -> bool {
+        if self.joined || self.detached || self.handle == null {
+            return false
+        }
+        if llpl_thread_detach(self.handle) <= 0 {
+            return false
+        }
+        self.handle = null
+        self.detached = true
+        return true
+    }
+
+    func is_joined() -> bool {
+        return self.joined
+    }
+
+    func is_detached() -> bool {
+        return self.detached
     }
 }
 

@@ -134,6 +134,7 @@ const ASYNC_RUNTIME_FUNCTIONS = [
     'async_start', 'async_run', 'async_ready', 'async_pending', 'async_sleep_until',
     'sleep_ms', 'async_join',
     'llpl_async_poll', 'llpl_async_destroy', 'llpl_async_now_ms',
+    'llpl_async_set_now_ms', 'llpl_async_advance_ms',
     'llpl_async_executor_spawn', 'llpl_async_executor_poll', 'llpl_async_executor_run_all',
 ];
 

@@ -168,6 +168,14 @@ class AssignExpr: Expr {
     }
 }
 
+class RawExpr: Expr {
+    let text: String
+
+    constructor(text: String) {
+        self.text = new String(text.c_str())
+    }
+}
+
 // ============================================================================
 // STATEMENTS
 // ============================================================================
@@ -304,9 +312,7 @@ class Program: ASTNode {
     let decls: Vector     // Vector<Decl*>
 
     constructor(decls: Vector*) {
-        // TODO: Copy vector contents or handle pointer properly
-        // For now, create empty vector
-        self.decls = new Vector()
+        self.decls = decls
     }
 }
 

@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <pthread.h>
+#include <sched.h>
 #endif
 
 #define LLPL_EH_MAX_ERROR_SIZE 256
@@ -147,6 +149,7 @@ static __LLPL_Closure llpl_custom_alloc = {0};
 static __LLPL_Closure llpl_custom_free = {0};
 static LLPL_AllocFn llpl_custom_alloc_raw = NULL;
 static LLPL_FreeFn llpl_custom_free_raw = NULL;
+static int llpl_irq_depth = 0;
 
 static size_t block_size(BlockHeader* b) { return b->size & ~ALLOC_FLAG; }
 static int block_allocated(BlockHeader* b) { return b->size & ALLOC_FLAG; }
@@ -240,6 +243,9 @@ static HeapSegment* segment_for_ptr(void* ptr) {
 }
 
 void* rc_alloc(size_t size) {
+    if (llpl_irq_depth > 0) {
+        llpl_panic("heap allocation is not IRQ-safe");
+    }
     if (llpl_custom_alloc.fn) {
         return (void*)((char* (*)(void*, uint64_t))llpl_custom_alloc.fn)(
             llpl_custom_alloc.env, (uint64_t)size);
@@ -1155,6 +1161,7 @@ char* llpl_async_create(uint64_t frame_size, void* poll_fn) {
     }
     task->frame_size = frame_size;
     task->poll = (LLPL_AsyncPollFn)poll_fn;
+    task->cancelled = 0;
     return (char*)task;
 }
 
@@ -1166,6 +1173,7 @@ char* llpl_async_frame(char* task) {
 int64_t llpl_async_poll(char* task, char* out) {
     if (!task) return -1;
     LLPL_AsyncTask* t = (LLPL_AsyncTask*)task;
+    if (t->cancelled) return -2;
     if (!t->poll || !t->frame) return -1;
     return (int64_t)t->poll(t->frame, out);
 }
@@ -1178,6 +1186,28 @@ int64_t llpl_async_block_on(char* task, char* out) {
     return state;
 }
 
+int64_t llpl_async_block_on_timeout(char* task, char* out, uint64_t timeout_ms) {
+    uint64_t deadline = llpl_async_now_ms() + timeout_ms;
+    int64_t state = 0;
+    do {
+        state = llpl_async_poll(task, out);
+        if (state != 0) return state;
+        if (llpl_async_now_ms() >= deadline) return 0;
+    } while (1);
+}
+
+int64_t llpl_async_cancel(char* task) {
+    if (!task) return -1;
+    LLPL_AsyncTask* t = (LLPL_AsyncTask*)task;
+    t->cancelled = 1;
+    return 1;
+}
+
+int64_t llpl_async_is_cancelled(char* task) {
+    if (!task) return 0;
+    return ((LLPL_AsyncTask*)task)->cancelled ? 1 : 0;
+}
+
 void llpl_async_destroy(char* task) {
     if (!task) return;
     LLPL_AsyncTask* t = (LLPL_AsyncTask*)task;
@@ -1186,8 +1216,12 @@ void llpl_async_destroy(char* task) {
 }
 
 static uint64_t llpl_async_clock_ms = 0;
+static int llpl_async_manual_clock = 0;
 
 uint64_t llpl_async_now_ms(void) {
+    if (llpl_async_manual_clock) {
+        return llpl_async_clock_ms;
+    }
 #if __STDC_HOSTED__ && defined(CLOCK_MONOTONIC)
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
@@ -1198,12 +1232,352 @@ uint64_t llpl_async_now_ms(void) {
 }
 
 void llpl_async_set_now_ms(uint64_t now_ms) {
+    llpl_async_manual_clock = 1;
     llpl_async_clock_ms = now_ms;
 }
 
 uint64_t llpl_async_advance_ms(uint64_t delta_ms) {
+    llpl_async_manual_clock = 1;
     llpl_async_clock_ms += delta_ms;
     return llpl_async_clock_ms;
+}
+
+void llpl_irq_enter(void) {
+    llpl_irq_depth++;
+}
+
+void llpl_irq_exit(void) {
+    if (llpl_irq_depth > 0) {
+        llpl_irq_depth--;
+    }
+}
+
+int64_t llpl_in_irq(void) {
+    return llpl_irq_depth > 0 ? 1 : 0;
+}
+
+int64_t llpl_atomic_i64_load(int64_t* ptr) {
+    __asm__ __volatile__("" ::: "memory");
+    int64_t value = *ptr;
+    __asm__ __volatile__("" ::: "memory");
+    return value;
+}
+
+void llpl_atomic_i64_store(int64_t* ptr, int64_t value) {
+    __asm__ __volatile__("" ::: "memory");
+    *ptr = value;
+    __asm__ __volatile__("" ::: "memory");
+}
+
+int64_t llpl_atomic_i64_exchange(int64_t* ptr, int64_t value) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("xchgq %0, %1" : "+r"(value), "+m"(*ptr) : : "memory");
+    return value;
+#else
+    int64_t old = *ptr;
+    *ptr = value;
+    return old;
+#endif
+}
+
+int64_t llpl_atomic_i64_fetch_add(int64_t* ptr, int64_t delta) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("lock; xaddq %0, %1" : "+r"(delta), "+m"(*ptr) : : "memory");
+    return delta;
+#else
+    int64_t old = *ptr;
+    *ptr = old + delta;
+    return old;
+#endif
+}
+
+int64_t llpl_atomic_i64_compare_exchange(int64_t* ptr, int64_t* expected, int64_t desired) {
+#if defined(__x86_64__)
+    int64_t old = *expected;
+    unsigned char ok;
+    __asm__ __volatile__(
+        "lock; cmpxchgq %3, %1; sete %0"
+        : "=q"(ok), "+m"(*ptr), "+a"(old)
+        : "r"(desired)
+        : "memory");
+    if (!ok) *expected = old;
+    return ok ? 1 : 0;
+#else
+    if (*ptr == *expected) {
+        *ptr = desired;
+        return 1;
+    }
+    *expected = *ptr;
+    return 0;
+#endif
+}
+
+uint64_t llpl_atomic_u64_load(uint64_t* ptr) {
+    return (uint64_t)llpl_atomic_i64_load((int64_t*)ptr);
+}
+
+void llpl_atomic_u64_store(uint64_t* ptr, uint64_t value) {
+    llpl_atomic_i64_store((int64_t*)ptr, (int64_t)value);
+}
+
+uint64_t llpl_atomic_u64_exchange(uint64_t* ptr, uint64_t value) {
+    return (uint64_t)llpl_atomic_i64_exchange((int64_t*)ptr, (int64_t)value);
+}
+
+uint64_t llpl_atomic_u64_fetch_add(uint64_t* ptr, uint64_t delta) {
+    return (uint64_t)llpl_atomic_i64_fetch_add((int64_t*)ptr, (int64_t)delta);
+}
+
+int64_t llpl_atomic_u64_compare_exchange(uint64_t* ptr, uint64_t* expected, uint64_t desired) {
+    return llpl_atomic_i64_compare_exchange((int64_t*)ptr, (int64_t*)expected, (int64_t)desired);
+}
+
+static void llpl_blocking_lock_irq_check(char* name) {
+    if (llpl_irq_depth > 0) {
+        llpl_panic(name);
+    }
+}
+
+void llpl_mutex_lock(int64_t* state) {
+    llpl_blocking_lock_irq_check("blocking lock acquire is not IRQ-safe");
+    while (!llpl_mutex_try_lock(state)) {
+#if defined(__x86_64__)
+        __asm__ __volatile__("pause");
+#endif
+    }
+}
+
+int64_t llpl_mutex_try_lock(int64_t* state) {
+    int64_t expected = 0;
+    return llpl_atomic_i64_compare_exchange(state, &expected, 1);
+}
+
+void llpl_mutex_unlock(int64_t* state) {
+    if (llpl_atomic_i64_exchange(state, 0) != 1) {
+        llpl_panic("Mutex.unlock: mutex is not locked");
+    }
+}
+
+void llpl_rwlock_read_lock(int64_t* state) {
+    llpl_blocking_lock_irq_check("blocking rwlock read acquire is not IRQ-safe");
+    while (!llpl_rwlock_try_read_lock(state)) {
+#if defined(__x86_64__)
+        __asm__ __volatile__("pause");
+#endif
+    }
+}
+
+int64_t llpl_rwlock_try_read_lock(int64_t* state) {
+    int64_t current = llpl_atomic_i64_load(state);
+    while (current >= 0) {
+        int64_t expected = current;
+        if (llpl_atomic_i64_compare_exchange(state, &expected, current + 1)) {
+            return 1;
+        }
+        current = expected;
+    }
+    return 0;
+}
+
+void llpl_rwlock_read_unlock(int64_t* state) {
+    int64_t previous = llpl_atomic_i64_fetch_add(state, -1);
+    if (previous <= 0) {
+        llpl_panic("RwLock.read_unlock: read lock is not held");
+    }
+}
+
+void llpl_rwlock_write_lock(int64_t* state) {
+    llpl_blocking_lock_irq_check("blocking rwlock write acquire is not IRQ-safe");
+    while (!llpl_rwlock_try_write_lock(state)) {
+#if defined(__x86_64__)
+        __asm__ __volatile__("pause");
+#endif
+    }
+}
+
+int64_t llpl_rwlock_try_write_lock(int64_t* state) {
+    int64_t expected = 0;
+    return llpl_atomic_i64_compare_exchange(state, &expected, -1);
+}
+
+void llpl_rwlock_write_unlock(int64_t* state) {
+    if (llpl_atomic_i64_exchange(state, 0) != -1) {
+        llpl_panic("RwLock.write_unlock: write lock is not held");
+    }
+}
+
+#define LLPL_TLS_SLOT_COUNT 64
+static int64_t llpl_tls_next_key = 0;
+#if __STDC_HOSTED__
+static pthread_key_t llpl_tls_key;
+static pthread_once_t llpl_tls_once = PTHREAD_ONCE_INIT;
+
+static void llpl_tls_destroy(void* ptr) {
+    free(ptr);
+}
+
+static void llpl_tls_make_key(void) {
+    if (pthread_key_create(&llpl_tls_key, llpl_tls_destroy) != 0) {
+        llpl_panic("failed to initialize thread-local storage");
+    }
+}
+
+static uint64_t* llpl_tls_current_slots(void) {
+    pthread_once(&llpl_tls_once, llpl_tls_make_key);
+    uint64_t* slots = (uint64_t*)pthread_getspecific(llpl_tls_key);
+    if (!slots) {
+        slots = (uint64_t*)calloc(LLPL_TLS_SLOT_COUNT, sizeof(uint64_t));
+        if (!slots) {
+            llpl_panic("failed to allocate thread-local storage");
+        }
+        if (pthread_setspecific(llpl_tls_key, slots) != 0) {
+            free(slots);
+            llpl_panic("failed to bind thread-local storage");
+        }
+    }
+    return slots;
+}
+#else
+static uint64_t llpl_tls_slots[LLPL_TLS_SLOT_COUNT];
+
+static uint64_t* llpl_tls_current_slots(void) {
+    return llpl_tls_slots;
+}
+#endif
+
+int64_t llpl_tls_alloc(void) {
+    int64_t key = llpl_atomic_i64_fetch_add(&llpl_tls_next_key, 1);
+    if (key < 0 || key >= LLPL_TLS_SLOT_COUNT) {
+        llpl_panic("thread/task-local storage key limit exceeded");
+    }
+    return key;
+}
+
+static void llpl_tls_check_key(int64_t key) {
+    if (key < 0 || key >= LLPL_TLS_SLOT_COUNT) {
+        llpl_panic("thread/task-local storage key out of range");
+    }
+}
+
+void llpl_tls_set_i64(int64_t key, int64_t value) {
+    llpl_tls_check_key(key);
+    uint64_t* slots = llpl_tls_current_slots();
+    llpl_atomic_u64_store(&slots[key], (uint64_t)value);
+}
+
+int64_t llpl_tls_get_i64(int64_t key) {
+    llpl_tls_check_key(key);
+    uint64_t* slots = llpl_tls_current_slots();
+    return (int64_t)llpl_atomic_u64_load(&slots[key]);
+}
+
+void llpl_tls_set_u64(int64_t key, uint64_t value) {
+    llpl_tls_check_key(key);
+    uint64_t* slots = llpl_tls_current_slots();
+    llpl_atomic_u64_store(&slots[key], value);
+}
+
+uint64_t llpl_tls_get_u64(int64_t key) {
+    llpl_tls_check_key(key);
+    uint64_t* slots = llpl_tls_current_slots();
+    return llpl_atomic_u64_load(&slots[key]);
+}
+
+typedef void (*LLPL_ThreadEntryFn)(void* env);
+
+typedef struct {
+#if __STDC_HOSTED__
+    pthread_t thread;
+#endif
+    __LLPL_Closure entry;
+    int joined;
+    int detached;
+} LLPL_Thread;
+
+#if __STDC_HOSTED__
+static void* llpl_thread_trampoline(void* arg) {
+    LLPL_Thread* thread = (LLPL_Thread*)arg;
+    if (thread && thread->entry.fn) {
+        ((LLPL_ThreadEntryFn)thread->entry.fn)(thread->entry.env);
+    }
+    return NULL;
+}
+#endif
+
+char* llpl_thread_spawn(__LLPL_Closure entry) {
+    if (!entry.fn) return NULL;
+#if __STDC_HOSTED__
+    LLPL_Thread* thread = (LLPL_Thread*)rc_alloc(sizeof(LLPL_Thread));
+    if (!thread) return NULL;
+    thread->entry = entry;
+    thread->joined = 0;
+    thread->detached = 0;
+    if (pthread_create(&thread->thread, NULL, llpl_thread_trampoline, thread) != 0) {
+        rc_free(thread);
+        return NULL;
+    }
+    return (char*)thread;
+#else
+    (void)entry;
+    llpl_panic("user-mode threads require a hosted runtime");
+    return NULL;
+#endif
+}
+
+int64_t llpl_thread_join(char* handle) {
+    if (!handle) return -1;
+    LLPL_Thread* thread = (LLPL_Thread*)handle;
+    if (thread->joined || thread->detached) return -1;
+#if __STDC_HOSTED__
+    int rc = pthread_join(thread->thread, NULL);
+    if (rc != 0) return -1;
+    thread->joined = 1;
+    rc_free(thread);
+    return 1;
+#else
+    (void)thread;
+    llpl_panic("user-mode threads require a hosted runtime");
+    return -1;
+#endif
+}
+
+int64_t llpl_thread_detach(char* handle) {
+    if (!handle) return -1;
+    LLPL_Thread* thread = (LLPL_Thread*)handle;
+    if (thread->joined || thread->detached) return -1;
+#if __STDC_HOSTED__
+    int rc = pthread_detach(thread->thread);
+    if (rc != 0) return -1;
+    thread->detached = 1;
+    return 1;
+#else
+    (void)thread;
+    llpl_panic("user-mode threads require a hosted runtime");
+    return -1;
+#endif
+}
+
+uint64_t llpl_thread_current_id(void) {
+#if __STDC_HOSTED__
+    return (uint64_t)(uintptr_t)pthread_self();
+#else
+    return 0;
+#endif
+}
+
+void llpl_thread_yield(void) {
+#if __STDC_HOSTED__
+    sched_yield();
+#endif
+}
+
+void llpl_thread_sleep_ms(uint64_t ms) {
+#if __STDC_HOSTED__
+    usleep((useconds_t)(ms * 1000ULL));
+#else
+    uint64_t deadline = llpl_async_now_ms() + ms;
+    while (llpl_async_now_ms() < deadline) { }
+#endif
 }
 
 typedef struct LLPL_AsyncExecutor {
@@ -1273,7 +1647,7 @@ int64_t llpl_async_executor_poll(char* executor) {
     while (polls > 0 && ex->count > 0) {
         uint64_t index = ex->next;
         int64_t state = llpl_async_poll(ex->tasks[index], NULL);
-        if (state == 1) {
+        if (state != 0) {
             llpl_async_executor_remove(ex, index);
         } else {
             ex->next = (index + 1) % ex->count;
@@ -1289,6 +1663,28 @@ int64_t llpl_async_executor_run_all(char* executor) {
         remaining = llpl_async_executor_poll(executor);
     } while (remaining > 0);
     return remaining;
+}
+
+int64_t llpl_async_executor_run_all_timeout(char* executor, uint64_t timeout_ms) {
+    uint64_t deadline = llpl_async_now_ms() + timeout_ms;
+    int64_t remaining = 0;
+    do {
+        remaining = llpl_async_executor_poll(executor);
+        if (remaining <= 0) return remaining;
+        if (llpl_async_now_ms() >= deadline) return remaining;
+    } while (1);
+}
+
+int64_t llpl_async_executor_cancel_all(char* executor) {
+    if (!executor) return -1;
+    LLPL_AsyncExecutor* ex = (LLPL_AsyncExecutor*)executor;
+    uint64_t cancelled = 0;
+    while (ex->count > 0) {
+        llpl_async_cancel(ex->tasks[0]);
+        llpl_async_executor_remove(ex, 0);
+        cancelled++;
+    }
+    return (int64_t)cancelled;
 }
 
 // Panic support. On hosted targets the default prints to stderr and aborts.

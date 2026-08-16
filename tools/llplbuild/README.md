@@ -10,6 +10,9 @@ pipeline for:
 - linking one or more binaries
 - packaging artifacts such as bootable ISOs
 - running the result under QEMU
+- creating package-style projects with `llpl.toml`
+- formatting LLPL source indentation
+- generating Markdown API docs
 - running LLPL tests from the repo root
 
 It is intentionally not a general task runner. The build graph shape is
@@ -50,14 +53,17 @@ cd examples/limine_baremetal_demo
 
 Commands:
 
-- `new <directory>`: create a small hosted LLPL project template. The target
-  must not already contain `build.yaml` or `main.llpl`.
+- `new <directory>`: create a small hosted LLPL package template. The target
+  must not already contain `build.yaml`, `llpl.toml`, or `src/main.llpl`.
 
 - `build`: run the compile, assemble, link, and package pipeline, except packages marked `run_only`.
 - `check`: run compile/assemble steps only; skip link/package.
 - `run`: run `build`, including `run_only` packages, then launch the configured QEMU command.
 - `clean`: remove generated outputs declared by `build.yaml`.
 - `configs`: print available configurations and the default.
+- `fmt [file-or-dir ...]`: format `.llpl` files in place. With no paths, formats the package `src/` tree.
+- `fmt-check [file-or-dir ...]`: report files that would change and exit non-zero.
+- `doc [package-dir]`: generate `build/docs/api.md` from visible declarations.
 - `test`: run LLPL test files from the repo root; does not need `build.yaml`.
 
 Common options:
@@ -77,6 +83,75 @@ Options:
 - `-j`, `--jobs`: max parallel compile/assemble/test jobs. Defaults to CPU count.
 - `--dir`: test directory for `test`, default `test`.
 - `--compiler`: LLPL compiler for `test`, default `./llpl`.
+
+## Package Metadata
+
+New projects include both `build.yaml` and `llpl.toml`. `build.yaml` still
+describes the native build pipeline. `llpl.toml` describes the LLPL package
+for compiler import resolution and package-level tooling:
+
+```toml
+[package]
+name = "demo"
+version = "0.1.0"
+entry = "src/main.llpl"
+target = "hosted"
+source_roots = ["src"]
+import_paths = ["lib", "modules"]
+
+[dependencies]
+# math = "vendor/math"
+```
+
+The compiler now searches these roots when resolving `import`:
+
+- the importing file's directory
+- package `source_roots`
+- package `import_paths`
+- every path declared in `[dependencies]`
+- each dependency's `src/` and `lib/`
+- `vendor/*`, `vendor/*/src`, and `vendor/*/lib`
+
+You can compile a package directory directly if `llpl.toml` has an `entry`:
+
+```sh
+llpl . -o build/main.c
+```
+
+Dependencies are local paths for now. A conventional vendored dependency
+layout is:
+
+```text
+vendor/
+  math/
+    llpl.toml
+    src/
+      math.llpl
+```
+
+## Formatting
+
+`llplbuild fmt` is deliberately conservative: it trims line edges, normalizes
+indentation from braces, and collapses repeated blank lines. It does not
+rewrite expressions or comments.
+
+```sh
+llplbuild fmt
+llplbuild fmt src test/foo.llpl
+llplbuild fmt-check
+```
+
+## Docs
+
+`llplbuild doc` scans `.llpl` files and writes a compact Markdown API index:
+
+```sh
+llplbuild doc
+open build/docs/api.md
+```
+
+It lists `func`, `async func`, `class`, `struct`, `trait`, `enum`, and
+`alias` declarations grouped by file.
 
 ## Test Command
 

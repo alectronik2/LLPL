@@ -142,6 +142,17 @@ void main(string[] args) {
     }
 
     auto projectConfig = findProjectConfig(inputFile);
+    if (exists(inputFile) && isDir(inputFile) && projectConfig !is null && projectConfig.entry.length > 0) {
+        inputFile = buildNormalizedPath(projectConfig.rootDir, projectConfig.entry);
+        if (!exists(inputFile)) {
+            if (diagnosticsJsonFile.length > 0) {
+                auto err = new CompileError(format("Package entry '%s' not found", inputFile), inputFile, 1, 1);
+                std.file.write(diagnosticsJsonFile, buildDiagnosticsJson([err]));
+            }
+            stderr.writefln("Error: package entry '%s' not found", inputFile);
+            return;
+        }
+    }
     if (targetProfile.length == 0) {
         targetProfile = projectConfig !is null && projectConfig.target.length > 0
             ? projectConfig.target

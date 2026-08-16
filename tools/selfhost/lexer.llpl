@@ -526,12 +526,18 @@ class Parser {
     let current: Token
     let decls: Vector
     let symtab: SymbolTable
+    let emit_parse: bool
 
     constructor(source: String) {
         self.lexer = new Lexer(source)
         self.current = self.lexer.next()
         self.decls = new Vector()
         self.symtab = new SymbolTable()
+        self.emit_parse = true
+    }
+
+    func set_emit_parse(value: bool) {
+        self.emit_parse = value
     }
 
     func advance() {
@@ -601,17 +607,25 @@ class Parser {
     }
 
     func line(depth: i64, text: string) {
+        if !self.emit_parse {
+            return
+        }
         print_indent(depth)
         puts(text)
     }
 
     func line_name(depth: i64, label: string, name: String) {
+        if !self.emit_parse {
+            return
+        }
         print_indent(depth)
         printf("%s %s\n", label, name.c_str())
     }
 
     func parse_program() {
-        puts("Program")
+        if self.emit_parse {
+            puts("Program")
+        }
         while !self.check("EOF") {
             self.parse_decl(1)
         }
@@ -1010,7 +1024,7 @@ class Parser {
         }
     }
 
-    func parse_param_list_text() -> String {
+    func parse_param_list_into(out_vec: Vector*) -> String {
         let params: TextBuf = new TextBuf()
         let first: bool = true
         while !self.check("RightParen") && !self.check("EOF") {
@@ -1036,6 +1050,11 @@ class Parser {
             }
             let pt: String = self.parse_type_name()
             params.append_string(pt)
+            if out_vec != null {
+                let param_type: Type* = new Type(pt, 0, false, 0)
+                let param_decl: VarDecl* = new VarDecl(pname.value, param_type, null as Expr*)
+                out_vec.push(param_decl as char*)
+            }
             if self.match("Assign") {
                 params.append_string(new String(" = "))
                 self.parse_default_expr_text(params)
@@ -1044,6 +1063,10 @@ class Parser {
             first = false
         }
         return params.to_string()
+    }
+
+    func parse_param_list_text() -> String {
+        return self.parse_param_list_into(null as Vector*)
     }
 
     func parse_function_name_text() -> String {
@@ -1086,36 +1109,36 @@ class Parser {
         self.expect("Function")
         let name: String = self.parse_function_name_text()
         self.expect("LeftParen")
-        let params: String = self.parse_param_list_text()
+        let param_vec: Vector* = new Vector()
+        let params: String = self.parse_param_list_into(param_vec)
         self.expect("RightParen")
         let ret: String = new String("void")
         if self.match("Arrow") {
             ret = self.parse_type_name()
         }
-        print_indent(depth)
-        if is_public {
-            printf("Public ")
+        if self.emit_parse {
+            print_indent(depth)
+            if is_public {
+                printf("Public ")
+            }
+            if is_extern {
+                printf("Extern ")
+            }
+            if is_inline {
+                printf("Inline ")
+            }
+            if is_interrupt {
+                printf("Interrupt ")
+            }
+            printf("Function %s(%s) -> %s\n", name.c_str(), params.c_str(), ret.c_str())
         }
-        if is_extern {
-            printf("Extern ")
-        }
-        if is_inline {
-            printf("Inline ")
-        }
-        if is_interrupt {
-            printf("Interrupt ")
-        }
-        printf("Function %s(%s) -> %s\n", name.c_str(), params.c_str(), ret.c_str())
+        let body: Block* = null as Block*
         if self.check("LeftBrace") {
-            self.parse_block(depth + 1)
+            body = self.parse_block(depth + 1)
         }
 
         // Build AST node
-        let param_vec: Vector* = new Vector()
-        // TODO: parse params string into VarDecl nodes
         let ret_type: Type* = new Type(ret, 0, false, 0)
-        let body: Block* = null as Block*
-        // TODO: parse body into Block node when we have stmt parsing
         let func_decl: FunctionDecl* = new FunctionDecl(name, param_vec, ret_type, body)
         self.decls.push((func_decl) as char*)
     }
@@ -1588,7 +1611,7 @@ class Parser {
         }
     }
 
-    func parse_var_decl(depth: i64) {
+    func parse_var_decl(depth: i64) -> VarDecl* {
         let is_volatile: bool = self.match("Volatile")
         let is_const: bool = self.match("Const")
         if !is_const {
@@ -1604,7 +1627,7 @@ class Parser {
             if self.match("Assign") {
                 self.parse_expr_until(depth + 1, "expr", "RightBrace")
             }
-            return
+            return null as VarDecl*
         }
         if self.check("Interrupt") {
             self.current = new Token("Identifier", self.current.value, self.current.line, self.current.column)
@@ -1620,23 +1643,30 @@ class Parser {
             if self.match("Assign") {
                 self.parse_expr_until(depth + 1, "expr", "RightBrace")
             }
-            return
+            return null as VarDecl*
         }
         let ty: String = new String("<inferred>")
+        let type_ref: Type* = null as Type*
         if self.match("Colon") {
             ty = self.parse_type_name()
+            type_ref = new Type(ty, 0, false, 0)
         }
-        print_indent(depth)
-        if is_const {
-            printf("Const %s: %s\n", name.value.c_str(), ty.c_str())
-        } else if is_volatile {
-            printf("Volatile Field %s: %s\n", name.value.c_str(), ty.c_str())
-        } else {
-            printf("Field %s: %s\n", name.value.c_str(), ty.c_str())
+        if self.emit_parse {
+            print_indent(depth)
+            if is_const {
+                printf("Const %s: %s\n", name.value.c_str(), ty.c_str())
+            } else if is_volatile {
+                printf("Volatile Field %s: %s\n", name.value.c_str(), ty.c_str())
+            } else {
+                printf("Field %s: %s\n", name.value.c_str(), ty.c_str())
+            }
         }
+        let init_expr: Expr* = null as Expr*
         if self.match("Assign") {
-            self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            let init_text: String = self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            init_expr = new RawExpr(init_text) as Expr*
         }
+        return new VarDecl(name.value, type_ref, init_expr)
     }
 
     func parse_brace_pattern_text(out: TextBuf) {
@@ -1683,14 +1713,18 @@ class Parser {
         }
     }
 
-    func parse_block(depth: i64) {
+    func parse_block(depth: i64) -> Block* {
         self.expect("LeftBrace")
         self.line(depth, "Block")
+        let stmts: Vector* = new Vector()
         while !self.check("RightBrace") && !self.check("EOF") {
             let start_kind: string = self.current.kind
             let start_line: i64 = self.current.line
             let start_column: i64 = self.current.column
-            self.parse_stmt(depth + 1)
+            let stmt: Stmt* = self.parse_stmt(depth + 1)
+            if stmt != null {
+                stmts.push(stmt as char*)
+            }
             if self.current.kind == start_kind &&
                     self.current.line == start_line &&
                     self.current.column == start_column {
@@ -1700,36 +1734,47 @@ class Parser {
             }
         }
         self.expect("RightBrace")
+        return new Block(stmts)
     }
 
-    func parse_stmt(depth: i64) {
+    func parse_stmt(depth: i64) -> Stmt* {
         if self.check("Let") || self.check("Const") || self.check("Volatile") {
-            self.parse_var_decl(depth)
+            return self.parse_var_decl(depth) as Stmt*
         } else if self.match("Break") {
             self.line(depth, "Break")
+            return null as Stmt*
         } else if self.match("Continue") {
             self.line(depth, "Continue")
+            return null as Stmt*
         } else if self.match("Return") {
             self.line(depth, "Return")
+            let value: Expr* = null as Expr*
             if !self.check("RightBrace") && !self.check("EOF") {
-                self.parse_expr_until(depth + 1, "expr", "RightBrace")
+                let text: String = self.parse_expr_until(depth + 1, "expr", "RightBrace")
+                value = new RawExpr(text) as Expr*
             }
+            return new ReturnStmt(value) as Stmt*
         } else if self.match("Throw") {
             self.line(depth, "Throw")
             self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            return null as Stmt*
         } else if self.match("Delete") {
             self.line(depth, "Delete")
             self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            return null as Stmt*
         } else if self.match("Assert") {
             self.line(depth, "Assert")
             self.parse_expr_until(depth + 1, "args", "RightBrace")
+            return null as Stmt*
         } else if self.match("Defer") {
             self.line(depth, "Defer")
             self.parse_stmt(depth + 1)
+            return null as Stmt*
         } else if self.check("Identifier") && self.current.value == "comptime" {
             self.advance()
             self.line(depth, "Comptime")
             self.parse_stmt(depth + 1)
+            return null as Stmt*
         } else if self.match("If") {
             self.line(depth, "If")
             self.parse_expr_until(depth + 1, "condition", "LeftBrace")
@@ -1747,32 +1792,39 @@ class Parser {
                     self.parse_stmt(depth + 1)
                 }
             }
+            return null as Stmt*
         } else if self.match("While") {
             self.line(depth, "While")
             self.parse_expr_until(depth + 1, "condition", "LeftBrace")
             self.parse_block(depth + 1)
+            return null as Stmt*
         } else if self.match("Until") {
             self.line(depth, "Until")
             self.parse_expr_until(depth + 1, "condition", "LeftBrace")
             self.parse_block(depth + 1)
+            return null as Stmt*
         } else if self.match("Do") {
             self.line(depth, "Do")
             self.parse_block(depth + 1)
             if self.match("While") {
                 self.parse_expr_until(depth + 1, "condition", "RightBrace")
             }
+            return null as Stmt*
         } else if self.match("For") {
             self.line(depth, "For")
             self.parse_for_header(depth + 1)
             self.parse_block(depth + 1)
+            return null as Stmt*
         } else if self.match("Foreach") {
             self.line(depth, "Foreach")
             self.parse_expr_until(depth + 1, "header", "LeftBrace")
             self.parse_block(depth + 1)
+            return null as Stmt*
         } else if self.match("With") {
             self.line(depth, "With")
             self.parse_expr_until(depth + 1, "object", "LeftBrace")
             self.parse_block(depth + 1)
+            return null as Stmt*
         } else if self.match("Try") {
             self.line(depth, "Try")
             self.parse_block(depth + 1)
@@ -1787,14 +1839,18 @@ class Parser {
                 self.line(depth + 1, "Finally")
                 self.parse_block(depth + 2)
             }
+            return null as Stmt*
         } else if self.match("Match") {
             self.line(depth, "Match")
             self.parse_expr_until(depth + 1, "subject", "LeftBrace")
             self.parse_match_body(depth + 1)
+            return null as Stmt*
         } else {
             self.line(depth, "ExprStmt")
-            self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            let text: String = self.parse_expr_until(depth + 1, "expr", "RightBrace")
+            return new ExprStmt(new RawExpr(text) as Expr*) as Stmt*
         }
+        return null as Stmt*
     }
 
     func parse_match_body(depth: i64) {
@@ -1901,7 +1957,7 @@ class Parser {
             kind == "LeftBracket"
     }
 
-    func parse_expr_until(depth: i64, label: string, stop: string) {
+    func parse_expr_until(depth: i64, label: string, stop: string) -> String {
         let text: TextBuf = new TextBuf()
         let parens: i64 = 0
         let brackets: i64 = 0
@@ -1966,13 +2022,17 @@ class Parser {
                 self.advance()
             }
         }
-        print_indent(depth)
-        printf("RawExpr %s %s\n", label, text.to_string().c_str())
+        let result: String = text.to_string()
+        if self.emit_parse {
+            print_indent(depth)
+            printf("RawExpr %s %s\n", label, result.c_str())
+        }
         // Parse mode is a short-lived tool. Keep expression scratch buffers
         // alive to avoid exercising the current cleanup/free-list edge while
         // broad source parsing is still being brought up.
         let keep: char* = text as char*
         rc_retain(keep)
+        return result
     }
 
     func skip_until_decl_boundary() {
@@ -2086,18 +2146,15 @@ func dump_ast(source: String) {
 
 func dump_codegen(source: String) {
     let parser: Parser = new Parser(source)
+    parser.set_emit_parse(false)
     rc_retain(parser as char*)
     parser.parse_program()
     parser.register_declarations()
 
-    // Generate C code - inline to avoid pointer method calls
     let program: Program* = parser.build_program()
-    // For now, just print a placeholder C code header
-    puts("#include <stdint.h>")
-    puts("#include <stdbool.h>")
-    puts("")
-    puts("// Generated from LLPL selfhost")
-    puts("")
+    let gen: CodeGen = new CodeGen()
+    let output: String = gen.generate(program)
+    puts(output.c_str())
 }
 
 func main(args: string[]) -> i64 {

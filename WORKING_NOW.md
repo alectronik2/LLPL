@@ -136,11 +136,11 @@ func main() {
 
 ## ❌ **Known Limitations**
 
-### Async/Concurrency - NOT IMPLEMENTED
-- No async/await
-- No threads
-- No channels
-- Planned for next phase
+### Async/Concurrency - PARTIAL
+- Async/await syntax and lowering exist
+- Runtime task/executor primitives exist
+- No standard channels yet
+- Cancellation/timeouts and synchronization APIs are still planned
 
 ### Serialization - NOT IMPLEMENTED
 - No struct serialization
@@ -188,14 +188,14 @@ dub build
 | Filesystem I/O | ✅ | Directory traversal working |
 | Module System | ✅ | Circular imports handled |
 | Code Generation | ✅ | 64-bit C output correct |
-| Async/await | ❌ | Not implemented |
+| Async/await | ⚠️ | Syntax/lowering/runtime exist; richer concurrency APIs pending |
 | Serialization | ⚠️ | Partial JSON only |
 | 64-bit Boot | ⚠️ | Use 32-bit or baremetal_demo |
 
 ## 💡 **What's Next**
 
 ### High Priority
-1. Async/concurrency (threads, channels)
+1. Async/concurrency APIs (channels, cancellation, synchronization)
 2. Struct serialization
 3. More UI widgets (TextInput, Dropdown)
 

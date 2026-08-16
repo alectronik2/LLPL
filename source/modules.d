@@ -7,6 +7,7 @@ import std.array;
 import std.algorithm;
 import std.format;
 import std.json;
+import std.string : endsWith, indexOf, join, replace, split, splitLines, startsWith, strip;
 import std.process : environment, execute;
 import std.datetime.stopwatch;
 import std.datetime.systime : SysTime, Clock;
@@ -20,8 +21,12 @@ import comptime;
 class ProjectConfig {
     string path;
     string rootDir;
+    string packageName;
+    string version_;
+    string entry;
     string[] importPaths;
     string[] sourceRoots;
+    string[string] dependencies;
     string[] linkLibraries;
     string[] compilerFlags;
     string target;
@@ -30,6 +35,21 @@ class ProjectConfig {
         string[] result;
         foreach (p; sourceRoots) result ~= buildNormalizedPath(rootDir, p);
         foreach (p; importPaths) result ~= buildNormalizedPath(rootDir, p);
+        foreach (name, p; dependencies) {
+            string depRoot = buildNormalizedPath(rootDir, p);
+            result ~= depRoot;
+            result ~= buildNormalizedPath(depRoot, "src");
+            result ~= buildNormalizedPath(depRoot, "lib");
+        }
+        string vendorDir = buildNormalizedPath(rootDir, "vendor");
+        if (exists(vendorDir) && isDir(vendorDir)) {
+            foreach (entry; dirEntries(vendorDir, SpanMode.shallow)) {
+                if (!entry.isDir) continue;
+                result ~= entry.name;
+                result ~= buildNormalizedPath(entry.name, "src");
+                result ~= buildNormalizedPath(entry.name, "lib");
+            }
+        }
         return result;
     }
 }
@@ -435,10 +455,97 @@ private string[] jsonStringArray(JSONValue root, string key) {
     return result;
 }
 
+private string stripTomlComment(string line) {
+    bool inString = false;
+    string out_;
+    for (size_t i = 0; i < line.length; i++) {
+        char ch = line[i];
+        if (ch == '"' && (i == 0 || line[i - 1] != '\\')) {
+            inString = !inString;
+        }
+        if (ch == '#' && !inString) break;
+        out_ ~= ch;
+    }
+    return out_.strip();
+}
+
+private string unquoteToml(string value) {
+    value = value.strip();
+    if (value.length >= 2 && value[0] == '"' && value[$ - 1] == '"') {
+        return value[1 .. $ - 1];
+    }
+    return value;
+}
+
+private string[] tomlArray(string value) {
+    string[] result;
+    value = value.strip();
+    if (value.length < 2 || value[0] != '[' || value[$ - 1] != ']') return result;
+    string inner = value[1 .. $ - 1];
+    bool inString = false;
+    string current;
+    for (size_t i = 0; i < inner.length; i++) {
+        char ch = inner[i];
+        if (ch == '"' && (i == 0 || inner[i - 1] != '\\')) {
+            inString = !inString;
+            current ~= ch;
+            continue;
+        }
+        if (ch == ',' && !inString) {
+            string item = unquoteToml(current.strip());
+            if (item.length > 0) result ~= item;
+            current = "";
+            continue;
+        }
+        current ~= ch;
+    }
+    string item = unquoteToml(current.strip());
+    if (item.length > 0) result ~= item;
+    return result;
+}
+
+private ProjectConfig loadTomlProjectConfig(string candidate, string rootDir) {
+    auto config = new ProjectConfig();
+    config.path = candidate;
+    config.rootDir = rootDir;
+    string section;
+    foreach (rawLine; readText(candidate).splitLines()) {
+        string line = stripTomlComment(rawLine);
+        if (line.length == 0) continue;
+        if (line.startsWith("[") && line.endsWith("]")) {
+            section = line[1 .. $ - 1].strip();
+            continue;
+        }
+        auto idx = line.indexOf('=');
+        if (idx < 0) continue;
+        string key = line[0 .. idx].strip();
+        string value = line[idx + 1 .. $].strip();
+        if (section == "package" || section.length == 0) {
+            if (key == "name") config.packageName = unquoteToml(value);
+            else if (key == "version") config.version_ = unquoteToml(value);
+            else if (key == "entry") config.entry = unquoteToml(value);
+            else if (key == "target") config.target = unquoteToml(value);
+            else if (key == "source_roots") config.sourceRoots = tomlArray(value);
+            else if (key == "import_paths") config.importPaths = tomlArray(value);
+            else if (key == "link") config.linkLibraries = tomlArray(value);
+            else if (key == "flags") config.compilerFlags = tomlArray(value);
+        } else if (section == "dependencies") {
+            config.dependencies[key] = unquoteToml(value);
+        }
+    }
+    if (config.sourceRoots.length == 0) config.sourceRoots = ["src"];
+    config.importPaths ~= ["lib", "modules"];
+    return config;
+}
+
 ProjectConfig findProjectConfig(string entryPath) {
     string start = exists(entryPath) && isDir(entryPath) ? absolutePath(entryPath) : dirName(absolutePath(entryPath));
     string dir = start;
     while (dir.length > 0) {
+        string tomlCandidate = buildNormalizedPath(dir, "llpl.toml");
+        if (exists(tomlCandidate)) {
+            return loadTomlProjectConfig(tomlCandidate, dir);
+        }
         string candidate = buildNormalizedPath(dir, "llpl.json");
         if (exists(candidate)) {
             auto config = new ProjectConfig();

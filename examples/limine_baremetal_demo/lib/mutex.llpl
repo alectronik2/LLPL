@@ -1,4 +1,0 @@
-class Mutex {
-    func acquire() { }
-    func release() { }
-}

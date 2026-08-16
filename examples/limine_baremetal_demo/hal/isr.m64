@@ -50,6 +50,12 @@ get_double_fault_stack_top:
     mov rax, double_fault_stack_top
     ret
 
+global set_tss_rsp0
+set_tss_rsp0:
+    mov rax, tss
+    mov [rax + 4], rdi
+    ret
+
 global load_tss
 load_tss:
     ltr di

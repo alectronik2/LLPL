@@ -42,6 +42,7 @@ typedef struct {
     void* frame;
     uint64_t frame_size;
     LLPL_AsyncPollFn poll;
+    int cancelled;
 } LLPL_AsyncTask;
 
 typedef struct {
@@ -182,6 +183,9 @@ char* llpl_async_create(uint64_t frame_size, void* poll_fn);
 char* llpl_async_frame(char* task);
 int64_t llpl_async_poll(char* task, char* out);
 int64_t llpl_async_block_on(char* task, char* out);
+int64_t llpl_async_block_on_timeout(char* task, char* out, uint64_t timeout_ms);
+int64_t llpl_async_cancel(char* task);
+int64_t llpl_async_is_cancelled(char* task);
 void llpl_async_destroy(char* task);
 uint64_t llpl_async_now_ms(void);
 void llpl_async_set_now_ms(uint64_t now_ms);
@@ -191,6 +195,41 @@ void llpl_async_executor_destroy(char* executor);
 int64_t llpl_async_executor_spawn(char* executor, char* task);
 int64_t llpl_async_executor_poll(char* executor);
 int64_t llpl_async_executor_run_all(char* executor);
+int64_t llpl_async_executor_run_all_timeout(char* executor, uint64_t timeout_ms);
+int64_t llpl_async_executor_cancel_all(char* executor);
+void llpl_irq_enter(void);
+void llpl_irq_exit(void);
+int64_t llpl_in_irq(void);
+int64_t llpl_atomic_i64_load(int64_t* ptr);
+void llpl_atomic_i64_store(int64_t* ptr, int64_t value);
+int64_t llpl_atomic_i64_exchange(int64_t* ptr, int64_t value);
+int64_t llpl_atomic_i64_fetch_add(int64_t* ptr, int64_t delta);
+int64_t llpl_atomic_i64_compare_exchange(int64_t* ptr, int64_t* expected, int64_t desired);
+uint64_t llpl_atomic_u64_load(uint64_t* ptr);
+void llpl_atomic_u64_store(uint64_t* ptr, uint64_t value);
+uint64_t llpl_atomic_u64_exchange(uint64_t* ptr, uint64_t value);
+uint64_t llpl_atomic_u64_fetch_add(uint64_t* ptr, uint64_t delta);
+int64_t llpl_atomic_u64_compare_exchange(uint64_t* ptr, uint64_t* expected, uint64_t desired);
+void llpl_mutex_lock(int64_t* state);
+int64_t llpl_mutex_try_lock(int64_t* state);
+void llpl_mutex_unlock(int64_t* state);
+void llpl_rwlock_read_lock(int64_t* state);
+int64_t llpl_rwlock_try_read_lock(int64_t* state);
+void llpl_rwlock_read_unlock(int64_t* state);
+void llpl_rwlock_write_lock(int64_t* state);
+int64_t llpl_rwlock_try_write_lock(int64_t* state);
+void llpl_rwlock_write_unlock(int64_t* state);
+int64_t llpl_tls_alloc(void);
+void llpl_tls_set_i64(int64_t key, int64_t value);
+int64_t llpl_tls_get_i64(int64_t key);
+void llpl_tls_set_u64(int64_t key, uint64_t value);
+uint64_t llpl_tls_get_u64(int64_t key);
+char* llpl_thread_spawn(__LLPL_Closure entry);
+int64_t llpl_thread_join(char* thread);
+int64_t llpl_thread_detach(char* thread);
+uint64_t llpl_thread_current_id(void);
+void llpl_thread_yield(void);
+void llpl_thread_sleep_ms(uint64_t ms);
 
 // Finds the llpl_symbol_table entry whose address is the closest one at
 // or before `addr` (i.e. "which function contains this return address") -

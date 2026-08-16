@@ -21,10 +21,13 @@ const THREAD_ZOMBIE   = 4
 
 const MAX_PRIORITY  = 32
 const MAX_KERNEL_THREADS = 16
-const MAX_ASYNC_TASKS = 4
+const MAX_KERNEL_ASYNC_TASKS = 8
 const ASYNC_FRAME_BYTES = 128
 const ASYNC_RESULT_BYTES = 16
 const DEFAULT_TIME_SLICE = 4
+const USER_DEMO_BASE = 0x0000_4000_0000_0000
+const USER_DEMO_COUNTER = USER_DEMO_BASE + 0x100
+const USER_DEMO_STACK_TOP = 0x0000_4000_0010_1000
 
 func current_thread() -> Kern.Thread {
     return HAL.current().thread
@@ -34,6 +37,12 @@ namespace Kern {
     alias fun = func(void*)
     alias AsyncPollFn = func(void*, void*) -> int
     alias AsyncCompleteFn = func(uint, void*)
+
+    const IO_EVENT_SERIAL_RX = 0
+    const IO_EVENT_KEYBOARD_IRQ = 1
+    const IO_EVENT_BLOCK_DONE = 2
+    const IO_EVENT_NET_PACKET = 3
+    const IO_EVENT_COUNT = 4
 
     let runq: DoublyLinkedList<Thread>[MAX_PRIORITY]
 
@@ -104,39 +113,278 @@ namespace Kern {
     let worker_b_thread: Thread = null
     let reaper_thread: Thread = null
     let one_shot_thread: Thread = null
+    let user_demo_thread: Thread = null
+    let user_demo_last_count: uint = 0
 
-    let async_tasks: AsyncTask[MAX_ASYNC_TASKS]
-    let async_completed: uint = 0
+    let kernel_async: KernelAsyncExecutor = null
     let async_spawned_second_wave: bool = false
+    let io_event_counts: uint[IO_EVENT_COUNT]
 
-    class AsyncTask {
+    func noop_async_poll( frame: void*, out: void* ) -> int {
+        return 1
+    }
+
+    func noop_async_complete( id: uint, result: void* ) {
+    }
+
+    // IRQ-polled async tasks use preallocated storage and may not allocate,
+    // block, or take locks that interrupted code can hold. The runtime
+    // enforces the allocation rule with llpl_irq_enter/exit around IRQ
+    // dispatch; blocking and lock discipline are kernel API contracts.
+    class KernelAsyncTask {
         frame: char[ASYNC_FRAME_BYTES]
         result: char[ASYNC_RESULT_BYTES]
         poller: AsyncPollFn
         on_complete: AsyncCompleteFn
         id: uint
-        done: bool
+        active: bool
+        finished: bool
+        cancelled: bool
+        wake_tick: uint
 
-        constructor( id: uint, poller: AsyncPollFn, on_complete: AsyncCompleteFn ) {
+        constructor() {
+            self.id = 0
+            self.poller = noop_async_poll
+            self.on_complete = noop_async_complete
+            self.active = false
+            self.finished = false
+            self.cancelled = false
+            self.wake_tick = 0
+        }
+
+        func configure( id: uint, poller: AsyncPollFn, on_complete: AsyncCompleteFn, wake_tick: uint ) {
             self.id = id
             self.poller = poller
             self.on_complete = on_complete
-            self.done = false
+            self.active = true
+            self.finished = false
+            self.cancelled = false
+            self.wake_tick = wake_tick
         }
 
-        func poll() -> bool {
-            if self.done {
+        func is_done() -> bool {
+            return self.finished || self.cancelled
+        }
+
+        func is_cancelled() -> bool {
+            return self.cancelled
+        }
+
+        func status() -> int {
+            if self.cancelled {
+                return TASK_CANCELLED
+            }
+            if self.finished {
+                return TASK_DONE
+            }
+            if self.active {
+                return TASK_RUNNING
+            }
+            return TASK_PENDING
+        }
+
+        func result_uint() -> uint {
+            return *(self.result as uint*)
+        }
+
+        func cancel() -> bool {
+            if !self.active {
+                return false
+            }
+            self.cancelled = true
+            self.active = false
+            return true
+        }
+
+        func poll_now() -> bool {
+            if self.is_done() {
                 return true
+            }
+            if !self.active {
+                return false
             }
 
             let poller: AsyncPollFn = self.poller
             let state = poller( self.frame as void*, self.result as void* )
-            self.done = state != 0
-            if self.done {
+            if state != 0 {
+                self.finished = true
+                self.active = false
                 let on_complete: AsyncCompleteFn = self.on_complete
                 on_complete( self.id, self.result as void* )
+                return true
             }
-            return self.done
+            return false
+        }
+    }
+
+    class KernelAsyncExecutor {
+        slots: KernelAsyncTask[MAX_KERNEL_ASYNC_TASKS]
+        active_count: uint
+        completed_count: uint
+        next_wake_tick: uint
+
+        constructor() {
+            let i = 0
+            while i < MAX_KERNEL_ASYNC_TASKS {
+                self.slots[i] = new KernelAsyncTask()
+                i = i + 1
+            }
+            self.active_count = 0
+            self.completed_count = 0
+            self.next_wake_tick = 0
+        }
+
+        func recompute_next_wake() {
+            let have = false
+            let next = 0
+            let i = 0
+            while i < MAX_KERNEL_ASYNC_TASKS {
+                let task = self.slots[i]
+                if task != null && task.active {
+                    if !have || task.wake_tick < next {
+                        next = task.wake_tick
+                        have = true
+                    }
+                }
+                i = i + 1
+            }
+            if have {
+                self.next_wake_tick = next
+            } else {
+                self.next_wake_tick = 0
+            }
+        }
+
+        func spawn_uint_at( id: uint, frame_size: uint, result_size: uint, poller: AsyncPollFn,
+                            on_complete: AsyncCompleteFn, wake_tick: uint ) -> KernelAsyncTask {
+            assert( frame_size <= ASYNC_FRAME_BYTES, "kernel async frame storage too small" )
+            assert( result_size <= ASYNC_RESULT_BYTES, "kernel async result storage too small" )
+
+            let i = 0
+            while i < MAX_KERNEL_ASYNC_TASKS {
+                let task = self.slots[i]
+                if task != null && !task.active {
+                    task.configure( id, poller, on_complete, wake_tick )
+                    self.active_count = self.active_count + 1
+                    if self.next_wake_tick == 0 || wake_tick < self.next_wake_tick {
+                        self.next_wake_tick = wake_tick
+                    }
+                    return task
+                }
+                i = i + 1
+            }
+
+            return null
+        }
+
+        func poll_due_irq() {
+            if self.active_count == 0 {
+                return
+            }
+
+            let now = Timer.current_tick()
+            if self.next_wake_tick != 0 && now < self.next_wake_tick {
+                return
+            }
+
+            let i = 0
+            while i < MAX_KERNEL_ASYNC_TASKS {
+                let task = self.slots[i]
+                if task != null && task.active && task.wake_tick <= now {
+                    let finished = task.poll_now()
+                    if finished {
+                        self.active_count = self.active_count - 1
+                        self.completed_count = self.completed_count + 1
+                    }
+                }
+                i = i + 1
+            }
+            self.recompute_next_wake()
+        }
+
+        func poll() -> uint {
+            self.poll_due_irq()
+            return self.active_count
+        }
+
+        func task_count() -> uint {
+            return self.active_count
+        }
+
+        func is_empty() -> bool {
+            return self.active_count == 0
+        }
+
+        func run_all_timeout( timeout_ticks: uint ) -> uint {
+            if llpl_in_irq() != 0 {
+                panic("kernel async run_all_timeout is not IRQ-safe")
+            }
+            let deadline = Timer.deadline_after_ticks( timeout_ticks )
+            while self.active_count > 0 {
+                self.poll_due_irq()
+                if self.active_count == 0 {
+                    return 0
+                }
+                if Timer.current_tick() >= deadline {
+                    return self.active_count
+                }
+                HAL.halt()
+            }
+            return 0
+        }
+
+        func cancel( id: uint ) -> bool {
+            let i = 0
+            while i < MAX_KERNEL_ASYNC_TASKS {
+                let task = self.slots[i]
+                if task != null && task.active && task.id == id {
+                    if task.cancel() {
+                        self.active_count = self.active_count - 1
+                        self.recompute_next_wake()
+                        return true
+                    }
+                }
+                i = i + 1
+            }
+            return false
+        }
+
+        func cancel_all() {
+            let i = 0
+            while i < MAX_KERNEL_ASYNC_TASKS {
+                let task = self.slots[i]
+                if task != null && task.active {
+                    task.cancel()
+                }
+                i = i + 1
+            }
+            self.active_count = 0
+            self.next_wake_tick = 0
+        }
+
+        func join_uint( task: KernelAsyncTask ) -> uint {
+            if llpl_in_irq() != 0 {
+                panic("kernel async join is not IRQ-safe")
+            }
+            while task != null && task.active {
+                HAL.halt()
+            }
+            return task.result_uint()
+        }
+
+        func join_uint_timeout( task: KernelAsyncTask, timeout_ticks: uint, out: uint* ) -> bool {
+            if llpl_in_irq() != 0 {
+                panic("kernel async join_timeout is not IRQ-safe")
+            }
+            let deadline = Timer.deadline_after_ticks( timeout_ticks )
+            while task != null && task.active {
+                if Timer.current_tick() >= deadline {
+                    return false
+                }
+                HAL.halt()
+            }
+            out[0] = task.result_uint()
+            return true
         }
     }
 
@@ -175,6 +423,7 @@ namespace Kern {
         while true {
             sleep_ticks( 100 )
             reap_zombies()
+            report_user_demo()
             dump_scheduler()
         }
     }
@@ -194,25 +443,113 @@ namespace Kern {
     }
 
     func spawn_async_tick( id: uint, delay: uint ) -> bool {
-        let i = 0
-        while i < MAX_ASYNC_TASKS {
-            if async_tasks[i] == null {
-                assert( Kern_await_timer_tick_from_async_frame_size() <= ASYNC_FRAME_BYTES,
-                    "Async task frame storage too small" )
-                assert( sizeof(uint) <= ASYNC_RESULT_BYTES,
-                    "Async task result storage too small" )
-                let start = Timer.current_tick()
-                let poller: AsyncPollFn = poll_async_tick
-                let on_complete: AsyncCompleteFn = async_tick_completed
-                async_tasks[i] = new AsyncTask( id, poller, on_complete )
-                Kern_await_timer_tick_from_async_start_into( async_tasks[i].frame as void*, start, delay )
-                return true
-            }
-            i = i + 1
+        if kernel_async == null {
+            return false
+        }
+
+        let start = Timer.current_tick()
+        let poller: AsyncPollFn = poll_async_tick
+        let on_complete: AsyncCompleteFn = async_tick_completed
+        let task = kernel_async.spawn_uint_at( id, Kern_await_timer_tick_from_async_frame_size(),
+            sizeof(uint), poller, on_complete, Timer.deadline_after_ticks( delay ) )
+        if task != null {
+            Kern_await_timer_tick_from_async_start_into( task.frame as void*, start, delay )
+            task.poll_now()
+            return true
         }
 
         "Async tick task table full\n" |> HAL.Serial.write
         return false
+    }
+
+    func spawn_async( id: uint, frame_size: uint, result_size: uint, poller: AsyncPollFn,
+                      on_complete: AsyncCompleteFn, wake_tick: uint ) -> KernelAsyncTask {
+        if kernel_async == null {
+            return null
+        }
+        return kernel_async.spawn_uint_at( id, frame_size, result_size, poller, on_complete, wake_tick )
+    }
+
+    func cancel_async( id: uint ) -> bool {
+        if kernel_async == null {
+            return false
+        }
+        return kernel_async.cancel( id )
+    }
+
+    func cancel_all_async() {
+        if kernel_async != null {
+            kernel_async.cancel_all()
+        }
+    }
+
+    func poll_async_tasks() -> uint {
+        if kernel_async == null {
+            return 0
+        }
+        return kernel_async.poll()
+    }
+
+    func run_all_async_timeout( timeout_ticks: uint ) -> uint {
+        if kernel_async == null {
+            return 0
+        }
+        return kernel_async.run_all_timeout( timeout_ticks )
+    }
+
+    func join_async_uint( task: KernelAsyncTask ) -> uint {
+        if kernel_async == null {
+            return 0
+        }
+        return kernel_async.join_uint( task )
+    }
+
+    func join_async_uint_timeout( task: KernelAsyncTask, timeout_ticks: uint, out: uint* ) -> bool {
+        if kernel_async == null {
+            return false
+        }
+        return kernel_async.join_uint_timeout( task, timeout_ticks, out )
+    }
+
+    func signal_io_event( event: uint ) {
+        if event < IO_EVENT_COUNT {
+            io_event_counts[event] = io_event_counts[event] + 1
+        }
+    }
+
+    func io_event_count( event: uint ) -> uint {
+        if event >= IO_EVENT_COUNT {
+            return 0
+        }
+        return io_event_counts[event]
+    }
+
+    func io_event_ready( event: uint, seen: uint ) -> AsyncFuture<uint> {
+        if event >= IO_EVENT_COUNT {
+            return async_ready( 0 as uint )
+        }
+
+        let count = io_event_counts[event]
+        if count != seen {
+            return async_ready( count )
+        }
+        return async_ready( 0 as uint )
+    }
+
+    func serial_rx_ready( seen: uint ) -> AsyncFuture<uint> {
+        return io_event_ready( IO_EVENT_SERIAL_RX, seen )
+    }
+
+    func keyboard_irq_ready( seen: uint ) -> AsyncFuture<uint> {
+        return io_event_ready( IO_EVENT_KEYBOARD_IRQ, seen )
+    }
+
+    func block_device_ready( seen: uint ) -> AsyncFuture<uint> {
+        return io_event_ready( IO_EVENT_BLOCK_DONE, seen )
+    }
+
+    func network_packet_ready( seen: uint ) -> AsyncFuture<uint> {
+        return io_event_ready( IO_EVENT_NET_PACKET, seen )
     }
 
     func enqueue_ready( thread: Thread ) {
@@ -423,6 +760,66 @@ namespace Kern {
         thread.ctx = ctx
     }
 
+    func write_u64_le( dst: u8*, value: uint ) {
+        let i = 0
+        while i < 8 {
+            dst[i] = ((value >> ((i as uint) * 8)) & 0xFF) as u8
+            i = i + 1
+        }
+    }
+
+    func install_user_demo_program() -> bool {
+        let code_page = MM.alloc_page( MM.FrameType.Other )
+        let stack_page = MM.alloc_page( MM.FrameType.Other )
+        let code_phys = code_page << MM.PAGE_SHIFT
+        let stack_phys = stack_page << MM.PAGE_SHIFT
+        let code = MM.p2v( code_phys ) as u8*
+
+        memset( code as void*, 0, MM.PAGE_SIZE )
+        memset( MM.p2v( stack_phys ) as void*, 0, MM.PAGE_SIZE )
+
+        // movabs rax, USER_DEMO_COUNTER
+        // inc qword ptr [rax]
+        // int 0x80
+        // jmp back to inc
+        code[0] = 0x48 as u8
+        code[1] = 0xB8 as u8
+        write_u64_le( code + 2, USER_DEMO_COUNTER )
+        code[10] = 0x48 as u8
+        code[11] = 0xFF as u8
+        code[12] = 0x00 as u8
+        code[13] = 0xCD as u8
+        code[14] = 0x80 as u8
+        code[15] = 0xEB as u8
+        code[16] = 0xF9 as u8
+
+        if !MM.map_page( MM.kernel_pml4, USER_DEMO_BASE, code_phys,
+                         MM.PG_PRESENT | MM.PG_WRITABLE | MM.PG_USER ) {
+            return false
+        }
+        if !MM.map_page( MM.kernel_pml4, USER_DEMO_STACK_TOP - MM.PAGE_SIZE, stack_phys,
+                         MM.PG_PRESENT | MM.PG_WRITABLE | MM.PG_USER ) {
+            return false
+        }
+
+        return true
+    }
+
+    func prepare_user_context( thread: Thread, entry: uint, stack_top: uint ) {
+        let top = ((thread.stack as uint) + thread.stack_size) & ~0xF
+        let frame_addr = top - sizeof(HAL.IDT.Context)
+        let ctx = frame_addr as HAL.IDT.Context*
+
+        memset( ctx as void*, 0, sizeof(HAL.IDT.Context) )
+        ctx.rip = entry
+        ctx.cs = 0x18 | 3
+        ctx.rflags = 0x202
+        ctx.rsp = stack_top
+        ctx.ss = 0x20 | 3
+
+        thread.ctx = ctx
+    }
+
     func create_kernel_thread( name: String, entry: fun, arg: void* = null ) -> Thread {
         assert( sched_thread_count < MAX_KERNEL_THREADS, "create_kernel_thread: thread table full" )
 
@@ -433,6 +830,28 @@ namespace Kern {
         prepare_initial_context( thread )
         enqueue_ready( thread )
         return thread
+    }
+
+    func create_user_demo_thread() -> Thread {
+        assert( sched_thread_count < MAX_KERNEL_THREADS, "create_user_demo_thread: thread table full" )
+        assert( install_user_demo_program(), "failed to install user demo program" )
+
+        let thread = new Thread( kproc, null as fun, "user-demo", THREAD_USER )
+        sched_threads[sched_thread_count] = thread
+        sched_thread_count = sched_thread_count + 1
+        prepare_user_context( thread, USER_DEMO_BASE, USER_DEMO_STACK_TOP )
+        enqueue_ready( thread )
+        "User-mode demo thread installed: rip=\(USER_DEMO_BASE:hex) rsp=\(USER_DEMO_STACK_TOP:hex)\n" |> HAL.Serial.write
+        return thread
+    }
+
+    func report_user_demo() {
+        let count = *(USER_DEMO_COUNTER as uint*)
+        if user_demo_thread != null && count != user_demo_last_count {
+            user_demo_last_count = count
+            "[user] CPL3 demo counter=\(count)\n" |> HAL.Serial.write
+            Terminal.write( "<bright-green>[user]</> CPL3 demo counter=\(count)\n" )
+        }
     }
 
     func thread_trampoline() {
@@ -517,12 +936,14 @@ namespace Kern {
         next.state = THREAD_RUNNING
         next.time_slice = DEFAULT_TIME_SLICE
         HAL.current().thread = next
+        HAL.GDT.set_tss_rsp0( ((next.stack as uint) + next.stack_size) & ~0xF )
         return next.ctx
     }
 
     func thread_init() {
         "Thread init()\n" |> HAL.Serial.write
 
+        kernel_async = new KernelAsyncExecutor()
         spawn_async_tick( 1, 20 )
         spawn_async_tick( 2, 40 )
 
@@ -547,28 +968,20 @@ namespace Kern {
         let entry_once: fun = scheduler_demo_once
         reaper_thread = create_kernel_thread( "sched-maint", entry_reaper )
         one_shot_thread = create_kernel_thread( "one-shot", entry_once )
+        user_demo_thread = create_user_demo_thread()
 
         "Scheduler started\n" |> HAL.Serial.write
         dump_scheduler()
     }
 
     func thread_poll() {
-        let i = 0
-        while i < MAX_ASYNC_TASKS {
-            let task = async_tasks[i]
-            if task != null {
-                let finished = task.poll()
-                if finished {
-                    async_tasks[i] = null
-                    async_completed = async_completed + 1
-                    delete task
-                }
-            }
-
-            i = i + 1
+        if kernel_async == null {
+            return
         }
 
-        if async_completed >= 2 && !async_spawned_second_wave {
+        kernel_async.poll_due_irq()
+
+        if kernel_async.completed_count >= 2 && !async_spawned_second_wave {
             async_spawned_second_wave = true
             spawn_async_tick( 3, 10 )
         }

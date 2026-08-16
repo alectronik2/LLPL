@@ -46,6 +46,7 @@ namespace HAL {
         extern func get_tss() -> u64
         extern func get_kernel_stack_top() -> u64
         extern func get_double_fault_stack_top() -> u64
+        extern func set_tss_rsp0(rsp0: u64)
         extern func load_tss(selector: u16)
 
         let entries: Entry[7]

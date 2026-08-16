@@ -1,6 +1,6 @@
 # LLPL - Low Level Programming Language
 
-A low-level programming language with familiary syntax that compiles to C for bare-metal development.
+A low-level programming language with familiar syntax that compiles to C for hosted and bare-metal development.
 
 ## Features
 
@@ -19,6 +19,7 @@ A low-level programming language with familiary syntax that compiles to C for ba
 - **Module Directories**: `import hal` can import every direct `.llpl` file in `hal/`
 - **Module Export Surfaces**: `public` declarations opt modules into explicit exported symbols
 - **Result<T, E> with Traces**: `?` propagation captures a chained `file:line` trace
+- **Async/Await Lowering**: `async func` / `await` lower to explicit frame and poll-function ABIs, with a small runtime executor
 - **Panics with Hooks**: `llpl_panic("...")` prints a message and aborts; optional handler for cleanup
 - **Assert Statement**: `assert(condition)` and `assert(condition, "message")` abort with a panic on failure
 - **Default Bounds Checking**: runtime bounds checks on fixed-size array indexing are enabled by default
@@ -392,6 +393,7 @@ All CLI flags:
 | `--lsp-symbols` | Analyze a file and dump diagnostics/symbols/usages as JSON, for editor tooling. |
 | `--diagnostics-json` | Write machine-readable diagnostics JSON to a file on compiler errors. |
 | `--emit-ast` | Parse an LLPL file and emit the canonical AST dump used by golden tests. |
+| `--emit-async-layout` | Analyze async functions and print their planned state/frame layout. |
 | `--emit-provenance` | Write a JSON map from generated C lines back to LLPL source locations. |
 | `--emit-effects` | Write conservative per-function capability/effect JSON (`ffi`, `alloc`, `mmio`, `dma`, `cache`, `paging`, `unsafe`, etc.). |
 | `--debug-bundle` | Write generated C, provenance, symbol/usage JSON, effects JSON, ABI assertions, and a manifest into a replay/debug artifact directory. |
@@ -427,6 +429,52 @@ bundle plus `audit.json`:
 
 ```bash
 ./llpl audit --target=kernel --audit-dir out/audit test/hw_features_demo.llpl
+```
+
+### Async/Await
+
+`async func` and `await` are implemented as explicit state-machine lowering.
+For each async function the compiler emits a frame type, a start function,
+a poll function, an erased start/poll ABI, and a normal blocking wrapper.
+This keeps the low-level ABI inspectable for kernels while still allowing
+hosted examples to use a small runtime executor.
+
+```swift
+async func blink_once() -> int {
+    puts("await")
+    let elapsed = await sleep_ms(1)
+    return elapsed
+}
+
+func main() -> int {
+    let ignored = blink_once()
+    return 0
+}
+```
+
+Inspect the generated async frame plan with:
+
+```bash
+./llpl --emit-async-layout examples/async_await_syntax.llpl
+```
+
+### User-Mode Threads
+
+Hosted programs can spawn OS threads with `Thread<T>`. The runtime uses
+POSIX threads on hosted targets; freestanding/kernel builds keep this API
+unavailable and should use their own scheduler abstractions instead.
+`TaskLocalI64`/`TaskLocalU64` are backed by real per-thread storage in
+hosted builds.
+
+```swift
+func main() -> int {
+    let counter: AtomicI64 = new AtomicI64(0)
+    let worker: Thread<i64> = new Thread<i64>(func[counter]() -> i64 {
+        return counter.fetch_add(1)
+    })
+    let previous = worker.join()
+    return previous as int
+}
 ```
 
 Repo-local tooling lives under `tools/`:
@@ -564,6 +612,7 @@ LLPL/
 │   ├── parser.d        # Parser (tokens → AST)
 │   ├── ast.d           # AST node definitions
 │   ├── codegen.d       # C code generator
+│   ├── async_layout.d   # Async frame/state layout reports
 │   ├── modules.d       # Module resolution / import search paths
 │   ├── grammar.d       # Inline ANTLR-like grammar support
 │   ├── errors.d        # Diagnostics
@@ -577,7 +626,8 @@ LLPL/
 ├── examples/
 │   ├── baremetal_demo/         # Flagship demo: GRUB/Multiboot2 kernel (see below)
 │   ├── limine_baremetal_demo/  # Same idea, booted via Limine instead of GRUB
-│   ├── collections/, regex/, embed_demo/, modules/, sdl/  # smaller focused examples
+│   ├── collections/, sdl/, stdlib/        # smaller focused examples
+│   └── async_await_syntax.llpl, regex.llpl, embed_demo.llpl, ...
 ├── editors/vscode-llpl/ # VS Code extension (syntax highlighting + LSP client)
 ├── playground/          # Local web playground (see Web Playground below)
 ├── EXAMPLES.md           # Long-form language walkthrough
@@ -706,6 +756,8 @@ Potential improvements:
 - [X] Single inheritance + virtual/override
 - [X] Inline grammars (ANTLR-like)
 - [X] `embed()` compile-time file embedding
+- [X] Async/await syntax and lowering
+- [ ] Async cancellation/timeouts and richer synchronization primitives
 
 ## Contributing
 

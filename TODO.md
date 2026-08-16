@@ -1,170 +1,123 @@
-# TODO - Feature Roadmap
+# TODO - Current Roadmap
 
-## HIGH PRIORITY
+This file tracks forward-looking work only. Completed session notes belong in
+commit messages or `WORKING_NOW.md`, not in the roadmap.
 
-### Async & Concurrency (Phase 1)
-- [ ] Thread primitives (spawn, join)
-- [ ] Mutex and RwLock types
-- [ ] Atomic types for synchronization
-- [ ] Channel type for thread communication (mpsc)
-- [ ] Task/thread local storage
-- [ ] Documentation and examples
+## High Priority
 
-### Async & Concurrency (Phase 2)
-- [ ] Event loop runtime (executor)
-- [ ] Async/await syntax in parser
-- [ ] Future/Promise types
-- [ ] Async channel variants
-- [ ] Timeout support
-- [ ] Integration with stdlib
+### Async & Concurrency
+- [x] Parse `async func` and `await`
+- [x] Lower async functions to frame/start/poll ABIs
+- [x] Provide async layout reports with `--emit-async-layout`
+- [x] Add runtime task/executor primitives in `prelude.llpl` and `runtime/`
+- [x] Cover async lowering, task join, pending futures, methods, and diagnostics in tests
+- [x] Add cancellation semantics
+- [x] Add timeout helpers around futures/tasks
+- [x] Add async channels or queues
+- [ ] Document hosted and kernel async patterns in `README.md` or a dedicated guide
 
-### Struct Serialization
-- [ ] Derive macro for `serialize`/`deserialize`
-- [ ] JSON serialization of structs
-- [ ] JSON deserialization to structs
-- [ ] YAML serialization (extend existing parser)
-- [ ] Binary format support
-- [ ] Nested struct serialization
-- [ ] Optional field handling
-- [ ] Tests and examples
+### Synchronization
+- [x] Add hosted user-mode `Thread<T>` APIs
+- [ ] Standardize thread/task primitive APIs across hosted and kernel targets
+- [x] Add portable atomic runtime types
+- [ ] Add compiler intrinsics for atomics
+- [x] Add `Mutex` and `RwLock` stdlib types
+- [x] Add task/thread-local storage
+- [x] Add tests for interrupt-context restrictions and scheduler interactions
 
-## MEDIUM PRIORITY
+### Serialization
+- [ ] Define stable reflection metadata contracts for structs/classes/enums
+- [ ] Add JSON serialization of structs
+- [ ] Add JSON deserialization into typed structs
+- [ ] Extend YAML support beyond parsing
+- [ ] Add binary serialization format support
+- [ ] Support nested structs, arrays, and optional/default fields
+- [ ] Add tests and examples
 
-### UI Widgets (Expansion)
-- [ ] TextInput widget (single-line text entry)
+## Medium Priority
+
+### Diagnostics
+- [ ] Add colored error output
+- [ ] Add source context snippets
+- [ ] Add suggestion engine for nearby names/imports
+- [ ] Add warning categories for unused variables, dead code, and narrowing casts
+- [ ] Improve generic/trait instantiation error messages
+- [ ] Improve circular import diagnostics
+
+### UI Widgets
+- [ ] TextInput widget
 - [ ] MultilineText widget
 - [ ] Dropdown / ComboBox widget
 - [ ] RadioButton group widget
 - [ ] TabView widget
-- [ ] Scrollbar widget (standalone)
-- [ ] Menu system (top bar, context menus)
-- [ ] Dialog boxes (modal windows)
+- [ ] Standalone scrollbar widget
+- [ ] Menu system with top-bar and context menus
+- [ ] Modal dialog boxes
 - [ ] File browser widget
-- [ ] Styling system (colors, fonts, borders)
+- [ ] Styling system for colors, fonts, and borders
 
 ### Reflection & Introspection
-- [ ] Runtime type information (RTTI)
+- [x] Runtime reflection entry points for type and field metadata
 - [ ] Generic type inspection
-- [ ] Field metadata
-- [ ] Method introspection
-- [ ] Dynamic dispatch support
-- [ ] Constructor auto-discovery
+- [ ] Method metadata
+- [ ] Constructor metadata
+- [ ] Enum variant metadata
+- [ ] Reflection docs and examples beyond `examples/reflection_demo.llpl`
 
-### REPL / Interactive Mode
-- [ ] Interactive CLI for LLPL
-- [ ] Line editing (history, completion)
-- [ ] Incremental compilation
-- [ ] Expression evaluation
-- [ ] Variable inspection
-- [ ] Function definition
+### Tooling
+- [ ] REPL / interactive CLI
+- [ ] Line editing with history and completion
+- [ ] Incremental compilation mode
+- [ ] Expression evaluation and variable inspection
+- [ ] Documentation generator
+- [ ] Expand editor/LSP feature coverage
 
-### Better Error Messages
-- [ ] Colored error output
-- [ ] Source code context display
-- [ ] Suggestion engine (did you mean?)
-- [ ] Error categorization
-- [ ] Warning system (deprecation, style)
-
-## LOWER PRIORITY
+## Lower Priority
 
 ### Networking APIs
-- [ ] Socket types (TCP, UDP)
-- [ ] Socket operations (bind, listen, connect)
-- [ ] HTTP client wrapper
-- [ ] HTTPS/TLS support
-- [ ] DNS resolution
-- [ ] Tests and examples
+- [ ] Stabilize hosted socket wrapper APIs
+- [ ] Add UDP socket support
+- [ ] Add HTTP client wrapper
+- [ ] Add HTTPS/TLS support
+- [ ] Add DNS resolution
+- [ ] Add tests and examples
 
-### Testing Framework
-- [ ] Test function macros (#[test])
-- [ ] Assertion macros (assert_eq!, etc.)
-- [ ] Test runner
-- [ ] Benchmark support
-- [ ] Test discovery and filtering
+### Testing & Benchmarking
+- [x] `unittest { ... }` compilation through `--unittest`
+- [x] Unified test runner through `tools/llplbuild test`
+- [ ] Test discovery/filtering ergonomics
+- [ ] Assertion macros or helpers such as `assert_eq`
+- [ ] Benchmark runner
+- [ ] Fuzz corpus minimization workflow
 
-### Boot/Baremetal Improvements
-- [ ] UEFI boot support (alternative to Multiboot2)
-- [ ] Fix 64-bit bootloader assembly
+### Bare-Metal Improvements
+- [x] GRUB/Multiboot2 example kernel
+- [x] Limine example kernel
+- [x] x86_64 interrupt functions and hidden-runtime-path checks
+- [ ] UEFI-first boot path documentation
 - [ ] Device tree support
 - [ ] ARM64 support
 - [ ] RISC-V support
+- [ ] More hardware driver examples
 
-### Graphics Enhancements
-- [ ] 2D graphics library (shapes, transforms)
+### Graphics
+- [ ] 2D graphics primitives
 - [ ] Sprite system
-- [ ] Animation support
+- [ ] Animation helpers
 - [ ] Text rendering improvements
-- [ ] Vector graphics (SVG support)
+- [ ] Vector graphics / SVG support
 
 ### Performance
-- [ ] Optimize generated C code
-- [ ] Better monomorphization (reduce code bloat)
-- [ ] Inline hints for codegen
-- [ ] Profiling support
-- [ ] Benchmarking tools
+- [ ] Optimize generated C for common expression patterns
+- [ ] Reduce monomorphized generic code size
+- [ ] Add inline hints or attributes for codegen
+- [ ] Add profiling hooks
+- [ ] Add benchmark snapshots for generated code
 
-## DEFERRED / NICE-TO-HAVE
+## Deferred
 
-- [ ] Pattern matching enhancements
-- [ ] Exhaustiveness checking for match
-- [ ] Better generic error messages
+- [ ] Exhaustiveness checking for `match`
 - [ ] Constraint-based type inference
-- [ ] Module visibility (pub/private)
-- [ ] Re-exports and public use
-- [ ] Documentation generation (docgen)
-- [ ] IDE support (LSP)
-- [ ] Debugger integration (GDB/LLDB)
-
-## KNOWN ISSUES TO FIX
-
-### Compiler
-- [ ] Integer type narrowing warnings
-- [ ] Unused variable detection
-- [ ] Dead code detection
-- [ ] Better cycle detection in circular imports
-
-### Runtime
-- [ ] Improve panic/error stack traces
-- [ ] Better memory leak detection
-- [ ] GC integration (optional mark-sweep)
-
-### Docs
-- [ ] Complete API documentation
-- [ ] More tutorial examples
-- [ ] Architecture documentation
-- [ ] Performance tuning guide
-
-## COMPLETED IN THIS SESSION ✅
-
-- [x] Fix List/TreeView widget rendering (malloc heap allocation)
-- [x] Fix string extraction in list items (get_list_item_at)
-- [x] Fix char literal casting in filesystem.llpl
-- [x] Fix namespace resolution (using namespace priority)
-- [x] Fix collections_demo compilation
-- [x] Fix interactive_demo compilation
-- [x] Update WORKING_NOW documentation
-- [x] Create comprehensive TODO list
-
-## Session Statistics
-
-**Files Modified:**
-- source/codegen.d - namespace resolution fix
-- examples/sdl/ui_dsl_app.llpl - UI rendering fixes
-- stdlib/ui/sdl.llpl - malloc heap allocation fixes
-- stdlib/io/filesystem.llpl - char literal fixes
-- examples/sdl/interactive_demo.llpl - type fixes
-- examples/collections/collections_demo.llpl - using namespace
-
-**Bugs Fixed:** 6
-**Files Updated:** 7
-**New Features:** Filesystem I/O bindings
-**Tests Passing:** 70/70 (LLPL test suite)
-
----
-
-## Notes
-
-- Async/concurrency is the highest-impact next feature (2-3 sessions)
-- Serialization is secondary but valuable (1-2 sessions)
-- UI widget expansion is incremental (can be done in parallel)
-- Focus on what enables real applications (async first)
+- [ ] Re-exports and public-use ergonomics
+- [ ] Debugger integration with GDB/LLDB
+- [ ] Optional tracing or leak-detection runtime mode

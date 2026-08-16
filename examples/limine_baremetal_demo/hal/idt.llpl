@@ -138,6 +138,9 @@ namespace HAL {
             // Double faults use the dedicated IST1 stack configured in the
             // TSS so stack exhaustion cannot recursively fault.
             set_gate( 8, isr8 as int, 0x08, 0x8E, 1 )
+            // Software yield/syscall gate. DPL=3 lets ring-3 demo code use
+            // `int 0x80`; the handler still runs on the current TSS.RSP0.
+            set_gate( 0x80, isr128 as int, 0x08, 0xEE, 0 )
 
             pointer.limit = (sizeof(Entry) * NUM_VECTORS) - 1
             pointer.base = entries as u64
@@ -153,7 +156,14 @@ func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
     }
 
     if ctx.vector >= 32 && ctx.vector < 48 {
+        llpl_irq_enter()
         let irq = (ctx.vector - 32) as uint
+        if irq == 1 {
+            Kern.signal_io_event( Kern.IO_EVENT_KEYBOARD_IRQ )
+        } else if irq == 4 {
+            Kern.signal_io_event( Kern.IO_EVENT_SERIAL_RX )
+        }
+
         let intr = HAL.interrupts[ctx.vector]
         while intr != null {
             intr.handler( intr.arg )
@@ -165,6 +175,7 @@ func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
         }
 
         HAL.PIC.eoi( irq )
+        llpl_irq_exit()
         return ctx
     }
 

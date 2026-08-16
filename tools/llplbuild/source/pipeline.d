@@ -134,6 +134,11 @@ private string[] llplProjectConfigInputs(string entryPath) {
     if (dir.length == 0) dir = ".";
     dir = absolutePath(dir).buildNormalizedPath();
     while (dir.length > 0) {
+        string tomlCandidate = buildNormalizedPath(dir, "llpl.toml");
+        if (exists(tomlCandidate)) {
+            result ~= tomlCandidate;
+            return result;
+        }
         string candidate = buildNormalizedPath(dir, "llpl.json");
         if (exists(candidate)) {
             result ~= candidate;
