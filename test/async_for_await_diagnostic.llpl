@@ -1,0 +1,11 @@
+async func bad() -> int {
+    for i in 0..3 {
+        let value = await async_ready(i)
+        return value
+    }
+    return 0
+}
+
+func main() -> int {
+    return bad()
+}

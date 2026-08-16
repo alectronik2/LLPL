@@ -1,0 +1,15 @@
+list.remove_item(1) = 1
+list.remove_item(3) = 1
+list.remove_item(2) = 1
+list.remove_item(9) = 0
+list.size() = 1
+list.front() = 2
+list.back() = 2
+dlist.remove(1) = 1
+dlist.remove(3) = 1
+dlist.remove_item(2) = 1
+dlist.remove(9) = 0
+dlist.size() = 1
+dlist.front() = 2
+dlist.back() = 2
+dlist.reverse[0] = 2

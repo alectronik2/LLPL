@@ -80,8 +80,122 @@ extern func llpl_reflect_field_size(field: char*) -> u64
 extern func llpl_alloc(size: u64) -> char*
 extern func llpl_free(ptr: char*)
 extern func llpl_memcpy(dest: char*, src: char*, count: u64)
+extern func llpl_async_create(frame_size: u64, poll_fn: void*) -> char*
+extern func llpl_async_frame(task: char*) -> char*
+extern func llpl_async_poll(task: char*, out: char*) -> i64
+extern func llpl_async_block_on(task: char*, out: char*) -> i64
+extern func llpl_async_destroy(task: char*)
+extern func llpl_async_now_ms() -> u64
+extern func llpl_async_set_now_ms(now_ms: u64)
+extern func llpl_async_advance_ms(delta_ms: u64) -> u64
+extern func llpl_async_executor_create() -> char*
+extern func llpl_async_executor_destroy(executor: char*)
+extern func llpl_async_executor_spawn(executor: char*, task: char*) -> i64
+extern func llpl_async_executor_poll(executor: char*) -> i64
+extern func llpl_async_executor_run_all(executor: char*) -> i64
 extern func llpl_set_allocator(alloc_fn: (u64) -> char*, free_fn: (char*) -> void)
 extern func llpl_reset_allocator()
+
+struct AsyncFuture<T> {
+    state: int
+    value: T
+}
+
+struct SleepFuture {
+    state: int
+    value: int
+    deadline_ms: u64
+}
+
+func async_ready<T>(value: T) -> AsyncFuture<T> {
+    return AsyncFuture<T> { state: 1, value: value }
+}
+
+func async_pending<T>(value: T) -> AsyncFuture<T> {
+    return AsyncFuture<T> { state: 0, value: value }
+}
+
+func async_sleep_until(deadline_ms: u64) -> SleepFuture {
+    return SleepFuture { state: 0, value: 0, deadline_ms: deadline_ms }
+}
+
+func sleep_ms(ms: u64) -> SleepFuture {
+    return async_sleep_until(llpl_async_now_ms() + ms)
+}
+
+func async_join(task: char*) -> i64 {
+    let status = llpl_async_block_on(task, null)
+    llpl_async_destroy(task)
+    return status
+}
+
+class AsyncTask<T> {
+    let handle: char*
+    let done: bool
+    let value: T
+
+    constructor(handle: char*) {
+        self.handle = handle
+        self.done = false
+    }
+
+    destructor() {
+        if self.handle != null {
+            llpl_async_destroy(self.handle)
+        }
+    }
+
+    func poll() -> bool {
+        if self.done {
+            return true
+        }
+        if llpl_async_poll(self.handle, (&self.value) as char*) == 1 {
+            llpl_async_destroy(self.handle)
+            self.handle = null
+            self.done = true
+            return true
+        }
+        return false
+    }
+
+    func join() -> T {
+        if !self.done {
+            llpl_async_block_on(self.handle, (&self.value) as char*)
+            llpl_async_destroy(self.handle)
+            self.handle = null
+            self.done = true
+        }
+        return self.value
+    }
+
+    func is_done() -> bool {
+        return self.done
+    }
+}
+
+class AsyncExecutor {
+    let handle: char*
+
+    constructor() {
+        self.handle = llpl_async_executor_create()
+    }
+
+    destructor() {
+        llpl_async_executor_destroy(self.handle)
+    }
+
+    func spawn(task: char*) -> i64 {
+        return llpl_async_executor_spawn(self.handle, task)
+    }
+
+    func poll() -> i64 {
+        return llpl_async_executor_poll(self.handle)
+    }
+
+    func run_all() -> i64 {
+        return llpl_async_executor_run_all(self.handle)
+    }
+}
 
 // Allocator is the common interface for user-provided allocation policies.
 // Trait dispatch is static/monomorphized; ClosureAllocator is the adapter for

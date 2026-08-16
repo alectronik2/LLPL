@@ -1,0 +1,19 @@
+struct Future<T> {
+    value: T
+}
+
+func ready(value: int) -> Future<int> {
+    let future: Future<int> = Future { value: value }
+    return future
+}
+
+async func add_after_await(a: int, b: int) -> int {
+    let left = await ready(a)
+    let right = await ready(b)
+    return left + right
+}
+
+func main() -> int {
+    let ignored = puts("\(add_after_await(20, 22))")
+    return 0
+}

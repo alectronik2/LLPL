@@ -1,0 +1,18 @@
+struct Future<T> {
+    state: int
+    value: T
+}
+
+func ready(value: int) -> Future<int> {
+    let future: Future<int> = Future { state: 1, value: value }
+    return future
+}
+
+async func pollable(seed: int) -> int {
+    let value = await ready(seed)
+    return value + 1
+}
+
+func main() -> int {
+    return pollable(41)
+}

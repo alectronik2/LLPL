@@ -9,6 +9,57 @@
         ],
         "description": "Function declaration"
     },
+    "Async Function": {
+        "prefix": "asyncfunc",
+        "body": [
+            "async func ${1:name}(${2:param}: ${3:int}) -> ${4:int} {",
+            "\tlet ${5:value} = await ${6:future_call}(${2:param})",
+            "\treturn ${5:value}",
+            "}"
+        ],
+        "description": "Async function with await support in expressions and control flow"
+    },
+    "Async Run": {
+        "prefix": "asyncrun",
+        "body": "let ${1:result} = async_run(${2:async_function}(${3:args}))",
+        "description": "Run an async function to completion and return its result"
+    },
+    "Async Start Poll": {
+        "prefix": "asyncstart",
+        "body": [
+            "let ${1:task} = async_start(${2:async_function}(${3:args}))",
+            "let ${4:out}: ${5:int} = 0",
+            "while llpl_async_poll(${1:task}, (&${4:out}) as char*) == 0 {",
+            "\t$0",
+            "}",
+            "llpl_async_destroy(${1:task})"
+        ],
+        "description": "Start an async task and poll it manually"
+    },
+    "Async Future": {
+        "prefix": "asyncfuture",
+        "body": "return AsyncFuture<${1:int}> { state: ${2:1}, value: ${3:value} }",
+        "description": "Return a ready or pending AsyncFuture<T>"
+    },
+    "Async Task Join": {
+        "prefix": "asynctask",
+        "body": [
+            "let ${1:task}: AsyncTask<${2:int}> = new AsyncTask<${2:int}>(async_start(${3:async_function}(${4:args})))",
+            "let ${5:result} = ${1:task}.join()",
+            "delete ${1:task}"
+        ],
+        "description": "Start an async function as a typed task and join its result"
+    },
+    "Async Executor": {
+        "prefix": "asyncexecutor",
+        "body": [
+            "let ${1:executor} = new AsyncExecutor()",
+            "${1:executor}.spawn(async_start(${2:async_function}(${3:args})))",
+            "${1:executor}.run_all()",
+            "delete ${1:executor}"
+        ],
+        "description": "Spawn async tasks and run them round-robin"
+    },
     "Generic Function": {
         "prefix": "funcgeneric",
         "body": [
@@ -140,6 +191,11 @@
         "prefix": "structlit",
         "body": "${1:Name} { ${2:field}: ${3:value} }",
         "description": "Struct literal - constructs a struct value directly, every field given by name"
+    },
+    "Generic Struct Literal": {
+        "prefix": "structlitgeneric",
+        "body": "${1:Name}<${2:int}> { ${3:field}: ${4:value} }",
+        "description": "Explicit generic struct literal - constructs Name<T> directly"
     },
     "Anonymous Struct Literal": {
         "prefix": "anonstruct",

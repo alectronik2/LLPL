@@ -1,0 +1,80 @@
+import hal
+import lib
+
+struct Future<T> {
+    state: int
+    value: T
+}
+
+namespace Timer {
+    const TVN_BITS = 6
+    const TVR_BITS = 8
+    const TVN_SIZE = (1 << TVN_BITS)
+    const TVR_SIZE = (1 << TVR_BITS)
+    const TVN_MASK = (TVN_SIZE - 1)
+    const TVR_MASK = (TVR_SIZE - 1)
+
+    struct TimerLink {
+        next: TimerLink*
+        prev: TimerLink*
+    }
+
+    struct TimerVec {
+        index: uint
+        vec: TimerLink[TVR_SIZE]
+    }
+
+    alias TimerProc = func( p: void* )
+
+    let ticks: uint = 0
+    let clocks: uint = 0
+
+    func init() {
+        ticks = 0
+        clocks = 0
+    }
+
+    func on_pit_tick() -> uint {
+        ticks = ticks + 1
+        clocks = clocks + HAL.PIT.CLOCKS_PER_TICK
+        return ticks
+    }
+
+    func current_tick() -> uint {
+        return ticks
+    }
+
+    func deadline_after_ticks( delay: uint ) -> uint {
+        return ticks + delay
+    }
+
+    func wait_until_tick( target: uint ) -> Future<uint> {
+        if ticks < target {
+            let pending: Future<uint> = Future { state: 0, value: target }
+            return pending
+        }
+
+        let ready: Future<uint> = Future { state: 1, value: ticks }
+        return ready
+    }
+
+    private func cascade_timers( tv: TimerVec ) {
+        let head = &tv.vec[tv.index]
+        let curr = head.next
+
+        while curr != head {
+            let timer = curr as Timer
+            let next = curr.next
+
+            timer.attach()
+            curr = next
+        }
+
+        head.next = head.prev = head
+        tv.index = (tv.index + 1) & TVN_MASK
+    }
+
+    class Timer : Object {
+
+    }
+}

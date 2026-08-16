@@ -1,0 +1,7 @@
+error: Cannot infer await result type from 'NotFuture'; expected Future<T>
+  --> test/async_invalid_future_diagnostic.llpl:10:17
+    |
+  9 | async func bad() -> int {
+ 10 |     let value = await not_future()
+    |                 ^
+ 11 |     return value

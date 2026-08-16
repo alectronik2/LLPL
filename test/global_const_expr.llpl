@@ -1,0 +1,13 @@
+const BITS = 6
+const SIZE = (1 << BITS)
+const MASK = (SIZE - 1)
+
+func main() -> i64 {
+    if SIZE != 64 {
+        return 1
+    }
+    if MASK != 63 {
+        return 2
+    }
+    return 0
+}

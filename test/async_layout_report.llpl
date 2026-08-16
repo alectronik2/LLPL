@@ -1,0 +1,12 @@
+struct Future<T> {
+    value: T
+}
+
+func sleep_ticks(ticks: int) -> Future<int> {
+}
+
+async func blink(period: int) -> int {
+    let elapsed = await sleep_ticks(period)
+    return elapsed
+}
+

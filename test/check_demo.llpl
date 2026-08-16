@@ -1,0 +1,9 @@
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    check(1 == 2, "one is not two")
+    puts("continued")
+    check(2 > 1)
+    puts("finished")
+    return 0
+}

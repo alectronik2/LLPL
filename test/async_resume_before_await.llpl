@@ -1,0 +1,12 @@
+let setup_runs: int = 0
+
+async func resume_before_await() -> int {
+    setup_runs = setup_runs + 1
+    let ignored = await sleep_ms(1)
+    return setup_runs * 20
+}
+
+func main() -> int {
+    let ignored = puts("\(resume_before_await())")
+    return 0
+}

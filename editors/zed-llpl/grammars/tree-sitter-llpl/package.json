@@ -1,0 +1,16 @@
+{
+  "name": "tree-sitter-llpl",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for LLPL",
+  "main": "grammar.js",
+  "license": "MIT",
+  "tree-sitter": [
+    {
+      "scope": "source.llpl",
+      "file-types": ["llpl"]
+    }
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.22.6"
+  }
+}

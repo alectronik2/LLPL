@@ -1,0 +1,20 @@
+id = "llpl"
+name = "LLPL"
+version = "0.1.0"
+schema_version = 1
+authors = ["LLPL Contributors"]
+description = "LLPL language support with compiler-backed IntelliSense, diagnostics, hover, definitions, and references."
+repository = "https://github.com/llpl-team/llpl"
+
+[grammars.llpl]
+repository = "file://./grammars/tree-sitter-llpl"
+rev = "HEAD"
+
+[language_servers.llpl-lsp]
+name = "LLPL Language Server"
+language = "LLPL"
+
+[[capabilities]]
+kind = "process:exec"
+command = "*"
+args = ["*"]

@@ -1,0 +1,24 @@
+extern func puts(s: char*) -> i64
+
+func main() -> int {
+    let a_buf: char[5]
+    let b_buf: char[5]
+    llpl_memcpy(a_buf as char*, "same", 5)
+    llpl_memcpy(b_buf as char*, "same", 5)
+
+    let a: char* = a_buf as char*
+    let b: char* = b_buf as char*
+    let c: char* = a
+
+    if a != b {
+        puts("different pointers")
+    }
+    if a == c {
+        puts("same pointer")
+    }
+    if llpl_strcmp(a, b) == 0 {
+        puts("same contents")
+    }
+
+    return 0
+}

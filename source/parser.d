@@ -3065,6 +3065,14 @@ class Parser {
     }
 
     private bool explicitGenericCallTypeArgsAhead() {
+        return explicitGenericTypeArgsAhead(TokenType.LeftParen);
+    }
+
+    private bool explicitGenericStructLiteralTypeArgsAhead() {
+        return explicitGenericTypeArgsAhead(TokenType.LeftBrace);
+    }
+
+    private bool explicitGenericTypeArgsAhead(TokenType trailingToken) {
         if (!check(TokenType.Less) || newlineBeforeCurrent()) return false;
 
         int depth = 0;
@@ -3078,11 +3086,15 @@ class Parser {
                     depth++;
                     break;
                 case TokenType.LeftParen:
-                    return false;
+                    if (trailingToken != TokenType.LeftParen) return false;
+                    break;
+                case TokenType.LeftBrace:
+                    if (trailingToken != TokenType.LeftBrace) return false;
+                    break;
                 case TokenType.Greater:
                     depth--;
                     if (depth == 0) {
-                        return peek(offset + 1).type == TokenType.LeftParen;
+                        return peek(offset + 1).type == trailingToken;
                     }
                     if (depth < 0) return false;
                     break;
@@ -3090,7 +3102,7 @@ class Parser {
                     if (depth >= 2) {
                         depth -= 2;
                         if (depth == 0) {
-                            return peek(offset + 1).type == TokenType.LeftParen;
+                            return peek(offset + 1).type == trailingToken;
                         }
                     } else {
                         return false;
@@ -3245,8 +3257,24 @@ class Parser {
                 }
                 return new MacroInvocation(name, macroArgs, tokLine, tokColumn);
             }
-            if (!qualifiedMacro && !noStructLiteral && check(TokenType.LeftBrace)) {
-                return structLiteral(name, tokLine, tokColumn);
+            if (!qualifiedMacro && !noStructLiteral) {
+                Type[] literalTypeArgs;
+                size_t beforeTypeArgs = pos;
+                Token beforeCurrent = current;
+                if (explicitGenericStructLiteralTypeArgsAhead()) {
+                    expect(TokenType.Less);
+                    do {
+                        literalTypeArgs ~= parseType();
+                    } while (match(TokenType.Comma));
+                    expectGreaterOrSplit();
+                }
+                if (check(TokenType.LeftBrace)) {
+                    return structLiteral(name, tokLine, tokColumn, literalTypeArgs);
+                }
+                if (literalTypeArgs.length > 0) {
+                    pos = beforeTypeArgs;
+                    current = beforeCurrent;
+                }
             }
             return new Identifier(name, tokLine, tokColumn);
         }
@@ -3307,7 +3335,7 @@ class Parser {
     // `name` and its start position are already consumed/captured by the
     // caller (primary()'s Identifier branch); this just parses the
     // `{ field: value, ... }` tail.
-    private ASTNode structLiteral(string name, int startLine, int startColumn) {
+    private ASTNode structLiteral(string name, int startLine, int startColumn, Type[] typeArgs = null) {
         expect(TokenType.LeftBrace);
         string[] fieldNames;
         ASTNode[] fieldValues;
@@ -3324,7 +3352,7 @@ class Parser {
             } while (match(TokenType.Comma));
         }
         expect(TokenType.RightBrace);
-        return new StructLiteral(name, fieldNames, fieldValues, startLine, startColumn);
+        return new StructLiteral(name, fieldNames, fieldValues, startLine, startColumn, typeArgs);
     }
 
     // `{ .field = value, ... }` - an anonymous struct literal whose type

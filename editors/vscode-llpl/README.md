@@ -10,7 +10,7 @@ find-references) for LLPL (`.llpl`) files.
   `class`, `struct` (with `packed`), `union`, `enum`, `macro` (with
   `NAME!(args)` invocations), `constructor`/`destructor`, `func` (including
   `static func`, `inline func`, `interrupt func`, `property` getter/setter
-  methods, and
+  methods, `async func`/`await`, and
   operator overloads like `func operator+`), `let`/`const`, `alias`,
   `unittest { ... }`,
   `ui Name: Window { ... }` declarations, control flow
@@ -26,7 +26,8 @@ find-references) for LLPL (`.llpl`) files.
 - Type-annotation aware highlighting, including pointers/pointers-to-pointers
   (`char*`, `int**`), fixed/nested arrays (`char[17]`, `int[2][3]`),
   bit-fields (`let flags: u32 : 3`), anonymous struct literals
-  (`{ .field = value }`), and dotted type names.
+  (`{ .field = value }`), explicit generic struct literals
+  (`Future<int> { state: 1, value: value }`), and dotted type names.
 - Numeric literals with `_` digit-group separators (`0x100_0000_0000`,
   `1_000_000`), float literals (`1.5`, `1.5e-5`, `1.0f`), and char literals
   (`'x'`, `'\n'`, `'\x1b'`).
@@ -40,9 +41,11 @@ find-references) for LLPL (`.llpl`) files.
   `property` getters/setters, `unless`, `if`, `while`, `for`, range-based
   `for`, `foreach`, `with` bindings, `holding lock { ... }`, `check`, `defer`, `delete`,
   `try`/`catch`/`finally`, `extern`, `import`, `#link`, `#flags`, `asm`,
-  `bitfield`), plus UI snippets (`uiapp`, `ui`, `uibutton`,
+  `bitfield`, async snippets (`asyncfunc`, `asyncrun`, `asyncstart`,
+  `asyncfuture`, `asynctask`, `asyncexecutor`)), plus UI snippets (`uiapp`, `ui`, `uibutton`,
   `uiprogress`, `uislider`, `uicheck`, `uiselect`, `uihover`).
-- Completion includes LLPL keywords plus common `std.ui` widget names
+- Completion includes LLPL keywords, async runtime helpers
+  (`async_start`, `async_run`, `AsyncFuture`, `AsyncTask`, `AsyncExecutor`, etc.), plus common `std.ui` widget names
 - Visibility modifiers `public`, `private`, and `protected` are highlighted and offered by completion
   (`Window`, `Panel`, `Card`, `ProgressBar`, `Slider`, `Checkbox`,
   `SelectableText`, `Badge`) and widget properties before compiler-backed
@@ -80,7 +83,7 @@ npm install
 npm run compile
 npm install -g @vscode/vsce   # once, if you don't have vsce
 vsce package
-code --install-extension llpl-language-0.9.0.vsix
+code --install-extension llpl-language-0.10.0.vsix
 ```
 
 Or symlink the extension folder straight into your VS Code extensions

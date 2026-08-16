@@ -195,6 +195,19 @@ private final class AstPrinter {
         } else if (auto tup = cast(TupleLiteral)node) {
             line(depth, format("TupleLiteral %d", tup.elements.length));
             foreach (elem; tup.elements) printExpr(elem, depth + 1);
+        } else if (auto lit = cast(StructLiteral)node) {
+            string suffix = "";
+            if (lit.typeArgs.length > 0) {
+                string[] args;
+                foreach (arg; lit.typeArgs) args ~= typeText(arg);
+                suffix = "<" ~ args.join(", ") ~ ">";
+            }
+            string name = lit.typeName.length > 0 ? lit.typeName ~ suffix : "<anonymous>";
+            line(depth, format("StructLiteral %s %d", name, lit.fieldNames.length));
+            foreach (i, field; lit.fieldNames) {
+                line(depth + 1, "Field " ~ field);
+                printExpr(lit.fieldValues[i], depth + 2);
+            }
         } else {
             line(depth, to!string(node.type));
         }

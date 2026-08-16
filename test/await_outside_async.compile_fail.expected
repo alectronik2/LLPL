@@ -1,0 +1,6 @@
+error: 'await' is only valid inside an async function
+  --> test/await_outside_async.llpl:9:16
+    |
+  8 | func main() {
+  9 |     let tick = await timer_after(10)
+    |                ^~~~~~~~~~~

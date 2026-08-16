@@ -1,0 +1,32 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Lock {
+    depth: i64
+
+    constructor() {}
+
+    func acquire() {
+        self.depth = self.depth + 1
+    }
+
+    func release() {
+        self.depth = self.depth - 1
+    }
+}
+
+func main() -> i64 {
+    let lock = new Lock()
+
+    holding lock {
+        print_int("inside", lock.depth)
+    }
+
+    print_int("outside", lock.depth)
+    return 0
+}

@@ -1,0 +1,7 @@
+func first() {
+    let broken =
+}
+
+func second() {
+    let also_broken =
+}

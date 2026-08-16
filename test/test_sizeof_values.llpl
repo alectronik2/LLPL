@@ -1,0 +1,15 @@
+// Parenthesized sizeof accepts both values and type names.
+
+extern func puts(s: char*) -> i64
+
+func main() -> i64 {
+    let bytes: char[16]
+    let address: i64* = null
+
+    if sizeof(bytes) != 16 { return 1 }
+    if sizeof(address) != 8 { return 2 }
+    if sizeof(i64) != 8 { return 3 }
+
+    puts("address=\(address:hex)")
+    return 0
+}

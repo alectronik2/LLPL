@@ -1,0 +1,9 @@
+async func read_after_pending() -> int {
+    let ignored = await sleep_ms(1)
+    return 9
+}
+
+func main() -> int {
+    let ignored = puts("\(read_after_pending())")
+    return 0
+}

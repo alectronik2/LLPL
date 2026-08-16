@@ -1,0 +1,48 @@
+import std.collections.collections
+
+extern func puts(s: char*) -> i64
+
+func print_bool(label: char*, value: bool) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value as i64)
+    puts(buf as char*)
+}
+
+func print_i64(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+func main() -> i64 {
+    let list: std.collections.LinkedList<i64> = new std.collections.LinkedList<i64>()
+    list.push_back(1)
+    list.push_back(2)
+    list.push_back(3)
+    list.push_back(2)
+
+    print_bool("list.remove_item(1)", list.remove_item(1))
+    print_bool("list.remove_item(3)", list.remove_item(3))
+    print_bool("list.remove_item(2)", list.remove_item(2))
+    print_bool("list.remove_item(9)", list.remove_item(9))
+    print_i64("list.size()", list.size())
+    print_i64("list.front()", list.front().unwrap())
+    print_i64("list.back()", list.back().unwrap())
+
+    let dlist: std.collections.DoublyLinkedList<i64> = new std.collections.DoublyLinkedList<i64>()
+    dlist.push_back(1)
+    dlist.push_back(2)
+    dlist.push_back(3)
+    dlist.push_back(2)
+
+    print_bool("dlist.remove(1)", dlist.remove(1))
+    print_bool("dlist.remove(3)", dlist.remove(3))
+    print_bool("dlist.remove_item(2)", dlist.remove_item(2))
+    print_bool("dlist.remove(9)", dlist.remove(9))
+    print_i64("dlist.size()", dlist.size())
+    print_i64("dlist.front()", dlist.front().unwrap())
+    print_i64("dlist.back()", dlist.back().unwrap())
+    print_i64("dlist.reverse[0]", dlist.reverse_iterate().get(0))
+
+    return 0
+}

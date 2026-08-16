@@ -1,0 +1,6 @@
+pollable_AsyncFrame pollable_async_start(intptr_t seed) {
+pollable_AsyncPoll pollable_async_poll(pollable_AsyncFrame* self) {
+if (self->__await0.state == 0) {
+uintptr_t pollable_async_frame_size() {
+void pollable_async_start_into(void* __frame, intptr_t seed) {
+intptr_t pollable_async_poll_erased(void* __frame, void* __out) {

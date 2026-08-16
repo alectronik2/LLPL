@@ -1,0 +1,2 @@
+global_box.get() = 7
+local_box.get() = 9

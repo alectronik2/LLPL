@@ -1,0 +1,12 @@
+async func compute(value: int) -> int {
+    let ignored = await sleep_ms(1)
+    return value * 2
+}
+
+func main() -> int {
+    let task: AsyncTask<int> = new AsyncTask<int>(async_start(compute(21)))
+    let result = task.join()
+    let ignored = puts("\(result)")
+    delete task
+    return 0
+}

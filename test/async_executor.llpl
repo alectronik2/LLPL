@@ -1,0 +1,17 @@
+let total: int = 0
+
+async func worker(delay: u64, value: int) -> int {
+    let ignored = await sleep_ms(delay)
+    total = total + value
+    return value
+}
+
+func main() -> int {
+    let executor = new AsyncExecutor()
+    executor.spawn(async_start(worker(1, 3)))
+    executor.spawn(async_start(worker(1, 5)))
+    executor.run_all()
+    let ignored = puts("\(total)")
+    delete executor
+    return 0
+}

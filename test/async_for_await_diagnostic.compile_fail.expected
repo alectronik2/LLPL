@@ -1,0 +1,7 @@
+error: async lowering does not support await inside foreach statements yet
+  --> test/async_for_await_diagnostic.llpl:2:5
+   |
+ 1 | async func bad() -> int {
+ 2 |     for i in 0..3 {
+   |     ^
+ 3 |         let value = await async_ready(i)

@@ -1,0 +1,189 @@
+import hal
+import lib
+import kern
+
+namespace VFS {
+    const MAXPATH = 2048
+
+    let pathsep: char = '/'
+    const PS1 = 47
+    const PS2 = 92
+    const S_IEXEC = 0x40
+    const EACCES = -6
+
+    struct Fs {
+        mntto: String
+        mode: int
+        uid: int
+        gid: int
+        next: Fs*
+    }
+
+    let mountlist: Fs* = null
+
+    class Filesystem {
+        name: string
+        next: Filesystem*
+    }
+
+    class Mount {
+        locks: int
+        exclusive: Mutex
+        mntfrom: String
+        mntto: String
+   
+        next: Mount
+        prev: Mount
+        data: void*
+        fsys: Filesystem
+    }
+
+    func vfs_check( mode: int, uid: int, gid: int, access: int ) -> int {
+        return EOK if mode & access
+        return EACCES
+    }
+
+    func fnmatch( name: String, name_start: i64, mount: String, mount_start: i64, count: i64 ) -> bool {
+        let i: i64 = 0
+
+        return false if name == null || mount == null
+        return false if name_start + count > name.byte_len() || mount_start + count > mount.byte_len()
+
+        while i < count {
+            return false if name.byte_at(name_start + i) != mount.byte_at(mount_start + i)
+            i++
+        }
+
+        return true
+    }
+
+    func canonicalize( path: String ) -> String {
+        let buffer: char[MAXPATH]
+        let pos: i64 = 0
+        let path_pos: i64 = 0
+        let len: i64 = 0
+
+        throw EINVAL if path == null
+        defer path.put()
+
+        // remove drive letter from file name
+        path_pos = 2 if path.byte_len() > 1 && path.byte_at(1) == ':'
+
+        // add current directory to filenae
+        if path_pos >= path.byte_len() || (path.byte_at(path_pos) != '/' && path.byte_at(path_pos) != '\'')  {
+            let t: Kern.Thread = current_thread()
+
+            if t != null && t.curdir != null {
+                len = t.curdir.byte_len()
+                if len > 1 {
+                    let cwd_pos: i64 = 0
+                    while cwd_pos < len {
+                        throw ENAMETOOLONG if pos >= MAXPATH - 1
+                        buffer[pos] = t.curdir.byte_at(cwd_pos)
+                        pos++
+                        cwd_pos++
+                    }
+                }
+            }
+        }
+
+        while path_pos < path.byte_len() {
+            path_pos++ if path.byte_at(path_pos) == '/' || path.byte_at(path_pos) == '\'' 
+            throw ENAMETOOLONG if pos >= MAXPATH - 1
+            buffer[pos] = pathsep
+            pos++
+
+            // parse next name part in path
+            len = 0
+            while path_pos < path.byte_len() && path.byte_at(path_pos) != '/' && path.byte_at(path_pos) != '\'' {
+                let ch: char = path.byte_at(path_pos)
+                throw EINVAL if ch > 0 && ch < ' '
+                throw ENAMETOOLONG if pos >= MAXPATH - 1
+
+                buffer[pos] = ch
+                pos++
+                path_pos++
+                len++
+            }
+
+            if len == 0 { 
+                pos--
+            } else if len == 1 && path.byte_at(path_pos - 1) == '.' {
+                pos -= 2
+            } else if len == 2 && path.byte_at(path_pos - 2) == '.' && path.byte_at(path_pos - 1) == '.' {
+                pos -= 4
+                throw EINVAL if pos < 0
+                while buffer[pos] != '/' {
+                    pos--
+                }
+            }
+        }
+
+        if pos == 0 {
+            buffer[pos] = pathsep
+            pos++
+        }
+
+        throw ENAMETOOLONG if pos >= MAXPATH
+        buffer[pos] = 0
+
+        return new String(buffer as char*)
+    }
+
+    func fslookup( name: String, full: int, mntfs: Mount**, rest: String* ) -> int {
+        let fs: Fs*
+        let p: i64 = 0
+        let q: i64
+        let n: i64
+        let m: i64
+        let rc: int
+
+        return EINVAL if name == null
+
+        p++ if name.byte_len() > 0 && (name.byte_at(0) == PS1 || name.byte_at(0) == PS2)
+        n = name.byte_len() - p
+
+        fs = mountlist
+        while fs != null {
+            if fs.mntto != null && fs.mntto.byte_len() > 0 {
+                q = 0
+                q++ if fs.mntto.byte_at(0) == PS1 || fs.mntto.byte_at(0) == PS2
+
+                if q >= fs.mntto.byte_len() {
+                    rc = vfs_check(fs.mode, fs.uid, fs.gid, S_IEXEC)
+                    return rc if rc < 0
+                    *rest = name.byte_substring(p, n) if rest != null
+                    *mntfs = fs
+                    return EOK
+                }
+
+                m = fs.mntto.byte_len() - q
+                if n >= m && fnmatch(name, p, fs.mntto, q, m) && ((p + m < name.byte_len() && (name.byte_at(p + m) == PS1 || name.byte_at(p + m) == PS2)) || (full != 0 && p + m == name.byte_len())) {
+                    rc = vfs_check(fs.mode, fs.uid, fs.gid, S_IEXEC)
+                    return rc if rc < 0
+                    *rest = name.byte_substring(p + m, n - m) if rest != null
+                    *mntfs = fs
+                    return EOK
+                }
+            }
+
+            fs = fs.next
+        }
+
+        return ENOENT
+    }
+
+    func init() {
+        "VFS.init\n" |> HAL.Serial.write
+    
+        try {
+            let path: String = canonicalize( "foo/../hello/world/../bar/baz" )
+            path.c_str() |> HAL.Serial.write
+            "\n" |> HAL.Serial.write
+        } catch ( e: int ) {
+            "VFS.init() failed with error code: \(e)\n" |> HAL.Serial.write
+        } finally {
+            "VFS initialized\n" |> Terminal.write
+        }
+    }
+}

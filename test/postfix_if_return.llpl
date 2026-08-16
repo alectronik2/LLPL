@@ -1,0 +1,11 @@
+extern func puts(s: char*) -> i64
+
+func choose(flag: bool) -> i64 {
+    5 if flag else 10
+}
+
+func main() -> i64 {
+    puts("first = \(choose(true))")
+    puts("second = \(choose(false))")
+    return 0
+}

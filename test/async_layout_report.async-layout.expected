@@ -1,0 +1,15 @@
+Async layout report
+async blink -> int
+  source: 8:1
+  lowering: supported: straight-line restricted lowering
+  frame:
+    state: int
+    result: int
+    param.period: int
+    local.elapsed: <inferred>
+    await0: sleep_ticks(period)
+  states:
+    0: entry
+    1: resume after await0 at 9:19
+    2: complete
+

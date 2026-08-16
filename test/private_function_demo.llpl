@@ -1,0 +1,6 @@
+import { exposed } from modules.private_function_lib
+
+func main() -> i64 {
+    puts("private function used internally: \(exposed())")
+    return 0
+}

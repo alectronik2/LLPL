@@ -1,0 +1,22 @@
+class Worker {
+    let base: int
+
+    constructor(base: int) {
+        self.base = base
+    }
+
+    destructor() {}
+
+    async func compute(delta: int) -> int {
+        let ignored = await sleep_ms(1)
+        return self.base + delta
+    }
+}
+
+func main() -> int {
+    let worker = new Worker(30)
+    let value = async_run(worker.compute(12))
+    let ignored = puts("\(value)")
+    delete worker
+    return 0
+}

@@ -1,0 +1,16 @@
+Program
+  Struct Future<T>
+    Field value: T
+  Function timer_after(ticks: int) -> Future<int>
+    Block
+  Function wait_for_tick() -> int async
+    Block
+      Field tick: <inferred>
+        Await
+          Call
+            Identifier timer_after
+            Int 10
+      Return
+        Binary +
+          Identifier tick
+          Int 1

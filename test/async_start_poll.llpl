@@ -1,0 +1,14 @@
+async func delayed_value() -> int {
+    let ignored = await sleep_ms(1)
+    return 7
+}
+
+func main() -> int {
+    let task = async_start(delayed_value())
+    let out: int = 0
+    while llpl_async_poll(task, (&out) as char*) == 0 {
+    }
+    llpl_async_destroy(task)
+    let ignored = puts("\(out)")
+    return 0
+}

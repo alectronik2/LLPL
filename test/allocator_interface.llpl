@@ -1,0 +1,37 @@
+extern func puts(s: char*) -> i64
+extern func malloc(size: u64) -> char*
+extern func free(ptr: char*)
+
+let alloc_calls: i64 = 0
+let free_calls: i64 = 0
+
+func tracked_alloc(size: u64) -> char* {
+    alloc_calls++
+    return malloc(size)
+}
+
+func tracked_free(ptr: char*) {
+    free_calls++
+    free(ptr)
+}
+
+class Box {
+    let value: i64
+    constructor(value: i64) { self.value = value }
+    destructor() {}
+}
+
+func main() -> i64 {
+    let alloc_fn: (u64) -> char* = tracked_alloc
+    let free_fn: (char*) -> void = tracked_free
+    let allocator = new ClosureAllocator(alloc_fn, free_fn)
+    allocator.install()
+
+    let box = new Box(42)
+    puts("allocator installed")
+    delete box
+
+    allocator.reset()
+    delete allocator
+    return 0
+}

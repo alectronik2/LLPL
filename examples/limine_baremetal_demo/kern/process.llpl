@@ -1,0 +1,52 @@
+import hal
+import lib
+import mm
+
+import std.collections.linked_list
+
+using namespace std.collections
+
+namespace Kern {
+    let kproc: Process = null
+
+    let processes: DoublyLinkedList<Process>
+
+    class Process : Object {
+        pml4:   uint
+        aspace: MM.AddressSpace
+        name:   String   
+        threads: DoublyLinkedList<Thread>
+
+        constructor( name: String ) {
+            "Process constructor\n" |> HAL.Serial.write
+
+            self.threads = new DoublyLinkedList<Thread>()
+            self.pml4 = MM.malloc<uint>( MM.PAGE_SIZE )
+            self.aspace = new MM.AddressSpace( 0x0, 0xFFFF_0000_0000 )
+            self.name = name // move ownership to process
+
+            Kern.processes.push_back( self ) // add self to process list
+        }
+
+        destructor() {
+            "Process destructor\n" |> HAL.Serial.write
+            MM.free( self.pml4 )
+            self.aspace.put() // free address space
+            self.name.put() // free name string
+
+            delete threads // free thread list
+            Kern.processes.remove( self ) // remove self from process list
+        }
+    }
+
+    func proc_init() {
+        processes = new DoublyLinkedList<Process>()
+        kproc = new Process( "kernel" )
+        kproc.aspace.put()
+        kproc.aspace = MM.kas
+        MM.free kproc.pml4
+        kproc.pml4 = MM.kernel_pml4
+        
+        "Kern.proc.init()\n" |> HAL.Serial.write
+    }
+}

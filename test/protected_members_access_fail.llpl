@@ -1,0 +1,15 @@
+class Base {
+    protected func secret() -> i64 {
+        return 7
+    }
+}
+
+class Other {
+    func bad(base: Base) -> i64 {
+        return base.secret()
+    }
+}
+
+func main() -> i64 {
+    return 0
+}

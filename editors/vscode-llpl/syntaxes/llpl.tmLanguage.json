@@ -38,6 +38,7 @@
         { "include": "#as-expression" },
         { "include": "#primitive-types" },
         { "include": "#macro-invocation" },
+        { "include": "#async-runtime-functions" },
         { "include": "#function-call" },
         { "include": "#range-operator" },
         { "include": "#member-access" },
@@ -215,20 +216,22 @@
         },
         "operator-declaration": {
             "comment": "func operator+(...) - the overloaded operator symbol isn't identifier syntax, so it needs its own rule ahead of function-declaration.",
-            "match": "\\b(?:(inline)\\s+)?(func)\\s+(operator)\\s*(==|!=|<=|>=|<<|>>|[+\\-*/%=<>!&|^~])",
+            "match": "\\b(?:(inline|async)\\s+)?(?:(inline|async)\\s+)?(func)\\s+(operator)\\s*(==|!=|<=|>=|<<|>>|[+\\-*/%=<>!&|^~])",
             "captures": {
                 "1": { "name": "storage.modifier.llpl" },
-                "2": { "name": "keyword.other.function.llpl" },
-                "3": { "name": "keyword.other.operator.llpl" },
-                "4": { "name": "keyword.operator.llpl" }
+                "2": { "name": "storage.modifier.llpl" },
+                "3": { "name": "keyword.other.function.llpl" },
+                "4": { "name": "keyword.other.operator.llpl" },
+                "5": { "name": "keyword.operator.llpl" }
             }
         },
         "function-declaration": {
-            "match": "\\b(?:(inline)\\s+)?(func)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+            "match": "\\b(?:(inline|async)\\s+)?(?:(inline|async)\\s+)?(func)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
             "captures": {
                 "1": { "name": "storage.modifier.llpl" },
-                "2": { "name": "keyword.other.function.llpl" },
-                "3": { "name": "entity.name.function.llpl" }
+                "2": { "name": "storage.modifier.llpl" },
+                "3": { "name": "keyword.other.function.llpl" },
+                "4": { "name": "entity.name.function.llpl" }
             }
         },
         "unittest-declaration": {
@@ -268,7 +271,7 @@
             }
         },
         "control-keywords": {
-            "match": "\\b(if|else|while|do|until|for|foreach|in|with|holding|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw|assert|check)\\b",
+            "match": "\\b(if|else|while|do|until|for|foreach|in|with|holding|return|continue|break|defer|match|case|default|unless|try|catch|finally|throw|assert|check|await)\\b",
             "name": "keyword.control.llpl"
         },
         "other-keywords": {
@@ -276,8 +279,12 @@
             "name": "keyword.other.llpl"
         },
         "modifier-keywords": {
-            "match": "\\b(packed|interrupt|volatile|public|private|protected|static|inline|virtual|override|property)\\b",
+            "match": "\\b(packed|interrupt|volatile|public|private|protected|static|inline|async|virtual|override|property)\\b",
             "name": "storage.modifier.llpl"
+        },
+        "async-runtime-functions": {
+            "match": "\\b(async_start|async_run|async_ready|async_pending|async_sleep_until|sleep_ms|async_join|llpl_async_create|llpl_async_frame|llpl_async_poll|llpl_async_block_on|llpl_async_destroy|llpl_async_now_ms|llpl_async_executor_create|llpl_async_executor_destroy|llpl_async_executor_spawn|llpl_async_executor_poll|llpl_async_executor_run_all)\\b\\s*(?=\\()",
+            "name": "support.function.async.llpl"
         },
         "sizeof-keyword": {
             "match": "\\bsizeof\\b",

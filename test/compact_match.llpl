@@ -1,0 +1,15 @@
+extern func puts(s: char*) -> i64
+
+func main() -> int {
+    let foo = 0
+    let result = 0
+    match foo {
+        0 => result = 5
+        default => result = 0
+    }
+    puts("compact match works")
+    if result == 5 {
+        return 0
+    }
+    return 1
+}

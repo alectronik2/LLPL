@@ -1,0 +1,23 @@
+project: comp
+entry: main.llpl
+generated_c: build/main.c
+llpl_compiler: "llpl"
+
+toolchain:
+  cc: cc
+  ld: cc
+
+common_cflags:
+  - -I../../runtime
+
+c_sources:
+  - path: build/main.c
+    output: build/main.o
+    include_dirs: ["../../runtime"]
+  - path: "../../runtime/runtime.c"
+    output: build/runtime.o
+    include_dirs: ["../../runtime"]
+
+link:
+  output: build/comp
+  objects: [build/main.o, build/runtime.o]

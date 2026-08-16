@@ -1,0 +1,14 @@
+struct Future<T> {
+    state: int
+    value: T
+}
+
+func ready(value: int) -> Future<int> {
+    return Future<int> { state: 1, value: value }
+}
+
+func main() -> int {
+    let future = ready(42)
+    let ignored = puts("\(future.value)")
+    return 0
+}

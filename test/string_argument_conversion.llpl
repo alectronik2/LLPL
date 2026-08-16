@@ -1,0 +1,10 @@
+extern func puts(s: char*) -> i64
+
+func show(value: String) {
+    puts(value.c_str())
+}
+
+func main() -> int {
+    show("implicit String")
+    return 0
+}

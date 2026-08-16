@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>
 #endif
 
 #define LLPL_EH_MAX_ERROR_SIZE 256
@@ -1141,6 +1142,153 @@ int64_t llpl_symbol_line(char* symbol) {
 
 void llpl_memcpy(char* dest, char* src, uint64_t count) {
     memcpy(dest, src, (size_t)count);
+}
+
+char* llpl_async_create(uint64_t frame_size, void* poll_fn) {
+    if (frame_size == 0 || !poll_fn) return NULL;
+    LLPL_AsyncTask* task = (LLPL_AsyncTask*)rc_alloc(sizeof(LLPL_AsyncTask));
+    if (!task) return NULL;
+    task->frame = rc_alloc((size_t)frame_size);
+    if (!task->frame) {
+        rc_free(task);
+        return NULL;
+    }
+    task->frame_size = frame_size;
+    task->poll = (LLPL_AsyncPollFn)poll_fn;
+    return (char*)task;
+}
+
+char* llpl_async_frame(char* task) {
+    if (!task) return NULL;
+    return (char*)((LLPL_AsyncTask*)task)->frame;
+}
+
+int64_t llpl_async_poll(char* task, char* out) {
+    if (!task) return -1;
+    LLPL_AsyncTask* t = (LLPL_AsyncTask*)task;
+    if (!t->poll || !t->frame) return -1;
+    return (int64_t)t->poll(t->frame, out);
+}
+
+int64_t llpl_async_block_on(char* task, char* out) {
+    int64_t state = 0;
+    do {
+        state = llpl_async_poll(task, out);
+    } while (state == 0);
+    return state;
+}
+
+void llpl_async_destroy(char* task) {
+    if (!task) return;
+    LLPL_AsyncTask* t = (LLPL_AsyncTask*)task;
+    if (t->frame) rc_free(t->frame);
+    rc_free(t);
+}
+
+static uint64_t llpl_async_clock_ms = 0;
+
+uint64_t llpl_async_now_ms(void) {
+#if __STDC_HOSTED__ && defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return ((uint64_t)ts.tv_sec * 1000ULL) + ((uint64_t)ts.tv_nsec / 1000000ULL);
+    }
+#endif
+    return llpl_async_clock_ms;
+}
+
+void llpl_async_set_now_ms(uint64_t now_ms) {
+    llpl_async_clock_ms = now_ms;
+}
+
+uint64_t llpl_async_advance_ms(uint64_t delta_ms) {
+    llpl_async_clock_ms += delta_ms;
+    return llpl_async_clock_ms;
+}
+
+typedef struct LLPL_AsyncExecutor {
+    char** tasks;
+    uint64_t count;
+    uint64_t capacity;
+    uint64_t next;
+} LLPL_AsyncExecutor;
+
+char* llpl_async_executor_create(void) {
+    LLPL_AsyncExecutor* executor = (LLPL_AsyncExecutor*)rc_alloc(sizeof(LLPL_AsyncExecutor));
+    if (!executor) return NULL;
+    executor->tasks = NULL;
+    executor->count = 0;
+    executor->capacity = 0;
+    executor->next = 0;
+    return (char*)executor;
+}
+
+void llpl_async_executor_destroy(char* executor) {
+    if (!executor) return;
+    LLPL_AsyncExecutor* ex = (LLPL_AsyncExecutor*)executor;
+    for (uint64_t i = 0; i < ex->count; i++) {
+        llpl_async_destroy(ex->tasks[i]);
+    }
+    if (ex->tasks) rc_free(ex->tasks);
+    rc_free(ex);
+}
+
+int64_t llpl_async_executor_spawn(char* executor, char* task) {
+    if (!executor || !task) return -1;
+    LLPL_AsyncExecutor* ex = (LLPL_AsyncExecutor*)executor;
+    if (ex->count == ex->capacity) {
+        uint64_t new_capacity = ex->capacity == 0 ? 4 : ex->capacity * 2;
+        char** new_tasks = (char**)rc_alloc(sizeof(char*) * (size_t)new_capacity);
+        if (!new_tasks) return -1;
+        for (uint64_t i = 0; i < ex->count; i++) {
+            new_tasks[i] = ex->tasks[i];
+        }
+        if (ex->tasks) rc_free(ex->tasks);
+        ex->tasks = new_tasks;
+        ex->capacity = new_capacity;
+    }
+    ex->tasks[ex->count++] = task;
+    return (int64_t)ex->count;
+}
+
+static void llpl_async_executor_remove(LLPL_AsyncExecutor* ex, uint64_t index) {
+    llpl_async_destroy(ex->tasks[index]);
+    for (uint64_t i = index + 1; i < ex->count; i++) {
+        ex->tasks[i - 1] = ex->tasks[i];
+    }
+    ex->count--;
+    if (ex->count == 0) {
+        ex->next = 0;
+    } else if (ex->next >= ex->count) {
+        ex->next = 0;
+    }
+}
+
+int64_t llpl_async_executor_poll(char* executor) {
+    if (!executor) return -1;
+    LLPL_AsyncExecutor* ex = (LLPL_AsyncExecutor*)executor;
+    if (ex->count == 0) return 0;
+
+    uint64_t polls = ex->count;
+    while (polls > 0 && ex->count > 0) {
+        uint64_t index = ex->next;
+        int64_t state = llpl_async_poll(ex->tasks[index], NULL);
+        if (state == 1) {
+            llpl_async_executor_remove(ex, index);
+        } else {
+            ex->next = (index + 1) % ex->count;
+        }
+        polls--;
+    }
+    return (int64_t)ex->count;
+}
+
+int64_t llpl_async_executor_run_all(char* executor) {
+    int64_t remaining = 0;
+    do {
+        remaining = llpl_async_executor_poll(executor);
+    } while (remaining > 0);
+    return remaining;
 }
 
 // Panic support. On hosted targets the default prints to stderr and aborts.

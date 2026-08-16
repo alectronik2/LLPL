@@ -1,0 +1,22 @@
+struct Future<T> {
+    state: int
+    value: T
+}
+
+func ready(value: int) -> Future<int> {
+    let future: Future<int> = Future { state: 1, value: value }
+    return future
+}
+
+async func statements_around_awaits(seed: int) -> int {
+    let base = seed + 1
+    let left = await ready(base)
+    let middle = left + 3
+    let right = await ready(middle)
+    return right + base
+}
+
+func main() -> int {
+    let ignored = puts("\(statements_around_awaits(10))")
+    return 0
+}

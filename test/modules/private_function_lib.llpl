@@ -1,0 +1,7 @@
+private func hidden() -> i64 {
+    return 41
+}
+
+public func exposed() -> i64 {
+    return hidden()
+}

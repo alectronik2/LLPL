@@ -105,9 +105,9 @@ const KEYWORDS = [
     'import', 'from', 'namespace', 'using', 'class', 'struct', 'union', 'packed', 'enum', 'macro',
     'constructor', 'destructor', 'func', 'inline', 'let', 'const', 'volatile', 'public', 'private', 'protected', 'static', 'virtual',
     'override', 'if', 'else', 'while', 'do', 'for', 'foreach', 'in', 'with', 'holding', 'return', 'continue', 'break', 'defer',
-    'until', 'unless', 'try', 'catch', 'finally', 'throw', 'delete', 'assert', 'check', 'asm', 'new', 'true', 'false', 'null',
+    'until', 'unless', 'try', 'catch', 'finally', 'throw', 'delete', 'assert', 'check', 'await', 'asm', 'new', 'true', 'false', 'null',
     'extern', 'as', 'match', 'case', 'default', 'alias', 'operator', 'trait', 'ui',
-    'impl', 'quote', 'unquote', 'interrupt', 'property', 'unittest',
+    'impl', 'quote', 'unquote', 'interrupt', 'property', 'unittest', 'async',
     'sizeof', 'self', 'super', 'int', 'uint', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32',
     'int64', 'uint64', 'u8', 'u16', 'u32', 'u64', 'i8', 'i16', 'i32', 'i64',
     'char', 'bool', 'void', 'float', 'string',
@@ -128,6 +128,17 @@ const UI_PROPERTIES = [
 const UI_METHODS = [
     'build', 'run', 'is_valid', 'apply_dark_theme', 'apply_light_theme',
     'add_child', 'render',
+];
+
+const ASYNC_RUNTIME_FUNCTIONS = [
+    'async_start', 'async_run', 'async_ready', 'async_pending', 'async_sleep_until',
+    'sleep_ms', 'async_join',
+    'llpl_async_poll', 'llpl_async_destroy', 'llpl_async_now_ms',
+    'llpl_async_executor_spawn', 'llpl_async_executor_poll', 'llpl_async_executor_run_all',
+];
+
+const ASYNC_RUNTIME_TYPES = [
+    'AsyncFuture', 'SleepFuture', 'AsyncTask', 'AsyncExecutor',
 ];
 
 const connection = createConnection(ProposedFeatures.all);
@@ -486,6 +497,20 @@ connection.onCompletion((params): CompletionItem[] => {
                 label: method,
                 kind: CompletionItemKind.Method,
                 detail: 'std.ui helper method',
+            });
+        }
+        for (const fn of ASYNC_RUNTIME_FUNCTIONS) {
+            items.push({
+                label: fn,
+                kind: CompletionItemKind.Function,
+                detail: 'LLPL async runtime helper',
+            });
+        }
+        for (const typeName of ASYNC_RUNTIME_TYPES) {
+            items.push({
+                label: typeName,
+                kind: CompletionItemKind.Struct,
+                detail: 'LLPL async runtime type',
             });
         }
         const realPath = fileURLToPath(params.textDocument.uri);

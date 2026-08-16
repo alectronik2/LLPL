@@ -1,0 +1,4 @@
+func main() -> i64 {
+    throw 42 as i64
+    return 0
+}

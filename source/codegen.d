@@ -86,6 +86,14 @@ private struct DeferInfo {
     string activeVarName;
 }
 
+private struct AsyncCallInfo {
+    FunctionDecl fn;
+    string baseName;
+    string usageName;
+    ASTNode usageNode;
+    ASTNode[] argsWithReceiver;
+}
+
 // resolveGenericFunctionCall's result - the monomorphized function's
 // mangled name plus the call's arguments already resolved to plain
 // positional form (named args placed, defaults substituted) - see
@@ -2828,9 +2836,17 @@ class CodeGenerator {
                             params ~= parameterDeclaration(param);
                         }
                         if (funcDecl.isVariadic) params ~= ", ...";
+                        string baseName = mangleFreeFunctionName(funcDecl);
                         earlyDeclCode ~= format("%s%s %s(%s);\n",
                             inlineFunctionPrefix(funcDecl), typeToC(returnTypeForFwd),
-                            mangleFreeFunctionName(funcDecl), params);
+                            baseName, params);
+                        if (funcDecl.isAsync) {
+                            string startParams = "void* __frame";
+                            if (params.length > 0) startParams ~= ", " ~ params;
+                            earlyDeclCode ~= format("uintptr_t %s_async_frame_size();\n", baseName);
+                            earlyDeclCode ~= format("void %s_async_start_into(%s);\n", baseName, startParams);
+                            earlyDeclCode ~= format("intptr_t %s_async_poll_erased(void* __frame, void* __out);\n", baseName);
+                        }
                     }
                 } else if (auto classDecl = cast(ClassDecl)decl) {
                     currentNamespaceSegments = classDecl.namespaceSegments;
@@ -2950,6 +2966,14 @@ class CodeGenerator {
                         earlyDeclCode ~= format("%s%s %s(%s);\n",
                             inlineFunctionPrefix(method), typeToC(returnTypeForFwd),
                             mangleMethodName(classDecl, cName, method), params);
+                        if (method.isAsync) {
+                            string baseName = mangleMethodName(classDecl, cName, method);
+                            string startParams = "void* __frame";
+                            if (params.length > 0) startParams ~= ", " ~ params;
+                            earlyDeclCode ~= format("uintptr_t %s_async_frame_size();\n", baseName);
+                            earlyDeclCode ~= format("void %s_async_start_into(%s);\n", baseName, startParams);
+                            earlyDeclCode ~= format("intptr_t %s_async_poll_erased(void* __frame, void* __out);\n", baseName);
+                        }
                     }
                 } else if (auto structDecl = cast(StructDecl)decl) {
                     // Constructor forward declaration(s) - see
@@ -5225,9 +5249,7 @@ class CodeGenerator {
 
     private string generateMethod(ClassDecl classDecl, FunctionDecl method) {
         if (method.isAsync) {
-            throw new CompileError(
-                "async method lowering is not implemented yet: parser and AST support are enabled, but the C backend still needs the state-machine transform",
-                currentModulePath, method.line, method.column);
+            return generateAsyncMethod(classDecl, method);
         }
 
         string cName = mangledClass(classDecl);
@@ -5311,6 +5333,22 @@ class CodeGenerator {
             variableTypes.remove("self");
         }
 
+        return code;
+    }
+
+    private string generateAsyncMethod(ClassDecl classDecl, FunctionDecl method) {
+        if (method.isStatic || method.isVirtual || method.isOverride) {
+            throw new CompileError("async methods currently support ordinary instance methods only",
+                currentModulePath, method.line, method.column);
+        }
+        string cName = mangledClass(classDecl);
+        Parameter[] leadingParams = [new Parameter("self", new Type(cName))];
+
+        string prevClassName = currentClassName;
+        currentClassName = cName;
+        currentNamespaceSegments = classDecl.namespaceSegments;
+        string code = generateAsyncFunction(method, mangleMethodName(classDecl, cName, method), leadingParams);
+        currentClassName = prevClassName;
         return code;
     }
 
@@ -5440,6 +5478,35 @@ class CodeGenerator {
     private bool asyncNodeContainsAwait(ASTNode node) {
         if (node is null) return false;
         if (cast(AwaitExpr)node) return true;
+        if (auto block = cast(Block)node) {
+            foreach (stmt; block.statements) if (asyncNodeContainsAwait(stmt)) return true;
+            return false;
+        }
+        if (auto i = cast(IfStmt)node) {
+            if (asyncNodeContainsAwait(i.condition)) return true;
+            if (asyncNodeContainsAwait(i.thenBlock)) return true;
+            return asyncNodeContainsAwait(i.elseBlock);
+        }
+        if (auto w = cast(WhileStmt)node) {
+            return asyncNodeContainsAwait(w.condition) || asyncNodeContainsAwait(w.body_);
+        }
+        if (auto d = cast(DoWhileStmt)node) return asyncNodeContainsAwait(d.body_) || asyncNodeContainsAwait(d.condition);
+        if (auto f = cast(ForStmt)node) {
+            foreach (init; f.initializers) if (asyncNodeContainsAwait(init)) return true;
+            return asyncNodeContainsAwait(f.condition) || asyncNodeContainsAwait(f.update) || asyncNodeContainsAwait(f.body_);
+        }
+        if (auto f = cast(ForeachStmt)node) return asyncNodeContainsAwait(f.iterable) || asyncNodeContainsAwait(f.body_);
+        if (auto d = cast(DeferStmt)node) return asyncNodeContainsAwait(d.statement);
+        if (auto t = cast(TryStmt)node) {
+            return asyncNodeContainsAwait(t.tryBlock) || asyncNodeContainsAwait(t.catchBlock) ||
+                asyncNodeContainsAwait(t.finallyBlock);
+        }
+        if (auto m = cast(MatchStmt)node) {
+            if (asyncNodeContainsAwait(m.subject)) return true;
+            foreach (case_; m.cases) if (asyncNodeContainsAwait(case_.body_)) return true;
+            return false;
+        }
+        if (auto l = cast(LambdaExpr)node) return asyncNodeContainsAwait(l.body_);
         if (auto v = cast(VarDecl)node) return asyncNodeContainsAwait(v.initializer);
         if (auto e = cast(ExprStmt)node) return asyncNodeContainsAwait(e.expression);
         if (auto r = cast(ReturnStmt)node) return asyncNodeContainsAwait(r.value);
@@ -5473,38 +5540,253 @@ class CodeGenerator {
         return false;
     }
 
+    private ASTNode[] normalizeAsyncStatement(ASTNode stmt, ref int tempIndex);
+
+    private Block normalizeAsyncBlock(Block block, ref int tempIndex) {
+        if (block is null) return null;
+        ASTNode[] statements;
+        foreach (stmt; block.statements) {
+            statements ~= normalizeAsyncStatement(stmt, tempIndex);
+        }
+        return new Block(statements, block.isHolding);
+    }
+
+    private ASTNode asyncTempIdentifier(string name, ASTNode source) {
+        return new Identifier(name, source !is null ? source.line : 0, source !is null ? source.column : 0);
+    }
+
+    private ASTNode extractAsyncAwaits(ASTNode expr, ref ASTNode[] prelude, ref int tempIndex) {
+        if (expr is null) return null;
+        if (auto awaitExpr = cast(AwaitExpr)expr) {
+            ASTNode[] nested;
+            ASTNode awaited = extractAsyncAwaits(awaitExpr.expression, nested, tempIndex);
+            foreach (stmt; nested) prelude ~= stmt;
+            string tempName = format("__llpl_async_tmp%d", tempIndex++);
+            prelude ~= new VarDecl(tempName, null, new AwaitExpr(awaited, awaitExpr.line, awaitExpr.column),
+                false, awaitExpr.line, awaitExpr.column);
+            return asyncTempIdentifier(tempName, awaitExpr);
+        }
+        if (auto b = cast(BinaryExpr)expr) {
+            return new BinaryExpr(b.op, extractAsyncAwaits(b.left, prelude, tempIndex),
+                extractAsyncAwaits(b.right, prelude, tempIndex), b.line, b.column);
+        }
+        if (auto u = cast(UnaryExpr)expr) {
+            return new UnaryExpr(u.op, extractAsyncAwaits(u.operand, prelude, tempIndex),
+                u.line, u.column, u.isPostfix);
+        }
+        if (auto c = cast(CallExpr)expr) {
+            ASTNode[] args;
+            foreach (arg; c.args) args ~= extractAsyncAwaits(arg, prelude, tempIndex);
+            return new CallExpr(extractAsyncAwaits(c.callee, prelude, tempIndex), args,
+                c.line, c.column, c.argNames, c.typeArgs);
+        }
+        if (auto m = cast(MemberExpr)expr) {
+            return new MemberExpr(extractAsyncAwaits(m.object, prelude, tempIndex), m.member, m.line, m.column);
+        }
+        if (auto idx = cast(IndexExpr)expr) {
+            return new IndexExpr(extractAsyncAwaits(idx.array, prelude, tempIndex),
+                extractAsyncAwaits(idx.index, prelude, tempIndex), idx.line, idx.column);
+        }
+        if (auto n = cast(NewExpr)expr) {
+            ASTNode[] args;
+            foreach (arg; n.args) args ~= extractAsyncAwaits(arg, prelude, tempIndex);
+            return new NewExpr(n.type, args, n.line, n.column, n.argNames);
+        }
+        if (auto c = cast(CastExpr)expr) {
+            return new CastExpr(c.type, extractAsyncAwaits(c.expression, prelude, tempIndex),
+                c.line, c.column, c.useImplicitConversion);
+        }
+        if (auto p = cast(PropagateExpr)expr) {
+            return new PropagateExpr(extractAsyncAwaits(p.operand, prelude, tempIndex), p.line, p.column);
+        }
+        if (auto a = cast(ArrayLiteral)expr) {
+            ASTNode[] elements;
+            foreach (elem; a.elements) elements ~= extractAsyncAwaits(elem, prelude, tempIndex);
+            return new ArrayLiteral(elements, a.line, a.column);
+        }
+        if (auto t = cast(TupleLiteral)expr) {
+            ASTNode[] elements;
+            foreach (elem; t.elements) elements ~= extractAsyncAwaits(elem, prelude, tempIndex);
+            return new TupleLiteral(elements, t.line, t.column);
+        }
+        if (auto s = cast(StructLiteral)expr) {
+            ASTNode[] values;
+            foreach (value; s.fieldValues) values ~= extractAsyncAwaits(value, prelude, tempIndex);
+            return new StructLiteral(s.typeName, s.fieldNames, values, s.line, s.column, s.typeArgs);
+        }
+        return expr;
+    }
+
+    private ASTNode[] normalizeAsyncStatement(ASTNode stmt, ref int tempIndex) {
+        ASTNode[] result;
+        if (auto v = cast(VarDecl)stmt) {
+            if (isDirectAwaitExpr(v.initializer)) {
+                result ~= stmt;
+                return result;
+            }
+            ASTNode[] prelude;
+            ASTNode init = extractAsyncAwaits(v.initializer, prelude, tempIndex);
+            result ~= prelude;
+            result ~= new VarDecl(v.name, v.type, init, v.isConst, v.line, v.column,
+                v.bitWidth, v.isVolatile, v.attributes);
+            return result;
+        }
+        if (auto r = cast(ReturnStmt)stmt) {
+            ASTNode[] prelude;
+            ASTNode value = extractAsyncAwaits(r.value, prelude, tempIndex);
+            result ~= prelude;
+            result ~= new ReturnStmt(value, r.line, r.column);
+            return result;
+        }
+        if (auto e = cast(ExprStmt)stmt) {
+            if (isDirectAwaitExpr(e.expression)) {
+                result ~= stmt;
+                return result;
+            }
+            ASTNode[] prelude;
+            ASTNode expr = extractAsyncAwaits(e.expression, prelude, tempIndex);
+            result ~= prelude;
+            result ~= new ExprStmt(expr);
+            return result;
+        }
+        if (auto i = cast(IfStmt)stmt) {
+            ASTNode[] prelude;
+            ASTNode condition = extractAsyncAwaits(i.condition, prelude, tempIndex);
+            result ~= prelude;
+            result ~= new IfStmt(condition, normalizeAsyncBlock(i.thenBlock, tempIndex),
+                normalizeAsyncBlock(i.elseBlock, tempIndex), i.isPostfix);
+            return result;
+        }
+        if (auto w = cast(WhileStmt)stmt) {
+            if (asyncNodeContainsAwait(w.condition)) {
+                ASTNode[] prelude;
+                ASTNode condition = extractAsyncAwaits(w.condition, prelude, tempIndex);
+                ASTNode[] bodyStatements;
+                bodyStatements ~= prelude;
+                bodyStatements ~= new IfStmt(new UnaryExpr("!", condition, condition.line, condition.column),
+                    new Block([cast(ASTNode)new BreakStmt(w.line, w.column)]));
+                bodyStatements ~= normalizeAsyncBlock(w.body_, tempIndex).statements;
+                result ~= new WhileStmt(new BoolLiteral(true, w.line, w.column), new Block(bodyStatements));
+            } else {
+                result ~= new WhileStmt(w.condition, normalizeAsyncBlock(w.body_, tempIndex));
+            }
+            return result;
+        }
+        if (auto block = cast(Block)stmt) {
+            result ~= normalizeAsyncBlock(block, tempIndex);
+            return result;
+        }
+        result ~= stmt;
+        return result;
+    }
+
     private AwaitExpr directAwaitFromStatement(ASTNode stmt) {
         if (auto v = cast(VarDecl)stmt) return cast(AwaitExpr)v.initializer;
         if (auto e = cast(ExprStmt)stmt) return cast(AwaitExpr)e.expression;
         return null;
     }
 
-    private void checkRestrictedAsyncFunction(FunctionDecl fn) {
+    private void checkAsyncLowering(ASTNode node) {
+        if (node is null) return;
+        if (auto block = cast(Block)node) {
+            foreach (stmt; block.statements) checkAsyncLowering(stmt);
+            return;
+        }
+        if (auto i = cast(IfStmt)node) {
+            if (asyncNodeContainsAwait(i.condition)) {
+                throw new CompileError("async lowering expected awaits in if conditions to be normalized",
+                    currentModulePath, i.line, i.column);
+            }
+            checkAsyncLowering(i.thenBlock);
+            checkAsyncLowering(i.elseBlock);
+            return;
+        }
+        if (auto w = cast(WhileStmt)node) {
+            if (asyncNodeContainsAwait(w.condition)) {
+                throw new CompileError("async lowering expected awaits in while conditions to be normalized",
+                    currentModulePath, w.line, w.column);
+            }
+            checkAsyncLowering(w.body_);
+            return;
+        }
+        if (auto d = cast(DoWhileStmt)node) {
+            if (asyncNodeContainsAwait(d)) {
+                throw new CompileError("async lowering does not support await inside do/while statements yet",
+                    currentModulePath, d.line, d.column);
+            }
+            return;
+        }
+        if (auto f = cast(ForStmt)node) {
+            if (asyncNodeContainsAwait(f)) {
+                throw new CompileError("async lowering does not support await inside for statements yet",
+                    currentModulePath, f.line, f.column);
+            }
+            return;
+        }
+        if (auto f = cast(ForeachStmt)node) {
+            if (asyncNodeContainsAwait(f)) {
+                throw new CompileError("async lowering does not support await inside foreach statements yet",
+                    currentModulePath, f.line, f.column);
+            }
+            return;
+        }
+        if (auto d = cast(DeferStmt)node) {
+            if (asyncNodeContainsAwait(d)) {
+                throw new CompileError("async lowering does not support await inside defer statements",
+                    currentModulePath, d.line, d.column);
+            }
+            return;
+        }
+        if (auto t = cast(TryStmt)node) {
+            if (asyncNodeContainsAwait(t)) {
+                throw new CompileError("async lowering does not support await inside try/catch/finally statements yet",
+                    currentModulePath, t.line, t.column);
+            }
+            return;
+        }
+        if (auto m = cast(MatchStmt)node) {
+            if (asyncNodeContainsAwait(m)) {
+                throw new CompileError("async lowering does not support await inside match statements yet",
+                    currentModulePath, m.line, m.column);
+            }
+            return;
+        }
+        if (auto v = cast(VarDecl)node) {
+            if (asyncNodeContainsAwait(v.initializer) && !isDirectAwaitExpr(v.initializer)) {
+                throw new CompileError("async lowering expected embedded awaits to be normalized",
+                    currentModulePath, v.line, v.column);
+            }
+            return;
+        }
+        if (auto e = cast(ExprStmt)node) {
+            if (asyncNodeContainsAwait(e.expression) && !isDirectAwaitExpr(e.expression)) {
+                throw new CompileError("async lowering expected embedded awaits to be normalized",
+                    currentModulePath, e.line, e.column);
+            }
+            return;
+        }
+        if (auto r = cast(ReturnStmt)node) {
+            if (asyncNodeContainsAwait(r.value)) {
+                throw new CompileError("async lowering expected awaits in return expressions to be normalized",
+                    currentModulePath, r.line, r.column);
+            }
+            return;
+        }
+        if (asyncNodeContainsAwait(node)) {
+            throw new CompileError("async lowering does not support await in this statement yet",
+                currentModulePath, node.line, node.column);
+        }
+    }
+
+    private Block normalizedAsyncBody(FunctionDecl fn) {
         if (fn.body_ is null) {
             throw new CompileError("async function lowering requires a function body",
                 currentModulePath, fn.line, fn.column);
         }
-        foreach (stmt; fn.body_.statements) {
-            if (auto r = cast(ReturnStmt)stmt) {
-                if (asyncNodeContainsAwait(r.value)) {
-                    throw new CompileError("restricted async lowering does not support 'await' inside return expressions yet",
-                        currentModulePath, r.line, r.column);
-                }
-            } else if (auto v = cast(VarDecl)stmt) {
-                if (asyncNodeContainsAwait(v.initializer) && !isDirectAwaitExpr(v.initializer)) {
-                    throw new CompileError("restricted async lowering only supports direct await initializers, e.g. 'let x = await f()'",
-                        currentModulePath, v.line, v.column);
-                }
-            } else if (auto e = cast(ExprStmt)stmt) {
-                if (asyncNodeContainsAwait(e.expression) && !isDirectAwaitExpr(e.expression)) {
-                    throw new CompileError("restricted async lowering only supports direct await expression statements",
-                        currentModulePath, e.line, e.column);
-                }
-            } else if (asyncNodeContainsAwait(stmt)) {
-                throw new CompileError("restricted async lowering only supports straight-line awaits for now",
-                    currentModulePath, stmt.line, stmt.column);
-            }
-        }
+        int tempIndex = 0;
+        Block body = normalizeAsyncBlock(fn.body_, tempIndex);
+        checkAsyncLowering(body);
+        return body;
     }
 
     private Type resolveAsyncVarType(VarDecl varDecl) {
@@ -5517,9 +5799,13 @@ class CodeGenerator {
     }
 
     private bool asyncFutureHasStateField(Type futureType) {
+        return asyncFutureHasField(futureType, "state");
+    }
+
+    private bool asyncFutureHasField(Type futureType, string fieldName) {
         if (auto structDecl = futureType.name in structRegistry) {
             foreach (field; structDecl.fields) {
-                if (field.name == "state") return true;
+                if (field.name == fieldName) return true;
             }
         }
         return false;
@@ -5535,11 +5821,221 @@ class CodeGenerator {
             awaitIndex, resumeState);
     }
 
-    private string generateAsyncFunction(FunctionDecl funcDecl) {
-        checkRestrictedAsyncFunction(funcDecl);
+    private string generateAsyncAwaitReadinessCheck(int awaitIndex, int resumeState, Type awaitType, string pad) {
+        string code;
+        if (asyncFutureHasField(awaitType, "deadline_ms")) {
+            code ~= format("%sif (llpl_async_now_ms() >= self->__await%d.deadline_ms) {\n", pad, awaitIndex);
+            code ~= format("%s    self->__await%d.state = 1;\n", pad, awaitIndex);
+            code ~= pad ~ "}\n";
+        }
+        if (!asyncFutureHasStateField(awaitType)) return code;
+        code ~= format(
+            "%sif (self->__await%d.state == 0) {\n" ~
+            "%s    self->state = %d;\n" ~
+            "%s    return __poll;\n" ~
+            "%s}\n",
+            pad, awaitIndex, pad, resumeState, pad, pad);
+        return code;
+    }
+
+    private void collectAsyncLocalsAndAwaits(ASTNode node, ref VarDecl[] locals, ref AwaitExpr[] awaits, ref Type[] awaitTypes) {
+        if (node is null) return;
+        if (auto block = cast(Block)node) {
+            foreach (stmt; block.statements) collectAsyncLocalsAndAwaits(stmt, locals, awaits, awaitTypes);
+            return;
+        }
+        if (auto v = cast(VarDecl)node) {
+            Type localType = resolveAsyncVarType(v);
+            locals ~= v;
+            variableTypes[v.name] = localType;
+            variableCNames[v.name] = "self->" ~ v.name;
+            recordLocal(v.name, localType, v.line, v.column, "local");
+            if (auto awaitExpr = cast(AwaitExpr)v.initializer) {
+                Type awaitType = inferType(awaitExpr.expression);
+                resolveType(awaitType);
+                if (awaitType.isPointer || awaitType.isArray) {
+                    throw new CompileError("async lowering expects await expressions to return a Future<T> value, not a pointer or array",
+                        currentModulePath, awaitExpr.line, awaitExpr.column);
+                }
+                if (futureValueType(awaitType) is null) {
+                    throw new CompileError(format("Cannot await '%s'; expected Future<T> or AsyncFuture<T>",
+                            awaitType.toString()),
+                        currentModulePath, awaitExpr.line, awaitExpr.column);
+                }
+                awaits ~= awaitExpr;
+                awaitTypes ~= awaitType;
+            }
+            return;
+        }
+        if (auto e = cast(ExprStmt)node) {
+            if (auto awaitExpr = cast(AwaitExpr)e.expression) {
+                Type awaitType = inferType(awaitExpr.expression);
+                resolveType(awaitType);
+                if (awaitType.isPointer || awaitType.isArray) {
+                    throw new CompileError("async lowering expects await expressions to return a Future<T> value, not a pointer or array",
+                        currentModulePath, awaitExpr.line, awaitExpr.column);
+                }
+                if (futureValueType(awaitType) is null) {
+                    throw new CompileError(format("Cannot await '%s'; expected Future<T> or AsyncFuture<T>",
+                            awaitType.toString()),
+                        currentModulePath, awaitExpr.line, awaitExpr.column);
+                }
+                awaits ~= awaitExpr;
+                awaitTypes ~= awaitType;
+            }
+            return;
+        }
+        if (auto i = cast(IfStmt)node) {
+            collectAsyncLocalsAndAwaits(i.thenBlock, locals, awaits, awaitTypes);
+            collectAsyncLocalsAndAwaits(i.elseBlock, locals, awaits, awaitTypes);
+            return;
+        }
+        if (auto w = cast(WhileStmt)node) {
+            collectAsyncLocalsAndAwaits(w.body_, locals, awaits, awaitTypes);
+            return;
+        }
+    }
+
+    private string asyncFrameValueAssignment(VarDecl varDecl, string exprCode) {
+        if (varDecl.type.isNullableSugar) {
+            return generateNullableWrap(varDecl.type, varDecl.initializer);
+        }
+        if (auto tupleLit = cast(TupleLiteral)varDecl.initializer) {
+            return generateTupleLiteral(tupleLit, cloneType(varDecl.type));
+        }
+        if (auto structLit = cast(StructLiteral)varDecl.initializer) {
+            return generateStructLiteralValue(structLit, cloneType(varDecl.type));
+        }
+        string converted = tryImplicitConversionCall(varDecl.initializer, varDecl.type);
+        if (converted.length > 0) return converted;
+        ASTNode initExpr = insertUpcastIfNeeded(varDecl.initializer, varDecl.type);
+        initExpr = insertNumericCoercionIfNeeded(initExpr, varDecl.type);
+        return generateExpression(initExpr);
+    }
+
+    private string generateAsyncStatements(ASTNode[] statements, Type[] awaitTypes,
+            ref int state, ref int awaitIndex, ref bool needCaseLabel, int asyncIndentLevel) {
+        string code;
+        string pad(int level) {
+            string s;
+            foreach (_; 0 .. level) s ~= "    ";
+            return s;
+        }
+        void emitCaseIfNeeded() {
+            if (needCaseLabel) {
+                code ~= pad(asyncIndentLevel - 1) ~ format("case %d:\n", state);
+                needCaseLabel = false;
+            }
+        }
+
+        foreach (stmt; statements) {
+            emitCaseIfNeeded();
+            if (auto varDecl = cast(VarDecl)stmt) {
+                if (auto awaitExpr = cast(AwaitExpr)varDecl.initializer) {
+                    code ~= pad(asyncIndentLevel) ~ format("self->__await%d = %s;\n", awaitIndex,
+                        generateExpression(awaitExpr.expression));
+                    code ~= pad(asyncIndentLevel) ~ format("self->state = %d;\n", state + 1);
+                    code ~= pad(asyncIndentLevel) ~ "/* fallthrough */\n";
+                    state++;
+                    code ~= pad(asyncIndentLevel - 1) ~ format("case %d:\n", state);
+                    code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex], pad(asyncIndentLevel));
+                    code ~= pad(asyncIndentLevel) ~ format("self->%s = self->__await%d.value;\n", varDecl.name, awaitIndex);
+                    code ~= pad(asyncIndentLevel) ~ format("self->state = %d;\n", state + 1);
+                    state++;
+                    awaitIndex++;
+                    needCaseLabel = true;
+                } else if (varDecl.initializer !is null) {
+                    code ~= pad(asyncIndentLevel) ~ format("self->%s = %s;\n", varDecl.name,
+                        asyncFrameValueAssignment(varDecl, generateExpression(varDecl.initializer)));
+                }
+                code ~= pad(asyncIndentLevel) ~ "/* fallthrough */\n";
+            } else if (auto exprStmt = cast(ExprStmt)stmt) {
+                if (auto awaitExpr = cast(AwaitExpr)exprStmt.expression) {
+                    code ~= pad(asyncIndentLevel) ~ format("self->__await%d = %s;\n", awaitIndex,
+                        generateExpression(awaitExpr.expression));
+                    code ~= pad(asyncIndentLevel) ~ format("self->state = %d;\n", state + 1);
+                    code ~= pad(asyncIndentLevel) ~ "/* fallthrough */\n";
+                    state++;
+                    code ~= pad(asyncIndentLevel - 1) ~ format("case %d:\n", state);
+                    code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex], pad(asyncIndentLevel));
+                    code ~= pad(asyncIndentLevel) ~ format("(void)self->__await%d.value;\n", awaitIndex);
+                    code ~= pad(asyncIndentLevel) ~ format("self->state = %d;\n", state + 1);
+                    state++;
+                    awaitIndex++;
+                    needCaseLabel = true;
+                } else {
+                    code ~= pad(asyncIndentLevel) ~ format("%s;\n", generateDiscardedExpression(exprStmt.expression));
+                }
+                code ~= pad(asyncIndentLevel) ~ "/* fallthrough */\n";
+            } else if (auto returnStmt = cast(ReturnStmt)stmt) {
+                if (returnStmt.value !is null) {
+                    ASTNode retExpr = returnStmt.value;
+                    if (currentReturnType !is null) {
+                        retExpr = insertUpcastIfNeeded(retExpr, currentReturnType);
+                        retExpr = insertNumericCoercionIfNeeded(retExpr, currentReturnType);
+                    }
+                    code ~= pad(asyncIndentLevel) ~ format("self->__result = %s;\n", generateExpression(retExpr));
+                    code ~= pad(asyncIndentLevel) ~ "__poll.value = self->__result;\n";
+                }
+                code ~= pad(asyncIndentLevel) ~ format("self->state = %d;\n", state + 1);
+                code ~= pad(asyncIndentLevel) ~ "__poll.state = 1;\n";
+                code ~= pad(asyncIndentLevel) ~ "return __poll;\n";
+                state++;
+                needCaseLabel = true;
+            } else if (auto ifStmt = cast(IfStmt)stmt) {
+                code ~= pad(asyncIndentLevel) ~ "if (" ~ generateCondition(ifStmt.condition) ~ ") {\n";
+                code ~= generateAsyncStatements(ifStmt.thenBlock.statements, awaitTypes,
+                    state, awaitIndex, needCaseLabel, asyncIndentLevel + 1);
+                if (needCaseLabel) {
+                    needCaseLabel = false;
+                }
+                if (ifStmt.elseBlock) {
+                    code ~= pad(asyncIndentLevel) ~ "} else {\n";
+                    code ~= generateAsyncStatements(ifStmt.elseBlock.statements, awaitTypes,
+                        state, awaitIndex, needCaseLabel, asyncIndentLevel + 1);
+                    if (needCaseLabel) {
+                        needCaseLabel = false;
+                    }
+                }
+                code ~= pad(asyncIndentLevel) ~ "}\n";
+                code ~= pad(asyncIndentLevel) ~ "/* fallthrough */\n";
+            } else if (auto whileStmt = cast(WhileStmt)stmt) {
+                code ~= pad(asyncIndentLevel) ~ "while (" ~ generateCondition(whileStmt.condition) ~ ") {\n";
+                code ~= generateAsyncStatements(whileStmt.body_.statements, awaitTypes,
+                    state, awaitIndex, needCaseLabel, asyncIndentLevel + 1);
+                if (needCaseLabel) {
+                    needCaseLabel = false;
+                }
+                code ~= pad(asyncIndentLevel) ~ "}\n";
+                code ~= pad(asyncIndentLevel) ~ "/* fallthrough */\n";
+            } else if (auto block = cast(Block)stmt) {
+                code ~= pad(asyncIndentLevel) ~ "{\n";
+                code ~= generateAsyncStatements(block.statements, awaitTypes,
+                    state, awaitIndex, needCaseLabel, asyncIndentLevel + 1);
+                if (needCaseLabel) {
+                    needCaseLabel = false;
+                }
+                code ~= pad(asyncIndentLevel) ~ "}\n";
+                code ~= pad(asyncIndentLevel) ~ "/* fallthrough */\n";
+            } else if (cast(ContinueStmt)stmt) {
+                code ~= pad(asyncIndentLevel) ~ "continue;\n";
+            } else if (cast(BreakStmt)stmt) {
+                code ~= pad(asyncIndentLevel) ~ "break;\n";
+            } else if (asyncNodeContainsAwait(stmt)) {
+                throw new CompileError("async lowering does not support await in this statement yet",
+                    currentModulePath, stmt.line, stmt.column);
+            } else {
+                code ~= generateStatement(stmt, false);
+            }
+        }
+        return code;
+    }
+
+    private string generateAsyncFunction(FunctionDecl funcDecl, string baseNameOverride = "", Parameter[] leadingParams = []) {
+        Block asyncBody = normalizedAsyncBody(funcDecl);
 
         string code = "";
-        string baseName = mangleFreeFunctionName(funcDecl);
+        string baseName = baseNameOverride.length > 0 ? baseNameOverride : mangleFreeFunctionName(funcDecl);
         string frameName = baseName ~ "_AsyncFrame";
         string pollName = baseName ~ "_AsyncPoll";
         string startName = baseName ~ "_async_start";
@@ -5561,7 +6057,8 @@ class CodeGenerator {
         pointerIndexBounds = null;
         shadowRenameCounter = 0;
 
-        foreach (param; funcDecl.params) {
+        Parameter[] allParams = leadingParams ~ funcDecl.params;
+        foreach (param; allParams) {
             resolveType(param.type);
             variableTypes[param.name] = param.type;
             variableCNames[param.name] = "self->" ~ param.name;
@@ -5571,34 +6068,16 @@ class CodeGenerator {
         VarDecl[] locals;
         AwaitExpr[] awaits;
         Type[] awaitTypes;
-        foreach (stmt; funcDecl.body_.statements) {
-            if (auto varDecl = cast(VarDecl)stmt) {
-                Type localType = resolveAsyncVarType(varDecl);
-                locals ~= varDecl;
-                variableTypes[varDecl.name] = localType;
-                variableCNames[varDecl.name] = "self->" ~ varDecl.name;
-                recordLocal(varDecl.name, localType, varDecl.line, varDecl.column, "local");
-            }
-            if (auto awaitExpr = directAwaitFromStatement(stmt)) {
-                Type awaitType = inferType(awaitExpr.expression);
-                resolveType(awaitType);
-                if (awaitType.isPointer || awaitType.isArray) {
-                    throw new CompileError("restricted async lowering expects await expressions to return a Future<T> value, not a pointer or array",
-                        currentModulePath, awaitExpr.line, awaitExpr.column);
-                }
-                awaits ~= awaitExpr;
-                awaitTypes ~= awaitType;
-            }
-        }
+        collectAsyncLocalsAndAwaits(asyncBody, locals, awaits, awaitTypes);
 
         code ~= format("typedef struct %s %s;\n", frameName, frameName);
         code ~= format("typedef struct %s %s;\n", pollName, pollName);
         code ~= format("struct %s {\n", frameName);
         code ~= "    int state;\n";
         if (funcDecl.returnType.name != "void" || funcDecl.returnType.isPointer) {
-            code ~= format("    %s result;\n", typeToC(funcDecl.returnType));
+            code ~= format("    %s __result;\n", typeToC(funcDecl.returnType));
         }
-        foreach (param; funcDecl.params) {
+        foreach (param; allParams) {
             code ~= "    " ~ typedParameterDeclaration(param.type, param.name) ~ ";\n";
         }
         foreach (local; locals) {
@@ -5617,18 +6096,18 @@ class CodeGenerator {
         code ~= "};\n\n";
 
         string params = "";
-        foreach (i, param; funcDecl.params) {
+        foreach (i, param; allParams) {
             if (i > 0) params ~= ", ";
             params ~= parameterDeclaration(param);
         }
 
         code ~= format("%s %s(%s) {\n", frameName, startName, params);
-        code ~= format("    %s self;\n", frameName);
-        code ~= "    self.state = 0;\n";
-        foreach (param; funcDecl.params) {
-            code ~= format("    self.%s = %s;\n", param.name, param.name);
+        code ~= format("    %s __frame_init;\n", frameName);
+        code ~= "    __frame_init.state = 0;\n";
+        foreach (param; allParams) {
+            code ~= format("    __frame_init.%s = %s;\n", param.name, param.name);
         }
-        code ~= "    return self;\n";
+        code ~= "    return __frame_init;\n";
         code ~= "}\n\n";
 
         code ~= format("%s %s(%s* self) {\n", pollName, pollFuncName, frameName);
@@ -5639,64 +6118,17 @@ class CodeGenerator {
         int state = 0;
         int awaitIndex = 0;
         bool needCaseLabel = true;
-        foreach (stmt; funcDecl.body_.statements) {
-            if (needCaseLabel) {
-                code ~= format("    case %d:\n", state);
-                needCaseLabel = false;
-            }
-            if (auto varDecl = cast(VarDecl)stmt) {
-                if (auto awaitExpr = cast(AwaitExpr)varDecl.initializer) {
-                    code ~= format("        self->state = %d;\n", state + 1);
-                    code ~= "        /* fallthrough */\n";
-                    state++;
-                    code ~= format("    case %d:\n", state);
-                    code ~= format("        self->__await%d = %s;\n", awaitIndex,
-                        generateExpression(awaitExpr.expression));
-                    code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex]);
-                    code ~= format("        self->%s = self->__await%d.value;\n", varDecl.name, awaitIndex);
-                    code ~= format("        self->state = %d;\n", state + 1);
-                    state++;
-                    awaitIndex++;
-                    needCaseLabel = true;
-                } else if (varDecl.initializer !is null) {
-                    code ~= format("        self->%s = %s;\n", varDecl.name,
-                        generateExpression(varDecl.initializer));
-                }
-                code ~= "        /* fallthrough */\n";
-            } else if (auto exprStmt = cast(ExprStmt)stmt) {
-                if (auto awaitExpr = cast(AwaitExpr)exprStmt.expression) {
-                    code ~= format("        self->state = %d;\n", state + 1);
-                    code ~= "        /* fallthrough */\n";
-                    state++;
-                    code ~= format("    case %d:\n", state);
-                    code ~= format("        self->__await%d = %s;\n", awaitIndex,
-                        generateExpression(awaitExpr.expression));
-                    code ~= generateAsyncAwaitReadinessCheck(awaitIndex, state, awaitTypes[awaitIndex]);
-                    code ~= format("        (void)self->__await%d.value;\n", awaitIndex);
-                    code ~= format("        self->state = %d;\n", state + 1);
-                    state++;
-                    awaitIndex++;
-                    needCaseLabel = true;
-                } else {
-                    code ~= format("        %s;\n", generateDiscardedExpression(exprStmt.expression));
-                }
-                code ~= "        /* fallthrough */\n";
-            } else if (auto returnStmt = cast(ReturnStmt)stmt) {
-                if (returnStmt.value !is null) {
-                    code ~= format("        self->result = %s;\n", generateExpression(returnStmt.value));
-                    code ~= "        __poll.value = self->result;\n";
-                }
-                code ~= format("        self->state = %d;\n", state + 1);
-                code ~= "        __poll.state = 1;\n";
-                code ~= "        return __poll;\n";
-                state++;
-                needCaseLabel = true;
-            }
+        foreach (param; allParams) {
+            variableCNames[param.name] = "self->" ~ param.name;
         }
+        foreach (local; locals) {
+            variableCNames[local.name] = "self->" ~ local.name;
+        }
+        code ~= generateAsyncStatements(asyncBody.statements, awaitTypes, state, awaitIndex, needCaseLabel, 2);
 
         code ~= "    default:\n";
         if (funcDecl.returnType.name != "void" || funcDecl.returnType.isPointer) {
-            code ~= "        __poll.value = self->result;\n";
+            code ~= "        __poll.value = self->__result;\n";
         }
         code ~= "        __poll.state = 1;\n";
         code ~= "        return __poll;\n";
@@ -5705,7 +6137,7 @@ class CodeGenerator {
 
         code ~= format("%s %s(%s) {\n", typeToC(funcDecl.returnType), baseName, params);
         code ~= format("    %s __frame = %s(%s);\n", frameName, startName,
-            funcDecl.params.map!(p => p.name).array.join(", "));
+            allParams.map!(p => p.name).array.join(", "));
         code ~= "    while (1) {\n";
         code ~= format("        %s __poll = %s(&__frame);\n", pollName, pollFuncName);
         code ~= "        if (__poll.state == 1) {\n";
@@ -5723,12 +6155,12 @@ class CodeGenerator {
         code ~= "}\n\n";
 
         code ~= format("void %s_async_start_into(void* __frame", baseName);
-        foreach (param; funcDecl.params) {
+        foreach (param; allParams) {
             code ~= ", " ~ parameterDeclaration(param);
         }
         code ~= ") {\n";
         code ~= format("    %s __tmp = %s(", frameName, startName);
-        foreach (i, param; funcDecl.params) {
+        foreach (i, param; allParams) {
             if (i > 0) code ~= ", ";
             code ~= param.name;
         }
@@ -7193,7 +7625,8 @@ class CodeGenerator {
             return new SizeofExpr(cloneType(sizeofExpr.type, typeSubs), sizeofExpr.line, sizeofExpr.column);
         } else if (auto structLit = cast(StructLiteral)node) {
             return new StructLiteral(structLit.typeName, structLit.fieldNames.dup,
-                cloneNodes(structLit.fieldValues, subs, typeSubs), structLit.line, structLit.column);
+                cloneNodes(structLit.fieldValues, subs, typeSubs), structLit.line, structLit.column,
+                structLit.typeArgs.map!(a => cloneType(a, typeSubs)).array);
         } else if (auto tupleLit = cast(TupleLiteral)node) {
             return new TupleLiteral(cloneNodes(tupleLit.elements, subs, typeSubs),
                 tupleLit.line, tupleLit.column);
@@ -8320,9 +8753,9 @@ class CodeGenerator {
     // since resolveType mutates its argument in place and this needs the
     // original, unmangled name/typeArgs to compare against). It's the only
     // way a literal naming a *generic* struct template ever gets concrete
-    // type arguments, since struct literals never write `<...>` themselves
-    // (ast.StructLiteral's doc comment) - the same "context supplies T"
-    // relationship generateNullableWrap's Optional<T> already relies on.
+    // type arguments for context-only literals (`Pair { ... }`). A literal
+    // may also write them directly (`Pair<int> { ... }`), in which case
+    // those explicit args take precedence.
     private StructDecl resolveStructLiteralTarget(StructLiteral lit, Type expectedType, out string mangledName) {
         if (lit.typeName.length == 0) {
             if (expectedType is null) {
@@ -8372,7 +8805,10 @@ class CodeGenerator {
 
         Type[] typeArgsToUse;
         bool haveTypeArgs = false;
-        if (expectedType !is null && expectedType.name == lit.typeName && expectedType.typeArgs.length > 0) {
+        if (lit.typeArgs.length > 0) {
+            typeArgsToUse = lit.typeArgs.map!(a => cloneType(a)).array;
+            haveTypeArgs = true;
+        } else if (expectedType !is null && expectedType.name == lit.typeName && expectedType.typeArgs.length > 0) {
             // The common case: expectedType is still the pristine,
             // as-written form (e.g. `Slice<int>`), not yet mutated by
             // resolveType.
@@ -11397,6 +11833,145 @@ class CodeGenerator {
         return format("((EmbeddedFile){ .data = (char*)%s, .len = %dULL })", dataName, bytes.length);
     }
 
+    private bool isAsyncBuiltinCall(CallExpr callExpr, string name) {
+        auto ident = cast(Identifier)callExpr.callee;
+        return ident !is null && ident.name == name;
+    }
+
+    private FunctionDecl resolveAsyncCallTarget(CallExpr asyncCall, out string resolvedName) {
+        FunctionDecl[] candidates;
+        if (auto ident = cast(Identifier)asyncCall.callee) {
+            resolvedName = resolveName(ident.name, (n) => (n in functionCandidates) !is null);
+            if (isSymbolVisibleFromCurrentModule(resolvedName)) {
+                if (auto c = resolvedName in functionCandidates) candidates = *c;
+            }
+        } else if (auto member = cast(MemberExpr)asyncCall.callee) {
+            resolvedName = tryResolveQualifiedPath(member, (n) => (n in functionCandidates) !is null);
+            if (resolvedName.length > 0) {
+                candidates = functionCandidates[resolvedName];
+            }
+        }
+        if (candidates.length == 0) {
+            throw new CompileError("async_start/async_run expects a direct async function call",
+                currentModulePath, asyncCall.line, asyncCall.column);
+        }
+        auto fn = resolveOverload(candidates, asyncCall.args, asyncCall.argNames,
+            format("function '%s'", resolvedName), asyncCall.line, asyncCall.column);
+        if (!fn.isAsync) {
+            throw new CompileError("async_start/async_run expects an async function call",
+                currentModulePath, asyncCall.line, asyncCall.column);
+        }
+        return fn;
+    }
+
+    private AsyncCallInfo resolveAsyncCallInfo(CallExpr asyncCall) {
+        AsyncCallInfo info;
+        if (auto member = cast(MemberExpr)asyncCall.callee) {
+            Type receiverType = inferType(member.object);
+            resolveType(receiverType);
+            string className = mangleTypeArg(receiverType);
+            if (receiverType.pointerDepth > 0) {
+                Type pointeeType = cloneType(receiverType);
+                pointeeType.pointerDepth--;
+                string pointeeName = mangleTypeArg(pointeeType);
+                if (className !in classRegistry && pointeeName in classRegistry) {
+                    className = pointeeName;
+                }
+            }
+            if (className in classRegistry) {
+                ClassDecl owner;
+                FunctionDecl[] candidates = resolveMethodOnHierarchy(classRegistry[className], member.member, owner);
+                if (candidates.length > 0) {
+                    string calleeDescription = format("async method '%s.%s'", className, member.member);
+                    FunctionDecl methodDecl = resolveOverload(candidates, asyncCall.args, asyncCall.argNames,
+                        calleeDescription, asyncCall.line, asyncCall.column);
+                    checkMemberAccess(methodDecl.isPrivate, methodDecl.isProtected, mangledClass(owner), calleeDescription,
+                        asyncCall.line, asyncCall.column);
+                    if (!methodDecl.isAsync) {
+                        throw new CompileError("async_start/async_run expects an async function or method call",
+                            currentModulePath, asyncCall.line, asyncCall.column);
+                    }
+                    if (methodDecl.isStatic || methodDecl.isVirtual || methodDecl.isOverride) {
+                        throw new CompileError("async_start/async_run currently supports ordinary async instance methods only",
+                            currentModulePath, asyncCall.line, asyncCall.column);
+                    }
+                    ASTNode[] resolvedArgs = applyImplicitArgumentConversions(
+                        resolveCallArguments(methodDecl.params, false, asyncCall.args,
+                            asyncCall.argNames, calleeDescription, asyncCall.line, asyncCall.column),
+                        methodDecl.params);
+                    info.fn = methodDecl;
+                    info.baseName = mangleMethodName(owner, mangledClass(owner), methodDecl);
+                    info.usageName = className ~ "." ~ member.member;
+                    info.usageNode = member;
+                    info.argsWithReceiver = [member.object] ~ resolvedArgs;
+                    return info;
+                }
+            }
+        }
+
+        string resolvedName;
+        FunctionDecl fn = resolveAsyncCallTarget(asyncCall, resolvedName);
+        ASTNode[] resolvedArgs = applyImplicitArgumentConversions(
+            resolveCallArguments(fn.params, fn.isVariadic, asyncCall.args, asyncCall.argNames,
+                format("function '%s'", resolvedName), asyncCall.line, asyncCall.column),
+            fn.params);
+        info.fn = fn;
+        info.baseName = mangleFreeFunctionName(fn);
+        info.usageName = info.baseName;
+        info.usageNode = asyncCall.callee;
+        info.argsWithReceiver = resolvedArgs;
+        return info;
+    }
+
+    private string generateAsyncTaskCreate(AsyncCallInfo info) {
+        string args = "";
+        foreach (arg; info.argsWithReceiver) {
+            args ~= ", " ~ generateExpression(arg);
+        }
+
+        int id = tempVarCounter++;
+        string task = format("__llpl_async_task%d", id);
+        return format(
+            "({ char* %s = llpl_async_create((uint64_t)%s_async_frame_size(), (void*)%s_async_poll_erased); " ~
+            "%s_async_start_into((void*)llpl_async_frame(%s)%s); %s; })",
+            task, info.baseName, info.baseName, info.baseName, task, args, task);
+    }
+
+    private string generateAsyncBuiltin(CallExpr callExpr, bool runToCompletion) {
+        if (callExpr.args.length != 1) {
+            throw new CompileError(runToCompletion
+                    ? "async_run expects exactly one async function call"
+                    : "async_start expects exactly one async function call",
+                currentModulePath, callExpr.line, callExpr.column);
+        }
+        auto asyncCall = cast(CallExpr)callExpr.args[0];
+        if (asyncCall is null) {
+            throw new CompileError("async_start/async_run expects a direct async function call",
+                currentModulePath, callExpr.args[0].line, callExpr.args[0].column);
+        }
+
+        AsyncCallInfo info = resolveAsyncCallInfo(asyncCall);
+        recordUsage(info.usageName, info.usageNode.line, info.usageNode.column);
+        string createExpr = generateAsyncTaskCreate(info);
+        if (!runToCompletion) {
+            return createExpr;
+        }
+
+        int id = tempVarCounter++;
+        string task = format("__llpl_async_run_task%d", id);
+        Type returnType = cloneType(info.fn.returnType);
+        resolveType(returnType);
+        bool returnsVoid = returnType.name == "void" && !returnType.isPointer;
+        if (returnsVoid) {
+            return format("({ char* %s = %s; llpl_async_block_on(%s, (char*)0); llpl_async_destroy(%s); })",
+                task, createExpr, task, task);
+        }
+        string outVar = format("__llpl_async_run_out%d", id);
+        return format("({ char* %s = %s; %s %s; llpl_async_block_on(%s, (char*)&%s); " ~
+            "llpl_async_destroy(%s); %s; })",
+            task, createExpr, typeToC(returnType), outVar, task, outVar, task, outVar);
+    }
+
     // Thin wrapper over the real dispatcher below: every expression in the
     // program funnels through here, which is the one place that can spot an
     // owned RC temporary regardless of what kind of expression contains it.
@@ -11619,6 +12194,12 @@ class CodeGenerator {
             checkInterruptSafeCall(callExpr);
             if (isEmbedCall(callExpr)) {
                 return generateEmbedCall(callExpr);
+            }
+            if (isAsyncBuiltinCall(callExpr, "async_start")) {
+                return generateAsyncBuiltin(callExpr, false);
+            }
+            if (isAsyncBuiltinCall(callExpr, "async_run")) {
+                return generateAsyncBuiltin(callExpr, true);
             }
             if (auto panicIdent = cast(Identifier)callExpr.callee) {
                 if (panicIdent.name == "panic" && callExpr.args.length == 1) {
@@ -12577,6 +13158,20 @@ class CodeGenerator {
             if (isEmbedCall(callExpr)) {
                 return new Type("EmbeddedFile");
             }
+            if (isAsyncBuiltinCall(callExpr, "async_start")) {
+                if (callExpr.args.length != 1 || cast(CallExpr)callExpr.args[0] is null) {
+                    throw inferError(expr, "async_start expects exactly one async function call");
+                }
+                resolveAsyncCallInfo(cast(CallExpr)callExpr.args[0]);
+                return new Type("char", true);
+            }
+            if (isAsyncBuiltinCall(callExpr, "async_run")) {
+                if (callExpr.args.length != 1 || cast(CallExpr)callExpr.args[0] is null) {
+                    throw inferError(expr, "async_run expects exactly one async function call");
+                }
+                AsyncCallInfo info = resolveAsyncCallInfo(cast(CallExpr)callExpr.args[0]);
+                return info.fn.returnType;
+            }
             if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
                 if (auto ctorType = resolveQualifiedConstructorType(memberCallee)) {
                     return new Type(ctorType.name);
@@ -12937,11 +13532,20 @@ class CodeGenerator {
     }
 
     private Type futureValueType(Type futureType) {
-        if (futureType.typeArgs.length == 1 && futureType.name == "Future") {
+        if (futureType.typeArgs.length == 1 &&
+                (futureType.name == "Future" || futureType.name == "AsyncFuture")) {
             return cloneType(futureType.typeArgs[0]);
         }
+        if (futureType.name == "SleepFuture") {
+            return new Type("int");
+        }
+        string suffix = "";
         if (futureType.name.startsWith("Future_")) {
-            string suffix = futureType.name["Future_".length .. $];
+            suffix = futureType.name["Future_".length .. $];
+        } else if (futureType.name.startsWith("AsyncFuture_")) {
+            suffix = futureType.name["AsyncFuture_".length .. $];
+        }
+        if (suffix.length > 0) {
             switch (suffix) {
                 case "int": return new Type("int");
                 case "uint": return new Type("uint");

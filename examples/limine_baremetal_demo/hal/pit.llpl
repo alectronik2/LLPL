@@ -1,3 +1,4 @@
+import kern
 import kern.timer
 
 namespace HAL {
@@ -31,6 +32,7 @@ namespace HAL {
             clocks += CLOCKS_PER_TICK
             ticks += 1
             Timer.on_pit_tick()
+            llpl_async_advance_ms( MSECS_PER_TICK )
 
             systemclock.usec += USECS_PER_TICK
             while systemclock.usec >= 1_000_000 {
@@ -39,6 +41,7 @@ namespace HAL {
             }
 
             run_timer_list()
+            Kern.thread_poll()
         }
 
         func run_timer_list() {

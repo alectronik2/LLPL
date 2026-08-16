@@ -1,0 +1,28 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+let global_box: Box*
+
+class Box : Object {
+    value: i64
+
+    constructor(@value: i64) {}
+
+    func get() -> i64 {
+        return self.value
+    }
+}
+
+func main() -> i64 {
+    global_box = new Box(7)
+    print_int("global_box.get()", global_box.get())
+
+    let local_box: Box* = new Box(9)
+    print_int("local_box.get()", local_box.get())
+    return 0
+}

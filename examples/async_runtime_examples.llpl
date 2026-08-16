@@ -1,0 +1,67 @@
+// Async runtime examples: concurrent timers, typed task joins, a tiny
+// producer/consumer handoff, and polling device-like state.
+
+let mailbox_full: bool = false
+let mailbox_value: int = 0
+let device_ready_at: u64 = 0
+
+async func timer_value(delay_ms: u64, value: int) -> int {
+    let ignored = await sleep_ms(delay_ms)
+    return value
+}
+
+async func producer(value: int) -> int {
+    let ignored = await sleep_ms(1)
+    mailbox_value = value
+    mailbox_full = true
+    return value
+}
+
+async func consumer() -> int {
+    while !mailbox_full {
+        let ignored = await sleep_ms(1)
+    }
+    return mailbox_value
+}
+
+func device_ready() -> AsyncFuture<int> {
+    if llpl_async_now_ms() >= device_ready_at {
+        return async_ready(1)
+    }
+    return async_ready(0)
+}
+
+async func poll_device() -> int {
+    while (await device_ready()) == 0 {
+        let ignored = await sleep_ms(1)
+    }
+    return 1
+}
+
+func main() -> int {
+    device_ready_at = llpl_async_now_ms() + 2
+
+    let first: AsyncTask<int> = new AsyncTask<int>(async_start(timer_value(1, 20)))
+    let second: AsyncTask<int> = new AsyncTask<int>(async_start(timer_value(1, 22)))
+    let made: AsyncTask<int> = new AsyncTask<int>(async_start(producer(7)))
+    let taken: AsyncTask<int> = new AsyncTask<int>(async_start(consumer()))
+    let ready: AsyncTask<int> = new AsyncTask<int>(async_start(poll_device()))
+
+    while !(first.is_done() && second.is_done() && made.is_done() && taken.is_done() && ready.is_done()) {
+        first.poll()
+        second.poll()
+        made.poll()
+        taken.poll()
+        ready.poll()
+    }
+
+    let total = first.join() + second.join() + made.join() + taken.join() + ready.join()
+    let ignored = puts("\(total)")
+
+    delete first
+    delete second
+    delete made
+    delete taken
+    delete ready
+    return 0
+}

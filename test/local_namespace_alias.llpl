@@ -1,0 +1,16 @@
+extern func puts(s: char*) -> i64
+
+namespace Foo {
+    namespace Bar {
+        func value() -> i64 { return 5 }
+    }
+}
+
+func main() -> i64 {
+    alias f = Foo.Bar
+    puts("local alias = \(f.value())")
+    alias b = Foo
+    puts("b = \(b.Bar.value())")
+
+    return 0
+}

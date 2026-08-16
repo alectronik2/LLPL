@@ -1,0 +1,18 @@
+struct Future<T> {
+    value: T
+}
+
+func timer_after(ticks: int) -> Future<int> {
+    let future: Future<int> = Future { value: ticks }
+    return future
+}
+
+async func wait_for_tick() -> int {
+    let tick = await timer_after(10)
+    return tick + 1
+}
+
+func main() -> int {
+    let ignored = puts("\(wait_for_tick())")
+    return 0
+}

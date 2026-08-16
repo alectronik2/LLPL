@@ -1,0 +1,2 @@
+global sum = 15
+local sum = 42

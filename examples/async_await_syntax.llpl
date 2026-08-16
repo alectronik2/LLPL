@@ -1,0 +1,26 @@
+// Async/await syntax sketch for a bare-metal executor.
+//
+// This example documents LLPL's async/await lowering. The compiler emits a
+// frame struct and poll function. Awaited Future<T> values are evaluated once
+// and stored in the async frame, then polled from that stored value.
+// For an async function named foo, the C ABI exposes:
+//   foo_AsyncFrame foo_async_start(...)
+//   foo_AsyncPoll  foo_async_poll(foo_AsyncFrame* frame)
+//   uint           foo_async_frame_size()
+//   void           foo_async_start_into(void* frame, ...)
+//   int            foo_async_poll_erased(void* frame, void* out)
+// The ordinary foo(...) wrapper still blocks by polling until Ready.
+//
+// Inspect the planned async frame/state layout with:
+//   llpl --emit-async-layout examples/async_await_syntax.llpl
+
+async func blink_once() -> int {
+    puts("await")
+    let elapsed = await sleep_ms(1)
+    return elapsed
+}
+
+func main() -> int {
+    let ignored = blink_once()
+    return 0
+}

@@ -1,0 +1,5 @@
+import { hidden } from modules.private_function_lib
+
+func main() -> i64 {
+    return hidden()
+}

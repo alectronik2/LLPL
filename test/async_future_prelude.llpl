@@ -1,0 +1,10 @@
+async func wait_ms(ms: u64) -> int {
+    let done = await sleep_ms(ms)
+    return done + 5
+}
+
+func main() -> int {
+    let value = async_run(wait_ms(2))
+    let ignored = puts("\(value)")
+    return 0
+}

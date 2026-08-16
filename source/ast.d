@@ -1742,21 +1742,22 @@ class SizeofExpr : ASTNode {
 // resolveStructLiteralTarget, which rejects a class name with a pointer to
 // `new` instead). For the anonymous `{ .field = value }` form, `typeName`
 // is empty and the enclosing expected type supplies the struct. For the
-// named form, `typeName` is a single, non-namespaced identifier with no
-// `<...>` type arguments of its own (parser.d's structLiteral()) - a
-// generic struct's type arguments, when needed, come entirely from context
-// (the enclosing `let`/return's declared type) rather than being written in
-// the literal itself, the same way `Optional<T>`'s `T` is always fixed by
-// context before any of its methods run. Every field must be given, by
-// name, though not necessarily in declaration order.
+// named form, `typeName` is a single, non-namespaced identifier and may
+// carry explicit `<...>` type arguments. If a generic literal omits them,
+// the enclosing `let`/return's declared type can still supply them as before.
+// Every field must be given, by name, though not necessarily in declaration
+// order.
 class StructLiteral : ASTNode {
     string typeName;
+    Type[] typeArgs;
     string[] fieldNames;
     ASTNode[] fieldValues;
 
-    this(string typeName, string[] fieldNames, ASTNode[] fieldValues, int line = 0, int column = 0) {
+    this(string typeName, string[] fieldNames, ASTNode[] fieldValues, int line = 0, int column = 0,
+            Type[] typeArgs = null) {
         super(NodeType.StructLiteral, line, column);
         this.typeName = typeName;
+        this.typeArgs = typeArgs;
         this.fieldNames = fieldNames;
         this.fieldValues = fieldValues;
     }

@@ -257,21 +257,22 @@ func kernel_main() {
 
     VFS.init()
 
-    //Kern.scheduler_start()
+    Kern.scheduler_start()
     HAL.enable_interrupts()
 
     //demo_hhdm( memmap, hhdm )
 
+    alias tw = Terminal.write
+
     draw_demo(fb)
     draw_memmap(fb, memmap)
-    Terminal.write( "<bright-green>DimensionOS kernel booting</>: TrueType + <cyan>ANSI</>\n" )
-    Terminal.write( "Limine framebuffer: \(fb.address:hex) \(fb.width)x\(fb.height) pitch=\(fb.pitch) bpp=\(fb.bpp)\n" )
-    Terminal.write( "Limine memory map: <magenta>\(memmap.entry_count)</> entries\n" )
-    Terminal.write( "Running on CPU \(HAL.cpu_id())\n" )
+    tw( "<bright-green>DimensionOS kernel booting</>: TrueType + <cyan>ANSI</>\n" )
+    tw( "Limine framebuffer: \(fb.address:hex) \(fb.width)x\(fb.height) pitch=\(fb.pitch) bpp=\(fb.bpp)\n" )
+    tw( "Limine memory map: <magenta>\(memmap.entry_count)</> entries\n" )
+    tw( "Running on CPU \(HAL.cpu_id())\n" )
 
     "Kernel initialization complete. Halting.\n" |> hs.write
     while true {
-        Kern.thread_poll()
         HAL.halt()
     }
 }

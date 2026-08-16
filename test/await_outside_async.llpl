@@ -1,0 +1,11 @@
+struct Future<T> {
+    value: T
+}
+
+func timer_after(ticks: int) -> Future<int> {
+}
+
+func main() {
+    let tick = await timer_after(10)
+}
+

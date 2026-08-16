@@ -1,0 +1,16 @@
+struct NotFuture {
+    value: int
+}
+
+func not_future() -> NotFuture {
+    return NotFuture { value: 1 }
+}
+
+async func bad() -> int {
+    let value = await not_future()
+    return value
+}
+
+func main() -> int {
+    return bad()
+}

@@ -1,0 +1,21 @@
+extern func printf(fmt: char*, ...)
+
+class Base {
+    protected let value: i64
+
+    protected func secret() -> i64 {
+        return 7
+    }
+}
+
+class Child : Base {
+    func expose() -> i64 {
+        return self.secret() + self.value
+    }
+}
+
+func main() -> i64 {
+    let child = new Child()
+    printf("%lld\n", child.expose())
+    return 0
+}

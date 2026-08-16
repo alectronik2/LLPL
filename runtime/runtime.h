@@ -36,6 +36,14 @@ typedef struct {
     void* env;
 } __LLPL_Closure;
 
+typedef intptr_t (*LLPL_AsyncPollFn)(void* frame, void* out);
+
+typedef struct {
+    void* frame;
+    uint64_t frame_size;
+    LLPL_AsyncPollFn poll;
+} LLPL_AsyncTask;
+
 typedef struct {
     char* name;
     char* type_name;
@@ -170,6 +178,19 @@ uint64_t llpl_reflect_field_size(char* field);
 char* llpl_alloc(uint64_t size);
 void llpl_free(char* ptr);
 void llpl_memcpy(char* dest, char* src, uint64_t count);
+char* llpl_async_create(uint64_t frame_size, void* poll_fn);
+char* llpl_async_frame(char* task);
+int64_t llpl_async_poll(char* task, char* out);
+int64_t llpl_async_block_on(char* task, char* out);
+void llpl_async_destroy(char* task);
+uint64_t llpl_async_now_ms(void);
+void llpl_async_set_now_ms(uint64_t now_ms);
+uint64_t llpl_async_advance_ms(uint64_t delta_ms);
+char* llpl_async_executor_create(void);
+void llpl_async_executor_destroy(char* executor);
+int64_t llpl_async_executor_spawn(char* executor, char* task);
+int64_t llpl_async_executor_poll(char* executor);
+int64_t llpl_async_executor_run_all(char* executor);
 
 // Finds the llpl_symbol_table entry whose address is the closest one at
 // or before `addr` (i.e. "which function contains this return address") -
