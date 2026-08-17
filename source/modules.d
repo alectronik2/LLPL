@@ -168,7 +168,7 @@ class ModuleResolver {
         // Check for circular dependency
         if (absPath in modules && modules[absPath].isBeingParsed) {
             // Circular import detected - this is OK, we'll handle it
-            writefln("Info: Circular import detected: %s", absPath);
+            //writefln("Info: Circular import detected: %s", absPath);
             return;
         }
 

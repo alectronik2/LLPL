@@ -2,48 +2,544 @@ import hal
 import lib
 import kern
 
+// Static contract for code that wants compile-time filesystem drivers.
+// Runtime VFS dispatch uses the inheritable VFS.Filesystem class below.
+trait VfsFilesystemDriver {
+    func driver_name() -> String
+    func driver_mount(path: String) -> int
+}
+
+func vfs_driver_label<T: VfsFilesystemDriver>(fs: T) -> String {
+    return fs.driver_name()
+}
+
 namespace VFS {
     const MAXPATH = 2048
+    const MAX_MOUNTS = 16
+    const MAX_MEM_NODES = 64
+    const TAR_BLOCK = 512
 
     let pathsep: char = '/'
     const PS1 = 47
     const PS2 = 92
     const S_IEXEC = 0x40
     const EACCES = -6
+    const ENOTDIR = -7
+    const EISDIR = -8
+    const ENOTEMPTY = -9
+    const EBADF = -10
 
-    struct Fs {
-        mntto: String
-        mode: int
-        uid: int
-        gid: int
-        next: Fs*
+    const O_READ = 1
+    const O_WRITE = 2
+    const O_CREATE = 4
+    const O_TRUNC = 8
+
+    const NODE_MISSING = 0
+    const NODE_FILE = 1
+    const NODE_DIR = 2
+
+    const TAR_TYPE_REG = 48
+    const TAR_TYPE_DIR = 53
+
+    class Vnode {
+        let fs: Filesystem
+        let path: String
+        let kind: int
+        let size: u64
+
+        constructor(fs: Filesystem, path: String, kind: int, size: u64 = 0) {
+            self.fs = fs
+            self.path = path
+            self.kind = kind
+            self.size = size
+        }
+
+        func is_file() -> bool {
+            return self.kind == NODE_FILE
+        }
+
+        func is_dir() -> bool {
+            return self.kind == NODE_DIR
+        }
     }
 
-    let mountlist: Fs* = null
-
     class Filesystem {
-        name: string
-        next: Filesystem*
+        let label: String
+
+        constructor(label: String) {
+            self.label = label
+        }
+
+        virtual func name() -> String {
+            return self.label
+        }
+
+        virtual func mount(path: String) -> int {
+            return EOK
+        }
+
+        virtual func lookup(path: String) -> Vnode {
+            return new Vnode(self, path, NODE_MISSING)
+        }
+
+        virtual func stat(path: String) -> Vnode {
+            return self.lookup(path)
+        }
+
+        virtual func mkdir(path: String) -> int {
+            return EINVAL
+        }
+
+        virtual func touch(path: String) -> int {
+            return EINVAL
+        }
+
+        virtual func remove(path: String) -> int {
+            return EINVAL
+        }
+
+        virtual func read_text(path: String) -> String {
+            return null
+        }
+
+        virtual func write_text(path: String, data: String) -> int {
+            return EINVAL
+        }
+
+        virtual func list(path: String) -> String {
+            return null
+        }
     }
 
     class Mount {
-        locks: int
-        exclusive: Mutex
-        mntfrom: String
-        mntto: String
-   
-        next: Mount
-        prev: Mount
-        data: void*
-        fsys: Filesystem
+        let path: String
+        let fs: Filesystem
+        let next: Mount
+
+        constructor(path: String, fs: Filesystem) {
+            self.path = path
+            self.fs = fs
+            self.next = null
+        }
     }
 
-    func vfs_check( mode: int, uid: int, gid: int, access: int ) -> int {
+    class ResolvedPath {
+        let fs: Filesystem
+        let path: String
+
+        constructor(fs: Filesystem, path: String) {
+            self.fs = fs
+            self.path = path
+        }
+    }
+
+    class FileHandle {
+        let fs: Filesystem
+        let path: String
+        let mode: int
+        let closed: bool
+
+        constructor(fs: Filesystem, path: String, mode: int) {
+            self.fs = fs
+            self.path = path
+            self.mode = mode
+            self.closed = false
+        }
+
+        func stat() -> Vnode {
+            if self.closed {
+                return new Vnode(self.fs, self.path, NODE_MISSING)
+            }
+            return self.fs.stat(self.path)
+        }
+
+        func read_all() -> String {
+            if self.closed || (self.mode & O_READ) == 0 {
+                return null
+            }
+            return self.fs.read_text(self.path)
+        }
+
+        func write_text(data: String) -> int {
+            if self.closed {
+                return EBADF
+            }
+            if (self.mode & O_WRITE) == 0 {
+                return EACCES
+            }
+            return self.fs.write_text(self.path, data)
+        }
+
+        func close() -> int {
+            self.closed = true
+            return EOK
+        }
+    }
+
+    class MemNode {
+        let path: String
+        let data: String
+        let kind: int
+
+        constructor(path: String, kind: int, data: String = null) {
+            self.path = path
+            self.kind = kind
+            self.data = data
+        }
+
+        func size() -> u64 {
+            if self.data == null {
+                return 0
+            }
+            return self.data.byte_len() as u64
+        }
+    }
+
+    class MemFilesystem : Filesystem {
+        let nodes: MemNode[MAX_MEM_NODES]
+        let count: uint
+
+        constructor(label: String) {
+            super(label)
+            self.count = 0
+            self.add_dir("/")
+        }
+
+        func find(path: String) -> int {
+            let i: uint = 0
+            while i < self.count {
+                if self.nodes[i] != null && self.nodes[i].path == path {
+                    return i as int
+                }
+                i = i + 1
+            }
+            return -1
+        }
+
+        func parent_path(path: String) -> String {
+            if path == null || path == "/" {
+                return null
+            }
+
+            let last_slash: i64 = -1
+            let i: i64 = 0
+            while i < path.byte_len() {
+                if path.byte_at(i) == PS1 {
+                    last_slash = i
+                }
+                i = i + 1
+            }
+
+            if last_slash <= 0 {
+                return new String("/")
+            }
+            return path.byte_substring(0, last_slash)
+        }
+
+        func parent_dir_exists(path: String) -> bool {
+            let parent = self.parent_path(path)
+            if parent == null {
+                return true
+            }
+            let idx = self.find(parent)
+            return idx >= 0 && self.nodes[idx].kind == NODE_DIR
+        }
+
+        func mkdir_parents(path: String) -> int {
+            if path == null || path.byte_len() == 0 {
+                return EINVAL
+            }
+
+            let i: i64 = 1
+            while i < path.byte_len() {
+                if path.byte_at(i) == PS1 {
+                    let dir = path.byte_substring(0, i)
+                    let idx = self.find(dir)
+                    if idx < 0 {
+                        let rc = self.add_dir(dir)
+                        if rc < 0 && rc != EEXIST {
+                            return rc
+                        }
+                    } else if self.nodes[idx].kind != NODE_DIR {
+                        return ENOTDIR
+                    }
+                }
+                i = i + 1
+            }
+            return EOK
+        }
+
+        func has_children(path: String) -> bool {
+            let i: uint = 0
+            while i < self.count {
+                let node = self.nodes[i]
+                if node != null && node.path != path && path_is_child(path, node.path) {
+                    return true
+                }
+                i = i + 1
+            }
+            return false
+        }
+
+        func add_node(path: String, kind: int, data: String = null) -> int {
+            if path == null || path.byte_len() == 0 {
+                return EINVAL
+            }
+
+            let existing = self.find(path)
+            if existing >= 0 {
+                if self.nodes[existing].kind != kind {
+                    return EISDIR if self.nodes[existing].kind == NODE_DIR
+                    return EEXIST
+                }
+                self.nodes[existing] = new MemNode(path, kind, data)
+                return EOK
+            }
+            if !self.parent_dir_exists(path) {
+                return ENOENT
+            }
+            if self.count >= MAX_MEM_NODES {
+                return ENOMEM
+            }
+            self.nodes[self.count] = new MemNode(path, kind, data)
+            self.count = self.count + 1
+            return EOK
+        }
+
+        func add_dir(path: String) -> int {
+            return self.add_node(path, NODE_DIR)
+        }
+
+        func name() -> String {
+            return self.label
+        }
+
+        func mount(path: String) -> int {
+            return EOK
+        }
+
+        func lookup(path: String) -> Vnode {
+            let idx = self.find(path)
+            if idx < 0 {
+                return new Vnode(self, path, NODE_MISSING)
+            }
+            let node = self.nodes[idx]
+            return new Vnode(self, path, node.kind, node.size())
+        }
+
+        func stat(path: String) -> Vnode {
+            return self.lookup(path)
+        }
+
+        func mkdir(path: String) -> int {
+            if self.find(path) >= 0 {
+                return EEXIST
+            }
+            return self.add_dir(path)
+        }
+
+        func touch(path: String) -> int {
+            let idx = self.find(path)
+            if idx >= 0 {
+                if self.nodes[idx].kind == NODE_DIR {
+                    return EISDIR
+                }
+                return EOK
+            }
+            return self.add_node(path, NODE_FILE, new String(""))
+        }
+
+        func remove(path: String) -> int {
+            if path == null || path == "/" {
+                return EINVAL
+            }
+            let idx = self.find(path)
+            if idx < 0 {
+                return ENOENT
+            }
+            if self.nodes[idx].kind == NODE_DIR && self.has_children(path) {
+                return ENOTEMPTY
+            }
+
+            self.count = self.count - 1
+            if idx as uint != self.count {
+                self.nodes[idx] = self.nodes[self.count]
+            }
+            self.nodes[self.count] = null
+            return EOK
+        }
+
+        func read_text(path: String) -> String {
+            let idx = self.find(path)
+            if idx < 0 {
+                return null
+            }
+            let node = self.nodes[idx]
+            if node.kind != NODE_FILE {
+                return null
+            }
+            return node.data
+        }
+
+        func write_text(path: String, data: String) -> int {
+            let idx = self.find(path)
+            if idx >= 0 && self.nodes[idx].kind == NODE_DIR {
+                return EISDIR
+            }
+            return self.add_node(path, NODE_FILE, data)
+        }
+
+        func is_direct_child(parent: String, child: String) -> bool {
+            if parent == null || child == null {
+                return false
+            }
+
+            let start: i64 = 1
+            if parent == "/" {
+                if child.byte_len() <= 1 || child.byte_at(0) != PS1 {
+                    return false
+                }
+            } else {
+                let plen = parent.byte_len()
+                if child.byte_len() <= plen {
+                    return false
+                }
+                if !fnmatch(child, 0, parent, 0, plen) {
+                    return false
+                }
+                if child.byte_at(plen) != PS1 {
+                    return false
+                }
+                start = plen + 1
+            }
+
+            let i: i64 = start
+            while i < child.byte_len() {
+                if child.byte_at(i) == PS1 {
+                    return false
+                }
+                i = i + 1
+            }
+            return true
+        }
+
+        func child_name(parent: String, child: String) -> String {
+            let start: i64 = 1
+            if parent != "/" {
+                start = parent.byte_len() + 1
+            }
+            return child.byte_substring(start, child.byte_len() - start)
+        }
+
+        func list(path: String) -> String {
+            let idx = self.find(path)
+            if idx < 0 || self.nodes[idx].kind != NODE_DIR {
+                return null
+            }
+
+            let out = new String("")
+            let i: uint = 0
+            while i < self.count {
+                let node = self.nodes[i]
+                if node != null && node.path != path && self.is_direct_child(path, node.path) {
+                    out = out + self.child_name(path, node.path).c_str()
+                    if node.kind == NODE_DIR {
+                        out = out + "/"
+                    }
+                    out = out + "\n"
+                }
+                i = i + 1
+            }
+            return out
+        }
+    }
+
+    class BootFilesystem : MemFilesystem {
+        constructor() {
+            super("bootfs")
+            self.write_text("/hello.txt", "hello from inherited BootFilesystem\n")
+            self.mkdir("/etc")
+            self.write_text("/etc/motd", "LLPL Limine VFS is class-dispatched\n")
+            self.mkdir("/dev")
+            self.touch("/dev/console")
+        }
+
+        func load_initrd(modules: LimineModuleResponse*) -> int {
+            if modules == null || modules.module_count == 0 || modules.modules == null {
+                "VFS initrd: no Limine modules\n" |> HAL.Serial.write
+                return ENOENT
+            }
+
+            let i: u64 = 0
+            while i < modules.module_count {
+                let file = modules.modules[i]
+                if file != null && file.address != null && file.size >= TAR_BLOCK {
+                    "VFS initrd module: " |> HAL.Serial.write
+                    if file.path != null {
+                        file.path |> HAL.Serial.write
+                    } else {
+                        "<unnamed>" |> HAL.Serial.write
+                    }
+                    "\n" |> HAL.Serial.write
+                    return self.load_tar(file.address as char*, file.size)
+                }
+                i = i + 1
+            }
+
+            "VFS initrd: no usable module\n" |> HAL.Serial.write
+            return ENOENT
+        }
+
+        func load_tar(base: char*, total_size: u64) -> int {
+            let offset: u64 = 0
+            let loaded: u64 = 0
+
+            while offset + TAR_BLOCK <= total_size {
+                let header = base + offset
+                if tar_header_empty(header) {
+                    "VFS initrd files loaded: \(loaded)\n" |> HAL.Serial.write
+                    return EOK
+                }
+
+                let path = tar_entry_path(header)
+                let size = tar_octal(header + 124, 12)
+                let typeflag: char = header[156]
+
+                if path != null {
+                    if typeflag == TAR_TYPE_DIR as char {
+                        let rc = self.mkdir_parents(path)
+                        if rc >= 0 {
+                            self.mkdir(path)
+                        }
+                    } else if typeflag == 0 || typeflag == TAR_TYPE_REG as char {
+                        let rc = self.mkdir_parents(path)
+                        if rc >= 0 {
+                            let data = tar_payload_string(base + offset + TAR_BLOCK, size)
+                            let write_rc = self.write_text(path, data)
+                            if write_rc >= 0 {
+                                loaded = loaded + 1
+                            }
+                        }
+                    }
+                }
+
+                offset = offset + TAR_BLOCK + tar_align(size)
+            }
+
+            "VFS initrd: tar ended without zero block\n" |> HAL.Serial.write
+            return EOK
+        }
+    }
+
+    let mounts: Mount = null
+    let mount_count: uint = 0
+
+    func vfs_check(mode: int, uid: int, gid: int, access: int) -> int {
         return EOK if mode & access
         return EACCES
     }
 
-    func fnmatch( name: String, name_start: i64, mount: String, mount_start: i64, count: i64 ) -> bool {
+    func fnmatch(name: String, name_start: i64, mount: String, mount_start: i64, count: i64) -> bool {
         let i: i64 = 0
 
         return false if name == null || mount == null
@@ -57,7 +553,147 @@ namespace VFS {
         return true
     }
 
-    func canonicalize( path: String ) -> String {
+    func path_is_child(parent: String, child: String) -> bool {
+        if parent == null || child == null {
+            return false
+        }
+        if parent == "/" {
+            return child.byte_len() > 1 && child.byte_at(0) == PS1
+        }
+        let plen = parent.byte_len()
+        if child.byte_len() <= plen {
+            return false
+        }
+        if !fnmatch(child, 0, parent, 0, plen) {
+            return false
+        }
+        return child.byte_at(plen) == PS1
+    }
+
+    func path_is_direct_child(parent: String, child: String) -> bool {
+        if !path_is_child(parent, child) {
+            return false
+        }
+
+        let i: i64 = 1
+        if parent != "/" {
+            i = parent.byte_len() + 1
+        }
+        while i < child.byte_len() {
+            if child.byte_at(i) == PS1 {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    func path_child_name(parent: String, child: String) -> String {
+        let start: i64 = 1
+        if parent != "/" {
+            start = parent.byte_len() + 1
+        }
+        return child.byte_substring(start, child.byte_len() - start)
+    }
+
+    func tar_header_empty(header: char*) -> bool {
+        let i: i64 = 0
+        while i < TAR_BLOCK {
+            if header[i] != 0 {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    func tar_octal(src: char*, count: i64) -> u64 {
+        let value: u64 = 0
+        let i: i64 = 0
+        while i < count {
+            let ch: char = src[i]
+            if ch >= '0' && ch <= '7' {
+                value = value * 8 + ((ch as u64) - ('0' as u64))
+            }
+            i = i + 1
+        }
+        return value
+    }
+
+    func tar_align(size: u64) -> u64 {
+        return ((size + 511) / 512) * 512
+    }
+
+    func tar_payload_string(src: char*, size: u64) -> String {
+        let copy = llpl_alloc(size + 1)
+        llpl_memcpy(copy, src, size)
+        copy[size as i64] = 0
+        let out = new String(copy)
+        llpl_free(copy)
+        return out
+    }
+
+    func tar_entry_path(header: char*) -> String {
+        if header[0] == 0 {
+            return null
+        }
+
+        let raw = new String(header)
+        if raw == "." || raw == "./" {
+            return null
+        }
+
+        if raw.byte_len() >= 2 && raw.byte_at(0) == '.' && raw.byte_at(1) == PS1 {
+            raw = raw.byte_substring(1, raw.byte_len() - 1)
+        }
+
+        if raw.byte_len() == 0 {
+            return null
+        }
+
+        if raw.byte_at(raw.byte_len() - 1) == PS1 {
+            raw = raw.byte_substring(0, raw.byte_len() - 1)
+        }
+
+        if raw.byte_len() == 0 {
+            return null
+        }
+
+        if raw.byte_at(0) != PS1 {
+            return new String("/") + raw.c_str()
+        }
+        return raw
+    }
+
+    func mount_matches(path: String, mount_path: String) -> bool {
+        if path == null || mount_path == null {
+            return false
+        }
+        if mount_path == "/" {
+            return path.byte_len() > 0 && path.byte_at(0) == PS1
+        }
+        let mlen = mount_path.byte_len()
+        if path.byte_len() < mlen {
+            return false
+        }
+        if !fnmatch(path, 0, mount_path, 0, mlen) {
+            return false
+        }
+        return path.byte_len() == mlen || path.byte_at(mlen) == PS1
+    }
+
+    func mount_relative_path(path: String, mount_path: String) -> String {
+        if mount_path == "/" {
+            return path
+        }
+        let mlen = mount_path.byte_len()
+        if path.byte_len() == mlen {
+            return new String("/")
+        }
+        return path.byte_substring(mlen, path.byte_len() - mlen)
+    }
+
+    func canonicalize(path: String) -> String {
         let buffer: char[MAXPATH]
         let pos: i64 = 0
         let path_pos: i64 = 0
@@ -66,11 +702,11 @@ namespace VFS {
         throw EINVAL if path == null
         defer path.put()
 
-        // remove drive letter from file name
+        // Remove drive letter from file name.
         path_pos = 2 if path.byte_len() > 1 && path.byte_at(1) == ':'
 
-        // add current directory to filenae
-        if path_pos >= path.byte_len() || (path.byte_at(path_pos) != '/' && path.byte_at(path_pos) != '\'')  {
+        // Add current directory to relative filenames.
+        if path_pos >= path.byte_len() || (path.byte_at(path_pos) != '/' && path.byte_at(path_pos) != '\')  {
             let t: Kern.Thread = current_thread()
 
             if t != null && t.curdir != null {
@@ -88,14 +724,13 @@ namespace VFS {
         }
 
         while path_pos < path.byte_len() {
-            path_pos++ if path.byte_at(path_pos) == '/' || path.byte_at(path_pos) == '\'' 
+            path_pos++ if path.byte_at(path_pos) == '/' || path.byte_at(path_pos) == '\'
             throw ENAMETOOLONG if pos >= MAXPATH - 1
             buffer[pos] = pathsep
             pos++
 
-            // parse next name part in path
             len = 0
-            while path_pos < path.byte_len() && path.byte_at(path_pos) != '/' && path.byte_at(path_pos) != '\'' {
+            while path_pos < path.byte_len() && path.byte_at(path_pos) != '/' && path.byte_at(path_pos) != '\' {
                 let ch: char = path.byte_at(path_pos)
                 throw EINVAL if ch > 0 && ch < ' '
                 throw ENAMETOOLONG if pos >= MAXPATH - 1
@@ -106,7 +741,7 @@ namespace VFS {
                 len++
             }
 
-            if len == 0 { 
+            if len == 0 {
                 pos--
             } else if len == 1 && path.byte_at(path_pos - 1) == '.' {
                 pos -= 2
@@ -130,60 +765,228 @@ namespace VFS {
         return new String(buffer as char*)
     }
 
-    func fslookup( name: String, full: int, mntfs: Mount**, rest: String* ) -> int {
-        let fs: Fs*
-        let p: i64 = 0
-        let q: i64
-        let n: i64
-        let m: i64
-        let rc: int
-
-        return EINVAL if name == null
-
-        p++ if name.byte_len() > 0 && (name.byte_at(0) == PS1 || name.byte_at(0) == PS2)
-        n = name.byte_len() - p
-
-        fs = mountlist
-        while fs != null {
-            if fs.mntto != null && fs.mntto.byte_len() > 0 {
-                q = 0
-                q++ if fs.mntto.byte_at(0) == PS1 || fs.mntto.byte_at(0) == PS2
-
-                if q >= fs.mntto.byte_len() {
-                    rc = vfs_check(fs.mode, fs.uid, fs.gid, S_IEXEC)
-                    return rc if rc < 0
-                    *rest = name.byte_substring(p, n) if rest != null
-                    *mntfs = fs
-                    return EOK
-                }
-
-                m = fs.mntto.byte_len() - q
-                if n >= m && fnmatch(name, p, fs.mntto, q, m) && ((p + m < name.byte_len() && (name.byte_at(p + m) == PS1 || name.byte_at(p + m) == PS2)) || (full != 0 && p + m == name.byte_len())) {
-                    rc = vfs_check(fs.mode, fs.uid, fs.gid, S_IEXEC)
-                    return rc if rc < 0
-                    *rest = name.byte_substring(p + m, n - m) if rest != null
-                    *mntfs = fs
-                    return EOK
-                }
-            }
-
-            fs = fs.next
+    func mount(path: String, fs: Filesystem) -> int {
+        if fs == null {
+            return EINVAL
+        }
+        if mount_count >= MAX_MOUNTS {
+            return ENOMEM
         }
 
-        return ENOENT
+        let mnt = canonicalize(path)
+        let rc = fs.mount(mnt)
+        if rc < 0 {
+            return rc
+        }
+
+        let node = new Mount(mnt, fs)
+        node.next = mounts
+        mounts = node
+        mount_count = mount_count + 1
+        return EOK
     }
 
-    func init() {
+    func resolve(path: String) -> ResolvedPath {
+        let full = canonicalize(path)
+        let best: Mount = null
+        let best_len: i64 = -1
+        let cur = mounts
+
+        while cur != null {
+            let len = cur.path.byte_len()
+            if len > best_len && mount_matches(full, cur.path) {
+                best = cur
+                best_len = len
+            }
+            cur = cur.next
+        }
+
+        if best == null {
+            return null
+        }
+        return new ResolvedPath(best.fs, mount_relative_path(full, best.path))
+    }
+
+    func lookup(path: String) -> Vnode {
+        let resolved = resolve(path)
+        if resolved == null {
+            return new Vnode(null, path, NODE_MISSING)
+        }
+        return resolved.fs.lookup(resolved.path)
+    }
+
+    func stat(path: String) -> Vnode {
+        let resolved = resolve(path)
+        if resolved == null {
+            return new Vnode(null, path, NODE_MISSING)
+        }
+        return resolved.fs.stat(resolved.path)
+    }
+
+    func mkdir(path: String) -> int {
+        let resolved = resolve(path)
+        if resolved == null {
+            return ENOENT
+        }
+        return resolved.fs.mkdir(resolved.path)
+    }
+
+    func touch(path: String) -> int {
+        let resolved = resolve(path)
+        if resolved == null {
+            return ENOENT
+        }
+        return resolved.fs.touch(resolved.path)
+    }
+
+    func remove(path: String) -> int {
+        let resolved = resolve(path)
+        if resolved == null {
+            return ENOENT
+        }
+        return resolved.fs.remove(resolved.path)
+    }
+
+    func write_text(path: String, data: String) -> int {
+        let resolved = resolve(path)
+        if resolved == null {
+            return ENOENT
+        }
+        return resolved.fs.write_text(resolved.path, data)
+    }
+
+    func read_text(path: String) -> String {
+        let resolved = resolve(path)
+        if resolved == null {
+            return null
+        }
+        return resolved.fs.read_text(resolved.path)
+    }
+
+    func list(path: String) -> String {
+        let resolved = resolve(path)
+        if resolved == null {
+            return null
+        }
+        return resolved.fs.list(resolved.path)
+    }
+
+    func open(path: String, mode: int) -> FileHandle {
+        let resolved = resolve(path)
+        if resolved == null {
+            return null
+        }
+
+        let node = resolved.fs.lookup(resolved.path)
+        if node.kind == NODE_MISSING {
+            if (mode & O_CREATE) == 0 {
+                return null
+            }
+            let rc = resolved.fs.touch(resolved.path)
+            if rc < 0 {
+                return null
+            }
+        } else if node.kind == NODE_DIR {
+            return null
+        }
+
+        if (mode & O_TRUNC) != 0 {
+            if (mode & O_WRITE) == 0 {
+                return null
+            }
+            let rc = resolved.fs.write_text(resolved.path, new String(""))
+            if rc < 0 {
+                return null
+            }
+        }
+
+        return new FileHandle(resolved.fs, resolved.path, mode)
+    }
+
+    func init(modules: LimineModuleResponse*) {
         "VFS.init\n" |> HAL.Serial.write
-    
+
         try {
-            let path: String = canonicalize( "foo/../hello/world/../bar/baz" )
-            path.c_str() |> HAL.Serial.write
+            let trait_probe = new VFS.MemFilesystem("memfs")
+            let label = vfs_driver_label(trait_probe)
+            "VFS driver: " |> HAL.Serial.write
+            label.c_str() |> HAL.Serial.write
             "\n" |> HAL.Serial.write
-        } catch ( e: int ) {
+
+            let bootfs = new VFS.BootFilesystem()
+            let boot_label = vfs_driver_label(bootfs)
+            "VFS inherited driver: " |> HAL.Serial.write
+            boot_label.c_str() |> HAL.Serial.write
+            "\n" |> HAL.Serial.write
+
+            let rc = VFS.mount("/", bootfs)
+            if rc < 0 {
+                throw rc
+            }
+
+            bootfs.load_initrd(modules)
+
+            VFS.write_text("/tmp.txt", "created through VFS.write_text\n")
+            VFS.mkdir("/var")
+            VFS.touch("/var/log.txt")
+
+            let log = VFS.open("/var/log.txt", VFS.O_READ | VFS.O_WRITE | VFS.O_TRUNC)
+            if log != null {
+                log.write_text("created through VFS.open\n")
+                let log_text = log.read_all()
+                if log_text != null {
+                    "read /var/log.txt: " |> HAL.Serial.write
+                    log_text.c_str() |> HAL.Serial.write
+                }
+                log.close()
+            }
+
+            let path: String = VFS.canonicalize("foo/../hello/world/../bar/baz")
+            "canonical path: " |> HAL.Serial.write
+            path.c_str() |> HAL.Serial.write
+            "\n" |> hsw
+
+            let hello = VFS.read_text("/hello.txt")
+            if hello != null {
+                "read /hello.txt: " |> HAL.Serial.write
+                hello.c_str() |> HAL.Serial.write
+            }
+
+            let entries = VFS.list("/")
+            if entries != null {
+                "root entries:\n" |> HAL.Serial.write
+                entries.c_str() |> HAL.Serial.write
+            }
+
+            let etc_entries = VFS.list("/etc")
+            if etc_entries != null {
+                "/etc entries:\n" |> HAL.Serial.write
+                etc_entries.c_str() |> HAL.Serial.write
+            }
+        } catch (e: int) {
             "VFS.init() failed with error code: \(e)\n" |> HAL.Serial.write
         } finally {
             "VFS initialized\n" |> Terminal.write
         }
+    }
+}
+
+impl VfsFilesystemDriver for VFS.MemFilesystem {
+    func driver_name() -> String {
+        return self.name()
+    }
+
+    func driver_mount(path: String) -> int {
+        return self.mount(path)
+    }
+}
+
+impl VfsFilesystemDriver for VFS.BootFilesystem {
+    func driver_name() -> String {
+        return self.name()
+    }
+
+    func driver_mount(path: String) -> int {
+        return self.mount(path)
     }
 }

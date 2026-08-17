@@ -16,6 +16,7 @@ namespace Kern {
         aspace: MM.AddressSpace
         name:   String   
         threads: DoublyLinkedList<Thread>
+        lock:   SpinLock
 
         constructor( name: String ) {
             "Process constructor\n" |> HAL.Serial.write
@@ -25,7 +26,9 @@ namespace Kern {
             self.aspace = new MM.AddressSpace( 0x0, 0xFFFF_0000_0000 )
             self.name = name // move ownership to process
 
-            Kern.processes.push_back( self ) // add self to process list
+            holding lock {
+                Kern.processes.push_back( self ) // add self to process list
+            }
         }
 
         destructor() {
@@ -35,7 +38,10 @@ namespace Kern {
             self.name.put() // free name string
 
             delete threads // free thread list
-            Kern.processes.remove( self ) // remove self from process list
+
+            holding lock {
+                Kern.processes.remove( self ) // remove self from process list
+            }
         }
     }
 

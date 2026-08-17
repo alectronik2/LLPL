@@ -4,8 +4,22 @@ func choose(flag: bool) -> i64 {
     5 if flag else 10
 }
 
+func choose_return(flag: bool) -> i64 {
+    return if flag { 20 } else { 30 }
+}
+
+func maybe_stop(flag: bool) {
+    puts("before")
+    return if flag
+    puts("after")
+}
+
 func main() -> i64 {
     puts("first = \(choose(true))")
     puts("second = \(choose(false))")
+    puts("third = \(choose_return(true))")
+    puts("fourth = \(choose_return(false))")
+    maybe_stop(true)
+    maybe_stop(false)
     return 0
 }

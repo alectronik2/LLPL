@@ -59,6 +59,44 @@ packed struct LimineHhdmResponse {
     let offset: u64
 }
 
+packed struct LimineUuid {
+    let a: u32
+    let b: u16
+    let c: u16
+    let d: u8[8]
+}
+
+packed struct LimineFile {
+    let revision: u64
+    let address: void*
+    let size: u64
+    let path: char*
+    let cmdline: char*
+    let media_type: u32
+    let unused: u32
+    let tftp_ip: u32
+    let tftp_port: u32
+    let partition_index: u32
+    let mbr_disk_id: u32
+    let gpt_disk_uuid: LimineUuid
+    let gpt_part_uuid: LimineUuid
+    let part_uuid: LimineUuid
+}
+
+packed struct LimineModuleRequest {
+    let id: u64[4]
+    let revision: u64
+    let response: LimineModuleResponse*
+    let internal_module_count: u64
+    let internal_modules: void*
+}
+
+packed struct LimineModuleResponse {
+    let revision: u64
+    let module_count: u64
+    let modules: LimineFile**
+}
+
 // Limine's fixed protocol magic numbers - see the Limine boot protocol
 // spec's "Requests" section. `alias NAME = [ ... ]` names an array
 // literal at compile time only (never its own addressable symbol); each
@@ -102,6 +140,12 @@ alias limine_hhdm_request_id = [
     0x63984e959a98244b
 ]
 
+alias limine_module_request_id = [
+    limine_common_magic,
+    0x3e7e279702be32af,
+    0xca1c4f3bd1280cee
+]
+
 enum MemMapType: u64 {
     Usable = 0,
     Reserved = 1,
@@ -113,4 +157,3 @@ enum MemMapType: u64 {
     Framebuffer = 7,
     ReservedMapped = 8,
 }
-

@@ -2527,10 +2527,38 @@ class Parser {
         int startColumn = current.column;
         expect(TokenType.Return);
         ASTNode value = null;
-        if (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
+        if (!check(TokenType.RightBrace) && !check(TokenType.EOF) &&
+            !returnIfStartsPostfixCondition()) {
             value = expression();
         }
         return new ReturnStmt(value, startLine, startColumn);
+    }
+
+    // `return if cond { a } else { b }` is a value-returning if-expression,
+    // while `return if cond` is a bare return with a postfix condition.
+    private bool returnIfStartsPostfixCondition() {
+        if (!check(TokenType.If) || current.precededByNewline) return false;
+
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        for (int offset = 1; ; offset++) {
+            Token tok = peek(offset);
+            if (tok.type == TokenType.EOF || tok.type == TokenType.RightBrace) return true;
+            if (tok.precededByNewline) return true;
+
+            if (tok.type == TokenType.LeftParen) {
+                parenDepth++;
+            } else if (tok.type == TokenType.RightParen) {
+                if (parenDepth > 0) parenDepth--;
+            } else if (tok.type == TokenType.LeftBracket) {
+                bracketDepth++;
+            } else if (tok.type == TokenType.RightBracket) {
+                if (bracketDepth > 0) bracketDepth--;
+            } else if (parenDepth == 0 && bracketDepth == 0) {
+                if (tok.type == TokenType.LeftBrace) return false;
+                if (tok.type == TokenType.Else) return true;
+            }
+        }
     }
 
     private ContinueStmt continueStmt() {

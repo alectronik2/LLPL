@@ -89,6 +89,7 @@ package:
     - mkdir: isodir/boot/limine
     - mkdir: isodir/EFI/BOOT
     - copy: {from: kernel.elf, to: isodir/boot/kernel.elf}
+    - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}
     - copy: {from: "${LIMINE_DIR}/limine-bios.sys", to: isodir/boot/limine/limine-bios.sys}

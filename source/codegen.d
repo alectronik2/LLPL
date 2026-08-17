@@ -2471,6 +2471,32 @@ class CodeGenerator {
             }
         }
 
+        // Some type aliases target classes declared in another module that
+        // is not in classRegistry yet during the early alias pass above
+        // (e.g. `namespace Kern { alias Handle = Object }`). Revisit aliases
+        // now that every concrete type is registered so later field layout
+        // lowering sees `Handle[]` as `Object**`, not a literal C `Handle**`.
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                auto aliasDecl = cast(AliasDecl)decl;
+                if (aliasDecl is null) continue;
+
+                string mangledName = mangled(aliasDecl.namespaceSegments, aliasDecl.name);
+                if ((mangledName in typeAliases) !is null) continue;
+                if (aliasDecl.targetType !is null) continue;
+
+                string baseName = aliasDecl.targetPath.length == 1 ?
+                    canonicalIntTypeName(aliasDecl.targetPath[0]) : aliasDecl.targetPath.join("_");
+                if (!isPrimitiveTypeName(baseName) && !isKnownTypeName(baseName)) continue;
+
+                typeAliases[mangledName] = new Type(baseName, aliasDecl.targetPointerDepth,
+                    aliasDecl.targetIsArray, aliasDecl.targetArraySize);
+                typeAliasModulePath[mangledName] = prog.modulePath;
+                exportDeclSymbol(prog.modulePath, aliasDecl, mangledName);
+            }
+        }
+
         // Build per-module import metadata (aliases, selective imports) now
         // that every module's exports are known.
         collectImports(programs);
@@ -2485,12 +2511,43 @@ class CodeGenerator {
         computeReachableFunctions(programs);
         finishCodegenPhase(codegenRegistryTime);
 
+        // Resolve `class Derived : Base { ... }` base-class references now
+        // that classRegistry is fully populated. Impl blocks are generated
+        // immediately below and may call inherited methods through `self`,
+        // so baseClassName must already be canonicalized before
+        // processImplBlock emits those bodies.
+        foreach (prog; programs) {
+            currentModulePath = prog.modulePath;
+            foreach (decl; prog.declarations) {
+                if (auto classDecl = cast(ClassDecl)decl) {
+                    if (classDecl.baseClassName.length == 0) continue;
+                    currentNamespaceSegments = classDecl.namespaceSegments;
+                    auto baseType = new Type(classDecl.baseClassName);
+                    resolveType(baseType);
+                    auto basePtr = baseType.name in classRegistry;
+                    if (basePtr is null) {
+                        throw new CompileError(
+                            format("Unknown base class '%s' for class '%s'",
+                                classDecl.baseClassName, classDecl.name),
+                            currentModulePath, classDecl.line, classDecl.column);
+                    }
+                    if (classDecl.typeParams.length > 0 || basePtr.typeParams.length > 0) {
+                        throw new CompileError(
+                            format("Class '%s' cannot inherit from '%s' - inheritance and generics " ~
+                                "are mutually exclusive", classDecl.name, classDecl.baseClassName),
+                            currentModulePath, classDecl.line, classDecl.column);
+                    }
+                    classDecl.baseClassName = baseType.name;
+                }
+            }
+        }
+
         // Process every parked `impl Trait for Type { ... }` block now
-        // that classRegistry/structRegistry are populated (so a
-        // user-defined target type resolves correctly) but before the
-        // field-resolution pass just below - the earliest point a generic
-        // instantiation's trait-bound check could otherwise fire, which
-        // needs traitImplemented already populated (see processImplBlock).
+        // that classRegistry/structRegistry are populated and inheritance
+        // links are resolved, but before the field-resolution pass just
+        // below - the earliest point a generic instantiation's trait-bound
+        // check could otherwise fire, which needs traitImplemented already
+        // populated (see processImplBlock).
         foreach (i, impl; pendingImpls) {
             currentModulePath = pendingImplModulePaths[i];
             currentNamespaceSegments = impl.namespaceSegments;
@@ -2537,41 +2594,6 @@ class CodeGenerator {
                             checkBitfield(field);
                         }
                     }
-                }
-            }
-        }
-
-        // Resolve `class Derived : Base { ... }` base-class references now
-        // that classRegistry is fully populated (line ~1044) - canonicalizes
-        // baseClassName in place (namespace-qualified) the same way an
-        // ordinary field/parameter type name gets resolved via resolveType,
-        // and enforces the scope this feature was built to: single
-        // inheritance only, mutually exclusive with generics (a generic
-        // ClassDecl's manual, non-reflective cloning in
-        // cloneClassDeclWithTypeSubs would otherwise need to also thread
-        // baseClassName through by hand, which it doesn't).
-        foreach (prog; programs) {
-            currentModulePath = prog.modulePath;
-            foreach (decl; prog.declarations) {
-                if (auto classDecl = cast(ClassDecl)decl) {
-                    if (classDecl.baseClassName.length == 0) continue;
-                    currentNamespaceSegments = classDecl.namespaceSegments;
-                    auto baseType = new Type(classDecl.baseClassName);
-                    resolveType(baseType);
-                    auto basePtr = baseType.name in classRegistry;
-                    if (basePtr is null) {
-                        throw new CompileError(
-                            format("Unknown base class '%s' for class '%s'",
-                                classDecl.baseClassName, classDecl.name),
-                            currentModulePath, classDecl.line, classDecl.column);
-                    }
-                    if (classDecl.typeParams.length > 0 || basePtr.typeParams.length > 0) {
-                        throw new CompileError(
-                            format("Class '%s' cannot inherit from '%s' - inheritance and generics " ~
-                                "are mutually exclusive", classDecl.name, classDecl.baseClassName),
-                            currentModulePath, classDecl.line, classDecl.column);
-                    }
-                    classDecl.baseClassName = baseType.name;
                 }
             }
         }
@@ -4687,6 +4709,7 @@ class CodeGenerator {
 
         string prevClassName = currentClassName;
         currentClassName = cName;
+        string[] prevNamespaceSegments = currentNamespaceSegments;
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
         string prevScopeName = currentScopeName;
@@ -4717,6 +4740,7 @@ class CodeGenerator {
         code ~= "}\n\n";
 
         currentClassName = prevClassName;
+        currentNamespaceSegments = prevNamespaceSegments;
         currentScopeName = prevScopeName;
         variableTypes.remove("self");
 
@@ -4861,6 +4885,7 @@ class CodeGenerator {
         // Set current class/namespace context
         string prevClassName = currentClassName;
         currentClassName = cName;
+        string[] prevNamespaceSegments = currentNamespaceSegments;
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
         string prevScopeName = currentScopeName;
@@ -4913,6 +4938,7 @@ class CodeGenerator {
 
         // Restore previous context
         currentClassName = prevClassName;
+        currentNamespaceSegments = prevNamespaceSegments;
         currentScopeName = prevScopeName;
 
         // Un-bind the constructor's own params (and self) from
@@ -4976,6 +5002,7 @@ class CodeGenerator {
 
         string prevClassName = currentClassName;
         currentClassName = cName;
+        string[] prevNamespaceSegments = currentNamespaceSegments;
         currentNamespaceSegments = classDecl.namespaceSegments;
         variableTypes["self"] = new Type(cName);
         variableCNames = null;
@@ -5073,6 +5100,7 @@ class CodeGenerator {
         code ~= "}\n\n";
 
         currentClassName = prevClassName;
+        currentNamespaceSegments = prevNamespaceSegments;
         foreach (param; constructor.params) {
             variableTypes.remove(param.name);
             constVariables.remove(param.name);
@@ -5264,6 +5292,7 @@ class CodeGenerator {
         // Set current class/namespace context
         string prevClassName = currentClassName;
         currentClassName = cName;
+        string[] prevNamespaceSegments = currentNamespaceSegments;
         currentNamespaceSegments = classDecl.namespaceSegments;
         string prevScopeName = currentScopeName;
         currentScopeName = cName ~ "." ~ method.name;
@@ -5319,6 +5348,7 @@ class CodeGenerator {
 
         // Restore previous context
         currentClassName = prevClassName;
+        currentNamespaceSegments = prevNamespaceSegments;
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
         currentScopeName = prevScopeName;
@@ -5381,6 +5411,7 @@ class CodeGenerator {
 
         string code = "";
         string params = "";
+        string[] prevNamespaceSegments = currentNamespaceSegments;
         currentNamespaceSegments = funcDecl.namespaceSegments;
         string prevScopeName = currentScopeName;
         currentScopeName = mangleFreeFunctionName(funcDecl);
@@ -5453,6 +5484,7 @@ class CodeGenerator {
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
         currentClassName = prevClassNameForSelf;
+        currentNamespaceSegments = prevNamespaceSegments;
         currentScopeName = prevScopeName;
 
         // See generateConstructor's matching comment: params are only
@@ -9318,7 +9350,10 @@ class CodeGenerator {
             // keeps both eager-instantiation sites consistent).
             Type[string] savedVarTypes = variableTypes.dup;
             auto savedDeferredRc = saveDeferredRcState();
+            TryFrame[] savedTryFrames = tryFrameStack;
+            tryFrameStack = [];
             deferredFunctionBodies ~= generateFunction(asFunction);
+            tryFrameStack = savedTryFrames;
             restoreDeferredRcState(savedDeferredRc);
             variableTypes = savedVarTypes;
         }
@@ -9534,12 +9569,15 @@ class CodeGenerator {
                 // the caller still needs.
                 Type[string] savedVarTypes = variableTypes.dup;
                 auto savedDeferredRc = saveDeferredRcState();
+                TryFrame[] savedTryFrames = tryFrameStack;
+                tryFrameStack = [];
                 string savedModulePath = currentModulePath;
                 currentModulePath = templateModulePath;
                 string classBody = generateClass(clone);
                 genericInstanceDecls ~= classBody;
                 genericClassInstances ~= classBody;
                 currentModulePath = savedModulePath;
+                tryFrameStack = savedTryFrames;
                 restoreDeferredRcState(savedDeferredRc);
                 variableTypes = savedVarTypes;
                 currentGenericTemplateNamespace = savedGenericNamespace;
@@ -9558,12 +9596,15 @@ class CodeGenerator {
                     resolveType(field.type);
                 }
                 auto savedDeferredRc = saveDeferredRcState();
+                TryFrame[] savedTryFrames = tryFrameStack;
+                tryFrameStack = [];
                 string savedModulePath = currentModulePath;
                 currentModulePath = templateModulePath;
                 string structBody = generateStruct(clone);
                 genericInstanceDecls ~= structBody;
                 genericStructInstances ~= structBody;
                 currentModulePath = savedModulePath;
+                tryFrameStack = savedTryFrames;
                 restoreDeferredRcState(savedDeferredRc);
                 currentGenericTemplateNamespace = savedGenericNamespace;
             }
@@ -9577,8 +9618,11 @@ class CodeGenerator {
     // either write explicit type arguments (`malloc<T>()`) or omit them and
     // let the resolver infer each type parameter from value arguments.
     private GenericCallResolution resolveGenericFunctionCall(string templateKey, ASTNode[] args,
-            string[] argNames, Type[] explicitTypeArgs = null) {
+            string[] argNames, Type[] explicitTypeArgs = null, string[] useNamespaceSegments = null) {
         FunctionDecl tmpl = genericFunctionTemplates[templateKey];
+        string[] callerNamespaceSegments = useNamespaceSegments is null
+            ? currentNamespaceSegments.dup
+            : useNamespaceSegments.dup;
         args = resolveCallArguments(tmpl.params, false, args, argNames,
             format("generic function '%s'", templateKey), 0, 0);
 
@@ -9592,7 +9636,7 @@ class CodeGenerator {
             }
             foreach (i, tp; tmpl.typeParams) {
                 Type explicitType = cloneType(explicitTypeArgs[i]);
-                resolveType(explicitType);
+                resolveTypeInNamespace(explicitType, callerNamespaceSegments);
                 bindings[tp] = explicitType;
             }
         } else {
@@ -9653,7 +9697,7 @@ class CodeGenerator {
         }
         Type[] typeArgs;
         foreach (tp; tmpl.typeParams) {
-            resolveType(bindings[tp]);
+            resolveTypeInNamespace(bindings[tp], callerNamespaceSegments);
             typeArgs ~= bindings[tp];
         }
 
@@ -9731,10 +9775,13 @@ class CodeGenerator {
             // the caller had before, regardless of name collisions.
             Type[string] savedVarTypes = variableTypes.dup;
             auto savedDeferredRc = saveDeferredRcState();
+            TryFrame[] savedTryFrames = tryFrameStack;
+            tryFrameStack = [];
             string savedModulePath = currentModulePath;
             currentModulePath = templateModulePath;
             deferredFunctionBodies ~= generateFunction(clone);
             currentModulePath = savedModulePath;
+            tryFrameStack = savedTryFrames;
             restoreDeferredRcState(savedDeferredRc);
             variableTypes = savedVarTypes;
         }
@@ -9863,6 +9910,13 @@ class CodeGenerator {
                 format("Generic type '%s' requires type arguments (e.g. %s<...>)", t.name, t.name),
                 currentModulePath, 0, 0);
         }
+    }
+
+    private void resolveTypeInNamespace(Type t, string[] namespaceSegments) {
+        string[] savedNamespaceSegments = currentNamespaceSegments;
+        currentNamespaceSegments = namespaceSegments.dup;
+        scope(exit) currentNamespaceSegments = savedNamespaceSegments;
+        resolveType(t);
     }
 
     private bool isStructTypeName(string name) {
@@ -10062,6 +10116,7 @@ class CodeGenerator {
             result[i] = insertStringConstructorIfNeeded(result[i], param.type);
             result[i] = insertUpcastIfNeeded(result[i], param.type);
             result[i] = insertNumericCoercionIfNeeded(result[i], param.type);
+            result[i] = insertClosureConversionCastIfNeeded(result[i], param.type);
             result[i] = insertImplicitConversionCastIfNeeded(result[i], param.type);
         }
         return result;
@@ -10112,6 +10167,18 @@ class CodeGenerator {
         }
         if (argType.pointerDepth != 0 || argType.isArray) return arg;
         if ((argType.name in classRegistry) is null && (argType.name in structRegistry) is null) return arg;
+        return new CastExpr(cloneType(targetType), arg, arg.line, arg.column, true);
+    }
+
+    // A free function can be used directly anywhere a closure-typed
+    // parameter is expected: `call_later(work)` should behave the same as
+    // `let cb: func(...) -> ... = work; call_later(cb)`. CastExpr already
+    // routes implicit closure conversions through tryImplicitConversionCall,
+    // so this just supplies the missing expected-type context for call args.
+    private ASTNode insertClosureConversionCastIfNeeded(ASTNode arg, Type targetType) {
+        if (targetType.closureReturnType is null) return arg;
+        FunctionDecl fn = resolveFunctionReference(arg, targetType);
+        if (fn is null) return arg;
         return new CastExpr(cloneType(targetType), arg, arg.line, arg.column, true);
     }
 
@@ -12036,7 +12103,8 @@ class CodeGenerator {
                         identType = null;
                     }
                     if (identType !is null && isRcManagedType(identType) &&
-                            rcLocalNames.canFind(leftEmitName)) {
+                            (rcLocalNames.canFind(leftEmitName) ||
+                             (leftEmitName in globalVarRegistry) !is null)) {
                         string tmp = format("__llpl_assign_tmp%d", rcAssignTmpCounter++);
                         string retain = isAliasingRcExpr(binExpr.right)
                             ? format("rc_retain((char*)%s); ", tmp) : "";
@@ -12100,11 +12168,35 @@ class CodeGenerator {
                     // calling YamlValue.as_string() automatically.
                     string converted = tryImplicitConversionCall(binExpr.right, leftType);
                     if (converted.length > 0) {
+                        if (cast(MemberExpr)binExpr.left !is null && isRcManagedType(leftType)) {
+                            string tmp = format("__llpl_assign_tmp%d", rcAssignTmpCounter++);
+                            string leftCode = generateExpression(binExpr.left);
+                            return format("({ %s %s = %s; %s = %s; %s; })",
+                                typeToC(leftType), tmp, converted, leftCode, tmp, leftCode);
+                        }
                         return generateExpression(binExpr.left) ~ " = " ~ converted;
                     }
                     ASTNode coerced = insertNumericCoercionIfNeeded(binExpr.right, leftType);
                     if (coerced !is binExpr.right) {
+                        if (cast(MemberExpr)binExpr.left !is null && isRcManagedType(leftType)) {
+                            string tmp = format("__llpl_assign_tmp%d", rcAssignTmpCounter++);
+                            string retain = isAliasingRcExpr(coerced)
+                                ? format("rc_retain((char*)%s); ", tmp) : "";
+                            string leftCode = generateExpression(binExpr.left);
+                            return format("({ %s %s = %s; %s%s = %s; %s; })",
+                                typeToC(leftType), tmp, generateExpression(coerced),
+                                retain, leftCode, tmp, leftCode);
+                        }
                         return generateExpression(binExpr.left) ~ " = " ~ generateExpression(coerced);
+                    }
+                    if (cast(MemberExpr)binExpr.left !is null && isRcManagedType(leftType)) {
+                        string tmp = format("__llpl_assign_tmp%d", rcAssignTmpCounter++);
+                        string retain = isAliasingRcExpr(binExpr.right)
+                            ? format("rc_retain((char*)%s); ", tmp) : "";
+                        string leftCode = generateExpression(binExpr.left);
+                        return format("({ %s %s = %s; %s%s = %s; %s; })",
+                            typeToC(leftType), tmp, generateExpression(binExpr.right),
+                            retain, leftCode, tmp, leftCode);
                     }
                 }
                 return generateExpression(binExpr.left) ~ " = " ~ generateExpression(binExpr.right);
@@ -12264,8 +12356,9 @@ class CodeGenerator {
                     (n) => (n in genericFunctionTemplates) !is null);
             }
             if (genericTemplateKey.length > 0) {
+                string[] callNamespaceSegments = currentNamespaceSegments.dup;
                 auto resolution = resolveGenericFunctionCall(genericTemplateKey, callExpr.args,
-                    callExpr.argNames, callExpr.typeArgs);
+                    callExpr.argNames, callExpr.typeArgs, callNamespaceSegments);
                 recordUsage(genericTemplateKey, callExpr.line, callExpr.column);
                 string gargs = "";
                 foreach (i, arg; resolution.resolvedArgs) {
@@ -12387,6 +12480,8 @@ class CodeGenerator {
                 // chained call like `a.trim().to_upper()`, an indexed or
                 // field-accessed instance, ...), so a method call works on
                 // any expression it can type, not just `x.method()`.
+                Type receiverType = inferType(memberExpr.object);
+                resolveType(receiverType);
                 string className = "";
                 try {
                     // mangleTypeArg, not the bare .name - a raw pointer
@@ -12394,19 +12489,16 @@ class CodeGenerator {
                     // char*` method) must dispatch to its own
                     // pointer-suffixed mangled name, distinct from its
                     // pointee's (see processImplBlock, which mangles impl
-                    // methods the same way). A no-op for every already-
-                    // working case: ordinary generic instantiations' .name
-                    // is already their final mangled name with isPointer
-                    // false, and plain classes/structs/primitives have
-                    // isPointer false too.
-                    className = mangleTypeArg(inferType(memberExpr.object));
+                    // methods the same way). Resolve first so namespace-
+                    // qualified class receivers inside impl-generated
+                    // functions (`self: ns.Child`) use the canonical
+                    // registry key and can find inherited methods.
+                    className = mangleTypeArg(receiverType);
                 } catch (Exception e) {
                 // fall through - className stays "", falls back to the
                 // CLASS_ placeholder below
                 }
 
-                Type receiverType = inferType(memberExpr.object);
-                resolveType(receiverType);
                 bool structPointerReceiver = false;
                 bool unionPointerReceiver = false;
                 // Struct and union methods receive pointer self parameters.
@@ -13179,8 +13271,9 @@ class CodeGenerator {
                 string genericKey = tryResolveQualifiedPath(memberCallee,
                     (n) => (n in genericFunctionTemplates) !is null);
                 if (genericKey.length > 0) {
+                    string[] callNamespaceSegments = currentNamespaceSegments.dup;
                     auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args,
-                        callExpr.argNames, callExpr.typeArgs);
+                        callExpr.argNames, callExpr.typeArgs, callNamespaceSegments);
                     return functionRegistry[resolution.mangledName].returnType;
                 }
                 if (callExpr.typeArgs.length > 0) {
@@ -13249,8 +13342,9 @@ class CodeGenerator {
                 string genericKey = findGenericTemplateKey(calleeIdent.name,
                     (n) => (n in genericFunctionTemplates) !is null);
                 if (genericKey.length > 0) {
+                    string[] callNamespaceSegments = currentNamespaceSegments.dup;
                     auto resolution = resolveGenericFunctionCall(genericKey, callExpr.args,
-                        callExpr.argNames, callExpr.typeArgs);
+                        callExpr.argNames, callExpr.typeArgs, callNamespaceSegments);
                     return functionRegistry[resolution.mangledName].returnType;
                 }
                 if (callExpr.typeArgs.length > 0) {

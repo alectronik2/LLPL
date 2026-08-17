@@ -16,11 +16,13 @@
 
 async func blink_once() -> int {
     puts("await")
-    let elapsed = await sleep_ms(1)
+    let elapsed = await sleep_ms(2000)
+    puts("done")
     return elapsed
 }
 
 func main() -> int {
     let ignored = blink_once()
+    puts("main done")
     return 0
 }

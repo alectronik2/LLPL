@@ -41,7 +41,7 @@ namespace HAL {
             }
 
             run_timer_list()
-            Kern.thread_poll()
+            //Kern.thread_poll()
         }
 
         func run_timer_list() {

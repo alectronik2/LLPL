@@ -12,8 +12,6 @@ import terminal
 import lib
 import kern
 
-alias hs = HAL.Serial
-
 // Strong freestanding runtime hooks: the default runtime panic hooks are
 // intentionally silent, so route assertion failures through COM1.
 func llpl_panic_putc(c: char) {
@@ -50,6 +48,15 @@ let hhdm_request: LimineHhdmRequest = LimineHhdmRequest {
     response: 0
 }
 
+@section(".limine_requests") @used
+let module_request: LimineModuleRequest = LimineModuleRequest {
+    id: limine_module_request_id,
+    revision: 0,
+    response: 0,
+    internal_module_count: 0,
+    internal_modules: 0
+}
+
 @section(".limine_requests_end") @used
 let limine_requests_end_marker: u64[2] = limine_end_marker_id
 
@@ -68,6 +75,10 @@ func limine_get_memmap() -> LimineMemmapResponse* {
 
 func limine_get_hhdm() -> LimineHhdmResponse* {
     return hhdm_request.response
+}
+
+func limine_get_modules() -> LimineModuleResponse* {
+    return module_request.response
 }
 
 func memmap_type_name(t: u64) -> string {
@@ -248,16 +259,15 @@ func kernel_main() {
 
     MM.init( memmap, hhdm )
     MM.aspace_init()
+    HAL.percpu_init()
 
     Kern.proc_init()
     Kern.thread_init()
     Terminal.init( fb )
 
-    HAL.percpu_init()
+    VFS.init(limine_get_modules())
 
-    VFS.init()
-
-    Kern.scheduler_start()
+    //Kern.scheduler_start()
     HAL.enable_interrupts()
 
     //demo_hhdm( memmap, hhdm )
@@ -271,7 +281,7 @@ func kernel_main() {
     tw( "Limine memory map: <magenta>\(memmap.entry_count)</> entries\n" )
     tw( "Running on CPU \(HAL.cpu_id())\n" )
 
-    "Kernel initialization complete. Halting.\n" |> hs.write
+    "Kernel initialization complete. Halting.\n" |> hsw
     while true {
         HAL.halt()
     }

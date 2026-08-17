@@ -13,21 +13,15 @@ extern func Kern_await_timer_tick_from_async_poll_erased(frame: void*, out: void
 const THREAD_KERNEL = 0x1
 const THREAD_USER   = 0x2
 
-const THREAD_NEW      = 0
-const THREAD_RUNNABLE = 1
-const THREAD_RUNNING  = 2
-const THREAD_SLEEPING = 3
-const THREAD_ZOMBIE   = 4
+enum ThreadState {
+    New,
+    Ready,
+    Running,
+    Sleeping,
+    Zombie
+}
 
 const MAX_PRIORITY  = 32
-const MAX_KERNEL_THREADS = 16
-const MAX_KERNEL_ASYNC_TASKS = 8
-const ASYNC_FRAME_BYTES = 128
-const ASYNC_RESULT_BYTES = 16
-const DEFAULT_TIME_SLICE = 4
-const USER_DEMO_BASE = 0x0000_4000_0000_0000
-const USER_DEMO_COUNTER = USER_DEMO_BASE + 0x100
-const USER_DEMO_STACK_TOP = 0x0000_4000_0010_1000
 
 func current_thread() -> Kern.Thread {
     return HAL.current().thread
@@ -35,55 +29,50 @@ func current_thread() -> Kern.Thread {
 
 namespace Kern {
     alias fun = func(void*)
-    alias AsyncPollFn = func(void*, void*) -> int
-    alias AsyncCompleteFn = func(uint, void*)
 
-    const IO_EVENT_SERIAL_RX = 0
-    const IO_EVENT_KEYBOARD_IRQ = 1
-    const IO_EVENT_BLOCK_DONE = 2
-    const IO_EVENT_NET_PACKET = 3
-    const IO_EVENT_COUNT = 4
-
+    let lock: SpinLock
     let runq: DoublyLinkedList<Thread>[MAX_PRIORITY]
+    let ready_summary: uint
 
     class Thread : Object {
         stack: char*
         stack_size: u64
         flags: uint
         name: String
-        proc: uint
+        proc: Process
 
-        code: fun
+        ptr: fun
         arg: void*
         ctx: HAL.IDT.Context*
         state: uint
         priority: uint
-        time_slice: uint
-        wake_tick: uint
-        ready_next: Thread
-        sleep_next: Thread
-        zombie_next: Thread
 
         curdir: String
 
-        constructor( proc: Process, ptr: fun, name: String, flags: uint, stack_size: u64 = MM.PAGE_SIZE * 4 ) {
+        constructor( proc: Process, ptr_: fun, arg: void*, name: String, flags: uint = 0, priority: uint = 16, stack_size: u64 = MM.PAGE_SIZE * 4 ) {
             self.stack_size = stack_size
-            self.stack = MM.malloc<char>( stack_size )
-            self.name = name
-            self.code = ptr
-            self.proc = proc as uint
-            self.arg = null
-            self.ctx = null
-            self.state = THREAD_NEW
-            self.priority = 0
-            self.time_slice = DEFAULT_TIME_SLICE
-            self.wake_tick = 0
-            self.ready_next = null
-            self.sleep_next = null
-            self.zombie_next = null
+            self.stack      = MM.malloc<char>( stack_size )
+            self.name       = name
+            self.ptr        = ptr_
+            self.proc       = proc
+            self.arg        = arg
+            self.state      = ThreadState.New
+            self.priority   = priority
+
+            let top = ((self.stack as uint) + self.stack_size) & ~0xF
+            let frame_addr = top - sizeof(HAL.IDT.Context)
+            self.ctx = frame_addr as HAL.IDT.Context*
+            memset( self.ctx as void*, 0, sizeof(HAL.IDT.Context) )
+            self.ctx.rip = thread_trampoline as u64
+            self.ctx.cs = 0x08
+            self.ctx.rflags = 0x202
+            self.ctx.rsp = top
+            self.ctx.ss = 0x10
 
             if proc != null {
-                proc.threads.push_back( self )
+                holding proc.lock {
+                    proc.threads.push_back( self )
+                }
             }
 
             "Stack allocated for thread \(name) at \(self.stack:hex)\n" |> HAL.Serial.write
@@ -91,661 +80,46 @@ namespace Kern {
         
         destructor() {
             "Thread destructor\n" |> HAL.Serial.write
-            if self.proc != 0 {
-                (self.proc as Process).threads.remove( self )
+            if self.proc != null {
+                self.proc.threads.remove( self )
             }
             MM.free( self.stack )
             self.curdir.put() if self.curdir != null
         }
     }
 
-    let init_thread: Thread = null
-    let ready_head: Thread = null
-    let ready_tail: Thread = null
-    let sleep_head: Thread = null
-    let zombie_head: Thread = null
-    let zombie_tail: Thread = null
-    let scheduler_started: bool = false
-    let next_thread_id: uint = 1
-    let sched_threads: Thread[MAX_KERNEL_THREADS]
-    let sched_thread_count: uint = 0
-    let worker_a_thread: Thread = null
-    let worker_b_thread: Thread = null
-    let reaper_thread: Thread = null
-    let one_shot_thread: Thread = null
-    let user_demo_thread: Thread = null
-    let user_demo_last_count: uint = 0
+    func thread_init() {
+        for i in 0..MAX_PRIORITY {
+            runq[i] = new DoublyLinkedList<Thread>()
+        }
 
-    let kernel_async: KernelAsyncExecutor = null
-    let async_spawned_second_wave: bool = false
-    let io_event_counts: uint[IO_EVENT_COUNT]
+        let t = new Thread( kproc, func() {
+            "Hello from Thread!!" |> HAL.Serial.write
+        }, null, "Init" )
 
-    func noop_async_poll( frame: void*, out: void* ) -> int {
-        return 1
+        t |> mark_thread_ready
+
+        switch_context( null, t )
     }
 
-    func noop_async_complete( id: uint, result: void* ) {
-    }
-
-    // IRQ-polled async tasks use preallocated storage and may not allocate,
-    // block, or take locks that interrupted code can hold. The runtime
-    // enforces the allocation rule with llpl_irq_enter/exit around IRQ
-    // dispatch; blocking and lock discipline are kernel API contracts.
-    class KernelAsyncTask {
-        frame: char[ASYNC_FRAME_BYTES]
-        result: char[ASYNC_RESULT_BYTES]
-        poller: AsyncPollFn
-        on_complete: AsyncCompleteFn
-        id: uint
-        active: bool
-        finished: bool
-        cancelled: bool
-        wake_tick: uint
-
-        constructor() {
-            self.id = 0
-            self.poller = noop_async_poll
-            self.on_complete = noop_async_complete
-            self.active = false
-            self.finished = false
-            self.cancelled = false
-            self.wake_tick = 0
+    func thread_trampoline() {
+        let thread: Thread = HAL.current().thread
+        if thread != null {
+            thread.ptr( thread.arg )
         }
 
-        func configure( id: uint, poller: AsyncPollFn, on_complete: AsyncCompleteFn, wake_tick: uint ) {
-            self.id = id
-            self.poller = poller
-            self.on_complete = on_complete
-            self.active = true
-            self.finished = false
-            self.cancelled = false
-            self.wake_tick = wake_tick
+        if thread != null {
+            thread.state = ThreadState.Zombie
         }
 
-        func is_done() -> bool {
-            return self.finished || self.cancelled
-        }
-
-        func is_cancelled() -> bool {
-            return self.cancelled
-        }
-
-        func status() -> int {
-            if self.cancelled {
-                return TASK_CANCELLED
-            }
-            if self.finished {
-                return TASK_DONE
-            }
-            if self.active {
-                return TASK_RUNNING
-            }
-            return TASK_PENDING
-        }
-
-        func result_uint() -> uint {
-            return *(self.result as uint*)
-        }
-
-        func cancel() -> bool {
-            if !self.active {
-                return false
-            }
-            self.cancelled = true
-            self.active = false
-            return true
-        }
-
-        func poll_now() -> bool {
-            if self.is_done() {
-                return true
-            }
-            if !self.active {
-                return false
-            }
-
-            let poller: AsyncPollFn = self.poller
-            let state = poller( self.frame as void*, self.result as void* )
-            if state != 0 {
-                self.finished = true
-                self.active = false
-                let on_complete: AsyncCompleteFn = self.on_complete
-                on_complete( self.id, self.result as void* )
-                return true
-            }
-            return false
-        }
-    }
-
-    class KernelAsyncExecutor {
-        slots: KernelAsyncTask[MAX_KERNEL_ASYNC_TASKS]
-        active_count: uint
-        completed_count: uint
-        next_wake_tick: uint
-
-        constructor() {
-            let i = 0
-            while i < MAX_KERNEL_ASYNC_TASKS {
-                self.slots[i] = new KernelAsyncTask()
-                i = i + 1
-            }
-            self.active_count = 0
-            self.completed_count = 0
-            self.next_wake_tick = 0
-        }
-
-        func recompute_next_wake() {
-            let have = false
-            let next = 0
-            let i = 0
-            while i < MAX_KERNEL_ASYNC_TASKS {
-                let task = self.slots[i]
-                if task != null && task.active {
-                    if !have || task.wake_tick < next {
-                        next = task.wake_tick
-                        have = true
-                    }
-                }
-                i = i + 1
-            }
-            if have {
-                self.next_wake_tick = next
-            } else {
-                self.next_wake_tick = 0
-            }
-        }
-
-        func spawn_uint_at( id: uint, frame_size: uint, result_size: uint, poller: AsyncPollFn,
-                            on_complete: AsyncCompleteFn, wake_tick: uint ) -> KernelAsyncTask {
-            assert( frame_size <= ASYNC_FRAME_BYTES, "kernel async frame storage too small" )
-            assert( result_size <= ASYNC_RESULT_BYTES, "kernel async result storage too small" )
-
-            let i = 0
-            while i < MAX_KERNEL_ASYNC_TASKS {
-                let task = self.slots[i]
-                if task != null && !task.active {
-                    task.configure( id, poller, on_complete, wake_tick )
-                    self.active_count = self.active_count + 1
-                    if self.next_wake_tick == 0 || wake_tick < self.next_wake_tick {
-                        self.next_wake_tick = wake_tick
-                    }
-                    return task
-                }
-                i = i + 1
-            }
-
-            return null
-        }
-
-        func poll_due_irq() {
-            if self.active_count == 0 {
-                return
-            }
-
-            let now = Timer.current_tick()
-            if self.next_wake_tick != 0 && now < self.next_wake_tick {
-                return
-            }
-
-            let i = 0
-            while i < MAX_KERNEL_ASYNC_TASKS {
-                let task = self.slots[i]
-                if task != null && task.active && task.wake_tick <= now {
-                    let finished = task.poll_now()
-                    if finished {
-                        self.active_count = self.active_count - 1
-                        self.completed_count = self.completed_count + 1
-                    }
-                }
-                i = i + 1
-            }
-            self.recompute_next_wake()
-        }
-
-        func poll() -> uint {
-            self.poll_due_irq()
-            return self.active_count
-        }
-
-        func task_count() -> uint {
-            return self.active_count
-        }
-
-        func is_empty() -> bool {
-            return self.active_count == 0
-        }
-
-        func run_all_timeout( timeout_ticks: uint ) -> uint {
-            if llpl_in_irq() != 0 {
-                panic("kernel async run_all_timeout is not IRQ-safe")
-            }
-            let deadline = Timer.deadline_after_ticks( timeout_ticks )
-            while self.active_count > 0 {
-                self.poll_due_irq()
-                if self.active_count == 0 {
-                    return 0
-                }
-                if Timer.current_tick() >= deadline {
-                    return self.active_count
-                }
-                HAL.halt()
-            }
-            return 0
-        }
-
-        func cancel( id: uint ) -> bool {
-            let i = 0
-            while i < MAX_KERNEL_ASYNC_TASKS {
-                let task = self.slots[i]
-                if task != null && task.active && task.id == id {
-                    if task.cancel() {
-                        self.active_count = self.active_count - 1
-                        self.recompute_next_wake()
-                        return true
-                    }
-                }
-                i = i + 1
-            }
-            return false
-        }
-
-        func cancel_all() {
-            let i = 0
-            while i < MAX_KERNEL_ASYNC_TASKS {
-                let task = self.slots[i]
-                if task != null && task.active {
-                    task.cancel()
-                }
-                i = i + 1
-            }
-            self.active_count = 0
-            self.next_wake_tick = 0
-        }
-
-        func join_uint( task: KernelAsyncTask ) -> uint {
-            if llpl_in_irq() != 0 {
-                panic("kernel async join is not IRQ-safe")
-            }
-            while task != null && task.active {
-                HAL.halt()
-            }
-            return task.result_uint()
-        }
-
-        func join_uint_timeout( task: KernelAsyncTask, timeout_ticks: uint, out: uint* ) -> bool {
-            if llpl_in_irq() != 0 {
-                panic("kernel async join_timeout is not IRQ-safe")
-            }
-            let deadline = Timer.deadline_after_ticks( timeout_ticks )
-            while task != null && task.active {
-                if Timer.current_tick() >= deadline {
-                    return false
-                }
-                HAL.halt()
-            }
-            out[0] = task.result_uint()
-            return true
-        }
-    }
-
-    func thread_func( arg: void* ) {
-        "Thread function called\n" |> HAL.Serial.write()
-    }
-
-    func scheduler_demo_a( arg: void* ) {
-        let i = 0
         while true {
-            "[sched] worker A iteration \(i), tick \(Timer.current_tick())\n" |> HAL.Serial.write
-            Terminal.write( "<yellow>[sched]</> worker A iteration \(i), tick \(Timer.current_tick())\n" )
-            sleep_ticks( 25 )
-            i = i + 1
+            HAL.halt()
         }
     }
 
-    func scheduler_demo_b( arg: void* ) {
-        let i = 0
-        while true {
-            "[sched] worker B iteration \(i), tick \(Timer.current_tick())\n" |> HAL.Serial.write
-            Terminal.write( "<cyan>[sched]</> worker B iteration \(i), tick \(Timer.current_tick())\n" )
-            sleep_ticks( 37 )
-            i = i + 1
-        }
-    }
+    func init_thread_context( thread: Thread ) {
+        return if !thread
 
-    func scheduler_demo_once( arg: void* ) {
-        "[sched] one-shot started at tick \(Timer.current_tick())\n" |> HAL.Serial.write
-        yield()
-        sleep_ticks( 18 )
-        "[sched] one-shot exiting at tick \(Timer.current_tick())\n" |> HAL.Serial.write
-    }
-
-    func scheduler_maintenance( arg: void* ) {
-        while true {
-            sleep_ticks( 100 )
-            reap_zombies()
-            report_user_demo()
-            dump_scheduler()
-        }
-    }
-
-    async func await_timer_tick_from( start: uint, delay: uint ) -> uint {
-        let ignored = await sleep_ms( (delay * HAL.PIT.MSECS_PER_TICK) as u64 )
-        return Timer.current_tick()
-    }
-
-    func poll_async_tick( frame: void*, out: void* ) -> int {
-        return Kern_await_timer_tick_from_async_poll_erased( frame, out )
-    }
-
-    func async_tick_completed( id: uint, result: void* ) {
-        let tick = *(result as uint*)
-        "Async task \(id) completed at tick \(tick)\n" |> HAL.Serial.write
-    }
-
-    func spawn_async_tick( id: uint, delay: uint ) -> bool {
-        if kernel_async == null {
-            return false
-        }
-
-        let start = Timer.current_tick()
-        let poller: AsyncPollFn = poll_async_tick
-        let on_complete: AsyncCompleteFn = async_tick_completed
-        let task = kernel_async.spawn_uint_at( id, Kern_await_timer_tick_from_async_frame_size(),
-            sizeof(uint), poller, on_complete, Timer.deadline_after_ticks( delay ) )
-        if task != null {
-            Kern_await_timer_tick_from_async_start_into( task.frame as void*, start, delay )
-            task.poll_now()
-            return true
-        }
-
-        "Async tick task table full\n" |> HAL.Serial.write
-        return false
-    }
-
-    func spawn_async( id: uint, frame_size: uint, result_size: uint, poller: AsyncPollFn,
-                      on_complete: AsyncCompleteFn, wake_tick: uint ) -> KernelAsyncTask {
-        if kernel_async == null {
-            return null
-        }
-        return kernel_async.spawn_uint_at( id, frame_size, result_size, poller, on_complete, wake_tick )
-    }
-
-    func cancel_async( id: uint ) -> bool {
-        if kernel_async == null {
-            return false
-        }
-        return kernel_async.cancel( id )
-    }
-
-    func cancel_all_async() {
-        if kernel_async != null {
-            kernel_async.cancel_all()
-        }
-    }
-
-    func poll_async_tasks() -> uint {
-        if kernel_async == null {
-            return 0
-        }
-        return kernel_async.poll()
-    }
-
-    func run_all_async_timeout( timeout_ticks: uint ) -> uint {
-        if kernel_async == null {
-            return 0
-        }
-        return kernel_async.run_all_timeout( timeout_ticks )
-    }
-
-    func join_async_uint( task: KernelAsyncTask ) -> uint {
-        if kernel_async == null {
-            return 0
-        }
-        return kernel_async.join_uint( task )
-    }
-
-    func join_async_uint_timeout( task: KernelAsyncTask, timeout_ticks: uint, out: uint* ) -> bool {
-        if kernel_async == null {
-            return false
-        }
-        return kernel_async.join_uint_timeout( task, timeout_ticks, out )
-    }
-
-    func signal_io_event( event: uint ) {
-        if event < IO_EVENT_COUNT {
-            io_event_counts[event] = io_event_counts[event] + 1
-        }
-    }
-
-    func io_event_count( event: uint ) -> uint {
-        if event >= IO_EVENT_COUNT {
-            return 0
-        }
-        return io_event_counts[event]
-    }
-
-    func io_event_ready( event: uint, seen: uint ) -> AsyncFuture<uint> {
-        if event >= IO_EVENT_COUNT {
-            return async_ready( 0 as uint )
-        }
-
-        let count = io_event_counts[event]
-        if count != seen {
-            return async_ready( count )
-        }
-        return async_ready( 0 as uint )
-    }
-
-    func serial_rx_ready( seen: uint ) -> AsyncFuture<uint> {
-        return io_event_ready( IO_EVENT_SERIAL_RX, seen )
-    }
-
-    func keyboard_irq_ready( seen: uint ) -> AsyncFuture<uint> {
-        return io_event_ready( IO_EVENT_KEYBOARD_IRQ, seen )
-    }
-
-    func block_device_ready( seen: uint ) -> AsyncFuture<uint> {
-        return io_event_ready( IO_EVENT_BLOCK_DONE, seen )
-    }
-
-    func network_packet_ready( seen: uint ) -> AsyncFuture<uint> {
-        return io_event_ready( IO_EVENT_NET_PACKET, seen )
-    }
-
-    func enqueue_ready( thread: Thread ) {
-        if thread == null {
-            return
-        }
-        if thread.state == THREAD_ZOMBIE {
-            return
-        }
-
-        thread.ready_next = null
-        thread.state = THREAD_RUNNABLE
-
-        if ready_tail == null {
-            ready_head = thread
-            ready_tail = thread
-        } else {
-            ready_tail.ready_next = thread
-            ready_tail = thread
-        }
-    }
-
-    func ready_queue_len() -> uint {
-        let count: uint = 0
-        let curr = ready_head
-        while curr != null {
-            count = count + 1
-            curr = curr.ready_next
-        }
-        return count
-    }
-
-    func sleep_queue_len() -> uint {
-        let count: uint = 0
-        let curr = sleep_head
-        while curr != null {
-            count = count + 1
-            curr = curr.sleep_next
-        }
-        return count
-    }
-
-    func zombie_queue_len() -> uint {
-        let count: uint = 0
-        let curr = zombie_head
-        while curr != null {
-            count = count + 1
-            curr = curr.zombie_next
-        }
-        return count
-    }
-
-    func dequeue_ready() -> Thread {
-        let thread = ready_head
-        if thread == null {
-            return null
-        }
-
-        ready_head = thread.ready_next
-        if ready_head == null {
-            ready_tail = null
-        }
-
-        thread.ready_next = null
-        return thread
-    }
-
-    func insert_sleeping( thread: Thread ) {
-        thread.sleep_next = null
-        thread.state = THREAD_SLEEPING
-
-        if sleep_head == null || thread.wake_tick < sleep_head.wake_tick {
-            thread.sleep_next = sleep_head
-            sleep_head = thread
-            return
-        }
-
-        let curr = sleep_head
-        while curr.sleep_next != null && curr.sleep_next.wake_tick <= thread.wake_tick {
-            curr = curr.sleep_next
-        }
-
-        thread.sleep_next = curr.sleep_next
-        curr.sleep_next = thread
-    }
-
-    func wake_sleepers() {
-        let now = Timer.current_tick()
-        while sleep_head != null && sleep_head.wake_tick <= now {
-            let thread = sleep_head
-            sleep_head = thread.sleep_next
-            thread.sleep_next = null
-            enqueue_ready( thread )
-        }
-    }
-
-    func enqueue_zombie( thread: Thread ) {
-        if thread == null {
-            return
-        }
-
-        thread.ready_next = null
-        thread.sleep_next = null
-        thread.zombie_next = null
-        thread.state = THREAD_ZOMBIE
-
-        if zombie_tail == null {
-            zombie_head = thread
-            zombie_tail = thread
-        } else {
-            zombie_tail.zombie_next = thread
-            zombie_tail = thread
-        }
-    }
-
-    func remove_sched_thread( thread: Thread ) {
-        let i: uint = 0
-        while i < sched_thread_count {
-            if sched_threads[i] == thread {
-                sched_threads[i] = sched_threads[sched_thread_count - 1]
-                sched_threads[sched_thread_count - 1] = null
-                sched_thread_count = sched_thread_count - 1
-                if one_shot_thread == thread {
-                    one_shot_thread = null
-                }
-                return
-            }
-            i = i + 1
-        }
-    }
-
-    func reap_zombies() {
-        while zombie_head != null {
-            let victim = zombie_head
-            zombie_head = victim.zombie_next
-            if zombie_head == null {
-                zombie_tail = null
-            }
-
-            victim.zombie_next = null
-            remove_sched_thread( victim )
-            "Reaping thread \(victim.name)\n" |> HAL.Serial.write
-            delete victim
-        }
-    }
-
-    func state_name( state: uint ) -> string {
-        match state {
-            case THREAD_NEW      => { return "new" }
-            case THREAD_RUNNABLE => { return "runnable" }
-            case THREAD_RUNNING  => { return "running" }
-            case THREAD_SLEEPING => { return "sleeping" }
-            case THREAD_ZOMBIE   => { return "zombie" }
-            case _               => { return "unknown" }
-        }
-    }
-
-    func dump_thread( label: string, thread: Thread ) {
-        if thread == null {
-            "[sched] \(label): <none>\n" |> HAL.Serial.write
-            return
-        }
-
-        "[sched] \(label): \(thread.name) state=\(state_name(thread.state)) wake=\(thread.wake_tick) slice=\(thread.time_slice) stack=\(thread.stack:hex)\n" |> HAL.Serial.write
-    }
-
-    func dump_scheduler() {
-        "[sched] tick=\(Timer.current_tick()) ready=\(ready_queue_len()) sleep=\(sleep_queue_len()) zombie=\(zombie_queue_len()) total=\(sched_thread_count)\n" |> HAL.Serial.write
-        dump_thread( "current", HAL.current().thread )
-
-        let curr = ready_head
-        while curr != null {
-            dump_thread( "ready", curr )
-            curr = curr.ready_next
-        }
-
-        curr = sleep_head
-        while curr != null {
-            dump_thread( "sleep", curr )
-            curr = curr.sleep_next
-        }
-
-        curr = zombie_head
-        while curr != null {
-            dump_thread( "zombie", curr )
-            curr = curr.zombie_next
-        }
-
-        let i: uint = 0
-        while i < sched_thread_count {
-            dump_thread( "thread", sched_threads[i] )
-            i = i + 1
-        }
-    }
-
-    func prepare_initial_context( thread: Thread ) {
         let top = ((thread.stack as uint) + thread.stack_size) & ~0xF
         let frame_addr = top - sizeof(HAL.IDT.Context)
         let ctx = frame_addr as HAL.IDT.Context*
@@ -760,230 +134,76 @@ namespace Kern {
         thread.ctx = ctx
     }
 
-    func write_u64_le( dst: u8*, value: uint ) {
-        let i = 0
-        while i < 8 {
-            dst[i] = ((value >> ((i as uint) * 8)) & 0xFF) as u8
-            i = i + 1
+    func mark_thread_ready( thread: Thread ) {
+        return if !thread
+        return if thread.state == ThreadState.Zombie
+
+        thread.state = ThreadState.Ready
+        holding lock {
+            runq[thread.priority].push_back( thread )
+            ready_summary |= 1 << thread.priority
         }
     }
 
-    func install_user_demo_program() -> bool {
-        let code_page = MM.alloc_page( MM.FrameType.Other )
-        let stack_page = MM.alloc_page( MM.FrameType.Other )
-        let code_phys = code_page << MM.PAGE_SHIFT
-        let stack_phys = stack_page << MM.PAGE_SHIFT
-        let code = MM.p2v( code_phys ) as u8*
-
-        memset( code as void*, 0, MM.PAGE_SIZE )
-        memset( MM.p2v( stack_phys ) as void*, 0, MM.PAGE_SIZE )
-
-        // movabs rax, USER_DEMO_COUNTER
-        // inc qword ptr [rax]
-        // int 0x80
-        // jmp back to inc
-        code[0] = 0x48 as u8
-        code[1] = 0xB8 as u8
-        write_u64_le( code + 2, USER_DEMO_COUNTER )
-        code[10] = 0x48 as u8
-        code[11] = 0xFF as u8
-        code[12] = 0x00 as u8
-        code[13] = 0xCD as u8
-        code[14] = 0x80 as u8
-        code[15] = 0xEB as u8
-        code[16] = 0xF9 as u8
-
-        if !MM.map_page( MM.kernel_pml4, USER_DEMO_BASE, code_phys,
-                         MM.PG_PRESENT | MM.PG_WRITABLE | MM.PG_USER ) {
-            return false
-        }
-        if !MM.map_page( MM.kernel_pml4, USER_DEMO_STACK_TOP - MM.PAGE_SIZE, stack_phys,
-                         MM.PG_PRESENT | MM.PG_WRITABLE | MM.PG_USER ) {
-            return false
-        }
-
-        return true
+    inline func current_thread() -> Thread {
+        return HAL.current().thread
     }
 
-    func prepare_user_context( thread: Thread, entry: uint, stack_top: uint ) {
-        let top = ((thread.stack as uint) + thread.stack_size) & ~0xF
-        let frame_addr = top - sizeof(HAL.IDT.Context)
-        let ctx = frame_addr as HAL.IDT.Context*
-
-        memset( ctx as void*, 0, sizeof(HAL.IDT.Context) )
-        ctx.rip = entry
-        ctx.cs = 0x18 | 3
-        ctx.rflags = 0x202
-        ctx.rsp = stack_top
-        ctx.ss = 0x20 | 3
-
-        thread.ctx = ctx
-    }
-
-    func create_kernel_thread( name: String, entry: fun, arg: void* = null ) -> Thread {
-        assert( sched_thread_count < MAX_KERNEL_THREADS, "create_kernel_thread: thread table full" )
-
-        let thread = new Thread( kproc, entry, name, THREAD_KERNEL )
-        sched_threads[sched_thread_count] = thread
-        sched_thread_count = sched_thread_count + 1
-        thread.arg = arg
-        prepare_initial_context( thread )
-        enqueue_ready( thread )
-        return thread
-    }
-
-    func create_user_demo_thread() -> Thread {
-        assert( sched_thread_count < MAX_KERNEL_THREADS, "create_user_demo_thread: thread table full" )
-        assert( install_user_demo_program(), "failed to install user demo program" )
-
-        let thread = new Thread( kproc, null as fun, "user-demo", THREAD_USER )
-        sched_threads[sched_thread_count] = thread
-        sched_thread_count = sched_thread_count + 1
-        prepare_user_context( thread, USER_DEMO_BASE, USER_DEMO_STACK_TOP )
-        enqueue_ready( thread )
-        "User-mode demo thread installed: rip=\(USER_DEMO_BASE:hex) rsp=\(USER_DEMO_STACK_TOP:hex)\n" |> HAL.Serial.write
-        return thread
-    }
-
-    func report_user_demo() {
-        let count = *(USER_DEMO_COUNTER as uint*)
-        if user_demo_thread != null && count != user_demo_last_count {
-            user_demo_last_count = count
-            "[user] CPL3 demo counter=\(count)\n" |> HAL.Serial.write
-            Terminal.write( "<bright-green>[user]</> CPL3 demo counter=\(count)\n" )
+    func switch_context( ctx: HAL.IDT.Context*, next: Thread ) -> HAL.IDT.Context* {
+        if next == null || next.state == ThreadState.Zombie || next.ctx == null {
+            //return ctx
         }
-    }
-
-    func thread_trampoline() {
-        let thread_addr = HAL.current().thread as uint
-        if thread_addr != 0 {
-            let entry: fun = (thread_addr as Thread).code
-            entry( (thread_addr as Thread).arg )
-        }
-
-        thread_exit()
-
-        while true {
-            HAL.halt()
-        }
-    }
-
-    func yield() {
-        if scheduler_started {
-            asm("int $0x80")
-        }
-    }
-
-    func thread_exit() {
-        let thread_addr = HAL.current().thread as uint
-        if thread_addr != 0 {
-            enqueue_zombie( thread_addr as Thread )
-        }
-
-        while true {
-            yield()
-            HAL.halt()
-        }
-    }
-
-    func sleep_ticks( delay: uint ) {
-        let thread: Thread = HAL.current().thread
-        if thread == null || delay == 0 {
-            return
-        }
-
-        thread.wake_tick = Timer.deadline_after_ticks( delay )
-        insert_sleeping( thread )
-
-        while thread.state == THREAD_SLEEPING {
-            HAL.halt()
-        }
-    }
-
-    func schedule_from_interrupt( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
-        if !scheduler_started {
+        
+        if next == null || next.state == ThreadState.Zombie || next.ctx == null {
             return ctx
         }
 
-        wake_sleepers()
-
-        let current: Thread = HAL.current().thread
-        if current != null {
-            current.ctx = ctx
-            if current.state == THREAD_RUNNING {
-                if current.time_slice > 0 {
-                    current.time_slice = current.time_slice - 1
-                }
-
-                if current.time_slice > 0 && ready_head == null {
-                    return ctx
-                }
-
-                current.time_slice = DEFAULT_TIME_SLICE
-                enqueue_ready( current )
-            }
-        }
-
-        let next = dequeue_ready()
-        if next == null {
-            if current != null && current.state != THREAD_SLEEPING && current.state != THREAD_ZOMBIE {
-                current.state = THREAD_RUNNING
-                return current.ctx
-            }
+        let current = current_thread()
+        if current == next {
             return ctx
         }
 
-        next.state = THREAD_RUNNING
-        next.time_slice = DEFAULT_TIME_SLICE
-        HAL.current().thread = next
-        HAL.GDT.set_tss_rsp0( ((next.stack as uint) + next.stack_size) & ~0xF )
-        return next.ctx
-    }
+        holding lock {
+            if current != null {
+                current.ctx = ctx
+                if current.state == ThreadState.Running {
+                    current.state = ThreadState.Ready
+                    runq[current.priority].push_back( current )
+                    ready_summary |= 1 << current.priority
+                }
+            }
 
-    func thread_init() {
-        "Thread init()\n" |> HAL.Serial.write
+            runq[next.priority].remove( next )
+            if runq[next.priority].is_empty() {
+                ready_summary &= ~(1 << next.priority)
+            }
 
-        kernel_async = new KernelAsyncExecutor()
-        spawn_async_tick( 1, 20 )
-        spawn_async_tick( 2, 40 )
-
-        let entry: fun = func(arg: void*) {
-            thread_func( arg )
-        }
-        init_thread = new Thread( kproc, entry, "init", THREAD_KERNEL )
-        sched_threads[sched_thread_count] = init_thread
-        sched_thread_count = sched_thread_count + 1
-        init_thread.state = THREAD_RUNNING
-    }
-
-    func scheduler_start() {
-        HAL.current().thread = init_thread
-        scheduler_started = true
-
-        let entry_a: fun = scheduler_demo_a
-        let entry_b: fun = scheduler_demo_b
-        worker_a_thread = create_kernel_thread( "worker-a", entry_a )
-        worker_b_thread = create_kernel_thread( "worker-b", entry_b )
-        let entry_reaper: fun = scheduler_maintenance
-        let entry_once: fun = scheduler_demo_once
-        reaper_thread = create_kernel_thread( "sched-maint", entry_reaper )
-        one_shot_thread = create_kernel_thread( "one-shot", entry_once )
-        user_demo_thread = create_user_demo_thread()
-
-        "Scheduler started\n" |> HAL.Serial.write
-        dump_scheduler()
-    }
-
-    func thread_poll() {
-        if kernel_async == null {
-            return
+            next.state = ThreadState.Running
+            HAL.current().thread = next
+            HAL.GDT.set_tss_rsp0( ((next.stack as uint) + next.stack_size) & ~0xF )
         }
 
-        kernel_async.poll_due_irq()
+        let next_ctx = next.ctx
+        asm("mov %0, %%rsp\n\t"
+            "pop %%r15\n\t"
+            "pop %%r14\n\t"
+            "pop %%r13\n\t"
+            "pop %%r12\n\t"
+            "pop %%r11\n\t"
+            "pop %%r10\n\t"
+            "pop %%r9\n\t"
+            "pop %%r8\n\t"
+            "pop %%rdi\n\t"
+            "pop %%rsi\n\t"
+            "pop %%rbp\n\t"
+            "pop %%rbx\n\t"
+            "pop %%rdx\n\t"
+            "pop %%rcx\n\t"
+            "pop %%rax\n\t"
+            "add $16, %%rsp\n\t"
+            "iretq"
+            : : "r"(next_ctx) : "memory")
 
-        if kernel_async.completed_count >= 2 && !async_spawned_second_wave {
-            async_spawned_second_wave = true
-            spawn_async_tick( 3, 10 )
-        }
+        return next_ctx
     }
 }
