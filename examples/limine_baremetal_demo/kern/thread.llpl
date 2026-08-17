@@ -157,15 +157,18 @@ namespace Kern {
         if next == null || next.state == ThreadState.Zombie || next.ctx == null {
             return ctx
         }
-
+        
         let current = current_thread()
+        if current != null && ctx != null {
+            current.ctx = ctx
+        }
+
         if current == next {
             return ctx
         }
 
         holding lock {
             if current != null {
-                current.ctx = ctx
                 if current.state == ThreadState.Running {
                     current.state = ThreadState.Ready
                     runq[current.priority].push_back( current )
