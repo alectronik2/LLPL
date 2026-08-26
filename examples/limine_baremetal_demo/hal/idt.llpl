@@ -138,8 +138,8 @@ namespace HAL {
             // Double faults use the dedicated IST1 stack configured in the
             // TSS so stack exhaustion cannot recursively fault.
             set_gate( 8, isr8 as int, 0x08, 0x8E, 1 )
-            // Software yield/syscall gate. DPL=3 lets ring-3 demo code use
-            // `int 0x80`; the handler still runs on the current TSS.RSP0.
+            // Software-yield gate. DPL=3 also permits a future userspace
+            // yield wrapper; the handler runs on the current TSS.RSP0.
             set_gate( 0x80, isr128 as int, 0x08, 0xEE, 0 )
 
             pointer.limit = (sizeof(Entry) * NUM_VECTORS) - 1
@@ -152,7 +152,7 @@ namespace HAL {
 
 func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
     if ctx.vector == 0x80 {
-        //return Kern.schedule_from_interrupt( ctx )
+        return Kern.schedule_from_interrupt( ctx )
     }
 
     if ctx.vector >= 32 && ctx.vector < 48 {
@@ -170,8 +170,10 @@ func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
             intr = intr.next
         }
 
-        if ctx.vector == 32 {
-            //ctx = Kern.schedule_from_interrupt( ctx )
+        if ctx.vector == 32 && HAL.PIT.take_schedule_request() {
+            HAL.PIC.eoi( irq )
+            llpl_irq_exit()
+            return Kern.schedule_from_interrupt( ctx )
         }
 
         HAL.PIC.eoi( irq )
@@ -183,7 +185,15 @@ func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
         0  => hs.write( "\x1b[1;31mDIVIDE BY ZERO:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 
         6  => hs.write( "\x1b[1;31mINVALID OPCODE:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 
         13 => hs.write( "\x1b[1;31mGENERAL PROTECTION FAULT:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
-        14 => hs.write( "\x1b[1;31mPAGE FAULT:\x1b[0m err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
+        14 => {
+            let next_ctx = page_fault_handler(ctx)
+            if next_ctx == null {
+                return ctx
+            }
+            if next_ctx != ctx {
+                return next_ctx
+            }
+        }
         _  => hs.write( "\x1b[1;31mEXCEPTION:\x1b[0m vector=\(ctx.vector:hex) err=\(ctx.err:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" )
     }
 
@@ -198,6 +208,103 @@ func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
 
     while true {
         HAL.halt()
+    }
+
+    return ctx
+}
+
+func page_fault_bit(err: u64, bit: u64) -> string {
+    return "1" if (err & (1 << bit)) != 0
+    return "0"
+}
+
+func page_fault_reason(err: u64) -> string {
+    return "protection violation" if (err & 1) != 0
+    return "non-present page"
+}
+
+func page_fault_access(err: u64) -> string {
+    return "write" if (err & 2) != 0
+    return "read"
+}
+
+func page_fault_mode(err: u64) -> string {
+    return "user" if (err & 4) != 0
+    return "supervisor"
+}
+
+func thread_state_name(state: uint) -> string {
+    match state {
+        case ThreadState.New =>      { return "new" }
+        case ThreadState.Ready =>    { return "ready" }
+        case ThreadState.Running =>  { return "running" }
+        case ThreadState.Sleeping => { return "sleeping" }
+        case ThreadState.Zombie =>   { return "zombie" }
+        case _ =>                    { return "unknown" }
+    }
+}
+
+func page_fault_print_context() {
+    let gs_base = HAL.read_gs_base()
+    if gs_base == 0 {
+        "  cpu/thread: GS base not initialized\n" |> hs.write
+        return
+    }
+
+    let pcpu = gs_base as HAL.PerCpu*
+    let thread = pcpu.thread
+    "  cpu=\(pcpu.cpuid) thread=\(thread as uint:hex)" |> hs.write
+
+    if thread == null {
+        " <none>\n" |> hs.write
+        return
+    }
+
+    " name=" |> hs.write
+    if thread.name != null {
+        thread.name.c_str() |> hs.write
+    } else {
+        "<unnamed>" |> hs.write
+    }
+    " state=" |> hs.write
+    thread_state_name(thread.state) |> hs.write
+    " priority=\(thread.priority) cr3=\(Kern.thread_cr3(thread):hex)\n" |> hs.write
+
+    if thread.proc != null {
+        "  process=\(thread.proc as uint:hex) name=" |> hs.write
+        if thread.proc.name != null {
+            thread.proc.name.c_str() |> hs.write
+        } else {
+            "<unnamed>" |> hs.write
+        }
+        " pml4=\(thread.proc.pml4:hex)\n" |> hs.write
+    } else {
+        "  process=<none>\n" |> hs.write
+    }
+}
+
+func page_fault_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
+    let fault_addr = HAL.read_cr2()
+    let active_cr3 = HAL.read_cr3()
+
+    if (ctx.err & 4) != 0 || (ctx.cs & 3) == 3 {
+        let thread: Kern.Thread = HAL.current().thread
+        if thread != null && Kern.resolve_user_page_fault(thread.proc, fault_addr, ctx.err) {
+            // Null is the internal "fault resolved, retry this context"
+            // sentinel; ctx itself continues to mean an unhandled fault.
+            return null
+        }
+    }
+
+    "\x1b[1;31mPAGE FAULT:\x1b[0m \(page_fault_reason(ctx.err)) during \(page_fault_access(ctx.err)) in \(page_fault_mode(ctx.err)) mode\n" |> hs.write
+    "  fault_addr=\(fault_addr:hex) rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex) rbp=\(ctx.rbp:hex)\n" |> hs.write
+    "  err=\(ctx.err:hex) bits P=\(page_fault_bit(ctx.err, 0)) W/R=\(page_fault_bit(ctx.err, 1)) U/S=\(page_fault_bit(ctx.err, 2)) RSVD=\(page_fault_bit(ctx.err, 3)) I/D=\(page_fault_bit(ctx.err, 4)) PK=\(page_fault_bit(ctx.err, 5)) SS=\(page_fault_bit(ctx.err, 6)) SGX=\(page_fault_bit(ctx.err, 15))\n" |> hs.write
+    "  cs=\(ctx.cs:hex) ss=\(ctx.ss:hex) rflags=\(ctx.rflags:hex) active_cr3=\(active_cr3:hex)\n" |> hs.write
+    page_fault_print_context()
+
+    if (ctx.err & 4) != 0 || (ctx.cs & 3) == 3 {
+        "  action=kill-user-thread\n" |> hs.write
+        return Kern.kill_current_thread_from_interrupt( ctx, 0xFFFF_FFFF_FFFF_FFF2 )
     }
 
     return ctx

@@ -1,0 +1,354 @@
+import hal
+import lib
+import mm
+import kern
+
+namespace Kern {
+    const MAX_FDS = 64
+    const FIRST_USER_FD = 3
+    const PIPE_CAPACITY = 4096
+    const EPIPE = -11
+
+    class Pipe : Object {
+        lock: SpinLock
+        read_waiters: WaitQueue
+        write_waiters: WaitQueue
+        buffer: char[PIPE_CAPACITY]
+        read_at: uint
+        write_at: uint
+        count: uint
+        readers: uint
+        writers: uint
+
+        constructor() {
+            self.read_waiters = new WaitQueue()
+            self.write_waiters = new WaitQueue()
+            self.read_at = 0
+            self.write_at = 0
+            self.count = 0
+            self.readers = 1
+            self.writers = 1
+        }
+
+        func read(dest: char*, size: uint) -> int {
+            while true {
+                let prepared = false
+                holding self.lock {
+                    if self.count != 0 {
+                        let amount = size
+                        if amount > self.count { amount = self.count }
+                        for i in 0..amount {
+                            dest[i] = self.buffer[self.read_at]
+                            self.read_at = (self.read_at + 1) % PIPE_CAPACITY
+                        }
+                        self.count -= amount
+                        wake_all(self.write_waiters)
+                        return amount as int
+                    }
+                    if self.writers == 0 { return 0 }
+                    prepared = prepare_block_current(self.read_waiters)
+                }
+                return EINVAL if !prepared
+                scheduler_yield()
+            }
+            return EINVAL
+        }
+
+        func write(src: char*, size: uint) -> int {
+            let written: uint = 0
+            while written < size {
+                let prepared = false
+                holding self.lock {
+                    if self.readers == 0 {
+                        return EPIPE if written == 0
+                        return written as int
+                    }
+                    let room = PIPE_CAPACITY - self.count
+                    if room != 0 {
+                        let amount = size - written
+                        if amount > room { amount = room }
+                        for i in 0..amount {
+                            self.buffer[self.write_at] = src[written + i]
+                            self.write_at = (self.write_at + 1) % PIPE_CAPACITY
+                        }
+                        self.count += amount
+                        written += amount
+                        wake_all(self.read_waiters)
+                    } else {
+                        prepared = prepare_block_current(self.write_waiters)
+                    }
+                }
+                if written < size && prepared { scheduler_yield() }
+            }
+            return written as int
+        }
+
+        func close_reader() {
+            holding self.lock { if self.readers != 0 { self.readers-- } }
+            wake_all(self.write_waiters)
+        }
+
+        func close_writer() {
+            holding self.lock { if self.writers != 0 { self.writers-- } }
+            wake_all(self.read_waiters)
+        }
+    }
+
+    class FileDescriptor : Object {
+        file: VFS.FileHandle
+        offset: uint
+        lock: SpinLock
+        pipe: Pipe
+        pipe_write: bool
+
+        constructor(file: VFS.FileHandle) {
+            self.file = file
+            self.offset = 0
+            self.pipe = null
+            self.pipe_write = false
+        }
+
+        constructor(pipe: Pipe, write_end: bool) {
+            self.file = null
+            self.offset = 0
+            self.pipe = pipe
+            self.pipe_write = write_end
+        }
+
+        destructor() {
+            if self.pipe != null {
+                if self.pipe_write { self.pipe.close_writer() }
+                else { self.pipe.close_reader() }
+            } else if self.file != null {
+                self.file.close()
+            }
+        }
+
+        func read(buffer: char*, size: uint) -> int {
+            if self.pipe != null {
+                return VFS.EBADF if self.pipe_write
+                return self.pipe.read(buffer, size)
+            }
+            if self.file == null || self.file.closed || (self.file.mode & VFS.O_READ) == 0 {
+                return VFS.EBADF
+            }
+            if size == 0 { return 0 }
+
+            let result: int = 0
+            holding self.lock {
+                let (data, length) = self.file.fs.read_binary(self.file.path)
+                if data == null || self.offset >= length as uint {
+                    result = 0
+                } else {
+                    let available = length as uint - self.offset
+                    let read_count = size
+                    if read_count > available { read_count = available }
+                    memcpy(buffer as void*, (data as uint + self.offset) as void*, read_count)
+                    self.offset += read_count
+                    result = read_count as int
+                }
+            }
+            return result
+        }
+
+        func write(buffer: char*, size: uint) -> int {
+            if self.pipe != null {
+                return VFS.EBADF if !self.pipe_write
+                return self.pipe.write(buffer, size)
+            }
+            if self.file == null || self.file.closed || (self.file.mode & VFS.O_WRITE) == 0 {
+                return VFS.EBADF
+            }
+            if size == 0 { return 0 }
+
+            let result: int = VFS.EBADF
+            holding self.lock {
+                let (old_data, old_size_u64) = self.file.fs.read_binary(self.file.path)
+                let old_size = old_size_u64 as uint
+                let end = self.offset + size
+                if end < self.offset {
+                    result = EINVAL
+                } else {
+                    let new_size = old_size
+                    if end > new_size { new_size = end }
+                    let copy = MM.malloc<char>(new_size + 1)
+                    memset(copy as void*, 0, new_size + 1)
+                    if old_data != null && old_size != 0 {
+                        memcpy(copy as void*, old_data as void*, old_size)
+                    }
+                    memcpy((copy as uint + self.offset) as void*, buffer as void*, size)
+                    let text = new String(copy)
+                    let rc = self.file.fs.write_text(self.file.path, text)
+                    MM.free(copy)
+                    if rc < 0 {
+                        result = rc
+                    } else {
+                        self.offset = end
+                        result = size as int
+                    }
+                }
+            }
+            return result
+        }
+
+        func seek(offset: uint, whence: uint) -> int {
+            if self.file == null || self.file.closed { return VFS.EBADF }
+            let result: int = EINVAL
+            holding self.lock {
+                let base: uint = 0
+                if whence == 0 {
+                    base = 0
+                } else if whence == 1 {
+                    base = self.offset
+                } else if whence == 2 {
+                    let (_, length) = self.file.fs.read_binary(self.file.path)
+                    base = length as uint
+                } else {
+                    return EINVAL
+                }
+                if base + offset < base { return EINVAL }
+                self.offset = base + offset
+                result = self.offset as int
+            }
+            return result
+        }
+
+        func close() -> int {
+            if self.file == null { return VFS.EBADF }
+            return self.file.close()
+        }
+    }
+
+    class DescriptorTable : Object {
+        lock: SpinLock
+        entries: FileDescriptor[MAX_FDS]
+        close_exec: bool[MAX_FDS]
+
+        constructor() {
+            // entries is an array of FileDescriptor *references* (each slot
+            // is a pointer), not inline FileDescriptor objects - sizing this
+            // zero-fill by sizeof(FileDescriptor) (the pointed-to object's
+            // own size, tens of bytes) instead of the pointer width wrote
+            // MAX_FDS times too much, stomping on whatever heap memory
+            // happened to follow this array (observed corrupting an
+            // unrelated Process's AddressSpace a few allocations away).
+            memset(self.entries as void*, 0, MAX_FDS * sizeof(FileDescriptor*))
+            memset(self.close_exec as void*, 0, MAX_FDS * sizeof(bool))
+        }
+
+        destructor() {
+            for fd in 0..MAX_FDS {
+                if self.entries[fd] != null {
+                    delete self.entries[fd]
+                    self.entries[fd] = null
+                }
+            }
+        }
+
+        func install(file: VFS.FileHandle) -> int {
+            if file == null { return VFS.EBADF }
+            let result: int = VFS.EBADF
+            holding self.lock {
+                for fd in FIRST_USER_FD..MAX_FDS {
+                    if self.entries[fd] == null {
+                        self.entries[fd] = new FileDescriptor(file)
+                        result = fd as int
+                        return result
+                    }
+                }
+            }
+            return result
+        }
+
+        func install_descriptor(descriptor: FileDescriptor, minimum: uint = FIRST_USER_FD) -> int {
+            return VFS.EBADF if descriptor == null || minimum >= MAX_FDS
+            holding self.lock {
+                for fd in minimum..MAX_FDS {
+                    if self.entries[fd] == null {
+                        rc_retain(descriptor as char*)
+                        self.entries[fd] = descriptor
+                        self.close_exec[fd] = false
+                        return fd as int
+                    }
+                }
+            }
+            return VFS.EBADF
+        }
+
+        func create_pipe(fds: int*) -> int {
+            return EINVAL if fds == null
+            let pipe = new Pipe()
+            let reader = new FileDescriptor(pipe, false)
+            let writer = new FileDescriptor(pipe, true)
+            let read_fd = self.install_descriptor(reader)
+            return read_fd if read_fd < 0
+            let write_fd = self.install_descriptor(writer)
+            if write_fd < 0 {
+                self.close(read_fd as uint)
+                return write_fd
+            }
+            fds[0] = read_fd
+            fds[1] = write_fd
+            return EOK
+        }
+
+        func duplicate(old_fd: uint, minimum: uint = FIRST_USER_FD) -> int {
+            return VFS.EBADF if old_fd >= MAX_FDS
+            let descriptor = self.get(old_fd)
+            return VFS.EBADF if descriptor == null
+            return self.install_descriptor(descriptor, minimum)
+        }
+
+        func duplicate_to(old_fd: uint, new_fd: uint) -> int {
+            return VFS.EBADF if old_fd >= MAX_FDS || new_fd >= MAX_FDS
+            return new_fd as int if old_fd == new_fd && self.get(old_fd) != null
+            let descriptor = self.get(old_fd)
+            return VFS.EBADF if descriptor == null
+            self.close(new_fd) if self.get(new_fd) != null
+            rc_retain(descriptor as char*)
+            holding self.lock {
+                self.entries[new_fd] = descriptor
+                self.close_exec[new_fd] = false
+            }
+            return new_fd as int
+        }
+
+        func set_close_exec(fd: uint, enabled: bool) -> int {
+            return VFS.EBADF if fd >= MAX_FDS || self.get(fd) == null
+            holding self.lock { self.close_exec[fd] = enabled }
+            return EOK
+        }
+
+        func clone_for_exec() -> DescriptorTable {
+            let copy = new DescriptorTable()
+            holding self.lock {
+                for fd in 0..MAX_FDS {
+                    if self.entries[fd] != null && !self.close_exec[fd] {
+                        rc_retain(self.entries[fd] as char*)
+                        copy.entries[fd] = self.entries[fd]
+                    }
+                }
+            }
+            return copy
+        }
+
+        func get(fd: uint) -> FileDescriptor {
+            if fd >= MAX_FDS { return null }
+            let result: FileDescriptor = null
+            holding self.lock { result = self.entries[fd] }
+            return result
+        }
+
+        func close(fd: uint) -> int {
+            if fd >= MAX_FDS { return VFS.EBADF }
+            let descriptor: FileDescriptor = null
+            holding self.lock {
+                descriptor = self.entries[fd]
+                self.entries[fd] = null
+            }
+            if descriptor == null { return VFS.EBADF }
+            delete descriptor
+            return EOK
+        }
+    }
+}

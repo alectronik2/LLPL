@@ -1,0 +1,188 @@
+import hal
+import lib
+import mm
+
+namespace Kern {
+    const ELF_PT_LOAD = 1
+    const ELF_ET_EXEC = 2
+    const ELF_EM_X86_64 = 62
+    const ELF_PF_W = 2
+    const USER_STACK_TOP = 0x7000_0000
+    const USER_STACK_SIZE = 16_384
+
+    // Keep the initial process and thread alive after spawn_elf returns.
+    let init_proc: Process
+    let init_thread: Thread
+
+    func user_entry_placeholder(arg: void*) {
+        // User threads replace RIP/RSP after construction and never invoke
+        // this kernel-side entry point.
+    }
+
+    packed struct Elf64Header {
+        ident: u8[16]
+        elf_type: u16
+        machine: u16
+        version: u32
+        entry: u64
+        phoff: u64
+        shoff: u64
+        flags: u32
+        ehsize: u16
+        phentsize: u16
+        phnum: u16
+        shentsize: u16
+        shnum: u16
+        shstrndx: u16
+    }
+
+    packed struct Elf64ProgramHeader {
+        type: u32
+        flags: u32
+        offset: u64
+        vaddr: u64
+        paddr: u64
+        filesz: u64
+        memsz: u64
+        align: u64
+    }
+
+    func elf_valid(file: char*, size: u64) -> bool {
+        return false if file == null || size < sizeof(Elf64Header)
+        let hdr = file as Elf64Header*
+        return false if hdr.ident[0] != 0x7F || hdr.ident[1] != 'E' || hdr.ident[2] != 'L' || hdr.ident[3] != 'F'
+        return false if hdr.ident[4] != 2 || hdr.ident[5] != 1
+        return false if hdr.elf_type != ELF_ET_EXEC || hdr.machine != ELF_EM_X86_64
+        return false if hdr.phentsize != sizeof(Elf64ProgramHeader) as u16 || hdr.phnum == 0
+        return false if hdr.phoff > size
+        let table_size = (hdr.phnum as u64) * sizeof(Elf64ProgramHeader)
+        return false if table_size / sizeof(Elf64ProgramHeader) != hdr.phnum as u64
+        return table_size <= size - hdr.phoff
+    }
+
+    func reserve_user_range(proc: Process, start: uint, end: uint) -> bool {
+        return false if start >= end || start < 0x1000 || end > USER_MMAP_END
+        holding proc.aspace.lock {
+            return false if proc.aspace.overlaps(start, end)
+            let vma = new MM.VmArea(start, end)
+            return false if vma == null
+            vma.flags = MM.MAP_USER
+            // VMA names are optional. Keep loader mappings unnamed so page
+            // table construction cannot depend on further string allocation.
+            MM.rb_insert(proc.aspace, vma)
+        }
+        return true
+    }
+
+    func map_elf_segment(proc: Process, file: char*, size: u64, ph: Elf64ProgramHeader*) -> bool {
+        return true if ph.memsz == 0
+        return false if ph.filesz > ph.memsz
+        return false if ph.offset > size || ph.filesz > size - ph.offset
+        return false if ph.vaddr < 0x1000 || ph.vaddr >= USER_MMAP_END
+        return false if ph.memsz > USER_MMAP_END - ph.vaddr
+
+        let first = ph.vaddr & ~(MM.PAGE_SIZE - 1)
+        let end_raw = ph.vaddr + ph.memsz
+        let end = (end_raw + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+        return false if end < end_raw || !reserve_user_range(proc, first, end)
+
+        let page_flags = MM.PG_USER
+        if (ph.flags & ELF_PF_W) != 0 {
+            page_flags |= MM.PG_WRITABLE
+        }
+
+        for let addr = first; addr < end; addr += MM.PAGE_SIZE {
+            let pf = MM.alloc_pageframe(MM.FrameType.Other)
+            let paddr = MM.pf2p(pf)
+            memset(MM.p2v(paddr) as void*, 0, MM.PAGE_SIZE)
+            return false if !MM.map_page(proc.pml4, addr, paddr, page_flags)
+        }
+
+        let copied: u64 = 0
+        while copied < ph.filesz {
+            let user_addr = ph.vaddr + copied
+            let (mapped, paddr) = user_v2p(proc.pml4, user_addr)
+            return false if !mapped
+            let page_left = MM.PAGE_SIZE - (user_addr & (MM.PAGE_SIZE - 1))
+            let chunk = ph.filesz - copied
+            if chunk > page_left {
+                chunk = page_left
+            }
+            memcpy(MM.p2v(paddr) as void*, (file + ph.offset + copied) as void*, chunk)
+            copied += chunk
+        }
+        return true
+    }
+
+    func map_user_stack(proc: Process) -> bool {
+        let bottom = USER_STACK_TOP - USER_STACK_SIZE
+        return false if !reserve_user_range(proc, bottom, USER_STACK_TOP)
+        for let addr = bottom; addr < USER_STACK_TOP; addr += MM.PAGE_SIZE {
+            map_user_zero_page(proc, addr, true)
+        }
+        return true
+    }
+
+    func load_elf_process(path: String, parent: Process) -> Process {
+        let (file, size) = VFS.read_binary(path)
+        if !elf_valid(file, size) {
+            "ELF: invalid or missing image " |> HAL.Serial.write
+            path.c_str() |> HAL.Serial.write
+            "\n" |> HAL.Serial.write
+            return null
+        }
+
+        let hdr = file as Elf64Header*
+        let proc = new Process(path, parent)
+        if parent != null {
+            proc.fds.put()
+            proc.fds = parent.fds.clone_for_exec()
+        }
+        init_user_pml4(proc)
+
+        for let i: u64 = 0; i < hdr.phnum as u64; i++ {
+            let ph = (file + hdr.phoff + i * sizeof(Elf64ProgramHeader)) as Elf64ProgramHeader*
+            if ph.type == ELF_PT_LOAD && !map_elf_segment(proc, file, size, ph) {
+                "ELF: failed to map load segment\n" |> HAL.Serial.write
+                return null
+            }
+        }
+
+        if !map_user_stack(proc) {
+            "ELF: failed to map user stack\n" |> HAL.Serial.write
+            return null
+        }
+
+        // Reuse the process name rather than allocating after page-table work.
+        let thread = new Thread(proc, user_entry_placeholder, null, proc.name, THREAD_USER)
+        thread.ctx.rip = hdr.entry
+        // SysV AMD64 process entry uses the same alignment as a function
+        // reached through CALL: RSP is 8 modulo 16 on entry.
+        thread.ctx.rsp = USER_STACK_TOP - 8
+        thread.ctx.rdi = 0
+        thread.ctx.rsi = 0
+        thread |> mark_thread_ready
+
+        return proc
+    }
+
+    func spawn_user_process(path: String, parent: Process) -> int {
+        let proc = load_elf_process(path, parent)
+        return ENOENT if proc == null
+        return proc.pid as int
+    }
+
+    func spawn_elf(path: String) -> bool {
+        init_proc = load_elf_process(path, kproc)
+        if init_proc == null { return false }
+        holding init_proc.lock {
+            let first = init_proc.threads.front()
+            if first.is_ok() { init_thread = first.get_ok() }
+        }
+
+        // path ownership has moved into the process/thread by this point.
+        "ELF: started /bin/init\n" |> HAL.Serial.write
+        return true
+    }
+
+}

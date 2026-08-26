@@ -15,7 +15,7 @@ import kern
 // Strong freestanding runtime hooks: the default runtime panic hooks are
 // intentionally silent, so route assertion failures through COM1.
 func llpl_panic_putc(c: char) {
-    HAL.Serial.write_char(c)
+    hs.write_char(c)
 }
 
 func llpl_panic_halt() {
@@ -234,14 +234,14 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
         let value = p[0] as u64
         "HHDM probe phys \(probe_phys:hex) -> virt \(probe_virt:hex) byte=\(value & 255:hex)\n" |> hs.write
     } else {
-        "No usable memory region available for HHDM probe\n" |> hs.write
+        "No usable memory region available for HHDM probe\n" |> hsw
     }
 }
 
 func kernel_main() {
     HAL.disable_interrupts()
     hs.init()
-    "LLPL Limine bare-metal demo booting\n" |> hs.write
+    "LLPL Limine bare-metal demo booting\n" |> hsw
 
     let fb      = limine_get_framebuffer()
     let memmap  = limine_get_memmap()
@@ -253,6 +253,7 @@ func kernel_main() {
 
     HAL.GDT.init()
     HAL.IDT.init()
+    HAL.Syscall.init()
     HAL.PIC.init()
     Timer.init()
     HAL.PIT.init()
@@ -264,11 +265,12 @@ func kernel_main() {
     Kern.proc_init()
     Kern.thread_init()
     Terminal.init( fb )
+    "Welcome to DimensionOS!\n" |> Terminal.write
 
     VFS.init(limine_get_modules())
-
-    //Kern.scheduler_start()
-    HAL.enable_interrupts()
+    "Spawning init <green>ok</>\n" |> Terminal.write
+    Kern.spawn_elf("/bin/init")
+    "Init spawned\n" |> Terminal.write
 
     //demo_hhdm( memmap, hhdm )
 
@@ -282,6 +284,9 @@ func kernel_main() {
     tw( "Running on CPU \(HAL.cpu_id())\n" )
 
     "Kernel initialization complete. Halting.\n" |> hsw
+
+    HAL.enable_interrupts()
+
     while true {
         HAL.halt()
     }

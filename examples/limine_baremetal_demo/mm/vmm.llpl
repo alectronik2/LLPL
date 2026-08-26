@@ -44,14 +44,23 @@ namespace MM {
             next:     PageFrame*
         }
 
+        // refcount is shared, preemptible kernel state (bumped/dropped from
+        // COW cloning, page-fault resolution, and process/thread teardown,
+        // any of which can be interrupted mid-update by a timer IRQ that
+        // reschedules another thread touching the same frame) - a plain
+        // ++/-- here is a genuine lost-update race, not just a style
+        // nit: two interleaved decrements can under-count and free a frame
+        // that's still referenced elsewhere, which is the kind of
+        // corruption that later surfaces as an unrelated-looking page
+        // fault. atomic_fetch_add closes that window without adding a
+        // per-frame lock (there's one PageFrame per physical page).
         func acquire() {
-            self.refcount++
+            atomic_fetch_add(&self.refcount, 1 as u32)
         }
 
         func release() {
-            self.refcount--
-
-            if self.refcount == 0 {
+            let previous = atomic_fetch_add(&self.refcount, (-1) as u32)
+            if previous == 1 {
                 free_pageframe(self)
             }
         }
@@ -66,6 +75,11 @@ namespace MM {
     const PG_PWT      = 1 << 3 // write through
     const PG_PCD      = 1 << 4 // cache disable (for MMIO)
     const PG_GLOBAL   = 1 << 8
+    // Software-owned available bit: this read-only leaf may be copied on a
+    // user write fault. Hardware ignores it during translation.
+    const PG_COW      = 1 << 9
+    const PG_FILE_DIRTY = 1 << 10
+    const PG_FILE_TRACK = 1 << 11
     const PG_NOEXEC   = 1 << 63
 
     const PADDR_4K_MASK = 0x000F_FFFF_FFFF_F000
@@ -129,7 +143,7 @@ namespace MM {
 
     func v2p( pgdir: uint, vaddr: uint ) -> uint {
         let idx = PageFrameIndexer( vaddr ) 
-        let l4 = pgdir as Pte*
+        let l4 = p2v(pgdir & PADDR_4K_MASK) as Pte*
 
         //hs.write("v2p: vaddr=\(vaddr:hex) - l4=\(idx.l4) l3=\(idx.l3) l2=\(idx.l2) l1=\(idx.l1)\n")
 
@@ -137,32 +151,43 @@ namespace MM {
             return 0
         }
 
-        let l3 = l4[idx.l4].paddr as Pte*
+        let l3 = p2v(l4[idx.l4].paddr) as Pte*
         if !l3[idx.l3].pte.present {
             return 0
         }
 
         if l3[idx.l3].pte.ps {
-            "v2p: 1G page at \(vaddr:hex) - l4=\(idx.l4) l3=\(idx.l3) l2=\(idx.l2) l1=\(idx.l1)\n" |> hs.write
             return l3[idx.l3].paddr | (vaddr & GIB - 1)
         }
 
-        let l2 = l3[idx.l3].paddr as Pte*
+        let l2 = p2v(l3[idx.l3].paddr) as Pte*
         if !l2[idx.l2].pte.present {
             return 0
         }
 
         if l2[idx.l2].pte.ps {
-            "v2p: 2M page at \(vaddr:hex) - l4=\(idx.l4) l3=\(idx.l3) l2=\(idx.l2) l1=\(idx.l1)\n" |> hs.write
             return l2[idx.l2].paddr + (vaddr & ((1 << 21) - 1))
         }
 
-        let l1 = l2[idx.l2].paddr as Pte*
+        let l1 = p2v(l2[idx.l2].paddr) as Pte*
         if !l1[idx.l1].pte.present {
             return 0
         }
 
         l1[idx.l1].paddr
+    }
+
+    func leaf_pte(pgdir: uint, vaddr: uint) -> Pte* {
+        return null if pgdir == 0
+        let idx = PageFrameIndexer(vaddr)
+        let l4 = p2v(pgdir & PADDR_4K_MASK) as Pte*
+        return null if !l4[idx.l4].pte.present || l4[idx.l4].pte.ps
+        let l3 = p2v(l4[idx.l4].paddr) as Pte*
+        return null if !l3[idx.l3].pte.present || l3[idx.l3].pte.ps
+        let l2 = p2v(l3[idx.l3].paddr) as Pte*
+        return null if !l2[idx.l2].pte.present || l2[idx.l2].pte.ps
+        let l1 = p2v(l2[idx.l2].paddr) as Pte*
+        return &l1[idx.l1]
     }
 
     func pf2v( pf: PageFrame* ) -> uint {
@@ -267,9 +292,25 @@ namespace MM {
         }
     }
 
+    // The multi-level walk below reads-then-conditionally-allocates at each
+    // of the four levels; nothing here holds a lock. A timer IRQ landing
+    // mid-walk can preempt this thread and reschedule another one, and if
+    // that thread later resumes a walk of its own touching the same
+    // intermediate table (or just churns the free-frame list via
+    // alloc_pageframe/free_pageframe while this walk is holding a raw
+    // pointer derived from an earlier, now possibly-stale level), the two
+    // interleaved walks corrupt each other. That's exactly the shape of
+    // bug that produced an intermittent supervisor-mode null-page fault
+    // several levels into this function under load - disabling interrupts
+    // for the whole walk closes the preemption window instead of chasing
+    // each possible corruption path individually.
     func map_page( pgdir: uint, vaddr: uint, paddr: uint, flags: uint ) -> bool {
+        let irq_enabled = HAL.interrupt_save()
         let idx = PageFrameIndexer( vaddr )
         let pml4 = p2v( pgdir ) as Pte*
+
+        //"map_page: pgdir=\(pgdir:hex) vaddr=\(vaddr:hex) paddr=\(paddr:hex) flags=\(flags:hex) l4=\(idx.l4)\n" |> hs.write
+        //"  pml4=\(pml4:hex) pml4[l4].raw=\(pml4[idx.l4].raw:hex) pml4[l4].present=\(pml4[idx.l4].pte.present)\n" |> hs.write
 
         if !pml4[idx.l4].pte.present {
             let new_page = MM.alloc_page( MM.FrameType.Other )
@@ -291,6 +332,7 @@ namespace MM {
         }
         if pdpt[idx.l3].pte.ps {
             "map_page: 1G page at \(vaddr:hex) - l4=\(idx.l4) l3=\(idx.l3) l2=\(idx.l2) l1=\(idx.l1)\n" |> hs.write
+            HAL.interrupt_restore(irq_enabled)
             return false
         }
 
@@ -306,12 +348,14 @@ namespace MM {
 
         if pd[idx.l2].pte.ps {
             "map_page: 2M page at \(vaddr:hex) - l4=\(idx.l4) l3=\(idx.l3) l2=\(idx.l2) l1=\(idx.l1)\n" |> hs.write
+            HAL.interrupt_restore(irq_enabled)
             return false
         }
 
         let pt = p2v( pd[idx.l2].paddr ) as Pte*
         pt[idx.l1].raw = paddr | flags | PG_PRESENT
 
+        HAL.interrupt_restore(irq_enabled)
         return true
     }
 
@@ -322,6 +366,18 @@ namespace MM {
     }
 
     inline func kmalloc_wrapper( size: u64 ) -> char* {
+        // Keep reference-counted runtime objects out of the intrusive small
+        // buffer buckets. A stale object reference must not be able to
+        // overwrite a bucket's in-band next pointer and corrupt unrelated
+        // kernel buffers.
+        if size <= MM.PAGE_SIZE {
+            let frame = MM.alloc_pageframe(MM.FrameType.HugeMalloc)
+            frame.tag = MM.FrameType.HugeMalloc
+            frame.size = 1
+            let address = MM.pf2v(frame) as char*
+            memset(address as void*, 0, MM.PAGE_SIZE)
+            return address
+        }
         MM.malloc<void>( size )
     }
 

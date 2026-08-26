@@ -1,4 +1,5 @@
 extern isr_handler
+extern syscall_handler
 
 // GDT/TSS helpers consumed by hal/gdt.llpl =========================================================
 
@@ -60,6 +61,71 @@ global load_tss
 load_tss:
     ltr di
     ret
+
+global syscall_entry
+syscall_entry:
+    mov R12, RSP
+    mov RSP, [tss + 4]
+
+    push 0x3b
+    push R12
+    push R11
+    push 0x43
+    push RCX
+    push 0
+    push 0x80
+
+    push RAX
+    push RCX
+    push RDX
+    push RBX
+    push RBP
+    push RSI
+    push RDI
+    push R8
+    push R9
+    push R10
+    push R11
+    push R12
+    push R13
+    push R14
+    push R15
+
+    mov RDI, RSP
+    call syscall_handler
+
+    test RAX, RAX
+    jz .syscall_same_context
+    mov RSP, RAX
+.syscall_same_context:
+
+    pop R15
+    pop R14
+    pop R13
+    pop R12
+    pop R11
+    pop R10
+    pop R9
+    pop R8
+    pop RDI
+    pop RSI
+    pop RBP
+    pop RBX
+    pop RDX
+    pop RCX
+    pop RAX
+
+    test qword [RSP + 24], 3
+    jz .syscall_iret
+
+    mov RCX, [RSP + 16]
+    mov R11, [RSP + 32]
+    mov RSP, [RSP + 40]
+    sysretq
+
+.syscall_iret:
+    add RSP, 16
+    iretq
 
 for num in 0..7 {
     GenISR($num)

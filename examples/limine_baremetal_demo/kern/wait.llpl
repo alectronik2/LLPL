@@ -1,0 +1,381 @@
+import hal
+import lib
+import kern.timer
+
+namespace Kern {
+    // Sleeping threads are kept in deadline order. Links are intrusive so
+    // neither sleeping nor waking allocates, including from the PIT handler.
+    let sleep_lock: SpinLock
+    let sleep_head: void*
+
+    class WaitQueue : Object {
+        // Raw links are non-owning. Queue membership does not control a
+        // thread's lifetime.
+        head: void*
+        tail: void*
+        lock: SpinLock
+
+        constructor() {
+            self.head = null
+            self.tail = null
+        }
+    }
+
+    // The caller must hold both queue.lock and Kern.lock.
+    func wait_append_locked(queue: WaitQueue, thread: Thread) {
+        thread.wait_next = null
+        thread.waiting_on = queue as void*
+        thread.state = ThreadState.Sleeping
+        thread.sleep_started_tick = Timer.current_tick()
+
+        if queue.tail == null {
+            queue.head = thread as void*
+            queue.tail = thread as void*
+        } else {
+            (queue.tail as Thread).wait_next = thread as void*
+            queue.tail = thread as void*
+        }
+    }
+
+    // Register without switching. This supports an atomic condition check +
+    // waiter registration when the caller holds its condition lock.
+    func prepare_block_current(queue: WaitQueue) -> bool {
+        let current = current_thread() as void*
+        if queue == null || current == null {
+            return false
+        }
+
+        let prepared = false
+        holding sleep_lock {
+            holding queue.lock {
+                holding Kern.lock {
+                    if (current as Thread).state == ThreadState.Running && (current as Thread).waiting_on == null {
+                        (current as Thread).wait_timed_out = false
+                        wait_append_locked(queue, current as Thread)
+                        prepared = true
+                    }
+                }
+            }
+        }
+        return prepared
+    }
+
+    func block_current(queue: WaitQueue) -> bool {
+        if !prepare_block_current(queue) {
+            return false
+        }
+        scheduler_yield()
+        return true
+    }
+
+    // Select the highest-priority waiter. The caller holds both locks.
+    func wait_take_best_locked(queue: WaitQueue) -> void* {
+        let best: void* = null
+        let best_prev: void* = null
+        let previous: void* = null
+        let cursor = queue.head
+
+        while cursor != null {
+            if best == null || (cursor as Thread).priority < (best as Thread).priority {
+                best = cursor
+                best_prev = previous
+            }
+            previous = cursor
+            cursor = (cursor as Thread).wait_next
+        }
+
+        if best == null {
+            return null
+        }
+
+        let following = (best as Thread).wait_next
+        if best_prev == null {
+            queue.head = following
+        } else {
+            (best_prev as Thread).wait_next = following
+        }
+        if queue.tail == best {
+            queue.tail = best_prev
+        }
+        (best as Thread).wait_next = null
+        (best as Thread).waiting_on = null
+        return best
+    }
+
+    // The caller holds queue.lock. Used by timeout expiry to unlink a known
+    // waiter rather than selecting by priority.
+    func wait_remove_locked(queue: WaitQueue, thread: Thread) -> bool {
+        let previous: void* = null
+        let cursor = queue.head
+        while cursor != null {
+            if cursor == thread as void* {
+                let following = (cursor as Thread).wait_next
+                if previous == null {
+                    queue.head = following
+                } else {
+                    (previous as Thread).wait_next = following
+                }
+                if queue.tail == cursor {
+                    queue.tail = previous
+                }
+                thread.wait_next = null
+                thread.waiting_on = null
+                return true
+            }
+            previous = cursor
+            cursor = (cursor as Thread).wait_next
+        }
+        return false
+    }
+
+    func wait_best_priority(queue: WaitQueue) -> uint {
+        if queue == null {
+            return MAX_PRIORITY
+        }
+        let priority: uint = MAX_PRIORITY
+        holding sleep_lock {
+            holding queue.lock {
+                let cursor = queue.head
+                while cursor != null {
+                    if (cursor as Thread).priority < priority {
+                        priority = (cursor as Thread).priority
+                    }
+                    cursor = (cursor as Thread).wait_next
+                }
+            }
+        }
+        return priority
+    }
+
+    func wake_one(queue: WaitQueue) -> bool {
+        if queue == null {
+            return false
+        }
+
+        let thread: void* = null
+        holding sleep_lock {
+            holding queue.lock {
+                holding Kern.lock {
+                    thread = wait_take_best_locked(queue)
+                    if thread != null && (thread as Thread).state == ThreadState.Sleeping {
+                        sleep_remove_locked(thread as Thread)
+                        (thread as Thread).wait_timed_out = false
+                        (thread as Thread).wakeups++
+                        (thread as Thread).sleep_ticks_total += Timer.current_tick() - (thread as Thread).sleep_started_tick
+                        (thread as Thread).state = ThreadState.Ready
+                        enqueue_ready_locked(thread as Thread)
+                    }
+                }
+            }
+        }
+        return thread != null
+    }
+
+    func wake_all(queue: WaitQueue) -> uint {
+        if queue == null {
+            return 0
+        }
+
+        let woken: uint = 0
+        holding sleep_lock {
+            holding queue.lock {
+                holding Kern.lock {
+                    while queue.head != null {
+                        let thread = wait_take_best_locked(queue)
+                        if thread != null && (thread as Thread).state == ThreadState.Sleeping {
+                            sleep_remove_locked(thread as Thread)
+                            (thread as Thread).wait_timed_out = false
+                            (thread as Thread).wakeups++
+                            (thread as Thread).sleep_ticks_total += Timer.current_tick() - (thread as Thread).sleep_started_tick
+                            (thread as Thread).state = ThreadState.Ready
+                            enqueue_ready_locked(thread as Thread)
+                            woken++
+                        }
+                    }
+                }
+            }
+        }
+        return woken
+    }
+
+    func sleep_insert_locked(thread: Thread) {
+        let previous: void* = null
+        let cursor = sleep_head
+
+        while cursor != null && (cursor as Thread).wake_tick <= thread.wake_tick {
+            previous = cursor
+            cursor = (cursor as Thread).sleep_next
+        }
+
+        thread.sleep_next = cursor
+        if previous == null {
+            sleep_head = thread as void*
+        } else {
+            (previous as Thread).sleep_next = thread as void*
+        }
+    }
+
+    func sleep_remove_locked(thread: Thread) -> bool {
+        let previous: void* = null
+        let cursor = sleep_head
+        while cursor != null {
+            if cursor == thread as void* {
+                let following = (cursor as Thread).sleep_next
+                if previous == null {
+                    sleep_head = following
+                } else {
+                    (previous as Thread).sleep_next = following
+                }
+                thread.sleep_next = null
+                return true
+            }
+            previous = cursor
+            cursor = (cursor as Thread).sleep_next
+        }
+        return false
+    }
+
+    // Register a timed waiter without switching. This lets synchronization
+    // primitives perform their condition check and registration atomically
+    // while holding their own lock.
+    func prepare_block_current_timeout_ticks(queue: WaitQueue, delay: uint) -> bool {
+        let current = current_thread() as void*
+        if queue == null || current == null || delay == 0 {
+            return false
+        }
+
+        let prepared = false
+        holding sleep_lock {
+            holding queue.lock {
+                holding Kern.lock {
+                    if (current as Thread).state == ThreadState.Running && (current as Thread).waiting_on == null {
+                        (current as Thread).wait_timed_out = false
+                        (current as Thread).wake_tick = Timer.deadline_after_ticks(delay)
+                        wait_append_locked(queue, current as Thread)
+                        sleep_insert_locked(current as Thread)
+                        prepared = true
+                    }
+                }
+            }
+        }
+        if !prepared {
+            return false
+        }
+
+        return true
+    }
+
+    // Complete a wait registered by prepare_block_current_timeout_ticks.
+    func finish_block_current_timeout() -> bool {
+        let current = current_thread() as void*
+        if current == null {
+            return false
+        }
+
+        scheduler_yield()
+        return !(current as Thread).wait_timed_out
+    }
+
+    // Return true when explicitly woken, or false when the deadline expires.
+    func block_current_timeout_ticks(queue: WaitQueue, delay: uint) -> bool {
+        if !prepare_block_current_timeout_ticks(queue, delay) {
+            return false
+        }
+        return finish_block_current_timeout()
+    }
+
+    func block_current_timeout_ms(queue: WaitQueue, milliseconds: uint) -> bool {
+        if milliseconds == 0 {
+            return false
+        }
+        let delay_ticks = (milliseconds + HAL.PIT.MSECS_PER_TICK - 1) / HAL.PIT.MSECS_PER_TICK
+        return block_current_timeout_ticks(queue, delay_ticks)
+    }
+
+    // Suspend the calling thread for at least delay ticks. A zero delay is a
+    // normal scheduler yield and does not enter the sleep queue.
+    func sleep_ticks(delay: uint) -> bool {
+        let current = current_thread() as void*
+        if current == null {
+            return false
+        }
+        if delay == 0 {
+            scheduler_yield()
+            return true
+        }
+
+        holding sleep_lock {
+            holding Kern.lock {
+                if (current as Thread).state != ThreadState.Running {
+                    return false
+                }
+                (current as Thread).wake_tick = Timer.deadline_after_ticks(delay)
+                (current as Thread).state = ThreadState.Sleeping
+                (current as Thread).sleep_started_tick = Timer.current_tick()
+                sleep_insert_locked(current as Thread)
+            }
+        }
+
+        scheduler_yield()
+        return true
+    }
+
+    // Round up so every non-zero duration sleeps for at least one PIT tick.
+    func sleep_ms(milliseconds: uint) -> bool {
+        if milliseconds == 0 {
+            return sleep_ticks(0)
+        }
+        let delay_ticks = (milliseconds + HAL.PIT.MSECS_PER_TICK - 1) / HAL.PIT.MSECS_PER_TICK
+        return sleep_ticks(delay_ticks)
+    }
+
+    // sleep_lock is already held by the timer path. Keeping the dynamic queue
+    // lock in this helper also gives generated cleanup code function scope.
+    func timeout_waiter_locked(queue: WaitQueue, thread: Thread) -> bool {
+        let expired = false
+        holding queue.lock {
+            holding Kern.lock {
+                if wait_remove_locked(queue, thread) && thread.state == ThreadState.Sleeping {
+                    thread.wait_timed_out = true
+                    thread.wakeups++
+                    thread.sleep_ticks_total += Timer.current_tick() - thread.sleep_started_tick
+                    thread.state = ThreadState.Ready
+                    enqueue_ready_locked(thread)
+                    expired = true
+                }
+            }
+        }
+        return expired
+    }
+
+    // Called with interrupts disabled by the PIT path. Waking is bounded by
+    // the number of deadlines which expire on this tick.
+    func wake_sleepers(now: uint) -> uint {
+        let woken: uint = 0
+        holding sleep_lock {
+            while sleep_head != null && (sleep_head as Thread).wake_tick <= now {
+                let thread = sleep_head
+                sleep_head = (thread as Thread).sleep_next
+                (thread as Thread).sleep_next = null
+                let queue = (thread as Thread).waiting_on
+
+                if queue != null {
+                    if timeout_waiter_locked(queue as WaitQueue, thread as Thread) {
+                        woken++
+                    }
+                } else {
+                    holding Kern.lock {
+                        if (thread as Thread).state == ThreadState.Sleeping {
+                            (thread as Thread).wakeups++
+                            (thread as Thread).sleep_ticks_total += now - (thread as Thread).sleep_started_tick
+                            (thread as Thread).state = ThreadState.Ready
+                            enqueue_ready_locked(thread as Thread)
+                            woken++
+                        }
+                    }
+                }
+            }
+        }
+        return woken
+    }
+}

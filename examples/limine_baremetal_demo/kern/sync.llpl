@@ -1,0 +1,401 @@
+import hal
+import lib
+import kern.timer
+
+namespace Kern {
+    // A sleeping, non-recursive mutex. The internal spinlock only protects
+    // metadata and is never held while the caller is blocked.
+    class BlockingMutex : Object {
+        gate: SpinLock
+        owner: void*
+        waiters: WaitQueue
+        donated_priority: uint
+        held_next: void*
+
+        constructor() {
+            self.owner = null
+            self.waiters = new WaitQueue()
+            self.donated_priority = MAX_PRIORITY
+            self.held_next = null
+        }
+
+        func try_lock() -> bool {
+            let current = current_thread() as void*
+            if current == null {
+                return false
+            }
+
+            let acquired = false
+            holding self.gate {
+                if self.owner == null {
+                    mutex_assign_owner_locked(self, current as Thread)
+                    acquired = true
+                }
+            }
+            return acquired
+        }
+
+        func lock() -> bool {
+            let current = current_thread() as void*
+            if current == null {
+                return false
+            }
+
+            while true {
+                let acquired = false
+                let prepared = false
+                holding self.gate {
+                    if self.owner == null {
+                        mutex_assign_owner_locked(self, current as Thread)
+                        acquired = true
+                    } else if self.owner != current {
+                        donate_mutex_priority_locked(self, current as Thread)
+                        (current as Thread).blocked_mutex = self as void*
+                        prepared = prepare_block_current(self.waiters)
+                    }
+                }
+
+                if acquired {
+                    (current as Thread).blocked_mutex = null
+                    return true
+                }
+                if !prepared {
+                    (current as Thread).blocked_mutex = null
+                    return false
+                }
+                scheduler_yield()
+                (current as Thread).blocked_mutex = null
+                refresh_mutex_donation(self)
+            }
+        }
+
+        func lock_timeout_ticks(delay: uint) -> bool {
+            let current = current_thread() as void*
+            if current == null || delay == 0 {
+                return self.try_lock()
+            }
+            let deadline = Timer.deadline_after_ticks(delay)
+
+            while true {
+                let acquired = false
+                let prepared = false
+                holding self.gate {
+                    if self.owner == null {
+                        mutex_assign_owner_locked(self, current as Thread)
+                        acquired = true
+                    } else if self.owner != current {
+                        donate_mutex_priority_locked(self, current as Thread)
+                        (current as Thread).blocked_mutex = self as void*
+                        let now = Timer.current_tick()
+                        if now < deadline {
+                            prepared = prepare_block_current_timeout_ticks(self.waiters, deadline - now)
+                        }
+                    }
+                }
+
+                if acquired {
+                    (current as Thread).blocked_mutex = null
+                    return true
+                }
+                if !prepared || !finish_block_current_timeout() {
+                    (current as Thread).blocked_mutex = null
+                    refresh_mutex_donation(self)
+                    return false
+                }
+                (current as Thread).blocked_mutex = null
+                refresh_mutex_donation(self)
+            }
+        }
+
+        func lock_timeout_ms(milliseconds: uint) -> bool {
+            if milliseconds == 0 {
+                return self.try_lock()
+            }
+            let delay_ticks = (milliseconds + HAL.PIT.MSECS_PER_TICK - 1) / HAL.PIT.MSECS_PER_TICK
+            return self.lock_timeout_ticks(delay_ticks)
+        }
+
+        func unlock() -> bool {
+            let current = current_thread() as void*
+            let released = false
+            holding self.gate {
+                if current != null && self.owner == current {
+                    mutex_remove_owner_locked(self, current as Thread)
+                    released = true
+                }
+            }
+            if released {
+                wake_one(self.waiters)
+            }
+            return released
+        }
+
+        func is_owned_by_current() -> bool {
+            let current = current_thread() as void*
+            let owned = false
+            holding self.gate {
+                owned = current != null && self.owner == current
+            }
+            return owned
+        }
+    }
+
+    func mutex_assign_owner_locked(mutex: BlockingMutex, owner: Thread) {
+        mutex.owner = owner as void*
+        mutex.held_next = owner.held_mutex_head
+        owner.held_mutex_head = mutex as void*
+    }
+
+    func mutex_remove_owner_locked(mutex: BlockingMutex, owner: Thread) {
+        let previous: void* = null
+        let cursor = owner.held_mutex_head
+        while cursor != null {
+            if cursor == mutex as void* {
+                if previous == null {
+                    owner.held_mutex_head = (cursor as BlockingMutex).held_next
+                } else {
+                    (previous as BlockingMutex).held_next = (cursor as BlockingMutex).held_next
+                }
+                break
+            }
+            previous = cursor
+            cursor = (cursor as BlockingMutex).held_next
+        }
+        mutex.held_next = null
+        mutex.owner = null
+        mutex.donated_priority = MAX_PRIORITY
+        refresh_thread_inherited_priority(owner)
+    }
+
+    func refresh_thread_inherited_priority(thread: Thread) {
+        return if thread == null
+        let priority = thread.base_priority
+        let cursor = thread.held_mutex_head
+        while cursor != null {
+            if (cursor as BlockingMutex).donated_priority < priority {
+                priority = (cursor as BlockingMutex).donated_priority
+            }
+            cursor = (cursor as BlockingMutex).held_next
+        }
+        set_thread_effective_priority(thread, priority)
+    }
+
+    func donate_mutex_priority_locked(mutex: BlockingMutex, waiter: Thread, depth: uint = 0) {
+        return if depth >= MAX_PRIORITY
+        if waiter.priority < mutex.donated_priority {
+            mutex.donated_priority = waiter.priority
+        }
+        let owner = mutex.owner
+        if owner != null && waiter.priority < (owner as Thread).priority {
+            set_thread_effective_priority(owner as Thread, waiter.priority)
+            let blocked = (owner as Thread).blocked_mutex
+            if blocked != null {
+                donate_blocked_mutex(blocked as BlockingMutex, owner as Thread, depth + 1)
+            }
+        }
+    }
+
+    func donate_blocked_mutex(mutex: BlockingMutex, waiter: Thread, depth: uint) {
+        holding mutex.gate {
+            donate_mutex_priority_locked(mutex, waiter, depth)
+        }
+    }
+
+    func refresh_mutex_donation(mutex: BlockingMutex) {
+        return if mutex == null
+        holding mutex.gate {
+            mutex.donated_priority = wait_best_priority(mutex.waiters)
+            if mutex.owner != null {
+                refresh_thread_inherited_priority(mutex.owner as Thread)
+            }
+        }
+    }
+
+    class ConditionVariable : Object {
+        waiters: WaitQueue
+
+        constructor() {
+            self.waiters = new WaitQueue()
+        }
+
+        // Atomically register on the condition queue while the mutex metadata
+        // is locked, then release the mutex before switching away.
+        func wait(mutex: BlockingMutex) -> bool {
+            let current = current_thread() as void*
+            if mutex == null || current == null {
+                return false
+            }
+
+            let prepared = false
+            holding mutex.gate {
+                if mutex.owner == current {
+                    prepared = prepare_block_current(self.waiters)
+                    if prepared {
+                        mutex_remove_owner_locked(mutex, current as Thread)
+                    }
+                }
+            }
+            if !prepared {
+                return false
+            }
+            wake_one(mutex.waiters)
+            scheduler_yield()
+            return mutex.lock()
+        }
+
+        // The mutex is always reacquired before returning. The result only
+        // distinguishes a signal/broadcast from deadline expiry.
+        func wait_timeout_ticks(mutex: BlockingMutex, delay: uint) -> bool {
+            if delay == 0 {
+                return false
+            }
+            let current = current_thread() as void*
+            if mutex == null || current == null {
+                return false
+            }
+
+            let prepared = false
+            holding mutex.gate {
+                if mutex.owner == current {
+                    prepared = prepare_block_current_timeout_ticks(self.waiters, delay)
+                    if prepared {
+                        mutex_remove_owner_locked(mutex, current as Thread)
+                    }
+                }
+            }
+            if !prepared {
+                return false
+            }
+            wake_one(mutex.waiters)
+            let signaled = finish_block_current_timeout()
+            if !mutex.lock() {
+                return false
+            }
+            return signaled
+        }
+
+        func wait_timeout_ms(mutex: BlockingMutex, milliseconds: uint) -> bool {
+            if milliseconds == 0 {
+                return false
+            }
+            let delay_ticks = (milliseconds + HAL.PIT.MSECS_PER_TICK - 1) / HAL.PIT.MSECS_PER_TICK
+            return self.wait_timeout_ticks(mutex, delay_ticks)
+        }
+
+        func signal() -> bool {
+            return wake_one(self.waiters)
+        }
+
+        func broadcast() -> uint {
+            return wake_all(self.waiters)
+        }
+    }
+
+    class Semaphore : Object {
+        gate: SpinLock
+        count: uint
+        waiters: WaitQueue
+
+        constructor(initial: uint = 0) {
+            self.count = initial
+            self.waiters = new WaitQueue()
+        }
+
+        func try_wait() -> bool {
+            let acquired = false
+            holding self.gate {
+                if self.count != 0 {
+                    self.count--
+                    acquired = true
+                }
+            }
+            return acquired
+        }
+
+        func wait() -> bool {
+            while true {
+                let acquired = false
+                let prepared = false
+                holding self.gate {
+                    if self.count != 0 {
+                        self.count--
+                        acquired = true
+                    } else {
+                        prepared = prepare_block_current(self.waiters)
+                    }
+                }
+                if acquired {
+                    return true
+                }
+                if !prepared {
+                    return false
+                }
+                scheduler_yield()
+            }
+        }
+
+        func wait_timeout_ticks(delay: uint) -> bool {
+            if delay == 0 {
+                return self.try_wait()
+            }
+            let deadline = Timer.deadline_after_ticks(delay)
+
+            while true {
+                let acquired = false
+                let prepared = false
+                holding self.gate {
+                    if self.count != 0 {
+                        self.count--
+                        acquired = true
+                    } else {
+                        let now = Timer.current_tick()
+                        if now < deadline {
+                            prepared = prepare_block_current_timeout_ticks(self.waiters, deadline - now)
+                        }
+                    }
+                }
+                if acquired {
+                    return true
+                }
+                if !prepared || !finish_block_current_timeout() {
+                    return false
+                }
+            }
+        }
+
+        func wait_timeout_ms(milliseconds: uint) -> bool {
+            if milliseconds == 0 {
+                return self.try_wait()
+            }
+            let delay_ticks = (milliseconds + HAL.PIT.MSECS_PER_TICK - 1) / HAL.PIT.MSECS_PER_TICK
+            return self.wait_timeout_ticks(delay_ticks)
+        }
+
+        func post(amount: uint = 1) -> bool {
+            if amount == 0 {
+                return true
+            }
+            let posted = false
+            holding self.gate {
+                if self.count + amount >= self.count {
+                    self.count += amount
+                    posted = true
+                }
+            }
+            if posted {
+                for i in 0..amount {
+                    wake_one(self.waiters)
+                }
+            }
+            return posted
+        }
+
+        func value() -> uint {
+            let result: uint = 0
+            holding self.gate {
+                result = self.count
+            }
+            return result
+        }
+    }
+}

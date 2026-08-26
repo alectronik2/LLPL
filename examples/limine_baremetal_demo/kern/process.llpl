@@ -7,9 +7,17 @@ import std.collections.linked_list
 using namespace std.collections
 
 namespace Kern {
+    const MAX_PROCESSES = 64
     let kproc: Process = null
+    let next_pid: uint = 1
+    let process_table: void*[MAX_PROCESSES]
 
     let processes: DoublyLinkedList<Process>
+
+    const USER_MMAP_BASE = 0x1000_0000
+    const USER_MMAP_END  = 0x0000_8000_0000_0000
+    const USER_BRK_BASE  = 0x4000_0000
+    const USER_BRK_LIMIT = 0x6000_0000
 
     class Process : Object {
         pml4:   uint
@@ -17,42 +25,495 @@ namespace Kern {
         name:   String   
         threads: DoublyLinkedList<Thread>
         lock:   SpinLock
+        next_mmap: uint
+        fds: DescriptorTable
+        pid: uint
+        parent: void*
+        child_next: void*
+        child_head: void*
+        child_waiters: WaitQueue
+        exited: bool
+        exit_status: uint
+        resources_reaped: bool
+        brk_base: uint
+        brk_current: uint
 
-        constructor( name: String ) {
-            "Process constructor\n" |> HAL.Serial.write
-
+        constructor( name: String, parent: Process = null ) {
             self.threads = new DoublyLinkedList<Thread>()
-            self.pml4 = MM.malloc<uint>( MM.PAGE_SIZE )
+            let pml4_frame = MM.alloc_pageframe( MM.FrameType.Other )
+            self.pml4 = MM.pf2p( pml4_frame )
+            memset( MM.p2v( self.pml4 ) as void*, 0, MM.PAGE_SIZE )
             self.aspace = new MM.AddressSpace( 0x0, 0xFFFF_0000_0000 )
+            self.aspace.pml4 = self.pml4
+            //"Process ctor: self.pml4=\(self.pml4:hex) self.aspace=\((self.aspace as uint):hex) self.aspace.pml4=\(self.aspace.pml4:hex)\n" |> HAL.Serial.write
             self.name = name // move ownership to process
+            self.next_mmap = USER_MMAP_BASE
+            self.fds = new DescriptorTable()
+            self.parent = parent as void*
+            self.child_next = null
+            self.child_head = null
+            self.child_waiters = new WaitQueue()
+            self.exited = false
+            self.exit_status = 0
+            self.resources_reaped = false
+            self.brk_base = USER_BRK_BASE
+            self.brk_current = USER_BRK_BASE
 
             holding lock {
-                Kern.processes.push_back( self ) // add self to process list
+                self.pid = next_pid
+                next_pid++
+                if self.pid < MAX_PROCESSES {
+                    process_table[self.pid] = self as void*
+                }
+                if parent != null {
+                    self.child_next = parent.child_head
+                    parent.child_head = self as void*
+                }
+                Kern.processes.push_back( self )
             }
         }
 
         destructor() {
             "Process destructor\n" |> HAL.Serial.write
-            MM.free( self.pml4 )
+            if self.pml4 != 0 && self.pml4 != MM.kernel_pml4 {
+                let pml4_frame = (MM.pfdb as uint + (self.pml4 >> MM.PAGE_SHIFT) * sizeof(MM.PageFrame)) as MM.PageFrame*
+                pml4_frame.release()
+            }
             self.aspace.put() // free address space
             self.name.put() // free name string
 
             delete threads // free thread list
 
             holding lock {
-                Kern.processes.remove( self ) // remove self from process list
+                Kern.processes.remove( self ) 
             }
         }
     }
 
     func proc_init() {
         processes = new DoublyLinkedList<Process>()
+        for pid in 0..MAX_PROCESSES { process_table[pid] = null }
+        
         kproc = new Process( "kernel" )
         kproc.aspace.put()
         kproc.aspace = MM.kas
-        MM.free kproc.pml4
+        let pml4_frame = (MM.pfdb as uint + (kproc.pml4 >> MM.PAGE_SHIFT) * sizeof(MM.PageFrame)) as MM.PageFrame*
+        pml4_frame.release()
         kproc.pml4 = MM.kernel_pml4
+        kproc.aspace.pml4 = MM.kernel_pml4
         
         "Kern.proc.init()\n" |> HAL.Serial.write
+    }
+
+    func process_id(proc: Process) -> uint {
+        return 0 if proc == null
+        return proc.pid
+    }
+
+    func mark_process_exited(proc: Process, status: uint) {
+        return if proc == null || proc == kproc
+        holding proc.lock {
+            if proc.exited { return }
+            proc.exited = true
+            proc.exit_status = status
+            // Reparent living children to the kernel process.
+            let child = proc.child_head
+            while child != null {
+                (child as Process).parent = kproc as void*
+                let following = (child as Process).child_next
+                (child as Process).child_next = kproc.child_head
+                kproc.child_head = child
+                child = following
+            }
+            proc.child_head = null
+        }
+        if proc.parent != null {
+            wake_all((proc.parent as Process).child_waiters)
+        }
+    }
+
+    func wait_process(parent: Process, pid: uint, status_out: uint* = null) -> int {
+        if parent == null { return EINVAL }
+        while true {
+            let found: void* = null
+            let previous: void* = null
+            let cursor = parent.child_head
+            holding parent.lock {
+                while cursor != null {
+                    if (pid == 0 || (cursor as Process).pid == pid) && (cursor as Process).exited {
+                        found = cursor
+                        if previous == null {
+                            parent.child_head = (cursor as Process).child_next
+                        } else {
+                            (previous as Process).child_next = (cursor as Process).child_next
+                        }
+                        (cursor as Process).child_next = null
+                        break
+                    }
+                    previous = cursor
+                    cursor = (cursor as Process).child_next
+                }
+                if found == null && !prepare_block_current(parent.child_waiters) {
+                    return EINVAL
+                }
+            }
+            if found != null {
+                let found_pid = (found as Process).pid
+                if status_out != null { status_out[0] = (found as Process).exit_status }
+                holding lock {
+                    if (found as Process).pid < MAX_PROCESSES {
+                        process_table[(found as Process).pid] = null
+                    }
+                }
+                reap_process_resources(found as Process)
+                return found_pid as int
+            }
+            scheduler_yield()
+        }
+    }
+
+    func reap_process_resources(proc: Process) -> bool {
+        if proc == null || proc == kproc || !proc.exited || proc.resources_reaped {
+            return false
+        }
+        assert((HAL.read_cr3() & MM.PADDR_4K_MASK) != proc.pml4, "cannot reap the active process")
+        sync_user_file_mappings(proc)
+        proc.aspace.destroy_user_memory()
+        if proc.pml4 != 0 && proc.pml4 != MM.kernel_pml4 {
+            let root_frame = (MM.pfdb as uint + (proc.pml4 >> MM.PAGE_SHIFT) * sizeof(MM.PageFrame)) as MM.PageFrame*
+            root_frame.release()
+            proc.pml4 = 0
+            proc.aspace.pml4 = 0
+        }
+        if proc.fds != null {
+            proc.fds.put()
+            proc.fds = null
+        }
+        proc.resources_reaped = true
+        return true
+    }
+
+    func map_user_anonymous( proc: Process, hint: uint, length: uint ) -> (int, uint) {
+        if proc == null || proc == kproc || length == 0 {
+            return (EINVAL, 0)
+        }
+
+        let len = (length + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+        if len < length {
+            return (EINVAL, 0)
+        }
+
+        let addr: uint
+        holding proc.aspace.lock {
+            if hint != 0 {
+                if (hint & (MM.PAGE_SIZE - 1)) != 0 || hint < USER_MMAP_BASE || hint + len > USER_MMAP_END {
+                    return (EINVAL, 0)
+                }
+                if proc.aspace.overlaps( hint, hint + len ) {
+                    return (EEXIST, 0)
+                }
+                addr = hint
+            } else {
+                addr = proc.next_mmap
+                if addr < USER_MMAP_BASE {
+                    addr = USER_MMAP_BASE
+                }
+                addr = (addr + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+
+                while addr + len <= USER_MMAP_END && proc.aspace.overlaps( addr, addr + len ) {
+                    addr = addr + len
+                }
+
+                if addr + len > USER_MMAP_END {
+                    return (ENOMEM, 0)
+                }
+            }
+
+            let vma = new MM.VmArea( addr, addr + len )
+            if vma == null {
+                return (ENOMEM, 0)
+            }
+
+            vma.flags = MM.MAP_USER
+            // Keep user VMAs unnamed: allocating metadata after page-table
+            // work can re-enter the early heap through syscall context.
+            vma.name = null
+            MM.rb_insert( proc.aspace, vma )
+            if hint == 0 {
+                proc.next_mmap = addr + len
+            }
+        }
+
+        return (EOK, addr)
+    }
+
+    // Resolve a non-present access inside an anonymous user VMA. The address
+    // space lock serializes faults for the same page and unmap operations.
+    func resolve_user_page_fault(proc: Process, fault_addr: uint, error: uint) -> bool {
+        if proc == null || proc == kproc || proc.exited || proc.pml4 == 0 ||
+            (error & 4) == 0 || fault_addr >= USER_MMAP_END {
+            return false
+        }
+
+        let page = fault_addr & ~(MM.PAGE_SIZE - 1)
+        // Avoid the exception-cleanup machinery generated by `holding` here:
+        // this function executes directly on an interrupt-gate frame.
+        proc.aspace.lock.acquire()
+        let area = proc.aspace.root
+        while area != null {
+            if fault_addr >= area.start && fault_addr < area.end {
+                if (area.flags & MM.MAP_USER) == 0 || MM.free_list == null {
+                    proc.aspace.lock.release()
+                    return false
+                }
+
+                // A present write fault is resolvable only for a leaf that a
+                // clone operation explicitly marked copy-on-write.
+                if (error & 1) != 0 {
+                    let old_pte = MM.leaf_pte(proc.pml4, page)
+                    if (error & 2) == 0 || old_pte == null {
+                        proc.aspace.lock.release()
+                        return false
+                    }
+                    if (old_pte.raw & MM.PG_FILE_TRACK) != 0 &&
+                        (area.flags & MM.MAP_WRITE) != 0 {
+                        old_pte.raw = old_pte.raw | MM.PG_WRITABLE | MM.PG_FILE_DIRTY
+                        asm("invlpg (%0)" : : "r"(page) : "memory")
+                        proc.aspace.lock.release()
+                        return true
+                    }
+                    if (old_pte.raw & MM.PG_COW) == 0 {
+                        proc.aspace.lock.release()
+                        return false
+                    }
+                    let old_paddr = old_pte.paddr
+                    let frame = MM.alloc_pageframe(MM.FrameType.Other)
+                    let new_paddr = MM.pf2p(frame)
+                    memcpy(MM.p2v(new_paddr) as void*, MM.p2v(old_paddr) as void*, MM.PAGE_SIZE)
+                    let old_flags = old_pte.raw & ~MM.PADDR_4K_MASK
+                    old_pte.raw = new_paddr | (old_flags & ~MM.PG_COW) |
+                        MM.PG_PRESENT | MM.PG_WRITABLE
+                    asm("invlpg (%0)" : : "r"(page) : "memory")
+                    MM.release_paddr_frame(old_paddr)
+                    proc.aspace.lock.release()
+                    return true
+                }
+
+                let frame = MM.alloc_pageframe(MM.FrameType.Other)
+                let paddr = MM.pf2p(frame)
+                memset(MM.p2v(paddr) as void*, 0, MM.PAGE_SIZE)
+                let page_flags = MM.PG_PRESENT | MM.PG_USER | MM.PG_WRITABLE
+                if (area.flags & MM.MAP_FILE) != 0 {
+                    let raw_file: void* = area.backing
+                    if raw_file == null {
+                        frame.release()
+                        proc.aspace.lock.release()
+                        return false
+                    }
+                    let (data, size) = (raw_file as FileDescriptor).file.fs.read_binary(
+                        (raw_file as FileDescriptor).file.path)
+                    let file_page = area.file_offset + (page - area.start)
+                    if data != null && file_page < size as uint {
+                        let amount = size as uint - file_page
+                        if amount > MM.PAGE_SIZE { amount = MM.PAGE_SIZE }
+                        if amount > area.file_length - (page - area.start) {
+                            amount = area.file_length - (page - area.start)
+                        }
+                        memcpy(MM.p2v(paddr) as void*, (data as uint + file_page) as void*, amount)
+                    }
+                    page_flags = MM.PG_PRESENT | MM.PG_USER
+                    if (area.flags & MM.MAP_WRITE) != 0 {
+                        page_flags |= MM.PG_FILE_TRACK
+                    }
+                }
+                let mapped = MM.map_page(proc.pml4, page, paddr, page_flags)
+                if mapped {
+                    asm("invlpg (%0)" : : "r"(page) : "memory")
+                } else {
+                    frame.release()
+                }
+                proc.aspace.lock.release()
+                return mapped
+            }
+            if fault_addr < area.start {
+                area = area.left
+            } else {
+                area = area.right
+            }
+        }
+        proc.aspace.lock.release()
+        return false
+    }
+
+    func map_user_file(proc: Process, descriptor: FileDescriptor, hint: uint,
+        length: uint, offset: uint, writable: bool, write_back: bool) -> (int, uint) {
+        if proc == null || descriptor == null || descriptor.file == null || length == 0 ||
+            (offset & (MM.PAGE_SIZE - 1)) != 0 ||
+            (descriptor.file.mode & VFS.O_READ) == 0 {
+            return (EINVAL, 0)
+        }
+        if writable && (descriptor.file.mode & VFS.O_WRITE) == 0 { return (VFS.EACCES, 0) }
+        let len = (length + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+        let addr = hint
+        holding proc.aspace.lock {
+            if addr == 0 {
+                addr = proc.next_mmap
+                while addr + len <= USER_MMAP_END && proc.aspace.overlaps(addr, addr + len) {
+                    addr += len
+                }
+            }
+            if addr < USER_MMAP_BASE || addr + len < addr || addr + len > USER_MMAP_END ||
+                proc.aspace.overlaps(addr, addr + len) {
+                return (EINVAL, 0)
+            }
+            let area = new MM.VmArea(addr, addr + len)
+            area.flags = MM.MAP_USER | MM.MAP_FILE
+            if writable { area.flags |= MM.MAP_WRITE }
+            if write_back { area.flags |= MM.MAP_SHARED }
+            area.backing = descriptor as void*
+            (area.backing as Object).get()
+            area.file_offset = offset
+            area.file_length = length
+            MM.rb_insert(proc.aspace, area)
+            if hint == 0 { proc.next_mmap = addr + len }
+        }
+        return (EOK, addr)
+    }
+
+    func flush_file_area(proc: Process, area: MM.VmArea*, start: uint, end: uint) -> int {
+        return EOK if area == null || (area.flags & (MM.MAP_FILE | MM.MAP_SHARED)) !=
+            (MM.MAP_FILE | MM.MAP_SHARED)
+        let raw_file: void* = area.backing
+        return EINVAL if raw_file == null
+        let first = area.start
+        if start > first { first = start & ~(MM.PAGE_SIZE - 1) }
+        let limit = area.end
+        if end < limit { limit = (end + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1) }
+        for let page = first; page < limit; page += MM.PAGE_SIZE {
+            let pte = MM.leaf_pte(proc.pml4, page)
+            if pte != null && pte.pte.present && (pte.raw & MM.PG_FILE_DIRTY) != 0 {
+                let file_at = area.file_offset + (page - area.start)
+                let amount = area.file_length - (page - area.start)
+                if amount > MM.PAGE_SIZE { amount = MM.PAGE_SIZE }
+                let (old, old_len_u64) = (raw_file as FileDescriptor).file.fs.read_binary(
+                    (raw_file as FileDescriptor).file.path)
+                let old_len = old_len_u64 as uint
+                let new_len = old_len
+                if file_at + amount > new_len { new_len = file_at + amount }
+                let copy = MM.malloc<char>(new_len + 1)
+                memset(copy as void*, 0, new_len + 1)
+                if old != null && old_len != 0 { memcpy(copy as void*, old as void*, old_len) }
+                memcpy((copy as uint + file_at) as void*, MM.p2v(pte.paddr) as void*, amount)
+                let rc = (raw_file as FileDescriptor).file.fs.write_binary(
+                    (raw_file as FileDescriptor).file.path, copy, new_len)
+                MM.free(copy)
+                return rc if rc < 0
+                pte.raw = (pte.raw & ~(MM.PG_WRITABLE | MM.PG_FILE_DIRTY)) | MM.PG_FILE_TRACK
+                if (HAL.read_cr3() & MM.PADDR_4K_MASK) == proc.pml4 {
+                    asm("invlpg (%0)" : : "r"(page) : "memory")
+                }
+            }
+        }
+        return EOK
+    }
+
+    func sync_user_file_mappings(proc: Process, start: uint = 0, end: uint = USER_MMAP_END) -> int {
+        return EINVAL if proc == null
+        let stack = MM.malloc<MM.VmArea*>(64 * sizeof(MM.VmArea*))
+        let top = 0
+        let current = proc.aspace.root
+        while current != null || top > 0 {
+            while current != null {
+                stack[top] = current
+                top++
+                current = current.left
+            }
+            top--
+            current = stack[top]
+            if current.end > start && current.start < end {
+                let rc = flush_file_area(proc, current, start, end)
+                if rc < 0 {
+                    MM.free(stack as void*)
+                    return rc
+                }
+            }
+            current = current.right
+        }
+        MM.free(stack as void*)
+        return EOK
+    }
+
+    func clone_process_address_space(parent: Process, name: String) -> Process {
+        return null if parent == null || parent == kproc || parent.exited || parent.pml4 == 0
+        // Debug: check offset of pml4 field in AddressSpace
+        let asp = parent.aspace
+        let asp_as_uint = asp as uint
+        // Write pml4 again and read it back
+        asp.pml4 = parent.pml4
+
+        let child = new Process(name, parent)
+        // Rewrite child's pml4 into aspace too
+        child.aspace.pml4 = child.pml4
+
+        // Share the kernel half exactly as normal user-process setup does.
+        let parent_root = MM.p2v(parent.pml4) as MM.Pte*
+        let child_root = MM.p2v(child.pml4) as MM.Pte*
+        for i in 256..512 { child_root[i].raw = parent_root[i].raw }
+
+        parent.aspace.lock.acquire()
+        MM.clone_vma_tree(parent.aspace.root as void*, parent.pml4, child.aspace)
+        child.next_mmap = parent.next_mmap
+        parent.aspace.lock.release()
+        return child
+    }
+
+    func unmap_user(proc: Process, addr: uint, length: uint) -> int {
+        if proc == null || proc == kproc || length == 0 || addr < USER_MMAP_BASE {
+            return EINVAL
+        }
+        if addr + length < addr || addr + length > USER_MMAP_END {
+            return EINVAL
+        }
+        let sync_rc = sync_user_file_mappings(proc, addr, addr + length)
+        return sync_rc if sync_rc < 0
+        return proc.aspace.unmap(addr, length)
+    }
+
+    func process_brk(proc: Process, requested: uint) -> (int, uint) {
+        return (EINVAL, 0) if proc == null || proc == kproc || proc.exited
+        return (EOK, proc.brk_current) if requested == 0
+        return (EINVAL, proc.brk_current) if requested < proc.brk_base ||
+            requested > USER_BRK_LIMIT
+
+        let old = proc.brk_current
+        let old_page_end = (old + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+        let new_page_end = (requested + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+        if new_page_end > old_page_end {
+            let (rc, _) = map_user_anonymous(proc, old_page_end,
+                new_page_end - old_page_end)
+            return (rc, old) if rc < 0
+        } else if new_page_end < old_page_end {
+            let rc = unmap_user(proc, new_page_end, old_page_end - new_page_end)
+            return (rc, old) if rc < 0
+        }
+        proc.brk_current = requested
+        return (EOK, requested)
+    }
+
+    func process_sbrk(proc: Process, increment: int) -> (int, uint) {
+        return (EINVAL, 0) if proc == null
+        let old = proc.brk_current
+        let requested: uint
+        if increment < 0 {
+            let decrease = (-increment) as uint
+            return (EINVAL, old) if decrease > old - proc.brk_base
+            requested = old - decrease
+        } else {
+            let increase = increment as uint
+            return (EINVAL, old) if increase > USER_BRK_LIMIT - old
+            requested = old + increase
+        }
+        let (rc, _) = process_brk(proc, requested)
+        return (rc, old)
     }
 }

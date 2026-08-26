@@ -80,52 +80,58 @@ namespace MM {
     let buckets: Bucket[12]
 
     func malloc<T>(size: int = sizeof(T)) -> T* {
-        if size > MM.PAGE_SIZE / 2 {
-            let pages = MM.pages_num(size)
-            let length = pages << MM.PAGE_SHIFT
+        holding MM.lock {
+            if size > MM.PAGE_SIZE / 2 {
+                let pages = MM.pages_num(size)
+                let length = pages << MM.PAGE_SHIFT
 
-            let vaddr = MM.kas.map( 0, length )
+                let vaddr = MM.kas.map( 0, length )
 
-            for let i = 0; i < pages; i++ {
-                let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.HugeMalloc )
+                for let i = 0; i < pages; i++ {
+                    let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.HugeMalloc )
 
-                pf.tag = MM.FrameType.HugeMalloc
-                pf.size = pages
+                    pf.tag = MM.FrameType.HugeMalloc
+                    pf.size = pages
 
-                MM.map_page( MM.kernel_pml4, vaddr + (i << MM.PAGE_SHIFT), MM.pf2p(pf), MM.PG_PRESENT | MM.PG_WRITABLE | MM.PG_USER )
+                    MM.map_page( MM.kernel_pml4, vaddr + (i << MM.PAGE_SHIFT), MM.pf2p(pf), MM.PG_PRESENT | MM.PG_WRITABLE | MM.PG_USER )
+                }
+
+                return vaddr as T*
             }
 
-            return vaddr as T*
+            let addr = 0
+            return 0 as T* if size == 0
+
+            let bucket = MM.bucketLog2[size - 1]
+            let b = &MM.buckets[bucket]
+
+            if b.mem == null {
+                let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.Kernel )
+                with pf {
+                    .tag = MM.FrameType.Malloc
+                    .size = bucket
+                }
+
+                b.size = 1 << bucket
+                let p = MM.pf2v( pf ) as void*
+                for let i = 0; i < MM.PAGE_SIZE; i += b.size {
+                    *((p + i) as void**) = b.mem
+                    b.mem = (p + i) as uint
+                }
+                b.pages++
+            }
+
+            if b.mem != 0 && (b.mem >> 48) != 0xFFFF {
+                "malloc: corrupt bucket size=\(size) bucket=\(bucket) head=\(b.mem:hex)\n" |> hs.write
+                panic("malloc: corrupt bucket free list")
+            }
+            addr = b.mem
+            b.mem = *((b.mem as void**)) as uint
+
+            memset( addr as void*, 0, b.size )
+
+            return addr as T*
         }
-
-        let addr = 0
-        return 0 as T* if size == 0
-
-        let bucket = MM.bucketLog2[size - 1]
-        let b = &MM.buckets[bucket]
-
-        if b.mem == null {
-            let pf: MM.PageFrame* = MM.alloc_pageframe( MM.FrameType.Kernel )
-            with pf {
-                .tag = MM.FrameType.Malloc
-                .size = bucket
-            }
-
-            b.size = 1 << bucket
-            let p = MM.pf2v( pf ) as void*
-            for let i = 0; i < MM.PAGE_SIZE; i += b.size {
-                *((p + i) as void**) = b.mem
-                b.mem = (p + i) as uint
-            }
-            b.pages++
-        }
-
-        addr = b.mem
-        b.mem = *((b.mem as void**)) as uint
-
-        memset( addr as void*, 0, b.size )
-
-        return addr as T*
     }
 
     func realloc<T>( p: void*, new_size: int = sizeof(T) ) -> T* {
@@ -166,8 +172,6 @@ namespace MM {
                 *((ptr) as void**) = b.mem as void*
                 b.mem = ptr as uint
             } else if pf.tag == MM.FrameType.HugeMalloc {
-                "HugeMalloc release" |> hs.write()
-
                 let pages = MM.pages_num( pf.size << MM.PAGE_SHIFT )
 
                 for let i = 0; i < pages; i++ {

@@ -6,10 +6,6 @@ import terminal
 
 using namespace std.collections
 
-extern func Kern_await_timer_tick_from_async_frame_size() -> uint
-extern func Kern_await_timer_tick_from_async_start_into(frame: void*, start: uint, delay: uint)
-extern func Kern_await_timer_tick_from_async_poll_erased(frame: void*, out: void*) -> int
-
 const THREAD_KERNEL = 0x1
 const THREAD_USER   = 0x2
 
@@ -19,6 +15,14 @@ enum ThreadState {
     Running,
     Sleeping,
     Zombie
+}
+
+struct ThreadStats {
+    runtime_ticks: uint
+    context_switches: uint
+    wakeups: uint
+    voluntary_yields: uint
+    sleep_ticks: uint
 }
 
 const MAX_PRIORITY  = 32
@@ -31,85 +35,622 @@ namespace Kern {
     alias fun = func(void*)
 
     let lock: SpinLock
-    let runq: DoublyLinkedList<Thread>[MAX_PRIORITY]
+    let runq_head: Thread[MAX_PRIORITY]
+    let runq_tail: Thread[MAX_PRIORITY]
     let ready_summary: uint
+    const MAX_THREADS = 128
+    let thread_table: void*[MAX_THREADS]
+    let next_tid: uint = 1
 
     class Thread : Object {
-        stack: char*
+        stack:      char*
         stack_size: u64
-        flags: uint
-        name: String
-        proc: Process
+        flags:      uint
+        name:       String
+        proc:       Process
 
-        ptr: fun
-        arg: void*
-        ctx: HAL.IDT.Context*
-        state: uint
-        priority: uint
+        ptr:        fun
+        arg:        void*
+        ctx:        HAL.IDT.Context*
+        state:      uint
+        priority:   uint
+        base_priority: uint
+        runq_next:  Thread
+        wait_next:  void*
+        waiting_on: void*
+        sleep_next: void*
+        wake_tick:  uint
+        wait_timed_out: bool
+        join_waiters: WaitQueue
+        exit_value: uint
+        detached: bool
+        joined: bool
+        cleanup_queued: bool
+        reap_next: void*
+        held_mutex_head: void*
+        blocked_mutex: void*
+        lifecycle_lock: SpinLock
+        tid: uint
+        tls_base: uint
 
-        curdir: String
+        runtime_ticks: uint
+        context_switches: uint
+        wakeups: uint
+        voluntary_yields: uint
+        sleep_ticks_total: uint
+        sleep_started_tick: uint
 
-        constructor( proc: Process, ptr_: fun, arg: void*, name: String, flags: uint = 0, priority: uint = 16, stack_size: u64 = MM.PAGE_SIZE * 4 ) {
+        curdir:     String
+
+        constructor( proc: Process, ptr_: fun, arg: void*, name: String, flags: uint = THREAD_KERNEL, priority: uint = 16, stack_size: u64 = MM.PAGE_SIZE * 4 ) {
+            assert(priority < MAX_PRIORITY, "Thread priority is out of range")
             self.stack_size = stack_size
             self.stack      = MM.malloc<char>( stack_size )
             self.name       = name
             self.ptr        = ptr_
             self.proc       = proc
             self.arg        = arg
+            self.flags      = flags
             self.state      = ThreadState.New
             self.priority   = priority
+            self.base_priority = priority
+            self.runq_next  = null
+            self.wait_next  = null
+            self.waiting_on = null
+            self.sleep_next = null
+            self.wake_tick  = 0
+            self.wait_timed_out = false
+            self.join_waiters = new WaitQueue()
+            self.exit_value = 0
+            self.detached = false
+            self.joined = false
+            self.cleanup_queued = false
+            self.reap_next = null
+            self.held_mutex_head = null
+            self.blocked_mutex = null
+            self.runtime_ticks = 0
+            self.context_switches = 0
+            self.wakeups = 0
+            self.voluntary_yields = 0
+            self.sleep_ticks_total = 0
+            self.sleep_started_tick = 0
+            self.tls_base = 0
+            holding lock {
+                self.tid = next_tid
+                next_tid++
+                if self.tid < MAX_THREADS { thread_table[self.tid] = self as void* }
+            }
 
             let top = ((self.stack as uint) + self.stack_size) & ~0xF
             let frame_addr = top - sizeof(HAL.IDT.Context)
             self.ctx = frame_addr as HAL.IDT.Context*
             memset( self.ctx as void*, 0, sizeof(HAL.IDT.Context) )
-            self.ctx.rip = thread_trampoline as u64
-            self.ctx.cs = 0x08
-            self.ctx.rflags = 0x202
-            self.ctx.rsp = top
-            self.ctx.ss = 0x10
+
+            if flags & THREAD_KERNEL {
+                self.ctx.rip    = thread_trampoline as u64
+                self.ctx.cs     = HAL.GDT.KERNEL_CS
+                self.ctx.rflags = 0x202
+                self.ctx.rsp    = frame_addr - 16
+                self.ctx.ss     = HAL.GDT.KERNEL_DS
+            } else {
+                self.ctx.rip    = ptr_.fn as u64
+                self.ctx.cs     = HAL.GDT.USER_CS | 3
+                self.ctx.rflags = 0x202
+                self.ctx.rsp    = top - 8
+                self.ctx.ss     = HAL.GDT.USER_DS | 3
+                self.ctx.rdi    = ptr_.env as u64
+                self.ctx.rsi    = arg as u64
+            }
 
             if proc != null {
                 holding proc.lock {
                     proc.threads.push_back( self )
                 }
             }
-
-            "Stack allocated for thread \(name) at \(self.stack:hex)\n" |> HAL.Serial.write
         }
         
         destructor() {
             "Thread destructor\n" |> HAL.Serial.write
-            if self.proc != null {
-                self.proc.threads.remove( self )
-            }
-            MM.free( self.stack )
+            MM.free( self.stack ) if self.stack != null
             self.curdir.put() if self.curdir != null
         }
     }
 
-    func thread_init() {
-        for i in 0..MAX_PRIORITY {
-            runq[i] = new DoublyLinkedList<Thread>()
+    let t1: Thread
+    let t2: Thread
+    let sync_test_reporter: Thread
+    let sync_test_detached_thread: Thread
+    let idle_thread: Thread
+    let reaper_thread: Thread
+    let reap_lock: SpinLock
+    let reap_head: void*
+    let reap_tail: void*
+    let reap_waiters: WaitQueue
+
+    let sync_test_mutex: BlockingMutex
+    let sync_test_started: Semaphore
+    let sync_test_attempted: Semaphore
+    let sync_test_short_done: Semaphore
+    let sync_test_done: Semaphore
+    let sync_test_tokens: Semaphore
+    let sync_test_condition: ConditionVariable
+    let sync_test_condition_ready: Semaphore
+    let sync_test_detached_done: Semaphore
+    let sync_test_condition_predicate: bool
+    let sync_test_counter: uint
+    let sync_test_owner_ok: bool
+    let sync_test_unlock_ok: bool
+    let sync_test_bad_unlock_rejected: bool
+    let sync_test_try_failed: bool
+    let sync_test_short_timeout: bool
+    let sync_test_long_acquire: bool
+    let sync_test_semaphore_timeout: bool
+    let sync_test_condition_timeout: bool
+    let sync_test_condition_signal: bool
+    let sync_test_condition_woken: bool
+    let sync_test_broadcast_empty: bool
+    let sync_test_priority_boost: bool
+    let sync_test_priority_restore: bool
+
+    func idle_main(arg: void*) {
+        while true {
+            HAL.halt()
+        }
+    }
+
+    func queue_thread_reap(thread: Thread) -> bool {
+        if thread == null {
+            return false
+        }
+        let queued = false
+        holding reap_lock {
+            if !thread.cleanup_queued {
+                thread.cleanup_queued = true
+                thread.reap_next = null
+                if reap_tail == null {
+                    reap_head = thread as void*
+                    reap_tail = thread as void*
+                } else {
+                    (reap_tail as Thread).reap_next = thread as void*
+                    reap_tail = thread as void*
+                }
+                queued = true
+            }
+        }
+        if queued {
+            wake_one(reap_waiters)
+        }
+        return queued
+    }
+
+    func take_reap_thread() -> void* {
+        let thread: void* = null
+        holding reap_lock {
+            if reap_head != null {
+                thread = reap_head
+                reap_head = (thread as Thread).reap_next
+                (thread as Thread).reap_next = null
+                if reap_head == null {
+                    reap_tail = null
+                }
+            }
+        }
+        return thread
+    }
+
+    // Runs only for a thread other than the current one, so its kernel stack
+    // can be released safely before process ownership is dropped.
+    func reclaim_thread(raw_thread: void*) {
+        return if raw_thread == null
+        let process = (raw_thread as Thread).proc as void*
+        if (raw_thread as Thread).stack != null {
+            MM.free((raw_thread as Thread).stack)
+            (raw_thread as Thread).stack = null
+        }
+        if process != null {
+            holding (process as Process).lock {
+                (process as Process).threads.remove(raw_thread as Thread)
+            }
+        }
+        holding lock {
+            if (raw_thread as Thread).tid < MAX_THREADS {
+                thread_table[(raw_thread as Thread).tid] = null
+            }
+        }
+    }
+
+    func reaper_main(arg: void*) {
+        while true {
+            let raw_thread = take_reap_thread()
+            if raw_thread != null {
+                reclaim_thread(raw_thread)
+            } else {
+                let prepared = false
+                holding reap_lock {
+                    if reap_head == null {
+                        prepared = prepare_block_current(reap_waiters)
+                    }
+                }
+                if prepared {
+                    scheduler_yield()
+                }
+            }
+        }
+    }
+
+    func finish_thread_exit(thread: Thread, value: uint) {
+        return if thread == null
+        let reap = false
+        holding thread.lifecycle_lock {
+            thread.exit_value = value
+            thread.state = ThreadState.Zombie
+            reap = thread.detached
+        }
+        wake_all(thread.join_waiters)
+        if reap {
+            queue_thread_reap(thread)
+        }
+    }
+
+    func thread_exit(value: uint = 0) {
+        let current = current_thread() as void*
+        if current != null {
+            finish_thread_exit(current as Thread, value)
+            scheduler_yield()
+        }
+        while true {
+            HAL.halt()
+        }
+    }
+
+    func join_thread(thread: Thread, value_out: uint* = null) -> bool {
+        let current = current_thread() as void*
+        if thread == null || current == null || thread as void* == current {
+            return false
         }
 
-        let t = new Thread( kproc, func() {
-            "Hello from Thread!!" |> HAL.Serial.write
-        }, null, "Init" )
+        while true {
+            let complete = false
+            let prepared = false
+            holding thread.lifecycle_lock {
+                if thread.detached || thread.joined {
+                    return false
+                }
+                if thread.state == ThreadState.Zombie {
+                    thread.joined = true
+                    complete = true
+                } else {
+                    prepared = prepare_block_current(thread.join_waiters)
+                }
+            }
+            if complete {
+                if value_out != null {
+                    value_out[0] = thread.exit_value
+                }
+                reclaim_thread(thread as void*)
+                return true
+            }
+            if !prepared {
+                return false
+            }
+            scheduler_yield()
+        }
+    }
 
-        t |> mark_thread_ready
+    func detach_thread(thread: Thread) -> bool {
+        if thread == null {
+            return false
+        }
+        let detached = false
+        let reap = false
+        holding thread.lifecycle_lock {
+            if !thread.detached && !thread.joined {
+                thread.detached = true
+                detached = true
+                reap = thread.state == ThreadState.Zombie
+            }
+        }
+        if reap {
+            queue_thread_reap(thread)
+        }
+        return detached
+    }
 
-        switch_context( null, t )
+    func sync_test_holder(arg: void*) {
+        if sync_test_mutex.lock() {
+            sync_test_owner_ok = sync_test_mutex.is_owned_by_current()
+            sync_test_started.post()
+            sync_test_attempted.wait()
+            // Keep ownership until the contender confirms its timed attempt
+            // expired, making the contention test independent of scheduling.
+            sync_test_short_done.wait()
+            sync_test_priority_boost = thread_priority(current_thread()) == 4
+            sync_test_counter = 1
+            sync_test_unlock_ok = sync_test_mutex.unlock()
+            sync_test_priority_restore = thread_priority(current_thread()) == 20
+        } else {
+            sync_test_started.post()
+        }
+
+        if sync_test_mutex.lock() {
+            sync_test_condition_timeout = !sync_test_condition.wait_timeout_ms(sync_test_mutex, 20)
+            sync_test_condition_ready.post()
+            while !sync_test_condition_predicate {
+                sync_test_condition_woken = sync_test_condition.wait(sync_test_mutex)
+            }
+            sync_test_mutex.unlock()
+        }
+        sync_test_done.post()
+        thread_exit(0x11)
+    }
+
+    func sync_test_contender(arg: void*) {
+        sync_test_started.wait()
+        sync_test_bad_unlock_rejected = !sync_test_mutex.unlock()
+        sync_test_try_failed = !sync_test_mutex.try_lock()
+        sync_test_attempted.post()
+        sync_test_short_timeout = !sync_test_mutex.lock_timeout_ms(20)
+        sync_test_short_done.post()
+        sync_test_long_acquire = sync_test_mutex.lock_timeout_ms(500)
+        if sync_test_long_acquire {
+            if sync_test_counter == 1 {
+                sync_test_counter = 2
+            }
+            sync_test_mutex.unlock()
+        }
+
+        sync_test_semaphore_timeout = !sync_test_tokens.wait_timeout_ms(20)
+        sync_test_tokens.post(2)
+
+        sync_test_condition_ready.wait()
+        if sync_test_mutex.lock() {
+            sync_test_condition_predicate = true
+            sync_test_condition_signal = sync_test_condition.signal()
+            sync_test_broadcast_empty = sync_test_condition.broadcast() == 0
+            sync_test_mutex.unlock()
+        }
+        sync_test_done.post()
+        thread_exit(0x22)
+    }
+
+    func sync_test_detached(arg: void*) {
+        sync_test_detached_done.post()
+        thread_exit(0x33)
+    }
+
+    func sync_test_report(arg: void*) {
+        sync_test_done.wait()
+        sync_test_done.wait()
+        sync_test_detached_done.wait()
+
+        let holder_stats = thread_stats(t1)
+        let contender_stats = thread_stats(t2)
+        let holder_value: uint = 0
+        let contender_value: uint = 0
+        let holder_joined = join_thread(t1, &holder_value)
+        let contender_joined = join_thread(t2, &contender_value)
+        // Give the lower-priority reaper a scheduling opportunity. Must be
+        // qualified: prelude.llpl's own top-level `sleep_ms` (an async,
+        // Future-returning helper, unrelated to the scheduler) shadows this
+        // Kern.sleep_ms even from inside namespace Kern - an unqualified
+        // call here silently resolved to the wrong function, constructed
+        // and discarded a SleepFuture, and returned immediately without
+        // ever actually yielding the CPU, so the reaper never got a turn.
+        Kern.sleep_ms(20)
+        let detached_reaped = sync_test_detached_thread.stack == null
+        let reap_test = new Process("reap-test", kproc)
+        let (reap_map_rc, reap_map_addr) = map_user_anonymous(reap_test, 0, MM.PAGE_SIZE * 2)
+        let reap_pid = reap_test.pid
+        mark_process_exited(reap_test, 0x44)
+        let reap_status: uint = 0
+        let waited_pid = wait_process(kproc, reap_pid, &reap_status)
+        let process_reaped = reap_map_rc == EOK && reap_map_addr != 0 &&
+            waited_pid == reap_pid as int && reap_status == 0x44 &&
+            reap_test.resources_reaped && reap_test.pml4 == 0 &&
+            reap_test.aspace.root == null && reap_test.fds == null
+
+        let cow_parent = new Process("cow-parent", kproc)
+        let (cow_map_rc, cow_addr) = map_user_anonymous(cow_parent, 0, MM.PAGE_SIZE)
+        let cow_faulted = cow_map_rc == EOK &&
+            resolve_user_page_fault(cow_parent, cow_addr, 4)
+        let parent_paddr = MM.v2p(cow_parent.pml4, cow_addr)
+        if cow_faulted && parent_paddr != 0 {
+            (MM.p2v(parent_paddr) as char*)[0] = 'P'
+        }
+        let cow_child = clone_process_address_space(cow_parent, "cow-child")
+        let shared_paddr = MM.v2p(cow_child.pml4, cow_addr)
+        let shared_frame = (MM.pfdb as uint + (parent_paddr >> MM.PAGE_SHIFT) * sizeof(MM.PageFrame)) as MM.PageFrame*
+        let shared_ok = cow_child != null && parent_paddr != 0 &&
+            shared_paddr == parent_paddr && shared_frame.refcount == 2
+        let cow_copied = shared_ok && resolve_user_page_fault(cow_child, cow_addr, 7)
+        let child_paddr = MM.v2p(cow_child.pml4, cow_addr)
+        let copied_ok = cow_copied && child_paddr != 0 && child_paddr != parent_paddr &&
+            (MM.p2v(child_paddr) as char*)[0] == 'P' && shared_frame.refcount == 1
+        if copied_ok { (MM.p2v(child_paddr) as char*)[0] = 'C' }
+        let cow_isolated = copied_ok && (MM.p2v(parent_paddr) as char*)[0] == 'P' &&
+            (MM.p2v(child_paddr) as char*)[0] == 'C'
+        mark_process_exited(cow_child, 0x55)
+        let cow_child_status: uint = 0
+        let cow_child_waited = wait_process(cow_parent, cow_child.pid, &cow_child_status)
+        mark_process_exited(cow_parent, 0x66)
+        let cow_parent_status: uint = 0
+        let cow_parent_waited = wait_process(kproc, cow_parent.pid, &cow_parent_status)
+        let cow_reaped = cow_child_waited > 0 && cow_child_status == 0x55 &&
+            cow_parent_waited > 0 && cow_parent_status == 0x66
+
+        let token_one = sync_test_tokens.try_wait()
+        let token_two = sync_test_tokens.try_wait()
+        let token_three_rejected = !sync_test_tokens.try_wait()
+        let passed = sync_test_owner_ok && sync_test_unlock_ok &&
+            sync_test_bad_unlock_rejected && sync_test_try_failed &&
+            sync_test_short_timeout && sync_test_long_acquire &&
+            sync_test_semaphore_timeout && sync_test_counter == 2 &&
+            sync_test_condition_timeout && sync_test_condition_signal &&
+            sync_test_condition_woken && sync_test_broadcast_empty &&
+            sync_test_priority_boost && sync_test_priority_restore &&
+            token_one && token_two && token_three_rejected &&
+            sync_test_tokens.value() == 0 && holder_joined && contender_joined &&
+            holder_value == 0x11 && contender_value == 0x22 && detached_reaped &&
+            process_reaped && cow_isolated && cow_reaped &&
+            holder_stats.context_switches != 0 && holder_stats.wakeups != 0 &&
+            contender_stats.context_switches != 0 && contender_stats.voluntary_yields != 0
+
+        if passed {
+            "Sync self-test: PASS\n" |> HAL.Serial.write
+        } else {
+            "Sync self-test: FAIL\n" |> HAL.Serial.write
+            if !sync_test_owner_ok { "  owner check\n" |> HAL.Serial.write }
+            if !sync_test_unlock_ok { "  owner unlock\n" |> HAL.Serial.write }
+            if !sync_test_bad_unlock_rejected { "  foreign unlock\n" |> HAL.Serial.write }
+            if !sync_test_try_failed { "  contended try_lock\n" |> HAL.Serial.write }
+            if !sync_test_short_timeout { "  short mutex timeout\n" |> HAL.Serial.write }
+            if !sync_test_long_acquire { "  long mutex acquire\n" |> HAL.Serial.write }
+            if !sync_test_semaphore_timeout { "  semaphore timeout\n" |> HAL.Serial.write }
+            if !sync_test_condition_timeout { "  condition timeout\n" |> HAL.Serial.write }
+            if !sync_test_condition_signal || !sync_test_condition_woken { "  condition signal\n" |> HAL.Serial.write }
+            if !sync_test_broadcast_empty { "  condition broadcast\n" |> HAL.Serial.write }
+            if !sync_test_priority_boost { "  priority inheritance\n" |> HAL.Serial.write }
+            if !sync_test_priority_restore { "  priority restoration\n" |> HAL.Serial.write }
+            if sync_test_counter != 2 { "  protected counter\n" |> HAL.Serial.write }
+            if !token_one || !token_two || !token_three_rejected { "  semaphore tokens\n" |> HAL.Serial.write }
+            if sync_test_tokens.value() != 0 { "  semaphore value\n" |> HAL.Serial.write }
+            if !holder_joined || !contender_joined || holder_value != 0x11 || contender_value != 0x22 { "  thread join/exit value\n" |> HAL.Serial.write }
+            if !detached_reaped { "  detached reaping\n" |> HAL.Serial.write }
+            if !process_reaped { "  process resource reaping\n" |> HAL.Serial.write }
+            if !cow_isolated || !cow_reaped { "  copy-on-write cloning\n" |> HAL.Serial.write }
+            if holder_stats.context_switches == 0 || holder_stats.wakeups == 0 || contender_stats.context_switches == 0 || contender_stats.voluntary_yields == 0 { "  scheduler statistics\n" |> HAL.Serial.write }
+        }
+    }
+
+    func thread_init() {
+        for i in 0..MAX_THREADS { thread_table[i] = null }
+        for i in 0..MAX_PRIORITY {
+            runq_head[i] = null
+            runq_tail[i] = null
+        }
+
+        sync_test_mutex = new BlockingMutex()
+        sync_test_started = new Semaphore(0)
+        sync_test_attempted = new Semaphore(0)
+        sync_test_short_done = new Semaphore(0)
+        sync_test_done = new Semaphore(0)
+        sync_test_tokens = new Semaphore(0)
+        sync_test_condition = new ConditionVariable()
+        sync_test_condition_ready = new Semaphore(0)
+        sync_test_detached_done = new Semaphore(0)
+        sync_test_condition_predicate = false
+        sync_test_counter = 0
+
+        t1 = new Thread(kproc, sync_test_holder, null, "sync-holder", THREAD_KERNEL, 20)
+
+        t1 |> mark_thread_ready
+
+        t2 = new Thread(kproc, sync_test_contender, null, "sync-contender", THREAD_KERNEL, 4)
+
+        t2 |> mark_thread_ready
+
+        sync_test_reporter = new Thread(kproc, sync_test_report, null, "sync-reporter")
+        sync_test_reporter |> mark_thread_ready
+
+        sync_test_detached_thread = new Thread(kproc, sync_test_detached, null, "sync-detached")
+        detach_thread(sync_test_detached_thread)
+        sync_test_detached_thread |> mark_thread_ready
+
+        Deferred.init()
+
+        reap_head = null
+        reap_tail = null
+        reap_waiters = new WaitQueue()
+        reaper_thread = new Thread(kproc, reaper_main, null, "thread-reaper", THREAD_KERNEL, MAX_PRIORITY - 2)
+        reaper_thread |> mark_thread_ready
+
+        idle_thread = new Thread(kproc, idle_main, null, "idle", THREAD_KERNEL, MAX_PRIORITY - 1)
+        idle_thread |> mark_thread_ready
+    }
+
+    func init_user_pml4( proc: Process ) {
+        memcpy( MM.p2v(proc.pml4) as void*, MM.p2v(MM.kernel_pml4) as void*, MM.PAGE_SIZE )
+
+        let pml4 = MM.p2v( proc.pml4 ) as u64*
+        for i in 0..256 {
+            pml4[i] = 0
+        }
+    }
+
+    func map_user_zero_page( proc: Process, vaddr: uint, writable: bool ) -> uint {
+        let pf = MM.alloc_pageframe( MM.FrameType.Other )
+        let paddr = MM.pf2p( pf )
+        memset( MM.p2v( paddr ) as void*, 0, MM.PAGE_SIZE )
+
+        let flags = MM.PG_PRESENT | MM.PG_USER
+        if writable {
+            flags |= MM.PG_WRITABLE
+        }
+
+        MM.map_page( proc.pml4, vaddr, paddr, flags )
+        paddr
+    }
+
+    func thread_cr3( thread: Thread ) -> u64 {
+        if thread == null || thread.proc == null {
+            return MM.kernel_pml4
+        }
+
+        return thread.proc.pml4
+    }
+
+    func switch_thread_address_space( thread: Thread ) {
+        let cr3 = thread_cr3( thread )
+        if (HAL.read_cr3() & MM.PADDR_4K_MASK) != cr3 {
+            HAL.write_cr3( cr3 )
+        }
+        HAL.write_msr(0xC000_0100 as u32, thread.tls_base)
+    }
+
+    func find_process_thread(proc: Process, tid: uint) -> Thread {
+        return null if proc == null || tid == 0 || tid >= MAX_THREADS
+        let raw = thread_table[tid]
+        return null if raw == null || (raw as Thread).proc != proc
+        return raw as Thread
+    }
+
+    func create_user_thread(proc: Process, entry: uint, arg: uint, tls: uint) -> int {
+        return EINVAL if proc == null || proc == kproc || proc.exited ||
+            entry < 0x1000 || entry >= USER_MMAP_END || tls >= USER_MMAP_END
+        let (rc, stack) = map_user_anonymous(proc, 0, MM.PAGE_SIZE * 4)
+        return rc if rc < 0
+        let thread = new Thread(proc, user_entry_placeholder, null, "user-thread", THREAD_USER)
+        thread.ctx.rip = entry
+        thread.ctx.rsp = stack + MM.PAGE_SIZE * 4 - 8
+        thread.ctx.rdi = arg
+        thread.tls_base = tls
+        thread |> mark_thread_ready
+        return thread.tid as int
+    }
+
+    func terminate_process_threads(proc: Process, except: Thread, status: uint) {
+        return if proc == null
+        for tid in 1..MAX_THREADS {
+            let raw = thread_table[tid]
+            if raw != null && (raw as Thread).proc == proc && raw != except as void* &&
+                (raw as Thread).state != ThreadState.Zombie {
+                holding lock {
+                    if (raw as Thread).state == ThreadState.Ready {
+                        remove_ready_locked(raw as Thread)
+                    }
+                }
+                (raw as Thread).detached = true
+                finish_thread_exit(raw as Thread, status)
+            }
+        }
     }
 
     func thread_trampoline() {
         let thread: Thread = HAL.current().thread
         if thread != null {
+            HAL.enable_interrupts()
             thread.ptr( thread.arg )
-        }
-
-        if thread != null {
-            thread.state = ThreadState.Zombie
+            thread_exit(0)
         }
 
         while true {
@@ -118,95 +659,357 @@ namespace Kern {
     }
 
     func init_thread_context( thread: Thread ) {
-        return if !thread
-
         let top = ((thread.stack as uint) + thread.stack_size) & ~0xF
         let frame_addr = top - sizeof(HAL.IDT.Context)
         let ctx = frame_addr as HAL.IDT.Context*
 
         memset( ctx as void*, 0, sizeof(HAL.IDT.Context) )
-        ctx.rip = thread_trampoline as u64
-        ctx.cs = 0x08
-        ctx.rflags = 0x202
-        ctx.rsp = top
-        ctx.ss = 0x10
+        ctx.rip     = thread_trampoline as u64
+        ctx.cs      = HAL.GDT.KERNEL_CS
+        ctx.rflags  = 0x202
+        ctx.rsp     = frame_addr - 16
+        ctx.ss      = HAL.GDT.KERNEL_DS
 
-        thread.ctx = ctx
+        thread.ctx  = ctx
     }
 
     func mark_thread_ready( thread: Thread ) {
-        return if !thread
         return if thread.state == ThreadState.Zombie
 
         thread.state = ThreadState.Ready
         holding lock {
-            runq[thread.priority].push_back( thread )
-            ready_summary |= 1 << thread.priority
+            enqueue_ready_locked(thread)
         }
+    }
+
+    // Voluntarily give another ready thread a chance to run. Vector 0x80 is
+    // a DPL3 interrupt gate, so the same primitive can later back a userspace
+    // yield syscall without duplicating context-switch machinery.
+    func scheduler_yield() {
+        let current = current_thread() as void*
+        if current != null {
+            (current as Thread).voluntary_yields++
+        }
+        asm("int $0x80" : : : "memory")
+    }
+
+    func account_current_runtime_tick() {
+        let current = current_thread() as void*
+        if current != null && (current as Thread).state == ThreadState.Running {
+            (current as Thread).runtime_ticks++
+        }
+    }
+
+    func thread_stats(thread: Thread) -> ThreadStats {
+        if thread == null {
+            return ThreadStats { runtime_ticks: 0, context_switches: 0, wakeups: 0, voluntary_yields: 0, sleep_ticks: 0 }
+        }
+        return ThreadStats {
+            runtime_ticks: thread.runtime_ticks,
+            context_switches: thread.context_switches,
+            wakeups: thread.wakeups,
+            voluntary_yields: thread.voluntary_yields,
+            sleep_ticks: thread.sleep_ticks_total
+        }
+    }
+
+    func thread_priority(thread: Thread) -> uint {
+        if thread == null {
+            return MAX_PRIORITY
+        }
+        return thread.priority
+    }
+
+    // Remove a ready thread without allocating or freeing queue nodes. The
+    // caller must hold Kern.lock with local interrupts disabled.
+    func remove_ready_locked(thread: Thread) -> bool {
+        let priority = thread.priority
+        let previous: void* = null
+        let cursor = runq_head[priority] as void*
+
+        while cursor != null {
+            if cursor == thread as void* {
+                let following = (cursor as Thread).runq_next as void*
+                if previous == null {
+                    runq_head[priority] = following as Thread
+                } else {
+                    (previous as Thread).runq_next = following as Thread
+                }
+
+                if runq_tail[priority] == cursor as Thread {
+                    runq_tail[priority] = previous as Thread
+                }
+                (cursor as Thread).runq_next = null
+
+                if runq_head[priority] == null {
+                    runq_tail[priority] = null
+                    ready_summary &= ~(1 << priority)
+                }
+                return true
+            }
+            previous = cursor
+            cursor = (cursor as Thread).runq_next as void*
+        }
+        return false
+    }
+
+    // Changes take effect immediately for queued threads. A running thread
+    // uses its new priority the next time it is placed back on a run queue.
+    func set_thread_effective_priority(thread: Thread, priority: uint) -> bool {
+        if thread == null || priority >= MAX_PRIORITY || thread.state == ThreadState.Zombie {
+            return false
+        }
+        if thread.priority == priority {
+            return true
+        }
+
+        let changed = true
+        holding lock {
+            let was_ready = thread.state == ThreadState.Ready
+            if was_ready && !remove_ready_locked(thread) {
+                changed = false
+            }
+            if changed {
+                thread.priority = priority
+                if was_ready {
+                    enqueue_ready_locked(thread)
+                }
+            }
+        }
+        return changed
+    }
+
+    func set_thread_priority(thread: Thread, priority: uint) -> bool {
+        if thread == null || priority >= MAX_PRIORITY || thread.state == ThreadState.Zombie {
+            return false
+        }
+        thread.base_priority = priority
+        refresh_thread_inherited_priority(thread)
+        return true
+    }
+
+    // Optionally yield after reprioritizing the caller so another thread can
+    // observe the new ordering without waiting for the next timer tick.
+    func set_current_thread_priority(priority: uint, yield_now: bool = true) -> bool {
+        let current = current_thread() as void*
+        if current == null || !set_thread_priority(current as Thread, priority) {
+            return false
+        }
+        if yield_now {
+            scheduler_yield()
+        }
+        return true
+    }
+
+    // Intrusive run queues keep the interrupt-time scheduler independent of
+    // the heap. The caller must hold Kern.lock.
+    func enqueue_ready_locked(thread: Thread) {
+        let priority = thread.priority
+        thread.runq_next = null
+        if runq_tail[priority] == null {
+            runq_head[priority] = thread
+            runq_tail[priority] = thread
+        } else {
+            runq_tail[priority].runq_next = thread
+            runq_tail[priority] = thread
+        }
+        ready_summary |= 1 << priority
+    }
+
+    func next_thread() -> void* {
+        holding lock {
+            if ready_summary == 0 {
+                return null
+            }
+
+            let priority: uint = 0
+            while priority < MAX_PRIORITY && (ready_summary & (1 << priority)) == 0 {
+                priority = priority + 1
+            }
+
+            if priority == MAX_PRIORITY {
+                return null
+            }
+
+            let next = runq_head[priority] as void*
+            if next == null {
+                ready_summary &= ~(1 << priority)
+                return null
+            }
+
+            runq_head[priority] = (next as Thread).runq_next
+            (next as Thread).runq_next = null
+            if runq_head[priority] == null {
+                runq_tail[priority] = null
+                ready_summary &= ~(1 << priority)
+            }
+
+            return next
+        }
+    }
+
+    func schedule_from_interrupt( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
+        // Raw pointers are intentional: scheduler lookups borrow threads.
+        // Owning class locals would emit rc_release calls on interrupt return.
+        let current = current_thread() as void*
+        if current != null {
+            (current as Thread).ctx = ctx
+        }
+
+        let next = next_thread()
+        if next == null {
+            return ctx
+        }
+
+        holding lock {
+            if current != null && (current as Thread).state == ThreadState.Running {
+                (current as Thread).state = ThreadState.Ready
+                enqueue_ready_locked(current as Thread)
+            }
+
+            (next as Thread).state = ThreadState.Running
+            (next as Thread).context_switches++
+            HAL.current().thread = next as Thread
+            switch_thread_address_space( next as Thread )
+            HAL.GDT.set_tss_rsp0( (((next as Thread).stack as uint) + (next as Thread).stack_size) & ~0xF )
+        }
+
+        return (next as Thread).ctx
+    }
+
+    func exit_current_thread_from_syscall( ctx: HAL.IDT.Context*, status: uint ) -> HAL.IDT.Context* {
+        let current = current_thread() as void*
+        if current == null {
+            return ctx
+        }
+
+        (current as Thread).ctx = ctx
+        finish_thread_exit(current as Thread, status)
+        ctx.rax = status
+
+        let next_ctx = schedule_from_interrupt( ctx )
+        if next_ctx == ctx {
+            HAL.enable_interrupts()
+            while true {
+                HAL.halt()
+            }
+        }
+
+        return next_ctx
+    }
+
+    func exit_current_process_from_syscall(ctx: HAL.IDT.Context*, status: uint) -> HAL.IDT.Context* {
+        let current = current_thread() as void*
+        if current != null {
+            terminate_process_threads((current as Thread).proc, current as Thread, status)
+            mark_process_exited((current as Thread).proc, status)
+        }
+        return exit_current_thread_from_syscall(ctx, status)
+    }
+
+    func kill_current_thread_from_interrupt( ctx: HAL.IDT.Context*, status: uint ) -> HAL.IDT.Context* {
+        let current = current_thread() as void*
+        if current == null {
+            return ctx
+        }
+
+        (current as Thread).ctx = ctx
+        finish_thread_exit(current as Thread, status)
+        ctx.rax = status
+
+        let next_ctx = schedule_from_interrupt( ctx )
+        if next_ctx == ctx {
+            HAL.enable_interrupts()
+            while true {
+                HAL.halt()
+            }
+        }
+
+        return next_ctx
     }
 
     inline func current_thread() -> Thread {
         return HAL.current().thread
     }
 
-    func switch_context( ctx: HAL.IDT.Context*, next: Thread ) -> HAL.IDT.Context* {
-        if next == null || next.state == ThreadState.Zombie || next.ctx == null {
-            //return ctx
-        }
-        
-        if next == null || next.state == ThreadState.Zombie || next.ctx == null {
-            return ctx
-        }
-        
+    func switch_context( next: Thread ) {
+        return if next == null
+
         let current = current_thread()
-        if current != null && ctx != null {
-            current.ctx = ctx
+        let resumed: uint = 0
+
+        if current != null && current.ctx != null {
+            let old_ctx = current.ctx
+            asm("mov %%r15, 0(%0)\n\t"
+                "mov %%r14, 8(%0)\n\t"
+                "mov %%r13, 16(%0)\n\t"
+                "mov %%r12, 24(%0)\n\t"
+                "mov %%r11, 32(%0)\n\t"
+                "mov %%r10, 40(%0)\n\t"
+                "mov %%r9, 48(%0)\n\t"
+                "mov %%r8, 56(%0)\n\t"
+                "mov %%rdi, 64(%0)\n\t"
+                "mov %%rsi, 72(%0)\n\t"
+                "mov %%rbp, 80(%0)\n\t"
+                "mov %%rbx, 88(%0)\n\t"
+                "mov %%rdx, 96(%0)\n\t"
+                "mov %%rcx, 104(%0)\n\t"
+                "mov %%rax, 112(%0)\n\t"
+                "mov %0, %%r11\n\t"
+                "lea 1f(%%rip), %%rax\n\t"
+                "mov %%rax, 136(%%r11)\n\t"
+                "movq $0, 120(%%r11)\n\t"
+                "movq $0, 128(%%r11)\n\t"
+                "movq $0x08, 144(%%r11)\n\t"
+                "pushfq\n\t"
+                "pop %%rax\n\t"
+                "orq $0x200, %%rax\n\t"
+                "mov %%rax, 152(%%r11)\n\t"
+                "mov %%rsp, 160(%%r11)\n\t"
+                "movq $0x10, 168(%%r11)\n\t"
+                "xor %%eax, %%eax\n\t"
+                "jmp 2f\n"
+                "1: mov $1, %%eax\n"
+                "2:"
+                : "=a"(resumed) : "r"(old_ctx) : "memory")
         }
 
-        if current == next {
-            return ctx
-        }
+        return if resumed != 0
 
         holding lock {
             if current != null {
                 if current.state == ThreadState.Running {
                     current.state = ThreadState.Ready
-                    runq[current.priority].push_back( current )
-                    ready_summary |= 1 << current.priority
+                    enqueue_ready_locked(current)
                 }
-            }
-
-            runq[next.priority].remove( next )
-            if runq[next.priority].is_empty() {
-                ready_summary &= ~(1 << next.priority)
             }
 
             next.state = ThreadState.Running
             HAL.current().thread = next
+            switch_thread_address_space( next )
             HAL.GDT.set_tss_rsp0( ((next.stack as uint) + next.stack_size) & ~0xF )
         }
 
-        let next_ctx = next.ctx
         asm("mov %0, %%rsp\n\t"
-            "pop %%r15\n\t"
-            "pop %%r14\n\t"
-            "pop %%r13\n\t"
-            "pop %%r12\n\t"
-            "pop %%r11\n\t"
-            "pop %%r10\n\t"
-            "pop %%r9\n\t"
-            "pop %%r8\n\t"
-            "pop %%rdi\n\t"
-            "pop %%rsi\n\t"
-            "pop %%rbp\n\t"
-            "pop %%rbx\n\t"
-            "pop %%rdx\n\t"
-            "pop %%rcx\n\t"
-            "pop %%rax\n\t"
-            "add $16, %%rsp\n\t"
-            "iretq"
-            : : "r"(next_ctx) : "memory")
-
-        return next_ctx
+            "mov 0(%%rsp), %%r15\n\t"
+            "mov 8(%%rsp), %%r14\n\t"
+            "mov 16(%%rsp), %%r13\n\t"
+            "mov 24(%%rsp), %%r12\n\t"
+            "mov 48(%%rsp), %%r9\n\t"
+            "mov 56(%%rsp), %%r8\n\t"
+            "mov 64(%%rsp), %%rdi\n\t"
+            "mov 72(%%rsp), %%rsi\n\t"
+            "mov 80(%%rsp), %%rbp\n\t"
+            "mov 88(%%rsp), %%rbx\n\t"
+            "mov 96(%%rsp), %%rdx\n\t"
+            "mov 104(%%rsp), %%rcx\n\t"
+            "mov 136(%%rsp), %%rax\n\t"
+            "mov 152(%%rsp), %%r10\n\t"
+            "mov 160(%%rsp), %%r11\n\t"
+            "push %%r10\n\t"
+            "popfq\n\t"
+            "mov %%r11, %%rsp\n\t"
+            "jmp *%%rax"
+            : : "r"(next.ctx) : "memory")
     }
 }

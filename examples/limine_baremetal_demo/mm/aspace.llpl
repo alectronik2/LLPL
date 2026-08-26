@@ -11,11 +11,65 @@ namespace MM {
 
     const MAP_FIXED = 1 << 0
     const MAP_USER  = 1 << 1
+    const MAP_FILE  = 1 << 2
+    const MAP_SHARED = 1 << 3
+    const MAP_WRITE = 1 << 4
 
     let kas: AddressSpace*
 
-    func vm_drop_memory(addr: uint, end: uint) {
-        // TODO: remove page-table mappings and release page frames for [addr, end).
+    func page_table_empty(table: Pte*) -> bool {
+        for i in 0..512 {
+            if table[i].pte.present { return false }
+        }
+        return true
+    }
+
+    func release_paddr_frame(paddr: uint) {
+        let frame = (pfdb as uint + (paddr >> PAGE_SHIFT) * sizeof(PageFrame)) as PageFrame*
+        frame.release()
+    }
+
+    func vm_drop_memory(pgdir: uint, addr: uint, end: uint) {
+        return if pgdir == 0 || end <= addr
+        let start = addr & ~(PAGE_SIZE - 1)
+        let limit = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)
+        let active = (HAL.read_cr3() & PADDR_4K_MASK) == (pgdir & PADDR_4K_MASK)
+        let pml4 = p2v(pgdir & PADDR_4K_MASK) as Pte*
+
+        for let page = start; page < limit; page += PAGE_SIZE {
+            let idx = PageFrameIndexer(page)
+            if pml4[idx.l4].pte.present && !pml4[idx.l4].pte.ps {
+                let pdpt = p2v(pml4[idx.l4].paddr) as Pte*
+                if pdpt[idx.l3].pte.present && !pdpt[idx.l3].pte.ps {
+                    let pd = p2v(pdpt[idx.l3].paddr) as Pte*
+                    if pd[idx.l2].pte.present && !pd[idx.l2].pte.ps {
+                        let pt_paddr = pd[idx.l2].paddr
+                        let pt = p2v(pt_paddr) as Pte*
+                        if pt[idx.l1].pte.present {
+                            let mapped_paddr = pt[idx.l1].paddr
+                            pt[idx.l1].raw = 0
+                            if active { asm("invlpg (%0)" : : "r"(page) : "memory") }
+                            release_paddr_frame(mapped_paddr)
+                        }
+
+                        if page_table_empty(pt) {
+                            pd[idx.l2].raw = 0
+                            release_paddr_frame(pt_paddr)
+                            if page_table_empty(pd) {
+                                let pd_paddr = pdpt[idx.l3].paddr
+                                pdpt[idx.l3].raw = 0
+                                release_paddr_frame(pd_paddr)
+                                if page_table_empty(pdpt) {
+                                    let pdpt_paddr = pml4[idx.l4].paddr
+                                    pml4[idx.l4].raw = 0
+                                    release_paddr_frame(pdpt_paddr)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     class VmArea : Object {
@@ -30,17 +84,31 @@ namespace MM {
         color: RbColor
 
         name: String
+        backing: void*
+        file_offset: uint
+        file_length: uint
 
-        constructor( @start: uint, @end: uint ) { }
+        constructor( @start: uint, @end: uint ) {
+            self.flags = 0
+            self.left = null
+            self.right = null
+            self.parent = null
+            self.color = RbColor.Black
+            self.name = null
+            self.backing = null
+            self.file_offset = 0
+            self.file_length = 0
+        }
 
         destructor() {
             name.put() if name
+            (backing as Object).put() if backing
         }
     }
 
     class AddressSpace : Object {
         root: VmArea*
-        pml4: uint*
+        pml4: uint
 
         start: uint
         end:   uint
@@ -53,6 +121,19 @@ namespace MM {
             self.start = start
             self.end   = end
             self.root = null
+            self.pml4 = 0
+        }
+
+        func destroy_user_memory() {
+            return if self.pml4 == 0
+            assert((HAL.read_cr3() & PADDR_4K_MASK) != (self.pml4 & PADDR_4K_MASK), "cannot destroy the active address space")
+            let detached_root: void* = null
+            holding self.lock {
+                detached_root = self.root as void*
+                self.root = null
+                self.num_areas = 0
+            }
+            destroy_vma_tree(detached_root, self.pml4)
         }
 
         func find( addr: uint ) -> VmArea* {
@@ -263,29 +344,92 @@ namespace MM {
 
                     if unmap_start <= vma.start && unmap_end >= vma.end {
                         MM.rb_delete(self, vma)
-                        vma.put()
+                        delete vma
                     } else if unmap_start > vma.start && unmap_end < vma.end {
                         let right_vma = new MM.VmArea(unmap_end, vma.end)
                         if !right_vma {
                             return ENOMEM
                         }
 
-                        right_vma.name = new String("split")
+                        right_vma.name = null
                         right_vma.flags = vma.flags
+                        right_vma.backing = vma.backing
+                        if right_vma.backing != null { (right_vma.backing as Object).get() }
+                        right_vma.file_offset = vma.file_offset + (unmap_end - vma.start)
+                        right_vma.file_length = vma.file_length - (unmap_end - vma.start)
 
+                        vma.file_length = unmap_start - vma.start
                         vma.end = unmap_start
                         MM.rb_insert(self, right_vma)
                     } else if unmap_start <= vma.start && unmap_end < vma.end {
+                        let removed = unmap_end - vma.start
                         vma.start = unmap_end
+                        vma.file_offset += removed
+                        vma.file_length -= removed
                     } else if unmap_start > vma.start && unmap_end >= vma.end {
+                        vma.file_length = unmap_start - vma.start
                         vma.end = unmap_start
                     }
                 }
             }
-            MM.vm_drop_memory(addr, addr + length)
+            MM.vm_drop_memory(self.pml4, addr, addr + length)
 
             return EOK
         }
+    }
+
+    func destroy_vma_tree(raw_area: void*, pgdir: uint) {
+        return if raw_area == null
+        let left = (raw_area as VmArea).left as void*
+        let right = (raw_area as VmArea).right as void*
+        destroy_vma_tree(left, pgdir)
+        destroy_vma_tree(right, pgdir)
+        vm_drop_memory(pgdir, (raw_area as VmArea).start, (raw_area as VmArea).end)
+        (raw_area as VmArea).left = null
+        (raw_area as VmArea).right = null
+        (raw_area as VmArea).parent = null
+        delete (raw_area as VmArea)
+    }
+
+    func clone_vma_tree(raw_area: void*, source_pgdir: uint, target: AddressSpace*) {
+        return if raw_area == null
+
+        "clone_vma_tree: raw_area=\(raw_area:hex) source_pgdir=\(source_pgdir:hex) target.pml4=\(target.pml4:hex)\n" |> hs.write
+        "  source->left=\((raw_area as VmArea).left:hex) source->right=\((raw_area as VmArea).right:hex) source->start=\((raw_area as VmArea).start:hex) source->end=\((raw_area as VmArea).end:hex)\n" |> hs.write
+
+        clone_vma_tree((raw_area as VmArea).left as void*, source_pgdir, target)
+
+        let source = raw_area as VmArea
+        let copy = new VmArea(source.start, source.end)
+        copy.flags = source.flags
+        copy.name = null
+        copy.backing = source.backing
+        if copy.backing != null { (copy.backing as Object).get() }
+        copy.file_offset = source.file_offset
+        copy.file_length = source.file_length
+        rb_insert(target, copy)
+
+        for let page = source.start; page < source.end; page += PAGE_SIZE {
+            let source_pte = leaf_pte(source_pgdir, page)
+            if source_pte != null && source_pte.pte.present {
+                let paddr = source_pte.paddr
+                let flags = source_pte.raw & ~PADDR_4K_MASK
+                if (source.flags & MAP_SHARED) == 0 &&
+                    (source_pte.pte.rw || (source_pte.raw & PG_COW) != 0) {
+                    flags = (flags & ~PG_WRITABLE) | PG_COW
+                    source_pte.raw = paddr | flags | PG_PRESENT
+                    asm("invlpg (%0)" : : "r"(page) : "memory")
+                }
+                let frame = (pfdb as uint + (paddr >> PAGE_SHIFT) * sizeof(PageFrame)) as PageFrame*
+                frame.acquire()
+                if !map_page(target.pml4, page, paddr, flags) {
+                    frame.release()
+                    panic("clone_vma_tree: cannot map shared page")
+                }
+            }
+        }
+
+        clone_vma_tree((raw_area as VmArea).right as void*, source_pgdir, target)
     }
 
     func rb_grandparent( area: VmArea* ) -> VmArea* {
@@ -387,6 +531,9 @@ namespace MM {
     }
 
     func rb_insert( space: AddressSpace*, vma: VmArea* ) {
+        // Tree links are raw pointers, so retain one reference for tree
+        // ownership independently of the caller's temporary.
+        rc_retain(vma as char*)
         let parent: VmArea* = null
         let curr = space.root
 

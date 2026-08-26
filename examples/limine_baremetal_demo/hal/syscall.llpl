@@ -1,0 +1,509 @@
+import hal
+import mm
+import kern
+
+extern func syscall_entry()
+
+const USER_COPY_LOW  = 0x0000_0000_0000_1000
+const USER_COPY_HIGH = 0x0000_8000_0000_0000
+const USER_PATH_MAX  = 2048
+const USER_IO_MAX    = 64 * 1024
+
+const SYS_OPEN     = 4
+const SYS_FD_READ  = 5
+const SYS_FD_WRITE = 6
+const SYS_CLOSE    = 7
+const SYS_SEEK     = 8
+const SYS_MMAP_FILE = 11
+const SYS_MSYNC     = 12
+const SYS_SPAWN     = 13
+const SYS_EXEC      = 14
+const SYS_WAITPID   = 15
+const SYS_THREAD_CREATE = 16
+const SYS_THREAD_EXIT = 17
+const SYS_THREAD_JOIN = 18
+const SYS_THREAD_DETACH = 19
+const SYS_GET_TLS = 20
+const SYS_PIPE = 21
+const SYS_DUP = 22
+const SYS_DUP2 = 23
+const SYS_CLOEXEC = 24
+const SYS_BRK = 25
+const SYS_SBRK = 26
+
+inline func user_pte_ok( pte: MM.Pte* ) -> bool {
+    return pte.pte.present && pte.pte.user
+}
+
+inline func user_pte_write_ok( pte: MM.Pte* ) -> bool {
+    return pte.pte.present && pte.pte.user && pte.pte.rw
+}
+
+inline func user_table_paddr_ok( paddr: uint ) -> bool {
+    return paddr < MM.max_phys_addr
+}
+
+func user_v2p( pgdir: uint, vaddr: uint, writable: bool = false ) -> (bool, uint) {
+    let idx = MM.PageFrameIndexer( vaddr )
+    let pml4_paddr = pgdir & MM.PADDR_4K_MASK
+
+    if !user_table_paddr_ok( pml4_paddr ) {
+        return (false, 0)
+    }
+
+    let pml4 = MM.p2v( pml4_paddr ) as MM.Pte*
+    if !user_pte_ok( &pml4[idx.l4] ) || (writable && !pml4[idx.l4].pte.rw) {
+        return (false, 0)
+    }
+
+    let pdpt_paddr = pml4[idx.l4].paddr
+    if !user_table_paddr_ok( pdpt_paddr ) {
+        return (false, 0)
+    }
+
+    let pdpt = MM.p2v( pdpt_paddr ) as MM.Pte*
+    if !user_pte_ok( &pdpt[idx.l3] ) || (writable && !pdpt[idx.l3].pte.rw) {
+        return (false, 0)
+    }
+
+    if pdpt[idx.l3].pte.ps {
+        let paddr = (pdpt[idx.l3].raw & MM.PADDR_1G_MASK) | (vaddr & ((1 << 30) - 1))
+        if paddr >= MM.max_phys_addr {
+            return (false, 0)
+        }
+        return (true, paddr)
+    }
+
+    let pd_paddr = pdpt[idx.l3].paddr
+    if !user_table_paddr_ok( pd_paddr ) {
+        return (false, 0)
+    }
+
+    let pd = MM.p2v( pd_paddr ) as MM.Pte*
+    if !user_pte_ok( &pd[idx.l2] ) || (writable && !pd[idx.l2].pte.rw) {
+        return (false, 0)
+    }
+
+    if pd[idx.l2].pte.ps {
+        let paddr = (pd[idx.l2].raw & MM.PADDR_2M_MASK) | (vaddr & ((1 << 21) - 1))
+        if paddr >= MM.max_phys_addr {
+            return (false, 0)
+        }
+        return (true, paddr)
+    }
+
+    let pt_paddr = pd[idx.l2].paddr
+    if !user_table_paddr_ok( pt_paddr ) {
+        return (false, 0)
+    }
+
+    let pt = MM.p2v( pt_paddr ) as MM.Pte*
+    if writable {
+        if !user_pte_write_ok( &pt[idx.l1] ) {
+            return (false, 0)
+        }
+    } else if !user_pte_ok( &pt[idx.l1] ) {
+        return (false, 0)
+    }
+
+    let paddr = pt[idx.l1].paddr | (vaddr & (MM.PAGE_SIZE - 1))
+    if paddr >= MM.max_phys_addr {
+        return (false, 0)
+    }
+    return (true, paddr)
+}
+
+namespace HAL {
+    namespace Syscall {
+        const IA32_EFER  = 0xC000_0080
+        const IA32_STAR  = 0xC000_0081
+        const IA32_LSTAR = 0xC000_0082
+        const IA32_FMASK = 0xC000_0084
+
+        const EFER_SCE = 1
+
+        func init() {
+            HAL.write_msr(IA32_EFER as u32, HAL.read_msr(IA32_EFER as u32) | EFER_SCE)
+
+            let star = ((HAL.GDT.SYSCALL_USER_BASE as uint) << 48) |
+                       ((HAL.GDT.KERNEL_CS as uint) << 32)
+
+            HAL.write_msr(IA32_STAR as u32, star)
+            HAL.write_msr(IA32_LSTAR as u32, syscall_entry as uint)
+            HAL.write_msr(IA32_FMASK as u32, 0x600)
+        }
+    }
+}
+
+func copy_from_user( dest: void*, src: uint, size: u64 ) -> bool {
+    return true if size == 0
+    return false if dest == null
+
+    let count = size as uint
+    return false if count as u64 != size 
+    return false if src < USER_COPY_LOW || src >= USER_COPY_HIGH || count > USER_COPY_HIGH - src 
+
+    let pgdir = HAL.read_cr3() as uint
+    let copied: uint = 0
+    while copied < count {
+        let user_addr = src + copied
+        let paddr: uint
+
+        let (ret, paddr) = user_v2p( pgdir, user_addr )
+        return false if !ret
+
+        let page_left = MM.PAGE_SIZE - (user_addr & (MM.PAGE_SIZE - 1))
+        let left = count - copied
+        let chunk = left
+        if page_left < left {
+            chunk = page_left
+        }
+
+        return false if paddr + chunk > MM.max_phys_addr
+
+        memcpy( (dest as uint + copied) as void*, MM.p2v( paddr ) as void*, chunk )
+        copied += chunk
+    }
+
+    true
+}
+
+func copy_to_user( dest: uint, src: void*, size: u64 ) -> bool {
+    return true if size == 0
+    return false if src == null
+
+    let count = size as uint
+    return false if count as u64 != size 
+    return false if dest < USER_COPY_LOW || dest >= USER_COPY_HIGH || count > USER_COPY_HIGH - dest 
+
+    let pgdir = HAL.read_cr3() as uint
+    let copied: uint = 0
+    while copied < count {
+        let user_addr = dest + copied
+        let paddr: uint
+
+        let (ret, paddr) = user_v2p( pgdir, user_addr, true )
+        if !ret {
+            let proc = syscall_process()
+            return false if proc == null ||
+                !Kern.resolve_user_page_fault(proc, user_addr, 7)
+            (ret, paddr) = user_v2p(pgdir, user_addr, true)
+            return false if !ret
+        }
+
+        let page_left = MM.PAGE_SIZE - (user_addr & (MM.PAGE_SIZE - 1))
+        let left = count - copied
+        let chunk = left
+        if page_left < left {
+            chunk = page_left
+        }
+
+        return false if paddr + chunk > MM.max_phys_addr
+
+        memcpy( MM.p2v( paddr ) as void*, (src as uint + copied) as void*, chunk )
+        copied += chunk
+    }
+
+    true
+}
+
+func copy_user_string(address: uint, maximum: uint = USER_PATH_MAX) -> String {
+    return null if address < USER_COPY_LOW || address >= USER_COPY_HIGH
+    let buffer = MM.malloc<char>(maximum + 1)
+    let length: uint = 0
+    while length < maximum {
+        if !copy_from_user(&buffer[length] as void*, address + length, 1) {
+            MM.free(buffer)
+            return null
+        }
+        if buffer[length] == 0 {
+            let result = new String(buffer)
+            MM.free(buffer)
+            return result
+        }
+        length++
+    }
+    MM.free(buffer)
+    return null
+}
+
+func syscall_process() -> Kern.Process {
+    let thread: Kern.Thread = HAL.current().thread
+    if thread == null {
+        return null
+    }
+    return thread.proc
+}
+
+func syscall_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
+    match ctx.rax {
+        0 => {
+            ctx.rax = 0
+        }
+        1 => {
+            let len = ctx.rdi as uint
+            if len > USER_IO_MAX {
+                ctx.rax = EINVAL as u64
+                return ctx
+            }
+            let buf = MM.malloc<char>( len + 1 )
+            let res = copy_from_user( buf as void*, ctx.rsi, len )
+            if !res {
+                MM.free(buf)
+                ctx.rax = EINVAL as u64
+                return ctx
+            }
+            buf[len] = 0
+
+            HAL.Serial.write(buf)
+            ctx.rax = 1
+
+            MM.free( buf )
+        }
+        2 => {
+            return Kern.exit_current_process_from_syscall( ctx, ctx.rdi as uint )
+        }
+        3 => {
+            let (rc, addr) = Kern.map_user_anonymous( HAL.current().thread.proc, ctx.rdi as uint, ctx.rsi as uint )
+            if rc < 0 {
+                ctx.rax = rc as u64
+            } else {
+                ctx.rax = addr
+            }
+        }
+        SYS_OPEN => {
+            let proc = syscall_process()
+            let path = copy_user_string(ctx.rdi)
+            if proc == null || path == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let mode = ctx.rsi as int
+                if (mode & (VFS.O_READ | VFS.O_WRITE)) == 0 || (mode & ~(VFS.O_READ | VFS.O_WRITE | VFS.O_CREATE | VFS.O_TRUNC)) != 0 {
+                    ctx.rax = EINVAL as u64
+                } else {
+                    let file = VFS.open(path, mode)
+                    if file == null {
+                        ctx.rax = ENOENT as u64
+                    } else {
+                        ctx.rax = proc.fds.install(file) as u64
+                    }
+                }
+            }
+        }
+        SYS_FD_READ => {
+            let proc = syscall_process()
+            let size = ctx.rdx as uint
+            if proc == null || size > USER_IO_MAX {
+                ctx.rax = EINVAL as u64
+            } else {
+                let descriptor = proc.fds.get(ctx.rdi as uint)
+                if descriptor == null {
+                    ctx.rax = VFS.EBADF as u64
+                } else {
+                    let buffer = MM.malloc<char>(size + 1)
+                    let result = descriptor.read(buffer, size)
+                    if result > 0 && !copy_to_user(ctx.rsi, buffer as void*, result as u64) {
+                        ctx.rax = EINVAL as u64
+                    } else {
+                        ctx.rax = result as u64
+                    }
+                    MM.free(buffer)
+                }
+            }
+        }
+        SYS_FD_WRITE => {
+            let proc = syscall_process()
+            let size = ctx.rdx as uint
+            if proc == null || size > USER_IO_MAX {
+                ctx.rax = EINVAL as u64
+            } else {
+                let descriptor = proc.fds.get(ctx.rdi as uint)
+                if descriptor == null {
+                    ctx.rax = VFS.EBADF as u64
+                } else {
+                    let buffer = MM.malloc<char>(size + 1)
+                    if !copy_from_user(buffer as void*, ctx.rsi, size) {
+                        ctx.rax = EINVAL as u64
+                    } else {
+                        buffer[size] = 0
+                        ctx.rax = descriptor.write(buffer, size) as u64
+                    }
+                    MM.free(buffer)
+                }
+            }
+        }
+        SYS_CLOSE => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                ctx.rax = proc.fds.close(ctx.rdi as uint) as u64
+            }
+        }
+        SYS_SEEK => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                let descriptor = proc.fds.get(ctx.rdi as uint)
+                if descriptor == null {
+                    ctx.rax = VFS.EBADF as u64
+                } else {
+                    ctx.rax = descriptor.seek(ctx.rsi as uint, ctx.rdx as uint) as u64
+                }
+            }
+        }
+        9 => {
+            ctx.rax = Kern.process_id(syscall_process())
+        }
+        10 => {
+            ctx.rax = Kern.unmap_user(syscall_process(), ctx.rdi as uint, ctx.rsi as uint) as u64
+        }
+        SYS_MMAP_FILE => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            let options = ctx.rdx as uint
+            if descriptor == null || (options & ~3) != 0 {
+                ctx.rax = EINVAL as u64
+            } else {
+                let (rc, addr) = Kern.map_user_file(proc, descriptor, 0,
+                    ctx.rsi as uint, 0, (options & 1) != 0, (options & 2) != 0)
+                ctx.rax = rc as u64 if rc < 0
+                if rc >= 0 { ctx.rax = addr }
+            }
+        }
+        SYS_MSYNC => {
+            let proc = syscall_process()
+            let start = ctx.rdi as uint
+            let length = ctx.rsi as uint
+            if proc == null || length == 0 || start + length < start {
+                ctx.rax = EINVAL as u64
+            } else {
+                ctx.rax = Kern.sync_user_file_mappings(proc, start, start + length) as u64
+            }
+        }
+        SYS_SPAWN => {
+            let path = copy_user_string(ctx.rdi)
+            let proc = syscall_process()
+            ctx.rax = EINVAL as u64 if path == null || proc == null
+            if path != null && proc != null {
+                ctx.rax = Kern.spawn_user_process(path, proc) as u64
+            }
+        }
+        SYS_EXEC => {
+            let path = copy_user_string(ctx.rdi)
+            let proc = syscall_process()
+            if path == null || proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let pid = Kern.spawn_user_process(path, proc)
+                if pid < 0 {
+                    ctx.rax = pid as u64
+                } else {
+                    let status: uint = 0
+                    let waited = Kern.wait_process(proc, pid as uint, &status)
+                    if waited < 0 { ctx.rax = waited as u64 }
+                    if waited >= 0 {
+                        return Kern.exit_current_process_from_syscall(ctx, status)
+                    }
+                }
+            }
+        }
+        SYS_WAITPID => {
+            let proc = syscall_process()
+            let status: uint = 0
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let pid = Kern.wait_process(proc, ctx.rdi as uint, &status)
+                if pid > 0 && ctx.rsi != 0 && !copy_to_user(ctx.rsi, &status as void*, sizeof(uint)) {
+                    ctx.rax = EINVAL as u64
+                } else {
+                    ctx.rax = pid as u64
+                }
+            }
+        }
+        SYS_THREAD_CREATE => {
+            ctx.rax = Kern.create_user_thread(syscall_process(), ctx.rdi as uint,
+                ctx.rsi as uint, ctx.rdx as uint) as u64
+        }
+        SYS_THREAD_EXIT => {
+            return Kern.exit_current_thread_from_syscall(ctx, ctx.rdi as uint)
+        }
+        SYS_THREAD_JOIN => {
+            let thread = Kern.find_process_thread(syscall_process(), ctx.rdi as uint)
+            let value: uint = 0
+            if thread == null || !Kern.join_thread(thread, &value) {
+                ctx.rax = EINVAL as u64
+            } else if ctx.rsi != 0 && !copy_to_user(ctx.rsi, &value as void*, sizeof(uint)) {
+                ctx.rax = EINVAL as u64
+            } else {
+                ctx.rax = EOK as u64
+            }
+        }
+        SYS_THREAD_DETACH => {
+            let thread = Kern.find_process_thread(syscall_process(), ctx.rdi as uint)
+            let detached = thread != null && Kern.detach_thread(thread)
+            ctx.rax = EOK as u64 if detached
+            if !detached { ctx.rax = EINVAL as u64 }
+        }
+        SYS_GET_TLS => {
+            let thread: Kern.Thread = HAL.current().thread
+            ctx.rax = thread.tls_base if thread != null
+            if thread == null { ctx.rax = 0 }
+        }
+        SYS_PIPE => {
+            let proc = syscall_process()
+            let fds: int[2]
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let rc = proc.fds.create_pipe(&fds[0])
+                if rc >= 0 && !copy_to_user(ctx.rdi, &fds[0] as void*, sizeof(fds)) {
+                    proc.fds.close(fds[0] as uint)
+                    proc.fds.close(fds[1] as uint)
+                    ctx.rax = EINVAL as u64
+                } else {
+                    ctx.rax = rc as u64
+                }
+            }
+        }
+        SYS_DUP => {
+            let proc = syscall_process()
+            ctx.rax = VFS.EBADF as u64 if proc == null
+            if proc != null {
+                ctx.rax = proc.fds.duplicate(ctx.rdi as uint, Kern.FIRST_USER_FD) as u64
+            }
+        }
+        SYS_DUP2 => {
+            let proc = syscall_process()
+            ctx.rax = VFS.EBADF as u64 if proc == null
+            if proc != null {
+                ctx.rax = proc.fds.duplicate_to(ctx.rdi as uint, ctx.rsi as uint) as u64
+            }
+        }
+        SYS_CLOEXEC => {
+            let proc = syscall_process()
+            ctx.rax = VFS.EBADF as u64 if proc == null
+            if proc != null {
+                ctx.rax = proc.fds.set_close_exec(ctx.rdi as uint, ctx.rsi != 0) as u64
+            }
+        }
+        SYS_BRK => {
+            let (rc, value) = Kern.process_brk(syscall_process(), ctx.rdi as uint)
+            ctx.rax = rc as u64 if rc < 0
+            if rc >= 0 { ctx.rax = value }
+        }
+        SYS_SBRK => {
+            let (rc, old) = Kern.process_sbrk(syscall_process(), ctx.rdi as int)
+            ctx.rax = rc as u64 if rc < 0
+            if rc >= 0 { ctx.rax = old }
+        }
+        _ => {
+            ctx.rax = 0xFFFF_FFFF_FFFF_FFDA
+        }
+    }
+
+    ctx
+}

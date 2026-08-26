@@ -5,10 +5,15 @@ struct SpinLock {
     volatile let owner: u64
     volatile let depth: u32
 
+    volatile let interrupts: bool
+
     func acquire() {
         let me = HAL.cpu_id() + 1
+        let irq_was_enabled = HAL.interrupt_save()
 
         if self.locked != 0 && self.owner == me {
+            // The outermost acquisition owns interrupt restoration. Do not
+            // overwrite its saved state during recursive acquisition.
             self.depth++
             return
         }
@@ -19,6 +24,7 @@ struct SpinLock {
             // byte is returned in value, so zero means we acquired it.
             asm("xchgb %0, %1" : "+q"(value) : "m"(self.locked) : "memory")
             if value == 0 {
+                self.interrupts = irq_was_enabled
                 self.owner = me
                 self.depth = 1
                 return
@@ -44,5 +50,9 @@ struct SpinLock {
         // A byte store is atomic; the memory clobber prevents prior critical
         // section stores from being reordered after the unlock.
         asm("movb $0, %0" : "=m"(self.locked) : : "memory")
+
+        if interrupts {
+            HAL.interrupt_restore( interrupts )
+        }
     }
 }

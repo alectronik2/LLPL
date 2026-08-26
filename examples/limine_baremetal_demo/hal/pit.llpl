@@ -27,11 +27,18 @@ namespace HAL {
         let clocks             = 0
         let systemclock: timeval
         let timer_interrupt: HAL.Interrupt = null
+        let schedule_requested = false
+
+        func deferred_tick_report(arg: void*) {
+            "Deferred work: PIT tick \(HAL.PIT.ticks)\n" |> HAL.Serial.write
+        }
 
         func timer_handler( arg: void* ) {
             clocks += CLOCKS_PER_TICK
             ticks += 1
-            Timer.on_pit_tick()
+            let now = Timer.on_pit_tick()
+            Kern.account_current_runtime_tick()
+            Kern.wake_sleepers(now)
             llpl_async_advance_ms( MSECS_PER_TICK )
 
             systemclock.usec += USECS_PER_TICK
@@ -41,7 +48,20 @@ namespace HAL {
             }
 
             run_timer_list()
-            //Kern.thread_poll()
+
+            // Demonstrate that IRQ handlers can request work which is unsafe
+            // to perform in interrupt context (serial formatting/output here).
+            if ticks % TIMER_FREQ == 0 {
+                Kern.Deferred.queue(deferred_tick_report)
+            }
+
+            schedule_requested = true
+        }
+
+        func take_schedule_request() -> bool {
+            let requested = schedule_requested
+            schedule_requested = false
+            return requested
         }
 
         func run_timer_list() {

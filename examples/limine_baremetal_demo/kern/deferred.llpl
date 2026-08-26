@@ -1,0 +1,113 @@
+import hal
+import lib
+import mm
+
+namespace Kern {
+    namespace Deferred {
+        alias WorkProc = func(void*)
+
+        const CAPACITY = 64
+
+        struct WorkItem {
+            callback: WorkProc
+            arg: void*
+        }
+
+        let items:   WorkItem[CAPACITY]
+        let head:    uint = 0
+        let tail:    uint = 0
+        let count:   uint = 0
+        let dropped: uint = 0
+        let lock:    SpinLock
+        let worker:  Thread
+        let waiters: WaitQueue
+
+        // Safe to call from an interrupt handler. The queue is bounded and
+        // performs no allocation. Capturing closures are rejected because
+        // retaining their environment would make IRQ-time ownership unsafe.
+        func queue(callback: WorkProc, arg: void* = null) -> bool {
+            if callback.fn == null || callback.env != null {
+                return false
+            }
+
+            let queued = false
+            holding lock {
+                if count == CAPACITY {
+                    dropped++
+                } else {
+                    items[tail].callback = callback
+                    items[tail].arg = arg
+                    tail = (tail + 1) % CAPACITY
+                    count++
+                    queued = true
+                }
+            }
+
+            if queued {
+                Kern.wake_one(waiters)
+            }
+            return queued
+        }
+
+        func take(out: WorkItem*) -> bool {
+            let taken = false
+            holding lock {
+                if count != 0 {
+                    out[0] = items[head]
+                    items[head].callback.fn = null
+                    items[head].callback.env = null
+                    items[head].arg = null
+                    head = (head + 1) % CAPACITY
+                    count--
+                    taken = true
+                }
+            }
+            return taken
+        }
+
+        func pending() -> uint {
+            let result: uint = 0
+            holding lock {
+                result = count
+            }
+            return result
+        }
+
+        func dropped_count() -> uint {
+            return dropped
+        }
+
+        func worker_main(arg: void*) {
+            while true {
+                let item: WorkItem
+                if take(&item) {
+                    item.callback(item.arg)
+                } else {
+                    // Hold the work-queue lock across the second empty check
+                    // and waiter registration. Producers take this same lock
+                    // before enqueueing, preventing a lost wakeup.
+                    let prepared = false
+                    holding lock {
+                        if count == 0 {
+                            prepared = Kern.prepare_block_current(waiters)
+                        }
+                    }
+
+                    if prepared {
+                        Kern.scheduler_yield()
+                    }
+                }
+            }
+        }
+
+        func init() {
+            head    = 0
+            tail    = 0
+            count   = 0
+            dropped = 0
+            waiters = new WaitQueue()
+            worker  = new Thread(kproc, worker_main, null, "deferred")
+            worker |> mark_thread_ready
+        }
+    }
+}

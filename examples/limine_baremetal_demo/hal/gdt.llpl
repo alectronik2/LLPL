@@ -3,6 +3,14 @@
 
 namespace HAL {
     namespace GDT {
+        const KERNEL_CS = 0x8
+        const KERNEL_DS = 0x10
+        const USER_CS = 0x18
+        const USER_DS = 0x20
+        const SYSCALL_USER_BASE = 0x30
+        const SYSCALL_USER_DS = 0x38
+        const SYSCALL_USER_CS = 0x40
+
         // One 8-byte GDT descriptor. `packed` is essential here: without it the
         // compiler could insert padding and the CPU would read garbage.
         packed struct Entry {
@@ -49,7 +57,7 @@ namespace HAL {
         extern func set_tss_rsp0(rsp0: u64)
         extern func load_tss(selector: u16)
 
-        let entries: Entry[7]
+        let entries: Entry[9]
         let pointer: Pointer
 
         func set_entry(index: i64, limit_low: u16, base_low: u16, base_mid: u8,
@@ -111,8 +119,10 @@ namespace HAL {
 
             init_tss()
             set_tss_descriptor(5, get_tss(), 104)     // TSS, selector 0x28
+            set_entry(7, 0xFFFF, 0, 0, 0xF2, 0xCF, 0) // sysret user data, selector 0x38
+            set_entry(8, 0xFFFF, 0, 0, 0xFA, 0xAF, 0) // sysret user code, selector 0x40
 
-            pointer.limit = (7 * 8) - 1
+            pointer.limit = (9 * 8) - 1
             pointer.base = entries as u64
 
             asm("lgdt (%0)" : : "r"(&pointer))

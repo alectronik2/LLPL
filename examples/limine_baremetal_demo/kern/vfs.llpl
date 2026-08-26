@@ -102,7 +102,15 @@ namespace VFS {
             return null
         }
 
+        virtual func read_binary(path: String) -> (char*, u64) {
+            return (null, 0)
+        }
+
         virtual func write_text(path: String, data: String) -> int {
+            return EINVAL
+        }
+
+        virtual func write_binary(path: String, data: char*, size: u64) -> int {
             return EINVAL
         }
 
@@ -179,15 +187,40 @@ namespace VFS {
     class MemNode {
         let path: String
         let data: String
+        let binary: char*
+        let binary_size: u64
         let kind: int
 
         constructor(path: String, kind: int, data: String = null) {
             self.path = path
             self.kind = kind
             self.data = data
+            self.binary = null
+            self.binary_size = 0
+        }
+
+        constructor(path: String, source: char*, size: u64) {
+            self.path = path
+            self.kind = NODE_FILE
+            self.data = null
+            self.binary_size = size
+            self.binary = MM.malloc<char>(size + 1)
+            if size > 0 {
+                memcpy(self.binary as void*, source as void*, size)
+            }
+            self.binary[size] = 0
+        }
+
+        destructor() {
+            if self.binary != null {
+                MM.free(self.binary)
+            }
         }
 
         func size() -> u64 {
+            if self.binary != null {
+                return self.binary_size
+            }
             if self.data == null {
                 return 0
             }
@@ -306,6 +339,29 @@ namespace VFS {
             return EOK
         }
 
+        func add_binary(path: String, source: char*, size: u64) -> int {
+            if path == null || path.byte_len() == 0 || source == null {
+                return EINVAL
+            }
+            let existing = self.find(path)
+            if existing >= 0 {
+                if self.nodes[existing].kind == NODE_DIR {
+                    return EISDIR
+                }
+                self.nodes[existing] = new MemNode(path, source, size)
+                return EOK
+            }
+            if !self.parent_dir_exists(path) {
+                return ENOENT
+            }
+            if self.count >= MAX_MEM_NODES {
+                return ENOMEM
+            }
+            self.nodes[self.count] = new MemNode(path, source, size)
+            self.count = self.count + 1
+            return EOK
+        }
+
         func add_dir(path: String) -> int {
             return self.add_node(path, NODE_DIR)
         }
@@ -378,7 +434,28 @@ namespace VFS {
             if node.kind != NODE_FILE {
                 return null
             }
-            return node.data
+            if node.data != null {
+                return node.data
+            }
+            if node.binary == null {
+                return null
+            }
+            return new String(node.binary)
+        }
+
+        func read_binary(path: String) -> (char*, u64) {
+            let idx = self.find(path)
+            if idx < 0 || self.nodes[idx].kind != NODE_FILE {
+                return (null, 0)
+            }
+            let node = self.nodes[idx]
+            if node.binary != null {
+                return (node.binary, node.binary_size)
+            }
+            if node.data == null {
+                return (null, 0)
+            }
+            return (node.data.c_str(), node.data.byte_len() as u64)
         }
 
         func write_text(path: String, data: String) -> int {
@@ -387,6 +464,10 @@ namespace VFS {
                 return EISDIR
             }
             return self.add_node(path, NODE_FILE, data)
+        }
+
+        func write_binary(path: String, data: char*, size: u64) -> int {
+            return self.add_binary(path, data, size)
         }
 
         func is_direct_child(parent: String, child: String) -> bool {
@@ -514,8 +595,7 @@ namespace VFS {
                     } else if typeflag == 0 || typeflag == TAR_TYPE_REG as char {
                         let rc = self.mkdir_parents(path)
                         if rc >= 0 {
-                            let data = tar_payload_string(base + offset + TAR_BLOCK, size)
-                            let write_rc = self.write_text(path, data)
+                            let write_rc = self.add_binary(path, base + offset + TAR_BLOCK, size)
                             if write_rc >= 0 {
                                 loaded = loaded + 1
                             }
@@ -861,6 +941,14 @@ namespace VFS {
             return null
         }
         return resolved.fs.read_text(resolved.path)
+    }
+
+    func read_binary(path: String) -> (char*, u64) {
+        let resolved = resolve(path)
+        if resolved == null {
+            return (null, 0)
+        }
+        return resolved.fs.read_binary(resolved.path)
     }
 
     func list(path: String) -> String {

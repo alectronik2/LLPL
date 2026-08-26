@@ -12,7 +12,7 @@ generated_c: build/kernel.c
 llpl_compiler: ../../llpl
 
 variables:
-  LIMINE_DIR: /home/nix/Projects/experiment64/limine
+  LIMINE_DIR: /usr/share/limine
 
 toolchain:
   m64: ../../tools/assembler/build/m64
@@ -67,6 +67,58 @@ link:
   ldflags: [-m, elf_x86_64, -nostdlib]
   objects: [build/kernel.o, build/runtime.o, build/isr.o]
 
+extra_links:
+  - name: init
+    c_sources:
+      - path: user/init.c
+        output: build/init.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/init.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/init.o]
+  - name: child
+    c_sources:
+      - path: user/child.c
+        output: build/child.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/child.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/child.o]
+  - name: execer
+    c_sources:
+      - path: user/execer.c
+        output: build/execer.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/execer.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/execer.o]
+  - name: fdinherit
+    c_sources:
+      - path: user/fdinherit.c
+        output: build/fdinherit.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/fdinherit.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/fdinherit.o]
+  - name: fdcheck
+    c_sources:
+      - path: user/fdcheck.c
+        output: build/fdcheck.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/fdcheck.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/fdcheck.o]
+
 package:
   output: kernel.iso
   run_only: true
@@ -89,6 +141,12 @@ package:
     - mkdir: isodir/boot/limine
     - mkdir: isodir/EFI/BOOT
     - copy: {from: kernel.elf, to: isodir/boot/kernel.elf}
+    - mkdir: initrd/bin
+    - copy: {from: build/init.elf, to: initrd/bin/init}
+    - copy: {from: build/child.elf, to: initrd/bin/child}
+    - copy: {from: build/execer.elf, to: initrd/bin/execer}
+    - copy: {from: build/fdinherit.elf, to: initrd/bin/fdinherit}
+    - copy: {from: build/fdcheck.elf, to: initrd/bin/fdcheck}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}
