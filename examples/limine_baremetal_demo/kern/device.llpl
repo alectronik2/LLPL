@@ -1,0 +1,53 @@
+import hal
+import lib
+
+namespace Kern {
+    const MAX_DEVICES = 16
+
+    let devices: Device[MAX_DEVICES]
+    let device_count: uint
+
+    // Base class for pluggable character devices, mirroring VFS.Filesystem's
+    // virtual-method shape (kern/vfs.llpl) but for live, non-file-backed
+    // streams (see FileDescriptor's `device` case, kern/handle.llpl) rather
+    // than filesystem content.
+    class Device : Object {
+        virtual func name() -> String {
+            return null
+        }
+
+        virtual func read(buf: char*, size: uint) -> int {
+            return EINVAL
+        }
+
+        virtual func write(buf: char*, size: uint) -> int {
+            return EINVAL
+        }
+    }
+
+    func device_init() {
+        device_count = 0
+        for i in 0..MAX_DEVICES { devices[i] = null }
+    }
+
+    func register_device(dev: Device) -> bool {
+        if dev == null || device_count >= MAX_DEVICES {
+            return false
+        }
+        devices[device_count] = dev
+        device_count++
+        return true
+    }
+
+    func find_device(name: String) -> Device {
+        if name == null {
+            return null
+        }
+        for i in 0..device_count {
+            if devices[i] != null && devices[i].name() == name {
+                return devices[i]
+            }
+        }
+        return null
+    }
+}

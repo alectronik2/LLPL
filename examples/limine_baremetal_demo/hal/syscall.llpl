@@ -31,6 +31,21 @@ const SYS_CLOEXEC = 24
 const SYS_BRK = 25
 const SYS_SBRK = 26
 
+// Returns the device name after "/dev/" if path starts with that prefix,
+// null otherwise - manual byte comparison since there's no String.starts_with
+// helper (matches the byte_at/byte_len string-handling style already used
+// elsewhere, e.g. VFS.MemFilesystem.parent_path).
+func device_name_for_path(path: String) -> String {
+    if path == null { return null }
+    let prefix = new String("/dev/")
+    let prefix_len = prefix.byte_len()
+    if path.byte_len() <= prefix_len { return null }
+    for i in 0..prefix_len {
+        if path.byte_at(i) != prefix.byte_at(i) { return null }
+    }
+    return path.byte_substring(prefix_len, path.byte_len() - prefix_len)
+}
+
 inline func user_pte_ok( pte: MM.Pte* ) -> bool {
     return pte.pte.present && pte.pte.user
 }
@@ -281,11 +296,21 @@ func syscall_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 if (mode & (VFS.O_READ | VFS.O_WRITE)) == 0 || (mode & ~(VFS.O_READ | VFS.O_WRITE | VFS.O_CREATE | VFS.O_TRUNC)) != 0 {
                     ctx.rax = EINVAL as u64
                 } else {
-                    let file = VFS.open(path, mode)
-                    if file == null {
-                        ctx.rax = ENOENT as u64
+                    let dev_name = device_name_for_path(path)
+                    if dev_name != null {
+                        let dev: Kern.Device = Kern.find_device(dev_name)
+                        if dev == null {
+                            ctx.rax = ENOENT as u64
+                        } else {
+                            ctx.rax = proc.fds.install_device(dev) as u64
+                        }
                     } else {
-                        ctx.rax = proc.fds.install(file) as u64
+                        let file = VFS.open(path, mode)
+                        if file == null {
+                            ctx.rax = ENOENT as u64
+                        } else {
+                            ctx.rax = proc.fds.install(file) as u64
+                        }
                     }
                 }
             }

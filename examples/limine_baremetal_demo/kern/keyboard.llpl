@@ -1,0 +1,216 @@
+import hal
+import lib
+
+namespace Kern {
+    const KBD_DATA_PORT = 0x60
+    const KBD_STATUS_PORT = 0x64
+    const KBD_OUTPUT_FULL = 0x1
+
+    const KBD_BUFFER_SIZE = 256
+
+    const SC_LEFT_SHIFT_DOWN = 0x2A
+    const SC_LEFT_SHIFT_UP = 0xAA
+    const SC_RIGHT_SHIFT_DOWN = 0x36
+    const SC_RIGHT_SHIFT_UP = 0xB6
+
+    // Scancode set 1, unshifted and shifted ASCII for a basic US layout.
+    // Index is the scancode's make-code byte (bit 7 clear); anything not
+    // covered here (function keys, arrows, ctrl/alt, ...) decodes to 0 and
+    // is dropped. Not a complete keyboard driver - just enough to type
+    // visible ASCII.
+    let scancode_ascii: char[128]
+    let scancode_ascii_shifted: char[128]
+
+    // One explicit assignment per real scancode-set-1 byte value, rather
+    // than a position-in-a-string-literal scheme - trivially auditable
+    // against a scancode reference table, no off-by-one risk from counting
+    // characters or relying on embedded-null escape handling.
+    func map_key(scancode: int, lower: char, upper: char) {
+        scancode_ascii[scancode] = lower
+        scancode_ascii_shifted[scancode] = upper
+    }
+
+    func init_scancode_tables() {
+        for i in 0..128 {
+            scancode_ascii[i] = 0 as char
+            scancode_ascii_shifted[i] = 0 as char
+        }
+
+        map_key(0x02, '1', '!')
+        map_key(0x03, '2', '@')
+        map_key(0x04, '3', '#')
+        map_key(0x05, '4', '$')
+        map_key(0x06, '5', '%')
+        map_key(0x07, '6', '^')
+        map_key(0x08, '7', '&')
+        map_key(0x09, '8', '*')
+        map_key(0x0A, '9', '(')
+        map_key(0x0B, '0', ')')
+        map_key(0x0C, '-', '_')
+        map_key(0x0D, '=', '+')
+        map_key(0x0E, '\x08', '\x08') // backspace
+        map_key(0x0F, '\t', '\t')
+
+        map_key(0x10, 'q', 'Q')
+        map_key(0x11, 'w', 'W')
+        map_key(0x12, 'e', 'E')
+        map_key(0x13, 'r', 'R')
+        map_key(0x14, 't', 'T')
+        map_key(0x15, 'y', 'Y')
+        map_key(0x16, 'u', 'U')
+        map_key(0x17, 'i', 'I')
+        map_key(0x18, 'o', 'O')
+        map_key(0x19, 'p', 'P')
+        map_key(0x1A, '[', '{')
+        map_key(0x1B, ']', '}')
+        map_key(0x1C, '\r', '\r') // enter
+
+        map_key(0x1E, 'a', 'A')
+        map_key(0x1F, 's', 'S')
+        map_key(0x20, 'd', 'D')
+        map_key(0x21, 'f', 'F')
+        map_key(0x22, 'g', 'G')
+        map_key(0x23, 'h', 'H')
+        map_key(0x24, 'j', 'J')
+        map_key(0x25, 'k', 'K')
+        map_key(0x26, 'l', 'L')
+        map_key(0x27, ';', ':')
+        map_key(0x28, '\'', '"')
+        map_key(0x29, '`', '~')
+        map_key(0x2B, '\\', '|')
+
+        map_key(0x2C, 'z', 'Z')
+        map_key(0x2D, 'x', 'X')
+        map_key(0x2E, 'c', 'C')
+        map_key(0x2F, 'v', 'V')
+        map_key(0x30, 'b', 'B')
+        map_key(0x31, 'n', 'N')
+        map_key(0x32, 'm', 'M')
+        map_key(0x33, ',', '<')
+        map_key(0x34, '.', '>')
+        map_key(0x35, '/', '?')
+        map_key(0x39, ' ', ' ') // space
+    }
+
+    class KeyboardDevice : Device {
+        buffer: char[KBD_BUFFER_SIZE]
+        read_at: uint
+        write_at: uint
+        count: uint
+        lock: SpinLock
+        read_waiters: WaitQueue
+        shift_held: bool
+        device_name: String
+
+        constructor() {
+            self.read_at = 0
+            self.write_at = 0
+            self.count = 0
+            self.read_waiters = new WaitQueue()
+            self.shift_held = false
+            // A bare string literal returned where a String is expected
+            // isn't a real String object (no vtable/refcount header) -
+            // constructing one here, once, is what made find_device's
+            // name() == name comparison crash (String_op_eq dereferencing
+            // a literal as if it were a String instance).
+            self.device_name = new String("kbd")
+        }
+
+        func name() -> String {
+            return self.device_name
+        }
+
+        func push(c: char) {
+            holding self.lock {
+                if self.count < KBD_BUFFER_SIZE {
+                    self.buffer[self.write_at] = c
+                    self.write_at = (self.write_at + 1) % KBD_BUFFER_SIZE
+                    self.count++
+                }
+            }
+            wake_all(self.read_waiters)
+        }
+
+        func read(buf: char*, size: uint) -> int {
+            while true {
+                let prepared = false
+                holding self.lock {
+                    if self.count != 0 {
+                        let amount = size
+                        if amount > self.count { amount = self.count }
+                        for i in 0..amount {
+                            buf[i] = self.buffer[self.read_at]
+                            self.read_at = (self.read_at + 1) % KBD_BUFFER_SIZE
+                        }
+                        self.count -= amount
+                        return amount as int
+                    }
+                    prepared = prepare_block_current(self.read_waiters)
+                }
+                return EINVAL if !prepared
+                scheduler_yield()
+            }
+            return EINVAL
+        }
+    }
+
+    let keyboard_device: KeyboardDevice = null
+    let kbd_interrupt: HAL.Interrupt = null
+
+    func keyboard_irq_handler(arg: void*) {
+        let scancode = HAL.inb(KBD_DATA_PORT)
+
+        if scancode == SC_LEFT_SHIFT_DOWN as u8 || scancode == SC_RIGHT_SHIFT_DOWN as u8 {
+            keyboard_device.shift_held = true
+            return
+        }
+        if scancode == SC_LEFT_SHIFT_UP as u8 || scancode == SC_RIGHT_SHIFT_UP as u8 {
+            keyboard_device.shift_held = false
+            return
+        }
+
+        // Bit 7 set marks a key-release (break code) for every other key -
+        // only make codes (key-down) produce input.
+        if (scancode & 0x80) != 0 {
+            return
+        }
+
+        let index = scancode as uint
+        if index >= 128 {
+            return
+        }
+        let c = if keyboard_device.shift_held { scancode_ascii_shifted[index] } else { scancode_ascii[index] }
+        if c as int != 0 {
+            keyboard_device.push(c)
+        }
+    }
+
+    func keyboard_init() {
+        // Drain a stale byte some firmware/QEMU leave pending in the output
+        // buffer before any handler is registered.
+        if (HAL.inb(KBD_STATUS_PORT) & KBD_OUTPUT_FULL as u8) != 0 {
+            HAL.inb(KBD_DATA_PORT)
+        }
+
+        init_scancode_tables()
+
+        keyboard_device = new KeyboardDevice()
+        register_device(keyboard_device)
+
+        // Must be the module-level global above, not a local: HAL.Interrupt
+        // is stored into HAL.interrupts[vector] as a raw, non-owning
+        // pointer (see HAL.Interrupt.register, hal/idt.llpl). A local here
+        // would be the only owning reference, freed the moment
+        // keyboard_init() returns - leaving a dangling pointer that later
+        // reads as garbage/null the first time a real IRQ1 fires (this is
+        // exactly what caused the null-pointer-call crash on first
+        // keypress). PIT's own timer_interrupt (hal/pit.llpl) is a global
+        // for the same reason.
+        kbd_interrupt = new HAL.Interrupt()
+        let handler: HAL.proc = keyboard_irq_handler
+        kbd_interrupt.register(0x21, handler)
+        HAL.PIC.enable_irq(1)
+
+        "Kern.keyboard_init()\n" |> HAL.Serial.write
+    }
+}

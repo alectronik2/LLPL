@@ -264,6 +264,10 @@ func kernel_main() {
 
     Kern.proc_init()
     Kern.thread_init()
+
+    Kern.device_init()
+    Kern.keyboard_init()
+
     Terminal.init( fb )
     "Welcome to DimensionOS!\n" |> Terminal.write
 
@@ -271,6 +275,8 @@ func kernel_main() {
     "Spawning init <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/init")
     "Init spawned\n" |> Terminal.write
+    Kern.spawn_elf("/bin/kbd_echo")
+    "kbd_echo spawned\n" |> Terminal.write
 
     //demo_hhdm( memmap, hhdm )
 

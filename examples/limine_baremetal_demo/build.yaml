@@ -118,6 +118,16 @@ extra_links:
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [build/fdcheck.o]
+  - name: kbd_echo
+    c_sources:
+      - path: user/kbd_echo.c
+        output: build/kbd_echo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/kbd_echo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/kbd_echo.o]
 
 package:
   output: kernel.iso
@@ -147,6 +157,7 @@ package:
     - copy: {from: build/execer.elf, to: initrd/bin/execer}
     - copy: {from: build/fdinherit.elf, to: initrd/bin/fdinherit}
     - copy: {from: build/fdcheck.elf, to: initrd/bin/fdcheck}
+    - copy: {from: build/kbd_echo.elf, to: initrd/bin/kbd_echo}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}

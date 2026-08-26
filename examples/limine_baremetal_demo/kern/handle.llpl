@@ -100,12 +100,14 @@ namespace Kern {
         lock: SpinLock
         pipe: Pipe
         pipe_write: bool
+        device: Device
 
         constructor(file: VFS.FileHandle) {
             self.file = file
             self.offset = 0
             self.pipe = null
             self.pipe_write = false
+            self.device = null
         }
 
         constructor(pipe: Pipe, write_end: bool) {
@@ -113,6 +115,15 @@ namespace Kern {
             self.offset = 0
             self.pipe = pipe
             self.pipe_write = write_end
+            self.device = null
+        }
+
+        constructor(device: Device) {
+            self.file = null
+            self.offset = 0
+            self.pipe = null
+            self.pipe_write = false
+            self.device = device
         }
 
         destructor() {
@@ -125,6 +136,9 @@ namespace Kern {
         }
 
         func read(buffer: char*, size: uint) -> int {
+            if self.device != null {
+                return self.device.read(buffer, size)
+            }
             if self.pipe != null {
                 return VFS.EBADF if self.pipe_write
                 return self.pipe.read(buffer, size)
@@ -152,6 +166,9 @@ namespace Kern {
         }
 
         func write(buffer: char*, size: uint) -> int {
+            if self.device != null {
+                return self.device.write(buffer, size)
+            }
             if self.pipe != null {
                 return VFS.EBADF if !self.pipe_write
                 return self.pipe.write(buffer, size)
@@ -252,6 +269,21 @@ namespace Kern {
                 for fd in FIRST_USER_FD..MAX_FDS {
                     if self.entries[fd] == null {
                         self.entries[fd] = new FileDescriptor(file)
+                        result = fd as int
+                        return result
+                    }
+                }
+            }
+            return result
+        }
+
+        func install_device(dev: Device) -> int {
+            if dev == null { return VFS.EBADF }
+            let result: int = VFS.EBADF
+            holding self.lock {
+                for fd in FIRST_USER_FD..MAX_FDS {
+                    if self.entries[fd] == null {
+                        self.entries[fd] = new FileDescriptor(dev)
                         result = fd as int
                         return result
                     }
