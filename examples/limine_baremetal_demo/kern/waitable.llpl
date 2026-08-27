@@ -1,0 +1,133 @@
+import hal
+import lib
+
+namespace Kern {
+    // Base for anything a SYS_WAIT_HANDLE fd can block on - mirrors the
+    // Device/VFS.Filesystem virtual-dispatch pattern (kern/device.llpl)
+    // rather than inventing a new mechanism. Concrete waitables live
+    // behind a FileDescriptor's `waitable` field (kern/handle.llpl),
+    // occupying an ordinary fd slot the same way a device or pipe does -
+    // one handle namespace for everything, matching NT's HANDLE model.
+    class Waitable : Object {
+        virtual func wait() -> bool {
+            return false
+        }
+
+        virtual func is_signaled() -> bool {
+            return false
+        }
+    }
+
+    // NT-style Event: manual-reset stays signaled until explicitly reset;
+    // auto-reset consumes the signal on the first successful wait. Blocking
+    // shape is the same holding+prepare_block_current+scheduler_yield loop
+    // already proven by Pipe (kern/handle.llpl).
+    class KernelEvent : Waitable {
+        signaled: bool
+        manual_reset: bool
+        lock: SpinLock
+        waiters: WaitQueue
+
+        constructor(manual_reset: bool, initial_state: bool) {
+            self.manual_reset = manual_reset
+            self.signaled = initial_state
+            self.waiters = new WaitQueue()
+        }
+
+        func set() {
+            holding self.lock {
+                self.signaled = true
+            }
+            wake_all(self.waiters)
+        }
+
+        func reset() {
+            holding self.lock {
+                self.signaled = false
+            }
+        }
+
+        func is_signaled() -> bool {
+            return self.signaled
+        }
+
+        func wait() -> bool {
+            while true {
+                let prepared = false
+                holding self.lock {
+                    if self.signaled {
+                        if !self.manual_reset { self.signaled = false }
+                        return true
+                    }
+                    prepared = prepare_block_current(self.waiters)
+                }
+                return false if !prepared
+                scheduler_yield()
+            }
+            return false
+        }
+    }
+
+    // Wraps a Process so an unrelated process (not just the real parent -
+    // matches the unrestricted-by-pid trust model SYS_TERMINATE/
+    // SYS_QUEUE_APC already established) can wait for it to exit without
+    // interfering with the real parent's own SYS_WAITPID/reaping. Retains
+    // the Process so it stays alive for as long as this handle exists, even
+    // after the real parent has reaped it.
+    class ProcessWaitable : Waitable {
+        proc: Process
+
+        constructor(proc: Process) {
+            self.proc = proc
+            (self.proc as Object).get()
+        }
+
+        destructor() {
+            (self.proc as Object).put()
+        }
+
+        func is_signaled() -> bool {
+            return self.proc.exited
+        }
+
+        func wait() -> bool {
+            while true {
+                return true if self.proc.exited
+                let prepared = prepare_block_current(self.proc.death_waiters)
+                return false if !prepared
+                scheduler_yield()
+            }
+            return false
+        }
+    }
+
+    // Wraps a Thread; join_waiters already supports multiple independent
+    // waiters (kern/thread.llpl), so no new field is needed the way
+    // ProcessWaitable needed death_waiters.
+    class ThreadWaitable : Waitable {
+        thread: Thread
+
+        constructor(thread: Thread) {
+            self.thread = thread
+            (self.thread as Object).get()
+        }
+
+        destructor() {
+            (self.thread as Object).put()
+        }
+
+        func is_signaled() -> bool {
+            return self.thread.state == ThreadState.Zombie
+        }
+
+        func wait() -> bool {
+            while true {
+                return true if self.thread.state == ThreadState.Zombie
+                let prepared = prepare_block_current(self.thread.join_waiters)
+                return false if !prepared
+                scheduler_yield()
+            }
+            return false
+        }
+    }
+}

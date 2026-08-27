@@ -37,6 +37,14 @@ const SYS_TERMINATE = 30
 const SYS_QUEUE_APC = 31
 const SYS_APC_RETURN = 32
 const SYS_GETTID = 33
+const SYS_SET_EXCEPTION_HANDLER = 34
+const SYS_EXCEPTION_RETURN = 35
+const SYS_CREATE_EVENT = 36
+const SYS_SET_EVENT = 37
+const SYS_RESET_EVENT = 38
+const SYS_WAIT_HANDLE = 39
+const SYS_OPEN_PROCESS = 40
+const SYS_OPEN_THREAD = 41
 
 // Returns the device name after "/dev/" if path starts with that prefix,
 // null otherwise - manual byte comparison since there's no String.starts_with
@@ -623,6 +631,87 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
             let thread = Kern.current_thread() as void*
             ctx.rax = 0
             if thread != null { ctx.rax = (thread as Kern.Thread).tid }
+        }
+        SYS_SET_EXCEPTION_HANDLER => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                proc.exception_handler = ctx.rdi
+                ctx.rax = EOK as u64
+            }
+        }
+        SYS_EXCEPTION_RETURN => {
+            // Raw pointer, not Kern.Thread - see maybe_deliver_apc's own
+            // comment (kern/thread.llpl).
+            let thread = Kern.current_thread() as void*
+            if thread != null {
+                (thread as Kern.Thread).in_exception = false
+            }
+            return Kern.exit_current_process_from_syscall(ctx, 0xFFFF_FFFF_FFFF_FFF2)
+        }
+        SYS_CREATE_EVENT => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let event = new Kern.KernelEvent(ctx.rdi != 0, ctx.rsi != 0)
+                ctx.rax = proc.fds.install_waitable(event as Kern.Waitable) as u64
+            }
+        }
+        SYS_SET_EVENT => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            if descriptor == null || descriptor.waitable == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                (descriptor.waitable as Kern.KernelEvent).set()
+                ctx.rax = EOK as u64
+            }
+        }
+        SYS_RESET_EVENT => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            if descriptor == null || descriptor.waitable == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                (descriptor.waitable as Kern.KernelEvent).reset()
+                ctx.rax = EOK as u64
+            }
+        }
+        SYS_WAIT_HANDLE => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            if descriptor == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                ctx.rax = descriptor.wait() as u64
+            }
+        }
+        SYS_OPEN_PROCESS => {
+            let proc = syscall_process()
+            let target: Kern.Process = Kern.find_process(ctx.rdi as uint)
+            if proc == null || target == null {
+                ctx.rax = ENOENT as u64
+            } else {
+                let waitable = new Kern.ProcessWaitable(target)
+                ctx.rax = proc.fds.install_waitable(waitable as Kern.Waitable) as u64
+            }
+        }
+        SYS_OPEN_THREAD => {
+            let proc = syscall_process()
+            let target_proc: Kern.Process = Kern.find_process(ctx.rdi as uint)
+            let target_thread: Kern.Thread = null
+            if target_proc != null { target_thread = Kern.find_process_thread(target_proc, ctx.rsi as uint) }
+            if proc == null || target_thread == null {
+                ctx.rax = ENOENT as u64
+            } else {
+                let waitable = new Kern.ThreadWaitable(target_thread)
+                ctx.rax = proc.fds.install_waitable(waitable as Kern.Waitable) as u64
+            }
         }
         _ => {
             ctx.rax = 0xFFFF_FFFF_FFFF_FFDA

@@ -38,6 +38,13 @@ namespace Kern {
         resources_reaped: bool
         brk_base: uint
         brk_current: uint
+        exception_handler: uint
+        // Woken (in addition to the real parent's child_waiters) whenever
+        // this process exits - a ProcessWaitable handle (kern/waitable.llpl)
+        // doesn't have to belong to the actual parent (matches the
+        // unrestricted-by-pid trust model SYS_TERMINATE/SYS_QUEUE_APC
+        // already established), so it can't rely on child_waiters alone.
+        death_waiters: WaitQueue
 
         constructor( name: String, parent: Process = null ) {
             self.threads = new DoublyLinkedList<Thread>()
@@ -59,6 +66,8 @@ namespace Kern {
             self.resources_reaped = false
             self.brk_base = USER_BRK_BASE
             self.brk_current = USER_BRK_BASE
+            self.exception_handler = 0
+            self.death_waiters = new WaitQueue()
 
             holding lock {
                 self.pid = next_pid
@@ -129,6 +138,7 @@ namespace Kern {
         if proc.parent != null {
             wake_all((proc.parent as Process).child_waiters)
         }
+        wake_all(proc.death_waiters)
     }
 
     func wait_process(parent: Process, pid: uint, status_out: uint* = null) -> int {

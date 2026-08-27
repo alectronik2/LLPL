@@ -95,6 +95,13 @@ namespace Kern {
         in_apc: bool
         saved_apc_ctx: HAL.IDT.Context
 
+        // Set while a structured-exception handler is running (see
+        // Kern.handle_user_exception) - separate from in_apc since an APC
+        // callback could itself fault and needs its own crash to still go
+        // through the handler; this only guards against the handler's own
+        // crash recursing into itself.
+        in_exception: bool
+
         runtime_ticks: uint
         context_switches: uint
         wakeups: uint
@@ -140,6 +147,7 @@ namespace Kern {
             self.apc_head = null
             self.apc_tail = null
             self.in_apc = false
+            self.in_exception = false
             holding lock {
                 self.tid = next_tid
                 next_tid++
@@ -1057,6 +1065,56 @@ namespace Kern {
         ctx.rsp = new_rsp
         ctx.rip = new_rsp
         return ctx
+    }
+
+    struct ExceptionInfo {
+        vector: u64
+        error_code: u64
+        fault_addr: u64
+        rip: u64
+    }
+
+    // Handles a hardware exception in a ring-3 thread: redirects to the
+    // process's registered handler (if any, and if we're not already
+    // inside one) via the same trampoline write_apc_trampoline already
+    // provides for APCs - the handler receives an ExceptionInfo* in rdi,
+    // and its own tail (after the handler returns normally) invokes
+    // exception_return_syscall instead of resuming the original faulting
+    // context: notify-then-terminate, not resume-execution, so nothing
+    // needs saving here the way maybe_deliver_apc saves the original ctx.
+    // Falls back to the existing kill-just-this-thread behavior if there's
+    // no handler, or the handler itself just faulted. Returns null only
+    // when this isn't a ring-3 fault at all (caller does its own
+    // kernel-mode handling, i.e. the existing halt loop for a genuine
+    // kernel bug) - otherwise always returns a valid resumption context.
+    func handle_user_exception(ctx: HAL.IDT.Context*, fault_addr: uint, exception_return_syscall: uint) -> HAL.IDT.Context* {
+        if (ctx.cs & 3) != 3 {
+            return null
+        }
+
+        let thread = current_thread() as void*
+        if thread != null && !(thread as Thread).in_exception {
+            let proc = (thread as Thread).proc
+            if proc != null && proc.exception_handler != 0 {
+                (thread as Thread).in_exception = true
+
+                let new_rsp = (ctx.rsp - 128 - APC_TRAMPOLINE_SIZE - sizeof(ExceptionInfo)) & ~0xF as uint
+                let info_addr = new_rsp + APC_TRAMPOLINE_SIZE
+                let info = info_addr as ExceptionInfo*
+                info.vector = ctx.vector
+                info.error_code = ctx.err
+                info.fault_addr = fault_addr as u64
+                info.rip = ctx.rip
+
+                write_apc_trampoline(new_rsp, proc.exception_handler, info_addr, exception_return_syscall)
+
+                ctx.rsp = new_rsp
+                ctx.rip = new_rsp
+                return ctx
+            }
+        }
+
+        return kill_current_thread_from_interrupt(ctx, 0xFFFF_FFFF_FFFF_FFF2)
     }
 
     inline func current_thread() -> Thread {

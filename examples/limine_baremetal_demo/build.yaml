@@ -168,6 +168,36 @@ extra_links:
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [build/apc_sender.o]
+  - name: seh_demo
+    c_sources:
+      - path: user/seh_demo.c
+        output: build/seh_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/seh_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/seh_demo.o]
+  - name: wait_target
+    c_sources:
+      - path: user/wait_target.c
+        output: build/wait_target.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/wait_target.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/wait_target.o]
+  - name: wait_demo
+    c_sources:
+      - path: user/wait_demo.c
+        output: build/wait_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/wait_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/wait_demo.o]
 
 package:
   output: kernel.iso
@@ -202,6 +232,9 @@ package:
     - copy: {from: build/shm_reader.elf, to: initrd/bin/shm_reader}
     - copy: {from: build/apc_target.elf, to: initrd/bin/apc_target}
     - copy: {from: build/apc_sender.elf, to: initrd/bin/apc_sender}
+    - copy: {from: build/seh_demo.elf, to: initrd/bin/seh_demo}
+    - copy: {from: build/wait_target.elf, to: initrd/bin/wait_target}
+    - copy: {from: build/wait_demo.elf, to: initrd/bin/wait_demo}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}

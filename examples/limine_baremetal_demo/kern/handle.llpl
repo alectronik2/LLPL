@@ -100,6 +100,7 @@ namespace Kern {
         pipe: Pipe
         pipe_write: bool
         device: Device
+        waitable: Waitable
 
         constructor(file: VFS.FileHandle) {
             self.file = file
@@ -107,6 +108,7 @@ namespace Kern {
             self.pipe = null
             self.pipe_write = false
             self.device = null
+            self.waitable = null
         }
 
         constructor(pipe: Pipe, write_end: bool) {
@@ -115,6 +117,7 @@ namespace Kern {
             self.pipe = pipe
             self.pipe_write = write_end
             self.device = null
+            self.waitable = null
         }
 
         constructor(device: Device) {
@@ -123,6 +126,20 @@ namespace Kern {
             self.pipe = null
             self.pipe_write = false
             self.device = device
+            self.waitable = null
+        }
+
+        // Unlike `device` (a shared, permanent global the fd merely
+        // references), a Waitable is created fresh per handle and is
+        // owned by this fd - released in the destructor below, matching
+        // VmArea's own idiom for an owned sub-object (mm/aspace.llpl).
+        constructor(waitable: Waitable) {
+            self.file = null
+            self.offset = 0
+            self.pipe = null
+            self.pipe_write = false
+            self.device = null
+            self.waitable = waitable
         }
 
         destructor() {
@@ -132,6 +149,7 @@ namespace Kern {
             } else if self.file != null {
                 self.file.close()
             }
+            self.waitable.put() if self.waitable
         }
 
         func read(buffer: char*, size: uint) -> int {
@@ -233,6 +251,12 @@ namespace Kern {
             if self.file == null { return VFS.EBADF }
             return self.file.close()
         }
+
+        func wait() -> int {
+            return VFS.EBADF if self.waitable == null
+            return EOK if self.waitable.wait()
+            return EINVAL
+        }
     }
 
     class DescriptorTable : Object {
@@ -278,6 +302,16 @@ namespace Kern {
                 let fd = FIRST_USER_FD
                 while self.entries.contains(fd as u64) { fd++ }
                 self.entries.insert(fd as u64, new FileDescriptor(dev))
+                return fd as int
+            }
+        }
+
+        func install_waitable(waitable: Waitable) -> int {
+            if waitable == null { return VFS.EBADF }
+            holding self.lock {
+                let fd = FIRST_USER_FD
+                while self.entries.contains(fd as u64) { fd++ }
+                self.entries.insert(fd as u64, new FileDescriptor(waitable))
                 return fd as int
             }
         }

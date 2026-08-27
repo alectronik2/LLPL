@@ -211,6 +211,21 @@ func isr_handler_inner( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
         return
     }
 
+    // Every vector except 14 (page faults, handled inside page_fault_handler
+    // above, which already routes through the same handle_user_exception)
+    // used to fall straight through to the kernel-halting loop below with
+    // no ring-3 check at all - meaning a plain user-mode divide-by-zero or
+    // invalid opcode hung the entire VM, not just the offending process.
+    // Route through the same SEH-or-kill helper the page fault path uses;
+    // it only returns null for a genuine ring-0 (kernel) fault, which still
+    // falls through to the halt loop exactly as before.
+    if ctx.vector != 14 {
+        let handled = Kern.handle_user_exception(ctx, 0, SYS_EXCEPTION_RETURN)
+        if handled != null {
+            return handled
+        }
+    }
+
     llpl_panic_backtrace_from_frame( ctx.rbp )
     // Linked from hal/isr.m64. Dispatching through HAL.interrupts can be
     // filled in once the interrupt context layout is consumed on the LLPL side.
@@ -297,8 +312,12 @@ func page_fault_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
     let active_cr3 = HAL.read_cr3()
 
     if (ctx.err & 4) != 0 || (ctx.cs & 3) == 3 {
-        let thread: Kern.Thread = HAL.current().thread
-        if thread != null && Kern.resolve_user_page_fault(thread.proc, fault_addr, ctx.err) {
+        // Raw pointer, not Kern.Thread - same reason as maybe_deliver_apc's
+        // own comment (kern/thread.llpl): an owning local for the current
+        // thread here would emit an rc_release on every page fault,
+        // risking freeing it out from under itself.
+        let thread = HAL.current().thread as void*
+        if thread != null && Kern.resolve_user_page_fault((thread as Kern.Thread).proc, fault_addr, ctx.err) {
             // Null is the internal "fault resolved, retry this context"
             // sentinel; ctx itself continues to mean an unhandled fault.
             return null
@@ -312,8 +331,8 @@ func page_fault_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
     page_fault_print_context()
 
     if (ctx.err & 4) != 0 || (ctx.cs & 3) == 3 {
-        "  action=kill-user-thread\n" |> hs.write
-        return Kern.kill_current_thread_from_interrupt( ctx, 0xFFFF_FFFF_FFFF_FFF2 )
+        "  action=kill-user-thread-or-handle\n" |> hs.write
+        return Kern.handle_user_exception( ctx, fault_addr, SYS_EXCEPTION_RETURN )
     }
 
     return ctx
