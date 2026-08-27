@@ -780,7 +780,15 @@ namespace VFS {
         let len: i64 = 0
 
         throw EINVAL if path == null
-        defer path.put()
+        // path is read-only here (byte_len/byte_at only) and never stored
+        // or returned - the actual result is a brand new String built from
+        // the local `buffer` below. So this function was never the owner
+        // of path to begin with; the original `defer path.put()` (a
+        // pre-existing mistake, not something this hardening pass should
+        // have "fixed" into a real delete) never actually freed anything
+        // because Object.put() never touched the real refcount - every
+        // caller has always kept working by continuing to own path itself
+        // after calling this. No release belongs here at all.
 
         // Remove drive letter from file name.
         path_pos = 2 if path.byte_len() > 1 && path.byte_at(1) == ':'

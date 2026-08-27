@@ -185,7 +185,7 @@ namespace Kern {
         destructor() {
             "Thread destructor\n" |> HAL.Serial.write
             MM.free( self.stack ) if self.stack != null
-            self.curdir.put() if self.curdir != null
+            // curdir (a String field) is released automatically.
         }
     }
 

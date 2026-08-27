@@ -149,7 +149,10 @@ namespace Kern {
             } else if self.file != null {
                 self.file.close()
             }
-            self.waitable.put() if self.waitable
+            // waitable itself needs no explicit release here - assigning
+            // it in the constructor already retained it (field-assignment
+            // semantics), and the compiler releases owning fields
+            // automatically on destruction.
         }
 
         func read(buffer: char*, size: uint) -> int {

@@ -288,6 +288,10 @@ func kernel_main() {
     Kern.spawn_elf("/bin/wait_target")
     Kern.spawn_elf("/bin/wait_demo")
     "wait demo spawned <green>ok</>\n" |> Terminal.write
+    Kern.spawn_elf("/bin/iocp_demo")
+    "iocp demo spawned <green>ok</>\n" |> Terminal.write
+    Kern.spawn_elf("/bin/sync_handle_demo")
+    "sync handle demo spawned <green>ok</>\n" |> Terminal.write
 
     //demo_hhdm( memmap, hhdm )
 
@@ -296,7 +300,7 @@ func kernel_main() {
     //draw_demo(fb)
     //draw_memmap(fb, memmap)
     tw( "<bright-green>DimensionOS kernel booting</>: TrueType + <cyan>ANSI</>\n" )
-    tw( "Limine framebuffer: \(fb.address:hex) \(fb.width)x\(fb.height) pitch=\(fb.pitch) bpp=\(fb.bpp)< green>ok</>\n" )
+    tw( "Limine framebuffer: \(fb.address:hex) \(fb.width)x\(fb.height) pitch=\(fb.pitch) bpp=\(fb.bpp) <green>ok</>\n" )
     tw( "Limine memory map: <magenta>\(memmap.entry_count)</> entries <green>ok</>\n" )
     tw( "Running on CPU \(HAL.cpu_id()) <green>ok</>\n" )
 

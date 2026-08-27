@@ -123,7 +123,7 @@ namespace Kern {
         return true
     }
 
-    func load_elf_process(path: String, parent: Process) -> Process {
+    func load_elf_process(path: String, parent: Process, command_line: String = null) -> Process {
         let (file, size) = VFS.read_binary(path)
         if !elf_valid(file, size) {
             "ELF: invalid or missing image " |> HAL.Serial.write
@@ -133,9 +133,12 @@ namespace Kern {
         }
 
         let hdr = file as Elf64Header*
-        let proc = new Process(path, parent)
+        let proc = new Process(path, parent, command_line)
         if parent != null {
-            proc.fds.put()
+            // Field reassignment doesn't auto-release the old value - this
+            // real delete is what actually frees the constructor's own
+            // fresh fd table before replacing it with the inherited one.
+            delete proc.fds
             proc.fds = parent.fds.clone_for_exec()
         }
         init_user_pml4(proc)
@@ -166,8 +169,8 @@ namespace Kern {
         return proc
     }
 
-    func spawn_user_process(path: String, parent: Process) -> int {
-        let proc = load_elf_process(path, parent)
+    func spawn_user_process(path: String, parent: Process, command_line: String = null) -> int {
+        let proc = load_elf_process(path, parent, command_line)
         return ENOENT if proc == null
         return proc.pid as int
     }

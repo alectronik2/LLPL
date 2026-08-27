@@ -101,8 +101,24 @@ namespace MM {
         }
 
         destructor() {
-            name.put() if name
-            (backing as Object).put() if backing
+            // name is released automatically (String is a statically-typed
+            // field, so the compiler already handles it).
+            //
+            // backing is void* - type-erased (it can be a FileDescriptor
+            // for a file mapping or a Kern.SharedMemorySegment for a
+            // shared-memory one), so the compiler can't auto-manage it the
+            // same way. Object.get()/.put() (prelude.llpl) don't fix this:
+            // they touch a separate, unrelated `Object.refcount` field
+            // that the real ARC (the header-level ref_count driving
+            // `delete` and automatic local-variable release) never
+            // consults - so a `.get()` here never actually kept anything
+            // alive, and `.put()` never actually freed anything. Deleting
+            // through a cast to Object instead dispatches polymorphically,
+            // through the object's own vtable, to whichever concrete
+            // destructor is correct - the same mechanism Object.put()
+            // itself relies on for its own (also broken, for the same
+            // reason) `delete self`.
+            if backing != null { delete (backing as Object) }
         }
     }
 
@@ -266,7 +282,8 @@ namespace MM {
                 // needless allocation, this keeps map() usable during early
                 // heap bootstrap.
                 if name {
-                    name.get()
+                    // Field assignment already retains - no explicit call
+                    // needed.
                     vma.name = name
                 }
 
@@ -354,7 +371,12 @@ namespace MM {
                         right_vma.name = null
                         right_vma.flags = vma.flags
                         right_vma.backing = vma.backing
-                        if right_vma.backing != null { (right_vma.backing as Object).get() }
+                        // Real retain, not Object.get() - see VmArea's own
+                        // destructor comment. Both vma and right_vma now
+                        // reference the same backing object independently,
+                        // and each will release it (via its own
+                        // destructor) when it's torn down.
+                        if right_vma.backing != null { rc_retain(right_vma.backing as char*) }
                         right_vma.file_offset = vma.file_offset + (unmap_end - vma.start)
                         right_vma.file_length = vma.file_length - (unmap_end - vma.start)
 
@@ -404,7 +426,10 @@ namespace MM {
         copy.flags = source.flags
         copy.name = null
         copy.backing = source.backing
-        if copy.backing != null { (copy.backing as Object).get() }
+        // Real retain, not Object.get() - see VmArea's own destructor
+        // comment. The COW-cloned child VMA now independently references
+        // the same backing object as the parent's.
+        if copy.backing != null { rc_retain(copy.backing as char*) }
         copy.file_offset = source.file_offset
         copy.file_length = source.file_length
         rb_insert(target, copy)

@@ -198,6 +198,26 @@ extra_links:
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [build/wait_demo.o]
+  - name: iocp_demo
+    c_sources:
+      - path: user/iocp_demo.c
+        output: build/iocp_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/iocp_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/iocp_demo.o]
+  - name: sync_handle_demo
+    c_sources:
+      - path: user/sync_handle_demo.c
+        output: build/sync_handle_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/sync_handle_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/sync_handle_demo.o]
 
 package:
   output: kernel.iso
@@ -235,6 +255,8 @@ package:
     - copy: {from: build/seh_demo.elf, to: initrd/bin/seh_demo}
     - copy: {from: build/wait_target.elf, to: initrd/bin/wait_target}
     - copy: {from: build/wait_demo.elf, to: initrd/bin/wait_demo}
+    - copy: {from: build/iocp_demo.elf, to: initrd/bin/iocp_demo}
+    - copy: {from: build/sync_handle_demo.elf, to: initrd/bin/sync_handle_demo}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}

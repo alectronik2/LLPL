@@ -77,13 +77,11 @@ namespace Kern {
     class ProcessWaitable : Waitable {
         proc: Process
 
+        // Assigning proc here retains it (standard field-assignment
+        // semantics), and the compiler releases it automatically when a
+        // ProcessWaitable is destroyed - no explicit destructor needed.
         constructor(proc: Process) {
             self.proc = proc
-            (self.proc as Object).get()
-        }
-
-        destructor() {
-            (self.proc as Object).put()
         }
 
         func is_signaled() -> bool {
@@ -107,13 +105,10 @@ namespace Kern {
     class ThreadWaitable : Waitable {
         thread: Thread
 
+        // See ProcessWaitable's matching comment - field assignment
+        // retains, the compiler releases automatically on destruction.
         constructor(thread: Thread) {
             self.thread = thread
-            (self.thread as Object).get()
-        }
-
-        destructor() {
-            (self.thread as Object).put()
         }
 
         func is_signaled() -> bool {

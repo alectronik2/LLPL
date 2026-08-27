@@ -1,0 +1,187 @@
+import hal
+import lib
+import mm
+
+namespace Kern {
+    class CompletionPacket : Object {
+        key: uint
+        context: uint
+        bytes_transferred: uint
+        status: int
+        next: CompletionPacket
+
+        constructor(key: uint, context: uint, bytes_transferred: uint, status: int) {
+            self.key = key
+            self.context = context
+            self.bytes_transferred = bytes_transferred
+            self.status = status
+            self.next = null
+        }
+    }
+
+    // NT-style I/O completion port: a queue of finished-operation packets
+    // plus a waiter list. Doubles as a plain Waitable (SYS_WAIT_HANDLE just
+    // wants "is anything ready", without dequeuing) alongside its own
+    // get_queued(), the real retrieval API that SYS_GET_QUEUED_COMPLETION
+    // uses.
+    class IoCompletionPort : Waitable {
+        lock: SpinLock
+        waiters: WaitQueue
+        head: CompletionPacket
+        tail: CompletionPacket
+
+        constructor() {
+            self.waiters = new WaitQueue()
+        }
+
+        func post(key: uint, context: uint, bytes_transferred: uint, status: int) {
+            let packet = new CompletionPacket(key, context, bytes_transferred, status)
+            holding self.lock {
+                if self.tail == null {
+                    self.head = packet
+                    self.tail = packet
+                } else {
+                    self.tail.next = packet
+                    self.tail = packet
+                }
+            }
+            wake_all(self.waiters)
+        }
+
+        func is_signaled() -> bool {
+            return self.head != null
+        }
+
+        func wait() -> bool {
+            while true {
+                let prepared = false
+                holding self.lock {
+                    if self.head != null { return true }
+                    prepared = prepare_block_current(self.waiters)
+                }
+                return false if !prepared
+                scheduler_yield()
+            }
+            return false
+        }
+
+        func get_queued(key_out: uint*, context_out: uint*, bytes_out: uint*, status_out: int*) -> bool {
+            while true {
+                let packet: CompletionPacket = null
+                let prepared = false
+                holding self.lock {
+                    if self.head != null {
+                        packet = self.head
+                        self.head = packet.next
+                        if self.head == null { self.tail = null }
+                    } else {
+                        prepared = prepare_block_current(self.waiters)
+                    }
+                }
+                if packet != null {
+                    key_out[0] = packet.key
+                    context_out[0] = packet.context
+                    bytes_out[0] = packet.bytes_transferred
+                    status_out[0] = packet.status
+                    delete packet
+                    return true
+                }
+                return false if !prepared
+                scheduler_yield()
+            }
+            return false
+        }
+    }
+
+    // One queued async read/write. Assigning descriptor/iocp into these
+    // fields retains them automatically (standard field-assignment
+    // semantics, same as every other class in this codebase), and the
+    // compiler releases them automatically when a request is destroyed -
+    // no explicit destructor needed here, so closing the caller's own fd
+    // (or the port) doesn't tear anything down mid-operation.
+    class AsyncIoRequest : Object {
+        descriptor: FileDescriptor
+        buf: uint
+        size: uint
+        is_write: bool
+        iocp: IoCompletionPort
+        key: uint
+        context: uint
+
+        constructor(descriptor: FileDescriptor, buf: uint, size: uint, is_write: bool,
+                iocp: IoCompletionPort, key: uint, context: uint) {
+            self.descriptor = descriptor
+            self.buf = buf
+            self.size = size
+            self.is_write = is_write
+            self.iocp = iocp
+            self.key = key
+            self.context = context
+        }
+    }
+
+    // Runs as its own THREAD_KERNEL worker (spawn_async_io, below) bound to
+    // the calling process - Thread.proc determines the active address
+    // space regardless of the KERNEL/USER flag (thread_cr3), so this
+    // executes in ring 0 with the *caller's* page tables active. It still
+    // never dereferences the caller's buffer pointer directly - a bad
+    // pointer touched that way would fault looking like a ring-0 kernel
+    // bug (unresolvable, hangs the machine - the same class of bug the SEH
+    // work fixed for other vectors). copy_to_user/copy_from_user
+    // (hal/syscall.llpl) do a safe, bounds-checked page-table walk instead,
+    // exactly like the existing synchronous SYS_FD_READ/SYS_FD_WRITE paths
+    // already use via their own kernel-owned scratch buffers.
+    func async_io_worker(arg: void*) {
+        let req = arg as AsyncIoRequest
+        let scratch = MM.malloc<char>(req.size + 1)
+        let bytes: uint = 0
+        let status: int = 0
+
+        if req.is_write {
+            if copy_from_user(scratch as void*, req.buf, req.size as u64) {
+                let result = req.descriptor.write(scratch, req.size)
+                if result < 0 { status = result } else { bytes = result as uint }
+            } else {
+                status = EINVAL
+            }
+        } else {
+            let result = req.descriptor.read(scratch, req.size)
+            if result < 0 {
+                status = result
+            } else {
+                bytes = result as uint
+                if bytes > 0 && !copy_to_user(req.buf, scratch as void*, bytes as u64) {
+                    status = EINVAL
+                    bytes = 0
+                }
+            }
+        }
+
+        MM.free(scratch)
+        req.iocp.post(req.key, req.context, bytes, status)
+        delete req
+    }
+
+    func spawn_async_io(proc: Process, descriptor: FileDescriptor, buf: uint, size: uint,
+            is_write: bool, iocp: IoCompletionPort, key: uint, context: uint) -> bool {
+        if proc == null || descriptor == null || iocp == null { return false }
+
+        let req = new AsyncIoRequest(descriptor, buf, size, is_write, iocp, key, context)
+
+        // Thread.arg is a raw void* (kern/thread.llpl), not an owning
+        // reference - without this, req's only reference (from
+        // construction) is released when this function's own local goes
+        // out of scope, freeing it before the worker thread - marked
+        // ready but not yet actually run - ever gets to dereference it via
+        // that raw pointer. async_io_worker's own `delete req` at the end
+        // is the matching release. rc_retain, not Object.get() - Object's
+        // own get()/put() (prelude.llpl) manage a separate, unrelated
+        // `Object.refcount` field that the compiler's real ARC (the
+        // header-level ref_count driving automatic local-variable release
+        // and `delete`) never looks at - discovered chasing this exact bug.
+        rc_retain(req as char*)
+        let thread = new Thread(proc, async_io_worker, req as void*, "async-io")
+        thread |> mark_thread_ready
+        return true
+    }
+}

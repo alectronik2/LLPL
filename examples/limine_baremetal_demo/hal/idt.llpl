@@ -276,7 +276,13 @@ func page_fault_print_context() {
     }
 
     let pcpu = gs_base as HAL.PerCpu*
-    let thread = pcpu.thread
+    // Raw pointer, not Kern.Thread - same reason as maybe_deliver_apc's own
+    // comment (kern/thread.llpl): an owning local for the current thread,
+    // used from code that can run directly on an interrupt-gate frame,
+    // emits an rc_release that can free it out from under itself. This
+    // function runs from page_fault_handler on every unresolved page
+    // fault, so it's exactly that context.
+    let thread = pcpu.thread as void*
     "  cpu=\(pcpu.cpuid) thread=\(thread as uint:hex)" |> hs.write
 
     if thread == null {
@@ -285,23 +291,23 @@ func page_fault_print_context() {
     }
 
     " name=" |> hs.write
-    if thread.name != null {
-        thread.name.c_str() |> hs.write
+    if (thread as Kern.Thread).name != null {
+        (thread as Kern.Thread).name.c_str() |> hs.write
     } else {
         "<unnamed>" |> hs.write
     }
     " state=" |> hs.write
-    thread_state_name(thread.state) |> hs.write
-    " priority=\(thread.priority) cr3=\(Kern.thread_cr3(thread):hex)\n" |> hs.write
+    thread_state_name((thread as Kern.Thread).state) |> hs.write
+    " priority=\((thread as Kern.Thread).priority) cr3=\(Kern.thread_cr3(thread as Kern.Thread):hex)\n" |> hs.write
 
-    if thread.proc != null {
-        "  process=\(thread.proc as uint:hex) name=" |> hs.write
-        if thread.proc.name != null {
-            thread.proc.name.c_str() |> hs.write
+    if (thread as Kern.Thread).proc != null {
+        "  process=\((thread as Kern.Thread).proc as uint:hex) name=" |> hs.write
+        if (thread as Kern.Thread).proc.name != null {
+            (thread as Kern.Thread).proc.name.c_str() |> hs.write
         } else {
             "<unnamed>" |> hs.write
         }
-        " pml4=\(thread.proc.pml4:hex)\n" |> hs.write
+        " pml4=\((thread as Kern.Thread).proc.pml4:hex)\n" |> hs.write
     } else {
         "  process=<none>\n" |> hs.write
     }

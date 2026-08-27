@@ -242,20 +242,34 @@ static HeapSegment* segment_for_ptr(void* ptr) {
     return NULL;
 }
 
+// Every path below returns memory zeroed up to the caller's requested
+// `size` - fields an LLPL constructor doesn't explicitly touch (an
+// embedded struct field like SpinLock, left to whatever the language's
+// implicit "unset = zero" convention assumes) must come back zeroed rather
+// than holding whatever a previous, freed occupant of this address left
+// behind. A free-list allocator recycles freed blocks, so unlike memory
+// fresh from the OS/bootloader (typically already zero), a reused block's
+// bytes are otherwise still whatever the last owner wrote - including,
+// for example, a SpinLock's "locked" byte reading as permanently held.
 void* rc_alloc(size_t size) {
     if (llpl_irq_depth > 0) {
         llpl_panic("heap allocation is not IRQ-safe");
     }
     if (llpl_custom_alloc.fn) {
-        return (void*)((char* (*)(void*, uint64_t))llpl_custom_alloc.fn)(
+        void* ptr = (void*)((char* (*)(void*, uint64_t))llpl_custom_alloc.fn)(
             llpl_custom_alloc.env, (uint64_t)size);
+        if (ptr) memset(ptr, 0, size);
+        return ptr;
     }
     if (llpl_custom_alloc_raw) {
-        return (void*)llpl_custom_alloc_raw((uint64_t)size);
+        void* ptr = (void*)llpl_custom_alloc_raw((uint64_t)size);
+        if (ptr) memset(ptr, 0, size);
+        return ptr;
     }
 
     heap_init();
 
+    size_t requested_size = size;
     if (size == 0) size = ALIGNMENT;
     size = align_up(size);
 
@@ -291,7 +305,9 @@ void* rc_alloc(size_t size) {
     }
 
     mark_allocated(best);
-    return (uint8_t*)best + sizeof(BlockHeader);
+    void* ptr = (uint8_t*)best + sizeof(BlockHeader);
+    memset(ptr, 0, requested_size);
+    return ptr;
 }
 
 void rc_free(void* ptr) {

@@ -2576,25 +2576,27 @@ func rounddown<T>( val: T, to: T ) -> T {
 }
 
 class Object {
-    let refcount: uint
-
-    constructor() {
-        refcount = 1
-    }
-
-    func get() -> void* {
-        // The lock prefix gives the increment acquire/release ordering and
-        // prevents concurrent references from losing an update.
-        asm("lock; incq %0" : "+m"(self.refcount) : : "memory")
-        return &self as void*
-    }
-
-    func put() {
-        // xadd returns the count before subtracting one. Checking that value
-        // avoids a separate, racy load after the atomic decrement.
-        let previous: uint
-        asm("lock; xaddq %0, %1" : "+q"(previous), "+m"(self.refcount) : : "memory")
-
-        delete self if previous == 1
-    }
+    // No get()/put() here on purpose. They used to exist as a manual
+    // retain/release pair backed by this class's own `refcount` field -
+    // but that field was entirely separate from the real ARC (the
+    // compiler-managed, header-level ref_count that drives `rc_retain`,
+    // automatic local-variable release, automatic field release on
+    // destruction, and `delete`), which never consulted it. A `.get()`
+    // never actually kept anything alive and a `.put()` never actually
+    // freed anything - only harmless when some *other* reference (a
+    // statically-typed owning field/local elsewhere) happened to keep the
+    // object alive regardless, and a real, silent leak or a real
+    // use-after-free whenever a `void*`-typed field was the *only*
+    // reference (the compiler can't auto-manage a type-erased pointer).
+    // Found by tracing exactly this class of bug twice in one session.
+    //
+    // For a normal, statically-typed owning field or local, just assign/
+    // reassign it and let the compiler handle retain and release - no
+    // method call needed at all. For a type-erased `void*` reference
+    // (the only case that ever needed something like get()/put()), use
+    // the real mechanism directly: `rc_retain(x as char*)` to retain, and
+    // `delete (x as Object)` to release - the cast to Object dispatches
+    // polymorphically through the object's own vtable to whichever
+    // concrete destructor is actually correct, regardless of x's real
+    // type.
 }

@@ -8,6 +8,7 @@ const USER_COPY_LOW  = 0x0000_0000_0000_1000
 const USER_COPY_HIGH = 0x0000_8000_0000_0000
 const USER_PATH_MAX  = 2048
 const USER_IO_MAX    = 64 * 1024
+const USER_CMDLINE_MAX = 1024
 
 const SYS_OPEN     = 4
 const SYS_FD_READ  = 5
@@ -45,6 +46,30 @@ const SYS_RESET_EVENT = 38
 const SYS_WAIT_HANDLE = 39
 const SYS_OPEN_PROCESS = 40
 const SYS_OPEN_THREAD = 41
+const SYS_CREATE_IOCP = 42
+const SYS_GET_QUEUED_COMPLETION = 43
+const SYS_READ_ASYNC = 44
+const SYS_WRITE_ASYNC = 45
+const SYS_CREATE_MUTEX = 46
+const SYS_RELEASE_MUTEX = 47
+const SYS_CREATE_SEMAPHORE = 48
+const SYS_RELEASE_SEMAPHORE = 49
+const SYS_GET_COMMAND_LINE = 50
+
+struct AsyncIoParams {
+    buf: u64
+    size: u64
+    iocp_fd: u64
+    key: u64
+    context: u64
+}
+
+struct CompletionResult {
+    key: u64
+    context: u64
+    bytes_transferred: u64
+    status: i64
+}
 
 // Returns the device name after "/dev/" if path starts with that prefix,
 // null otherwise - manual byte comparison since there's no String.starts_with
@@ -434,18 +459,22 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
         SYS_SPAWN => {
             let path = copy_user_string(ctx.rdi)
             let proc = syscall_process()
+            let command_line: String = null
+            if ctx.rsi != 0 { command_line = copy_user_string(ctx.rsi, USER_CMDLINE_MAX) }
             ctx.rax = EINVAL as u64 if path == null || proc == null
             if path != null && proc != null {
-                ctx.rax = Kern.spawn_user_process(path, proc) as u64
+                ctx.rax = Kern.spawn_user_process(path, proc, command_line) as u64
             }
         }
         SYS_EXEC => {
             let path = copy_user_string(ctx.rdi)
             let proc = syscall_process()
+            let command_line: String = null
+            if ctx.rsi != 0 { command_line = copy_user_string(ctx.rsi, USER_CMDLINE_MAX) }
             if path == null || proc == null {
                 ctx.rax = EINVAL as u64
             } else {
-                let pid = Kern.spawn_user_process(path, proc)
+                let pid = Kern.spawn_user_process(path, proc, command_line)
                 if pid < 0 {
                     ctx.rax = pid as u64
                 } else {
@@ -711,6 +740,146 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
             } else {
                 let waitable = new Kern.ThreadWaitable(target_thread)
                 ctx.rax = proc.fds.install_waitable(waitable as Kern.Waitable) as u64
+            }
+        }
+        SYS_CREATE_IOCP => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let iocp = new Kern.IoCompletionPort()
+                ctx.rax = proc.fds.install_waitable(iocp as Kern.Waitable) as u64
+            }
+        }
+        SYS_GET_QUEUED_COMPLETION => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            if descriptor == null || descriptor.waitable == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                let iocp = descriptor.waitable as Kern.IoCompletionPort
+                let key: uint = 0
+                let context: uint = 0
+                let bytes: uint = 0
+                let status: int = 0
+                if iocp.get_queued(&key, &context, &bytes, &status) {
+                    let result = CompletionResult {
+                        key: key as u64, context: context as u64,
+                        bytes_transferred: bytes as u64, status: status as i64
+                    }
+                    if copy_to_user(ctx.rsi, &result as void*, sizeof(CompletionResult)) {
+                        ctx.rax = EOK as u64
+                    } else {
+                        ctx.rax = EINVAL as u64
+                    }
+                } else {
+                    ctx.rax = EINVAL as u64
+                }
+            }
+        }
+        SYS_READ_ASYNC => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            let params: AsyncIoParams
+            if descriptor == null || !copy_from_user(&params as void*, ctx.rsi, sizeof(AsyncIoParams)) {
+                ctx.rax = EINVAL as u64
+            } else if params.size > USER_IO_MAX as u64 {
+                ctx.rax = EINVAL as u64
+            } else {
+                let iocp_descriptor = proc.fds.get(params.iocp_fd as uint)
+                if iocp_descriptor == null || iocp_descriptor.waitable == null {
+                    ctx.rax = ENOENT as u64
+                } else {
+                    let iocp = iocp_descriptor.waitable as Kern.IoCompletionPort
+                    let ok = Kern.spawn_async_io(proc, descriptor, params.buf as uint, params.size as uint,
+                        false, iocp, params.key as uint, params.context as uint)
+                    ctx.rax = EOK as u64 if ok
+                    if !ok { ctx.rax = EINVAL as u64 }
+                }
+            }
+        }
+        SYS_WRITE_ASYNC => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            let params: AsyncIoParams
+            if descriptor == null || !copy_from_user(&params as void*, ctx.rsi, sizeof(AsyncIoParams)) {
+                ctx.rax = EINVAL as u64
+            } else if params.size > USER_IO_MAX as u64 {
+                ctx.rax = EINVAL as u64
+            } else {
+                let iocp_descriptor = proc.fds.get(params.iocp_fd as uint)
+                if iocp_descriptor == null || iocp_descriptor.waitable == null {
+                    ctx.rax = ENOENT as u64
+                } else {
+                    let iocp = iocp_descriptor.waitable as Kern.IoCompletionPort
+                    let ok = Kern.spawn_async_io(proc, descriptor, params.buf as uint, params.size as uint,
+                        true, iocp, params.key as uint, params.context as uint)
+                    ctx.rax = EOK as u64 if ok
+                    if !ok { ctx.rax = EINVAL as u64 }
+                }
+            }
+        }
+        SYS_CREATE_MUTEX => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let mutex = new Kern.BlockingMutex()
+                if ctx.rdi != 0 { mutex.lock() }
+                ctx.rax = proc.fds.install_waitable(mutex as Kern.Waitable) as u64
+            }
+        }
+        SYS_RELEASE_MUTEX => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            if descriptor == null || descriptor.waitable == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                let released = (descriptor.waitable as Kern.BlockingMutex).unlock()
+                ctx.rax = EOK as u64 if released
+                if !released { ctx.rax = EINVAL as u64 }
+            }
+        }
+        SYS_CREATE_SEMAPHORE => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let sem = new Kern.Semaphore(ctx.rdi as uint)
+                ctx.rax = proc.fds.install_waitable(sem as Kern.Waitable) as u64
+            }
+        }
+        SYS_RELEASE_SEMAPHORE => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            if descriptor == null || descriptor.waitable == null {
+                ctx.rax = VFS.EBADF as u64
+            } else {
+                let posted = (descriptor.waitable as Kern.Semaphore).post(ctx.rsi as uint)
+                ctx.rax = EOK as u64 if posted
+                if !posted { ctx.rax = EINVAL as u64 }
+            }
+        }
+        SYS_GET_COMMAND_LINE => {
+            let proc = syscall_process()
+            if proc == null {
+                ctx.rax = EINVAL as u64
+            } else if proc.command_line == null {
+                ctx.rax = 0
+            } else {
+                let available = ctx.rsi as uint
+                let copy_len = proc.command_line.byte_len() + 1 // include NUL
+                if copy_len > available { copy_len = available }
+                if copy_len == 0 || !copy_to_user(ctx.rdi, proc.command_line.c_str() as void*, copy_len as u64) {
+                    ctx.rax = EINVAL as u64
+                } else {
+                    ctx.rax = copy_len as u64
+                }
             }
         }
         _ => {

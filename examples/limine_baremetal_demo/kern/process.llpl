@@ -23,7 +23,13 @@ namespace Kern {
     class Process : Object {
         pml4:   uint
         aspace: MM.AddressSpace
-        name:   String   
+        name:   String
+        // NT-style: a single command-line string handed to the process at
+        // spawn time (CreateProcess's lpCommandLine, stored in the PEB) -
+        // queryable at any time via SYS_GET_COMMAND_LINE, not just at
+        // entry. Splitting it into words is left to user-mode, same as a
+        // real CRT parses GetCommandLineA's result before calling main().
+        command_line: String
         threads: DoublyLinkedList<Thread>
         lock:   SpinLock
         next_mmap: uint
@@ -46,7 +52,7 @@ namespace Kern {
         // already established), so it can't rely on child_waiters alone.
         death_waiters: WaitQueue
 
-        constructor( name: String, parent: Process = null ) {
+        constructor( name: String, parent: Process = null, command_line: String = null ) {
             self.threads = new DoublyLinkedList<Thread>()
             let pml4_frame = MM.alloc_pageframe( MM.FrameType.Other )
             self.pml4 = MM.pf2p( pml4_frame )
@@ -55,6 +61,7 @@ namespace Kern {
             self.aspace.pml4 = self.pml4
             //"Process ctor: self.pml4=\(self.pml4:hex) self.aspace=\((self.aspace as uint):hex) self.aspace.pml4=\(self.aspace.pml4:hex)\n" |> HAL.Serial.write
             self.name = name // move ownership to process
+            self.command_line = command_line
             self.next_mmap = USER_MMAP_BASE
             self.fds = new DescriptorTable()
             self.parent = parent as void*
@@ -86,10 +93,17 @@ namespace Kern {
                 let pml4_frame = (MM.pfdb as uint + (self.pml4 >> MM.PAGE_SHIFT) * sizeof(MM.PageFrame)) as MM.PageFrame*
                 pml4_frame.release()
             }
-            self.aspace.put() // free address space
-            self.name.put() // free name string
-
-            delete threads // free thread list
+            // aspace, name, and threads (an AddressSpace, a String, and a
+            // DoublyLinkedList<Thread> field, all statically typed) are
+            // all released automatically by the compiler-generated
+            // destructor epilogue. The previous explicit `delete threads`
+            // here double-released the same field - confirmed via
+            // generated C showing both the explicit delete's rc_release
+            // AND the compiler's own auto-generated
+            // `if (self->threads) rc_release(...)` firing on the same
+            // pointer - a real double-free/use-after-free that corrupted
+            // the heap allocator every time a process exited, silently,
+            // until a later unrelated allocation (e.g. SYS_PIPE) hung.
         }
     }
 
@@ -97,7 +111,10 @@ namespace Kern {
         process_table = new HashMap<u64, Process>()
 
         kproc = new Process( "kernel" )
-        kproc.aspace.put()
+        // Field reassignment doesn't auto-release the old value (unlike a
+        // local variable's) - this real delete is what actually frees the
+        // constructor's own throwaway AddressSpace before replacing it.
+        delete kproc.aspace
         kproc.aspace = MM.kas
         let pml4_frame = (MM.pfdb as uint + (kproc.pml4 >> MM.PAGE_SHIFT) * sizeof(MM.PageFrame)) as MM.PageFrame*
         pml4_frame.release()
@@ -193,7 +210,9 @@ namespace Kern {
             proc.aspace.pml4 = 0
         }
         if proc.fds != null {
-            proc.fds.put()
+            // Field reassignment doesn't auto-release the old value - this
+            // real delete is what actually frees the fd table.
+            delete proc.fds
             proc.fds = null
         }
         proc.resources_reaped = true
@@ -378,7 +397,14 @@ namespace Kern {
             if writable { area.flags |= MM.MAP_WRITE }
             if write_back { area.flags |= MM.MAP_SHARED }
             area.backing = descriptor as void*
-            (area.backing as Object).get()
+            // Real retain, not Object.get() - see VmArea's own destructor
+            // comment (mm/aspace.llpl): Object.get()/.put() touch a
+            // separate, unrelated field the real ARC never consults, so
+            // this descriptor was never actually kept alive past the
+            // caller's own fd table entry - closing the fd while the
+            // mapping was still active would free it out from under the
+            // VMA. rc_retain is the real mechanism.
+            rc_retain(area.backing as char*)
             area.file_offset = offset
             area.file_length = length
             MM.rb_insert(proc.aspace, area)

@@ -1,11 +1,16 @@
 import hal
 import lib
+import kern
 import kern.timer
 
 namespace Kern {
     // A sleeping, non-recursive mutex. The internal spinlock only protects
-    // metadata and is never held while the caller is blocked.
-    class BlockingMutex : Object {
+    // metadata and is never held while the caller is blocked. Waitable so
+    // it can also be exposed to user-mode as a SYS_WAIT_HANDLE-able handle
+    // (SYS_CREATE_MUTEX, hal/syscall.llpl) alongside events/processes/
+    // threads/IOCPs - wait() just acquires it, matching WaitForSingleObject
+    // on an NT mutex handle.
+    class BlockingMutex : Waitable {
         gate: SpinLock
         owner: void*
         waiters: WaitQueue
@@ -137,6 +142,17 @@ namespace Kern {
                 owned = current != null && self.owner == current
             }
             return owned
+        }
+
+        // Waitable overrides: acquiring the mutex is what "waiting" on its
+        // handle means (matches WaitForSingleObject on an NT mutex), and it
+        // reads as signaled exactly when nobody holds it.
+        func wait() -> bool {
+            return self.lock()
+        }
+
+        func is_signaled() -> bool {
+            return self.owner == null
         }
     }
 
@@ -291,7 +307,11 @@ namespace Kern {
         }
     }
 
-    class Semaphore : Object {
+    // Waitable so it can be exposed to user-mode as a SYS_WAIT_HANDLE-able
+    // handle (SYS_CREATE_SEMAPHORE, hal/syscall.llpl) - wait() below already
+    // has the right "acquire" semantics (decrements count, blocks the same
+    // way KernelEvent does).
+    class Semaphore : Waitable {
         gate: SpinLock
         count: uint
         waiters: WaitQueue
@@ -396,6 +416,10 @@ namespace Kern {
                 result = self.count
             }
             return result
+        }
+
+        func is_signaled() -> bool {
+            return self.count != 0
         }
     }
 }

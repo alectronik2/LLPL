@@ -43,7 +43,8 @@ namespace Kern {
                 MM.release_paddr_frame(self.frame_paddrs[i])
             }
             MM.free(self.frame_paddrs as void*)
-            self.name.put() if self.name
+            // name (a String field) is released automatically - it's
+            // statically typed, unlike vma.backing elsewhere in this file.
         }
     }
 
@@ -121,7 +122,9 @@ namespace Kern {
                     vma.flags = MM.MAP_USER | MM.MAP_SHARED
                     vma.name = null
                     vma.backing = segment as void*
-                    (vma.backing as Object).get()
+                    // Real retain, not Object.get() - see VmArea's own
+                    // destructor comment (mm/aspace.llpl).
+                    rc_retain(vma.backing as char*)
                     MM.rb_insert(proc.aspace, vma)
                     proc.next_mmap = addr + len
                 }
@@ -146,7 +149,10 @@ namespace Kern {
         // another CPU can't drop the segment's last reference and free it
         // out from under us between this lookup and the vma.backing
         // reference below - that reference is what keeps it alive
-        // afterward, but only once it actually exists.
+        // afterward, but only once it actually exists. rc_retain/delete
+        // are the real mechanism - segment has a known static type here
+        // (unlike vma.backing, which is void*), so delete alone (no cast)
+        // is enough, same as shm_create/shm_unlink's own `delete segment`.
         let segment: SharedMemorySegment = null
         holding lock {
             let found = shm_segments.get(name)
@@ -154,7 +160,7 @@ namespace Kern {
                 return (ENOENT, 0)
             }
             segment = found.get()
-            (segment as Object).get()
+            rc_retain(segment as char*)
         }
         let len = segment.page_count * MM.PAGE_SIZE
 
@@ -162,13 +168,13 @@ namespace Kern {
         holding proc.aspace.lock {
             let (rc, found_addr) = find_free_shm_va(proc, len)
             if rc < 0 {
-                (segment as Object).put()
+                delete segment
                 return (rc, 0)
             }
             addr = found_addr
 
             if !map_shm_pages(proc, addr, segment) {
-                (segment as Object).put()
+                delete segment
                 return (ENOMEM, 0)
             }
 
@@ -176,12 +182,14 @@ namespace Kern {
             vma.flags = MM.MAP_USER | MM.MAP_SHARED
             vma.name = null
             vma.backing = segment as void*
-            (vma.backing as Object).get()
+            // Real retain, not Object.get() - see VmArea's own destructor
+            // comment (mm/aspace.llpl).
+            rc_retain(vma.backing as char*)
             MM.rb_insert(proc.aspace, vma)
             proc.next_mmap = addr + len
         }
 
-        (segment as Object).put()
+        delete segment
         return (EOK, addr)
     }
 
