@@ -107,8 +107,12 @@ private bool shouldUseColor() {
     string forceColor = environment.get("FORCE_COLOR");
     if (forceColor.length > 0) return true;
     if (noColor.length > 0) return false;
-    // Default to color if stderr is a terminal
-    return true;
+    // Only emit ANSI colors when stderr is a real terminal (not piped,
+    // not captured by a test runner, not redirected to a file).
+    // Without this, compile-fail golden tests see color escapes in the
+    // actual output that don't appear in the plain-text expected files.
+    import core.sys.posix.unistd : isatty, STDERR_FILENO;
+    return isatty(STDERR_FILENO) != 0;
 }
 
 // Renders an error with a source citation in the style of rustc/clang with colors:

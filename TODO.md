@@ -20,19 +20,19 @@ commit messages or `WORKING_NOW.md`, not in the roadmap.
 - [x] Add hosted user-mode `Thread<T>` APIs
 - [ ] Standardize thread/task primitive APIs across hosted and kernel targets
 - [x] Add portable atomic runtime types
-- [ ] Add compiler intrinsics for atomics
+- [x] Add compiler intrinsics for atomics
 - [x] Add `Mutex` and `RwLock` stdlib types
 - [x] Add task/thread-local storage
 - [x] Add tests for interrupt-context restrictions and scheduler interactions
 
 ### Serialization
-- [ ] Define stable reflection metadata contracts for structs/classes/enums
-- [ ] Add JSON serialization of structs
-- [ ] Add JSON deserialization into typed structs
+- [x] Define stable reflection metadata contracts for structs/classes/enums
+- [x] Add JSON serialization of structs
+- [x] Add JSON deserialization into typed structs
 - [ ] Extend YAML support beyond parsing
 - [ ] Add binary serialization format support
 - [ ] Support nested structs, arrays, and optional/default fields
-- [ ] Add tests and examples
+- [x] Add tests and examples (`examples/struct_serialization_demo.llpl`)
 
 ## Medium Priority
 
@@ -62,7 +62,7 @@ commit messages or `WORKING_NOW.md`, not in the roadmap.
 - [ ] Method metadata
 - [ ] Constructor metadata
 - [ ] Enum variant metadata
-- [ ] Reflection docs and examples beyond `examples/reflection_demo.llpl`
+- [x] Reflection docs and examples (`examples/reflection_demo.llpl`, `examples/struct_serialization_demo.llpl`)
 
 ### Tooling
 - [ ] REPL / interactive CLI
@@ -101,9 +101,9 @@ commit messages or `WORKING_NOW.md`, not in the roadmap.
 - [ ] More hardware driver examples
 
 ### Graphics
-- [ ] 2D graphics primitives
-- [ ] Sprite system
-- [ ] Animation helpers
+- [x] 2D graphics primitives (circles, arcs, rounded rects, ellipses, triangles, polygons, gradients)
+- [x] Sprite system (position, scale, collision, texture drawing)
+- [x] Animation helpers (frame-based animation, particle emitter, camera)
 - [ ] Text rendering improvements
 - [ ] Vector graphics / SVG support
 

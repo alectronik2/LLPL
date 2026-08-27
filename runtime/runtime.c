@@ -379,19 +379,27 @@ void rc_init(RefCount* rc) {
     rc->weak_count = 0;
 }
 
+// count/weak_count are shared, preemptible state: any two threads holding
+// a reference to the same object can retain/release it concurrently, and
+// a timer IRQ can preempt either side mid-update. Plain ++/-- here is a
+// lost-update race - two interleaved releases can under-count and free an
+// object that's still referenced elsewhere (or, conversely, never reach
+// zero and leak) - invisible under single-threaded/cooperative use, but a
+// real, silent corruption source now that preemptive task switching exists
+// for every ref-counted object in the language, not just this one type.
 void rc_retain(char* ptr) {
     if (!ptr) return;
     RefCount* rc = (RefCount*)ptr;
-    rc->count++;
+    llpl_atomic_i32_fetch_add((int32_t*)&rc->count, 1);
 }
 
 void rc_release(void* ptr, void (*destructor)(void*)) {
     if (!ptr) return;
 
     RefCount* rc = (RefCount*)ptr;
-    rc->count--;
+    int32_t previous = llpl_atomic_i32_fetch_add((int32_t*)&rc->count, -1);
 
-    if (rc->count == 0) {
+    if (previous == 1) {
         if (destructor) {
             destructor(ptr);
         }
@@ -399,7 +407,7 @@ void rc_release(void* ptr, void (*destructor)(void*)) {
         // around past this point (so it can safely observe "count == 0"
         // instead of reading freed/reused memory) - the value itself is
         // already gone, same as before weak references existed.
-        if (rc->weak_count == 0) {
+        if (llpl_atomic_i32_load((int32_t*)&rc->weak_count) == 0) {
             rc_free(ptr);
         }
     }
@@ -408,14 +416,14 @@ void rc_release(void* ptr, void (*destructor)(void*)) {
 void rc_weak_retain(char* ptr) {
     if (!ptr) return;
     RefCount* rc = (RefCount*)ptr;
-    rc->weak_count++;
+    llpl_atomic_i32_fetch_add((int32_t*)&rc->weak_count, 1);
 }
 
 void rc_weak_release(char* ptr) {
     if (!ptr) return;
     RefCount* rc = (RefCount*)ptr;
-    rc->weak_count--;
-    if (rc->weak_count == 0 && rc->count == 0) {
+    int32_t previous = llpl_atomic_i32_fetch_add((int32_t*)&rc->weak_count, -1);
+    if (previous == 1 && llpl_atomic_i32_load((int32_t*)&rc->count) == 0) {
         rc_free((void*)ptr);
     }
 }
@@ -423,13 +431,13 @@ void rc_weak_release(char* ptr) {
 bool rc_is_alive(char* ptr) {
     if (!ptr) return false;
     RefCount* rc = (RefCount*)ptr;
-    return rc->count > 0;
+    return llpl_atomic_i32_load((int32_t*)&rc->count) > 0;
 }
 
 int64_t rc_use_count(char* ptr) {
     if (!ptr) return 0;
     RefCount* rc = (RefCount*)ptr;
-    return (int64_t)rc->count;
+    return (int64_t)llpl_atomic_i32_load((int32_t*)&rc->count);
 }
 
 void* memset(void* dest, int val, size_t count) {
@@ -1136,6 +1144,12 @@ char* llpl_symbol_name(char* symbol) {
     return s ? s->name : "";
 }
 
+char* llpl_symbol_display_name(char* symbol) {
+    LLPL_Symbol* s = (LLPL_Symbol*)symbol;
+    if (!s) return "";
+    return (s->display_name && s->display_name[0]) ? s->display_name : s->name;
+}
+
 char* llpl_symbol_file(char* symbol) {
     LLPL_Symbol* s = (LLPL_Symbol*)symbol;
     return s ? s->file : "";
@@ -1256,6 +1270,158 @@ int64_t llpl_in_irq(void) {
     return llpl_irq_depth > 0 ? 1 : 0;
 }
 
+// One load/store/exchange/fetch_add/compare_exchange family per width
+// (8/16/32/64-bit), backed by hand-written x86_64 asm - the same
+// instructions gcc/clang/tcc all assemble identically, which matters
+// because tcc (the kernel example's toolchain) does not implement
+// __atomic_*/__ATOMIC_SEQ_CST at all (verified directly: `tcc -run -` on
+// a snippet using __ATOMIC_SEQ_CST fails with "undeclared"). The non-x86_64
+// #else branch is unreachable from tcc (tcc only ever targets x86_64 in
+// this project) so it's free to use __atomic_* builtins - real gcc/clang,
+// unlike the plain read-modify-write this branch used to do, which wasn't
+// atomic at all on a non-x86_64 host.
+
+int8_t llpl_atomic_i8_load(int8_t* ptr) {
+    __asm__ __volatile__("" ::: "memory");
+    int8_t value = *ptr;
+    __asm__ __volatile__("" ::: "memory");
+    return value;
+}
+
+void llpl_atomic_i8_store(int8_t* ptr, int8_t value) {
+    __asm__ __volatile__("" ::: "memory");
+    *ptr = value;
+    __asm__ __volatile__("" ::: "memory");
+}
+
+int8_t llpl_atomic_i8_exchange(int8_t* ptr, int8_t value) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("xchgb %0, %1" : "+r"(value), "+m"(*ptr) : : "memory");
+    return value;
+#else
+    return (int8_t)__atomic_exchange_n(ptr, value, __ATOMIC_SEQ_CST);
+#endif
+}
+
+int8_t llpl_atomic_i8_fetch_add(int8_t* ptr, int8_t delta) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("lock; xaddb %0, %1" : "+r"(delta), "+m"(*ptr) : : "memory");
+    return delta;
+#else
+    return (int8_t)__atomic_fetch_add(ptr, delta, __ATOMIC_SEQ_CST);
+#endif
+}
+
+int64_t llpl_atomic_i8_compare_exchange(int8_t* ptr, int8_t* expected, int8_t desired) {
+#if defined(__x86_64__)
+    int8_t old = *expected;
+    unsigned char ok;
+    __asm__ __volatile__(
+        "lock; cmpxchgb %3, %1; sete %0"
+        : "=q"(ok), "+m"(*ptr), "+a"(old)
+        : "r"(desired)
+        : "memory");
+    if (!ok) *expected = old;
+    return ok ? 1 : 0;
+#else
+    return __atomic_compare_exchange_n(ptr, expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
+#endif
+}
+
+int16_t llpl_atomic_i16_load(int16_t* ptr) {
+    __asm__ __volatile__("" ::: "memory");
+    int16_t value = *ptr;
+    __asm__ __volatile__("" ::: "memory");
+    return value;
+}
+
+void llpl_atomic_i16_store(int16_t* ptr, int16_t value) {
+    __asm__ __volatile__("" ::: "memory");
+    *ptr = value;
+    __asm__ __volatile__("" ::: "memory");
+}
+
+int16_t llpl_atomic_i16_exchange(int16_t* ptr, int16_t value) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("xchgw %0, %1" : "+r"(value), "+m"(*ptr) : : "memory");
+    return value;
+#else
+    return (int16_t)__atomic_exchange_n(ptr, value, __ATOMIC_SEQ_CST);
+#endif
+}
+
+int16_t llpl_atomic_i16_fetch_add(int16_t* ptr, int16_t delta) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("lock; xaddw %0, %1" : "+r"(delta), "+m"(*ptr) : : "memory");
+    return delta;
+#else
+    return (int16_t)__atomic_fetch_add(ptr, delta, __ATOMIC_SEQ_CST);
+#endif
+}
+
+int64_t llpl_atomic_i16_compare_exchange(int16_t* ptr, int16_t* expected, int16_t desired) {
+#if defined(__x86_64__)
+    int16_t old = *expected;
+    unsigned char ok;
+    __asm__ __volatile__(
+        "lock; cmpxchgw %3, %1; sete %0"
+        : "=q"(ok), "+m"(*ptr), "+a"(old)
+        : "r"(desired)
+        : "memory");
+    if (!ok) *expected = old;
+    return ok ? 1 : 0;
+#else
+    return __atomic_compare_exchange_n(ptr, expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
+#endif
+}
+
+int32_t llpl_atomic_i32_load(int32_t* ptr) {
+    __asm__ __volatile__("" ::: "memory");
+    int32_t value = *ptr;
+    __asm__ __volatile__("" ::: "memory");
+    return value;
+}
+
+void llpl_atomic_i32_store(int32_t* ptr, int32_t value) {
+    __asm__ __volatile__("" ::: "memory");
+    *ptr = value;
+    __asm__ __volatile__("" ::: "memory");
+}
+
+int32_t llpl_atomic_i32_exchange(int32_t* ptr, int32_t value) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("xchgl %0, %1" : "+r"(value), "+m"(*ptr) : : "memory");
+    return value;
+#else
+    return (int32_t)__atomic_exchange_n(ptr, value, __ATOMIC_SEQ_CST);
+#endif
+}
+
+int32_t llpl_atomic_i32_fetch_add(int32_t* ptr, int32_t delta) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("lock; xaddl %0, %1" : "+r"(delta), "+m"(*ptr) : : "memory");
+    return delta;
+#else
+    return (int32_t)__atomic_fetch_add(ptr, delta, __ATOMIC_SEQ_CST);
+#endif
+}
+
+int64_t llpl_atomic_i32_compare_exchange(int32_t* ptr, int32_t* expected, int32_t desired) {
+#if defined(__x86_64__)
+    int32_t old = *expected;
+    unsigned char ok;
+    __asm__ __volatile__(
+        "lock; cmpxchgl %3, %1; sete %0"
+        : "=q"(ok), "+m"(*ptr), "+a"(old)
+        : "r"(desired)
+        : "memory");
+    if (!ok) *expected = old;
+    return ok ? 1 : 0;
+#else
+    return __atomic_compare_exchange_n(ptr, expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
+#endif
+}
+
 int64_t llpl_atomic_i64_load(int64_t* ptr) {
     __asm__ __volatile__("" ::: "memory");
     int64_t value = *ptr;
@@ -1274,9 +1440,7 @@ int64_t llpl_atomic_i64_exchange(int64_t* ptr, int64_t value) {
     __asm__ __volatile__("xchgq %0, %1" : "+r"(value), "+m"(*ptr) : : "memory");
     return value;
 #else
-    int64_t old = *ptr;
-    *ptr = value;
-    return old;
+    return __atomic_exchange_n(ptr, value, __ATOMIC_SEQ_CST);
 #endif
 }
 
@@ -1285,9 +1449,7 @@ int64_t llpl_atomic_i64_fetch_add(int64_t* ptr, int64_t delta) {
     __asm__ __volatile__("lock; xaddq %0, %1" : "+r"(delta), "+m"(*ptr) : : "memory");
     return delta;
 #else
-    int64_t old = *ptr;
-    *ptr = old + delta;
-    return old;
+    return __atomic_fetch_add(ptr, delta, __ATOMIC_SEQ_CST);
 #endif
 }
 
@@ -1303,13 +1465,68 @@ int64_t llpl_atomic_i64_compare_exchange(int64_t* ptr, int64_t* expected, int64_
     if (!ok) *expected = old;
     return ok ? 1 : 0;
 #else
-    if (*ptr == *expected) {
-        *ptr = desired;
-        return 1;
-    }
-    *expected = *ptr;
-    return 0;
+    return __atomic_compare_exchange_n(ptr, expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
 #endif
+}
+
+uint8_t llpl_atomic_u8_load(uint8_t* ptr) {
+    return (uint8_t)llpl_atomic_i8_load((int8_t*)ptr);
+}
+
+void llpl_atomic_u8_store(uint8_t* ptr, uint8_t value) {
+    llpl_atomic_i8_store((int8_t*)ptr, (int8_t)value);
+}
+
+uint8_t llpl_atomic_u8_exchange(uint8_t* ptr, uint8_t value) {
+    return (uint8_t)llpl_atomic_i8_exchange((int8_t*)ptr, (int8_t)value);
+}
+
+uint8_t llpl_atomic_u8_fetch_add(uint8_t* ptr, uint8_t delta) {
+    return (uint8_t)llpl_atomic_i8_fetch_add((int8_t*)ptr, (int8_t)delta);
+}
+
+int64_t llpl_atomic_u8_compare_exchange(uint8_t* ptr, uint8_t* expected, uint8_t desired) {
+    return llpl_atomic_i8_compare_exchange((int8_t*)ptr, (int8_t*)expected, (int8_t)desired);
+}
+
+uint16_t llpl_atomic_u16_load(uint16_t* ptr) {
+    return (uint16_t)llpl_atomic_i16_load((int16_t*)ptr);
+}
+
+void llpl_atomic_u16_store(uint16_t* ptr, uint16_t value) {
+    llpl_atomic_i16_store((int16_t*)ptr, (int16_t)value);
+}
+
+uint16_t llpl_atomic_u16_exchange(uint16_t* ptr, uint16_t value) {
+    return (uint16_t)llpl_atomic_i16_exchange((int16_t*)ptr, (int16_t)value);
+}
+
+uint16_t llpl_atomic_u16_fetch_add(uint16_t* ptr, uint16_t delta) {
+    return (uint16_t)llpl_atomic_i16_fetch_add((int16_t*)ptr, (int16_t)delta);
+}
+
+int64_t llpl_atomic_u16_compare_exchange(uint16_t* ptr, uint16_t* expected, uint16_t desired) {
+    return llpl_atomic_i16_compare_exchange((int16_t*)ptr, (int16_t*)expected, (int16_t)desired);
+}
+
+uint32_t llpl_atomic_u32_load(uint32_t* ptr) {
+    return (uint32_t)llpl_atomic_i32_load((int32_t*)ptr);
+}
+
+void llpl_atomic_u32_store(uint32_t* ptr, uint32_t value) {
+    llpl_atomic_i32_store((int32_t*)ptr, (int32_t)value);
+}
+
+uint32_t llpl_atomic_u32_exchange(uint32_t* ptr, uint32_t value) {
+    return (uint32_t)llpl_atomic_i32_exchange((int32_t*)ptr, (int32_t)value);
+}
+
+uint32_t llpl_atomic_u32_fetch_add(uint32_t* ptr, uint32_t delta) {
+    return (uint32_t)llpl_atomic_i32_fetch_add((int32_t*)ptr, (int32_t)delta);
+}
+
+int64_t llpl_atomic_u32_compare_exchange(uint32_t* ptr, uint32_t* expected, uint32_t desired) {
+    return llpl_atomic_i32_compare_exchange((int32_t*)ptr, (int32_t*)expected, (int32_t)desired);
 }
 
 uint64_t llpl_atomic_u64_load(uint64_t* ptr) {
@@ -1748,7 +1965,7 @@ static void llpl_panic_backtrace_from(uint64_t frame_addr) {
             ksnprintf(buf, sizeof(buf),
                 "\x1b[36m  #%02d\x1b[0m rbp=\x1b[33m0x%016x\x1b[0m rip=\x1b[33m0x%016x\x1b[0m \x1b[1;32m%s\x1b[0m (\x1b[2m%s:%d\x1b[0m)\n",
                 depth, frame_addr, rip,
-                llpl_symbol_name(sym), llpl_symbol_file(sym), llpl_symbol_line(sym));
+                llpl_symbol_display_name(sym), llpl_symbol_file(sym), llpl_symbol_line(sym));
         } else if (llpl_panic_use_color()) {
             ksnprintf(buf, sizeof(buf),
                 "\x1b[36m  #%02d\x1b[0m rbp=\x1b[33m0x%016x\x1b[0m rip=\x1b[33m0x%016x\x1b[0m \x1b[1;31m<unknown>\x1b[0m\n",
@@ -1757,7 +1974,7 @@ static void llpl_panic_backtrace_from(uint64_t frame_addr) {
             ksnprintf(buf, sizeof(buf),
                 "  #%02d rbp=0x%016x rip=0x%016x %s (%s:%d)\n",
                 depth, frame_addr, rip,
-                llpl_symbol_name(sym), llpl_symbol_file(sym), llpl_symbol_line(sym));
+                llpl_symbol_display_name(sym), llpl_symbol_file(sym), llpl_symbol_line(sym));
         } else {
             ksnprintf(buf, sizeof(buf),
                 "  #%02d rbp=0x%016x rip=0x%016x <unknown>\n",

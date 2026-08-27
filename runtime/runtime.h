@@ -75,6 +75,11 @@ typedef struct {
     void* addr;
     char* file;
     int64_t line;
+    // Dot-joined form of the same namespace/class/name pieces that produced
+    // `name` (e.g. "Kern.KeyboardDevice.push" for mangled name
+    // "Kern_KeyboardDevice_push") - what panic backtraces print; `name`
+    // itself stays the real C symbol, still what nm/objdump show.
+    char* display_name;
 } LLPL_Symbol;
 
 extern LLPL_Symbol llpl_symbol_table[];
@@ -200,6 +205,39 @@ int64_t llpl_async_executor_cancel_all(char* executor);
 void llpl_irq_enter(void);
 void llpl_irq_exit(void);
 int64_t llpl_in_irq(void);
+int8_t llpl_atomic_i8_load(int8_t* ptr);
+void llpl_atomic_i8_store(int8_t* ptr, int8_t value);
+int8_t llpl_atomic_i8_exchange(int8_t* ptr, int8_t value);
+int8_t llpl_atomic_i8_fetch_add(int8_t* ptr, int8_t delta);
+int64_t llpl_atomic_i8_compare_exchange(int8_t* ptr, int8_t* expected, int8_t desired);
+uint8_t llpl_atomic_u8_load(uint8_t* ptr);
+void llpl_atomic_u8_store(uint8_t* ptr, uint8_t value);
+uint8_t llpl_atomic_u8_exchange(uint8_t* ptr, uint8_t value);
+uint8_t llpl_atomic_u8_fetch_add(uint8_t* ptr, uint8_t delta);
+int64_t llpl_atomic_u8_compare_exchange(uint8_t* ptr, uint8_t* expected, uint8_t desired);
+
+int16_t llpl_atomic_i16_load(int16_t* ptr);
+void llpl_atomic_i16_store(int16_t* ptr, int16_t value);
+int16_t llpl_atomic_i16_exchange(int16_t* ptr, int16_t value);
+int16_t llpl_atomic_i16_fetch_add(int16_t* ptr, int16_t delta);
+int64_t llpl_atomic_i16_compare_exchange(int16_t* ptr, int16_t* expected, int16_t desired);
+uint16_t llpl_atomic_u16_load(uint16_t* ptr);
+void llpl_atomic_u16_store(uint16_t* ptr, uint16_t value);
+uint16_t llpl_atomic_u16_exchange(uint16_t* ptr, uint16_t value);
+uint16_t llpl_atomic_u16_fetch_add(uint16_t* ptr, uint16_t delta);
+int64_t llpl_atomic_u16_compare_exchange(uint16_t* ptr, uint16_t* expected, uint16_t desired);
+
+int32_t llpl_atomic_i32_load(int32_t* ptr);
+void llpl_atomic_i32_store(int32_t* ptr, int32_t value);
+int32_t llpl_atomic_i32_exchange(int32_t* ptr, int32_t value);
+int32_t llpl_atomic_i32_fetch_add(int32_t* ptr, int32_t delta);
+int64_t llpl_atomic_i32_compare_exchange(int32_t* ptr, int32_t* expected, int32_t desired);
+uint32_t llpl_atomic_u32_load(uint32_t* ptr);
+void llpl_atomic_u32_store(uint32_t* ptr, uint32_t value);
+uint32_t llpl_atomic_u32_exchange(uint32_t* ptr, uint32_t value);
+uint32_t llpl_atomic_u32_fetch_add(uint32_t* ptr, uint32_t delta);
+int64_t llpl_atomic_u32_compare_exchange(uint32_t* ptr, uint32_t* expected, uint32_t desired);
+
 int64_t llpl_atomic_i64_load(int64_t* ptr);
 void llpl_atomic_i64_store(int64_t* ptr, int64_t value);
 int64_t llpl_atomic_i64_exchange(int64_t* ptr, int64_t value);
@@ -242,6 +280,7 @@ void llpl_thread_sleep_ms(uint64_t ms);
 // linear scan - only ever called from a panic/backtrace path.
 char* llpl_resolve_symbol(uint64_t addr);
 char* llpl_symbol_name(char* symbol);
+char* llpl_symbol_display_name(char* symbol);
 char* llpl_symbol_file(char* symbol);
 int64_t llpl_symbol_line(char* symbol);
 

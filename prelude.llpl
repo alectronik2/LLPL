@@ -101,16 +101,6 @@ extern func llpl_async_executor_cancel_all(executor: char*) -> i64
 extern func llpl_irq_enter()
 extern func llpl_irq_exit()
 extern func llpl_in_irq() -> i64
-extern func llpl_atomic_i64_load(ptr: i64*) -> i64
-extern func llpl_atomic_i64_store(ptr: i64*, value: i64)
-extern func llpl_atomic_i64_exchange(ptr: i64*, value: i64) -> i64
-extern func llpl_atomic_i64_fetch_add(ptr: i64*, delta: i64) -> i64
-extern func llpl_atomic_i64_compare_exchange(ptr: i64*, expected: i64*, desired: i64) -> i64
-extern func llpl_atomic_u64_load(ptr: u64*) -> u64
-extern func llpl_atomic_u64_store(ptr: u64*, value: u64)
-extern func llpl_atomic_u64_exchange(ptr: u64*, value: u64) -> u64
-extern func llpl_atomic_u64_fetch_add(ptr: u64*, delta: u64) -> u64
-extern func llpl_atomic_u64_compare_exchange(ptr: u64*, expected: u64*, desired: u64) -> i64
 extern func llpl_mutex_lock(state: i64*)
 extern func llpl_mutex_try_lock(state: i64*) -> i64
 extern func llpl_mutex_unlock(state: i64*)
@@ -409,6 +399,12 @@ class AsyncChannel<T> {
     }
 }
 
+// load/store/exchange/fetch_add/compare_exchange are compiler intrinsics
+// (see codegen.d's isAtomicBuiltinCall), not extern-declared functions -
+// they type-infer T from the pointer argument and work on any of
+// i8/i16/i32/i64/u8/u16/u32/u64/bool. AtomicI64/AtomicU64/AtomicBool keep
+// their existing API for backward compatibility; Atomic<T> below covers
+// every other width without six near-duplicate wrapper classes.
 class AtomicI64 {
     let value: i64
 
@@ -417,23 +413,23 @@ class AtomicI64 {
     }
 
     func load() -> i64 {
-        return llpl_atomic_i64_load(&self.value)
+        return atomic_load(&self.value)
     }
 
     func store(value: i64) {
-        llpl_atomic_i64_store(&self.value, value)
+        atomic_store(&self.value, value)
     }
 
     func exchange(value: i64) -> i64 {
-        return llpl_atomic_i64_exchange(&self.value, value)
+        return atomic_exchange(&self.value, value)
     }
 
     func fetch_add(delta: i64) -> i64 {
-        return llpl_atomic_i64_fetch_add(&self.value, delta)
+        return atomic_fetch_add(&self.value, delta)
     }
 
     func compare_exchange(expected: i64*, desired: i64) -> bool {
-        return llpl_atomic_i64_compare_exchange(&self.value, expected, desired) != 0
+        return atomic_compare_exchange(&self.value, expected, desired)
     }
 }
 
@@ -445,66 +441,77 @@ class AtomicU64 {
     }
 
     func load() -> u64 {
-        return llpl_atomic_u64_load(&self.value)
+        return atomic_load(&self.value)
     }
 
     func store(value: u64) {
-        llpl_atomic_u64_store(&self.value, value)
+        atomic_store(&self.value, value)
     }
 
     func exchange(value: u64) -> u64 {
-        return llpl_atomic_u64_exchange(&self.value, value)
+        return atomic_exchange(&self.value, value)
     }
 
     func fetch_add(delta: u64) -> u64 {
-        return llpl_atomic_u64_fetch_add(&self.value, delta)
+        return atomic_fetch_add(&self.value, delta)
     }
 
     func compare_exchange(expected: u64*, desired: u64) -> bool {
-        return llpl_atomic_u64_compare_exchange(&self.value, expected, desired) != 0
+        return atomic_compare_exchange(&self.value, expected, desired)
     }
 }
 
 class AtomicBool {
-    let value: i64
+    let value: bool
 
     constructor(value: bool = false) {
-        if value {
-            self.value = 1
-        } else {
-            self.value = 0
-        }
+        self.value = value
     }
 
     func load() -> bool {
-        return llpl_atomic_i64_load(&self.value) != 0
+        return atomic_load(&self.value)
     }
 
     func store(value: bool) {
-        if value {
-            llpl_atomic_i64_store(&self.value, 1)
-        } else {
-            llpl_atomic_i64_store(&self.value, 0)
-        }
+        atomic_store(&self.value, value)
     }
 
     func exchange(value: bool) -> bool {
-        if value {
-            return llpl_atomic_i64_exchange(&self.value, 1) != 0
-        }
-        return llpl_atomic_i64_exchange(&self.value, 0) != 0
+        return atomic_exchange(&self.value, value)
     }
 
-    func compare_exchange(expected: bool, desired: bool) -> bool {
-        let expected_raw: i64 = 0
-        let desired_raw: i64 = 0
-        if expected {
-            expected_raw = 1
-        }
-        if desired {
-            desired_raw = 1
-        }
-        return llpl_atomic_i64_compare_exchange(&self.value, &expected_raw, desired_raw) != 0
+    func compare_exchange(expected: bool*, desired: bool) -> bool {
+        return atomic_compare_exchange(&self.value, expected, desired)
+    }
+}
+
+// Covers every width AtomicI64/AtomicU64/AtomicBool don't (i8/i16/i32/u8/
+// u16/u32): Atomic<i32>, Atomic<u8>, etc.
+class Atomic<T> {
+    let value: T
+
+    constructor(value: T) {
+        self.value = value
+    }
+
+    func load() -> T {
+        return atomic_load(&self.value)
+    }
+
+    func store(value: T) {
+        atomic_store(&self.value, value)
+    }
+
+    func exchange(value: T) -> T {
+        return atomic_exchange(&self.value, value)
+    }
+
+    func fetch_add(delta: T) -> T {
+        return atomic_fetch_add(&self.value, delta)
+    }
+
+    func compare_exchange(expected: T*, desired: T) -> bool {
+        return atomic_compare_exchange(&self.value, expected, desired)
     }
 }
 

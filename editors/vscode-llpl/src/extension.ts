@@ -35,7 +35,11 @@ export function activate(context: vscode.ExtensionContext): void {
     };
 
     client = new LanguageClient('llplLanguageServer', 'LLPL Language Server', serverOptions, clientOptions);
-    void client.start();
+    context.subscriptions.push(client);
+    void client.start().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`LLPL language server failed to start: ${message}`);
+    });
 }
 
 export function deactivate(): Thenable<void> | undefined {

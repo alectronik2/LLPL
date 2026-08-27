@@ -491,6 +491,52 @@ class CodeGenerator {
         rcLocalTypes = state.rcLocalTypes;
         rcFunctionBodyIndent = state.rcFunctionBodyIndent;
     }
+
+    // generateFunction/generateMethod/generateClass/generateStruct (and
+    // the struct-constructor family) all unconditionally reset these
+    // three to empty at their own entry (see e.g. generateFunction's own
+    // comment referencing generateStructConstructor) - correct when
+    // called at the top level, once per whole function, but wrong the
+    // moment one of them is invoked *reentrantly*, mid-generation of some
+    // other function's own body. That happens whenever a generic
+    // instantiation is seen for the first time while generating whatever
+    // code triggered it (resolveGenericFunctionCall, instantiateGeneric-
+    // TypeArgs, processImplBlock's eager function case), and similarly
+    // whenever a lambda trampoline is generated inline. Left unsaved, a
+    // template/lambda whose own body happens to shadow a variable name
+    // (e.g. two separate `for let i = 0; ...` loops) leaves a stale
+    // rename or bound behind that then wrongly applies to the *caller's*
+    // own, completely unrelated use of that name for the rest of its
+    // body. This was exactly the historical `i__shadow2` bug:
+    // `MM.malloc<uint>`'s own internal variable shadowing leaked into a
+    // caller's plain `for i in 0..n` loop merely because that call
+    // happened to be the first-ever instantiation of `malloc<uint>`.
+    //
+    // Deliberately narrower than "every field a nested code-generation
+    // call touches" - variableTypes, constVariables, tryFrameStack, and
+    // currentModulePath are also saved/restored around these same call
+    // sites, but each has its own site-specific twist (a lambda patches
+    // variableTypes additively instead of fully resetting it; callers set
+    // currentModulePath to the *template's* module, not the caller's, for
+    // the duration) that doesn't fit one shared save/restore pair. These
+    // three, by contrast, are always a plain save-now/restore-later with
+    // no variation - the actual bundle worth sharing.
+    private struct ShadowGenState {
+        string[string] variableCNames;
+        int shadowRenameCounter;
+        int[string] pointerIndexBounds;
+    }
+
+    private ShadowGenState saveShadowGenState() {
+        return ShadowGenState(variableCNames.dup, shadowRenameCounter, pointerIndexBounds.dup);
+    }
+
+    private void restoreShadowGenState(ShadowGenState state) {
+        variableCNames = state.variableCNames;
+        shadowRenameCounter = state.shadowRenameCounter;
+        pointerIndexBounds = state.pointerIndexBounds;
+    }
+
     private bool[string] constVariables; // Names (mangled) of `const`-declared variables
     private FunctionDecl[string] functionRegistry; // Functions, by mangled (namespace-prefixed) name
     private ClassDecl[string] classRegistry; // Classes, by mangled (namespace-prefixed) name
@@ -1869,6 +1915,15 @@ class CodeGenerator {
     // e.g. mangled(["Graphics"], "Point") -> "Graphics_Point".
     private string mangled(string[] segments, string name) {
         return segments.length > 0 ? segments.join("_") ~ "_" ~ name : name;
+    }
+
+    // Same pieces as mangled() above, joined with "." instead of "_" - a
+    // readable display form for panic backtraces (see
+    // generateBacktraceSymbolTable/llpl_resolve_symbol) alongside the real
+    // mangled C symbol name, which stays the addr-table lookup key and is
+    // still what nm/objdump show.
+    private string displayName(string[] segments, string name) {
+        return segments.length > 0 ? segments.join(".") ~ "." ~ name : name;
     }
 
     private string mangledFunc(FunctionDecl fn) {
@@ -3797,21 +3852,25 @@ class CodeGenerator {
             if (funcDecl.isExtern) continue;
             if (name in originalFreeFunctionKeys && (name in reachableFunctions) is null) continue;
             string file = name in functionModulePath ? baseName(functionModulePath[name]) : "?";
-            entries ~= format("    { %s, (void*)%s, %s, %d },\n",
-                cStringLiteral(name), name, cStringLiteral(file), funcDecl.line);
+            string display = displayName(funcDecl.namespaceSegments, funcDecl.name);
+            entries ~= format("    { %s, (void*)%s, %s, %d, %s },\n",
+                cStringLiteral(name), name, cStringLiteral(file), funcDecl.line, cStringLiteral(display));
         }
 
         foreach (cName, classDecl; classRegistry) {
             string file = cName in classModulePath ? baseName(classModulePath[cName]) : "?";
+            string classDisplay = displayName(classDecl.namespaceSegments, classDecl.name);
             foreach (ctor; classDecl.constructors) {
                 string mangledName = mangleConstructorName(classDecl, cName, ctor);
-                entries ~= format("    { %s, (void*)%s, %s, %d },\n",
-                    cStringLiteral(mangledName), mangledName, cStringLiteral(file), ctor.line);
+                string display = classDisplay ~ ".new";
+                entries ~= format("    { %s, (void*)%s, %s, %d, %s },\n",
+                    cStringLiteral(mangledName), mangledName, cStringLiteral(file), ctor.line, cStringLiteral(display));
             }
             foreach (method; classDecl.methods) {
                 string mangledName = mangleMethodName(classDecl, cName, method);
-                entries ~= format("    { %s, (void*)%s, %s, %d },\n",
-                    cStringLiteral(mangledName), mangledName, cStringLiteral(file), method.line);
+                string display = classDisplay ~ "." ~ method.name;
+                entries ~= format("    { %s, (void*)%s, %s, %d, %s },\n",
+                    cStringLiteral(mangledName), mangledName, cStringLiteral(file), method.line, cStringLiteral(display));
             }
         }
 
@@ -9344,15 +9403,19 @@ class CodeGenerator {
             // `self.x` field access) - so it can't go in genericInstanceDecls
             // (spliced before declCode); see deferredFunctionBodies's doc comment.
             //
-            // Snapshot/restore variableTypes around this - see the matching
-            // comment in resolveGenericFunctionCall for why (this call isn't
-            // known to be reentrant today, but the guard costs nothing and
-            // keeps both eager-instantiation sites consistent).
+            // Snapshot/restore variableTypes (and, via ShadowGenState,
+            // variableCNames/shadowRenameCounter/pointerIndexBounds) around
+            // this - see the matching comment in resolveGenericFunctionCall
+            // for why (this call isn't known to be reentrant today, but the
+            // guard costs nothing and keeps both eager-instantiation sites
+            // consistent).
             Type[string] savedVarTypes = variableTypes.dup;
             auto savedDeferredRc = saveDeferredRcState();
             TryFrame[] savedTryFrames = tryFrameStack;
             tryFrameStack = [];
+            auto savedShadowGen = saveShadowGenState();
             deferredFunctionBodies ~= generateFunction(asFunction);
+            restoreShadowGenState(savedShadowGen);
             tryFrameStack = savedTryFrames;
             restoreDeferredRcState(savedDeferredRc);
             variableTypes = savedVarTypes;
@@ -9573,7 +9636,9 @@ class CodeGenerator {
                 tryFrameStack = [];
                 string savedModulePath = currentModulePath;
                 currentModulePath = templateModulePath;
+                auto savedShadowGen = saveShadowGenState();
                 string classBody = generateClass(clone);
+                restoreShadowGenState(savedShadowGen);
                 genericInstanceDecls ~= classBody;
                 genericClassInstances ~= classBody;
                 currentModulePath = savedModulePath;
@@ -9600,7 +9665,9 @@ class CodeGenerator {
                 tryFrameStack = [];
                 string savedModulePath = currentModulePath;
                 currentModulePath = templateModulePath;
+                auto savedShadowGen = saveShadowGenState();
                 string structBody = generateStruct(clone);
+                restoreShadowGenState(savedShadowGen);
                 genericInstanceDecls ~= structBody;
                 genericStructInstances ~= structBody;
                 currentModulePath = savedModulePath;
@@ -9773,13 +9840,19 @@ class CodeGenerator {
             // too. Snapshotting/restoring the whole map around the call
             // isolates this instantiation's variable scope from whatever
             // the caller had before, regardless of name collisions.
+            //
+            // See ShadowGenState's own comment for the matching reason
+            // variableCNames/shadowRenameCounter/pointerIndexBounds need
+            // the same treatment here.
             Type[string] savedVarTypes = variableTypes.dup;
             auto savedDeferredRc = saveDeferredRcState();
             TryFrame[] savedTryFrames = tryFrameStack;
             tryFrameStack = [];
             string savedModulePath = currentModulePath;
             currentModulePath = templateModulePath;
+            auto savedShadowGen = saveShadowGenState();
             deferredFunctionBodies ~= generateFunction(clone);
+            restoreShadowGenState(savedShadowGen);
             currentModulePath = savedModulePath;
             tryFrameStack = savedTryFrames;
             restoreDeferredRcState(savedDeferredRc);
@@ -11783,11 +11856,18 @@ class CodeGenerator {
         // mirroring generateFunction/generateMethod: this trampoline is a
         // real top-level C function with its own fresh defer-stack, and
         // its own params/captures must not leak into the surrounding
-        // function's variableTypes once it's done generating.
-        DeferInfo[] savedDeferred = deferredStatements;
+        // function's variableTypes once it's done generating. (Also
+        // covers pointerIndexBounds via ShadowGenState, which this site
+        // used to leave unsaved - the same class of bug as the
+        // resolveGenericFunctionCall/instantiateGenericTypeArgs fix.)
+        auto savedDeferredRc = saveDeferredRcState();
         deferredStatements = [];
         rcLocalNames = null; rcLocalTypes = null;
         rcFunctionBodyIndent = indentLevel;
+        auto savedShadowGen = saveShadowGenState();
+        variableCNames = null;
+        shadowRenameCounter = 0;
+        pointerIndexBounds = null;
         LambdaCaptureCtx[string] savedCaptures = currentLambdaCaptures.dup;
         Type prevReturnType = currentReturnType;
         currentReturnType = lambdaExpr.returnType;
@@ -11833,7 +11913,8 @@ class CodeGenerator {
             variableTypes.remove(p.name);
         }
         currentLambdaCaptures = savedCaptures;
-        deferredStatements = savedDeferred;
+        restoreDeferredRcState(savedDeferredRc);
+        restoreShadowGenState(savedShadowGen);
         currentReturnType = prevReturnType;
         currentReturnTypeAsWritten = prevReturnTypeAsWritten;
 
@@ -11903,6 +11984,138 @@ class CodeGenerator {
     private bool isAsyncBuiltinCall(CallExpr callExpr, string name) {
         auto ident = cast(Identifier)callExpr.callee;
         return ident !is null && ident.name == name;
+    }
+
+    // atomic_load/store/exchange/fetch_add/compare_exchange are compiler
+    // intrinsics, not extern-declared functions: recognized by name here
+    // (same "no functionCandidates entry, must be intercepted before the
+    // ordinary call-resolution cascade" reasoning as isEmbedCall/
+    // isAsyncBuiltinCall above), then dispatched to a concrete per-width
+    // runtime function (llpl_atomic_i32_fetch_add, etc.) based on the
+    // pointee type of the first argument - see atomicIntrinsicElementType.
+    //
+    // These deliberately do NOT emit __atomic_* GCC/Clang builtins inline:
+    // the kernel example's toolchain is tcc, which doesn't define
+    // __ATOMIC_SEQ_CST or implement __atomic_* at all (verified directly),
+    // so every width still routes through runtime.c, whose x86_64 asm path
+    // is what both hosted and kernel targets actually compile today.
+    private bool isAtomicBuiltinCall(CallExpr callExpr) {
+        auto ident = cast(Identifier)callExpr.callee;
+        if (ident is null) return false;
+        switch (ident.name) {
+            case "atomic_load": case "atomic_store": case "atomic_exchange":
+            case "atomic_fetch_add": case "atomic_compare_exchange":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static immutable string[9] atomicIntrinsicAllowedTypes =
+        ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool"];
+
+    private Type atomicIntrinsicElementType(ASTNode ptrArg) {
+        Type ptrType = inferType(ptrArg);
+        resolveType(ptrType);
+        if (ptrType.pointerDepth != 1 || ptrType.isArray) {
+            throw new CompileError(
+                "atomic intrinsics expect a pointer (T*) as this argument",
+                currentModulePath, ptrArg.line, ptrArg.column);
+        }
+        Type elemType = cloneType(ptrType);
+        elemType.pointerDepth = 0;
+        bool allowed = false;
+        foreach (name; atomicIntrinsicAllowedTypes) {
+            if (elemType.name == name) { allowed = true; break; }
+        }
+        if (!allowed) {
+            throw new CompileError(format(
+                "atomic intrinsics only support i8/i16/i32/i64/u8/u16/u32/u64/bool, got '%s'",
+                elemType.name), currentModulePath, ptrArg.line, ptrArg.column);
+        }
+        return elemType;
+    }
+
+    // "i8"/"u8" -> "i8", "u32" -> "i32", "bool" -> "i8" (bool is a real C99
+    // 1-byte _Bool - see primitiveToC - so it reuses the i8 runtime path via
+    // an explicit cast), etc.: the runtime only implements a signed variant
+    // per width (llpl_atomic_i8_*/i16_*/i32_*/i64_*), the same way the
+    // existing llpl_atomic_u64_* functions already just cast through to
+    // llpl_atomic_i64_* (runtime.c).
+    private string atomicRuntimeWidthSuffix(string elemTypeName) {
+        switch (elemTypeName) {
+            case "i8": case "u8": case "bool": return "i8";
+            case "i16": case "u16": return "i16";
+            case "i32": case "u32": return "i32";
+            case "i64": case "u64": return "i64";
+            default: assert(0, "unreachable: unfiltered atomic element type");
+        }
+    }
+
+    private string generateAtomicIntrinsicCall(CallExpr callExpr) {
+        auto ident = cast(Identifier)callExpr.callee;
+        string name = ident.name;
+        int expectedArgs = (name == "atomic_load") ? 1
+            : (name == "atomic_compare_exchange") ? 3 : 2;
+        if (callExpr.args.length != expectedArgs) {
+            throw new CompileError(format("%s expects %d argument(s), got %d",
+                name, expectedArgs, callExpr.args.length),
+                currentModulePath, callExpr.line, callExpr.column);
+        }
+
+        Type elemType = atomicIntrinsicElementType(callExpr.args[0]);
+        string cType = primitiveToC(elemType.name);
+        string widthSuffix = atomicRuntimeWidthSuffix(elemType.name);
+        string ptrCode = generateExpression(callExpr.args[0]);
+        // Every runtime helper is signed-width-typed; bool/unsigned callers
+        // are cast through the matching signed pointer type at the call
+        // boundary only - the LLPL-visible type (bool/u8/u16/u32/u64) never
+        // changes.
+        string signedCType = (widthSuffix == "i8") ? "int8_t"
+            : (widthSuffix == "i16") ? "int16_t"
+            : (widthSuffix == "i32") ? "int32_t" : "int64_t";
+        string castPtr = format("(%s*)(%s)", signedCType, ptrCode);
+
+        switch (name) {
+            case "atomic_load":
+                return format("(%s)llpl_atomic_%s_load(%s)", cType, widthSuffix, castPtr);
+            case "atomic_store":
+                return format("llpl_atomic_%s_store(%s, (%s)(%s))", widthSuffix, castPtr,
+                    signedCType, generateExpression(callExpr.args[1]));
+            case "atomic_exchange":
+                return format("(%s)llpl_atomic_%s_exchange(%s, (%s)(%s))", cType, widthSuffix,
+                    castPtr, signedCType, generateExpression(callExpr.args[1]));
+            case "atomic_fetch_add":
+                return format("(%s)llpl_atomic_%s_fetch_add(%s, (%s)(%s))", cType, widthSuffix,
+                    castPtr, signedCType, generateExpression(callExpr.args[1]));
+            case "atomic_compare_exchange":
+                Type expectedType = atomicIntrinsicElementType(callExpr.args[1]);
+                if (expectedType.name != elemType.name) {
+                    throw new CompileError(format(
+                        "atomic_compare_exchange: 'expected' pointee type '%s' does not match 'ptr' pointee type '%s'",
+                        expectedType.name, elemType.name),
+                        currentModulePath, callExpr.args[1].line, callExpr.args[1].column);
+                }
+                return format("llpl_atomic_%s_compare_exchange(%s, (%s*)(%s), (%s)(%s)) != 0",
+                    widthSuffix, castPtr, signedCType, generateExpression(callExpr.args[1]),
+                    signedCType, generateExpression(callExpr.args[2]));
+            default:
+                assert(0);
+        }
+    }
+
+    private Type inferAtomicIntrinsicType(CallExpr callExpr) {
+        auto ident = cast(Identifier)callExpr.callee;
+        switch (ident.name) {
+            case "atomic_load": case "atomic_exchange": case "atomic_fetch_add":
+                return cloneType(atomicIntrinsicElementType(callExpr.args.length > 0 ? callExpr.args[0] : callExpr));
+            case "atomic_store":
+                return new Type("void");
+            case "atomic_compare_exchange":
+                return new Type("bool");
+            default:
+                assert(0);
+        }
     }
 
     private FunctionDecl resolveAsyncCallTarget(CallExpr asyncCall, out string resolvedName) {
@@ -12292,6 +12505,9 @@ class CodeGenerator {
             }
             if (isAsyncBuiltinCall(callExpr, "async_run")) {
                 return generateAsyncBuiltin(callExpr, true);
+            }
+            if (isAtomicBuiltinCall(callExpr)) {
+                return generateAtomicIntrinsicCall(callExpr);
             }
             if (auto panicIdent = cast(Identifier)callExpr.callee) {
                 if (panicIdent.name == "panic" && callExpr.args.length == 1) {
@@ -13263,6 +13479,9 @@ class CodeGenerator {
                 }
                 AsyncCallInfo info = resolveAsyncCallInfo(cast(CallExpr)callExpr.args[0]);
                 return info.fn.returnType;
+            }
+            if (isAtomicBuiltinCall(callExpr)) {
+                return inferAtomicIntrinsicType(callExpr);
             }
             if (auto memberCallee = cast(MemberExpr)callExpr.callee) {
                 if (auto ctorType = resolveQualifiedConstructorType(memberCallee)) {
