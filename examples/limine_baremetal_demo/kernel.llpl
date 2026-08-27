@@ -264,6 +264,7 @@ func kernel_main() {
 
     Kern.proc_init()
     Kern.thread_init()
+    Kern.shm_init()
 
     Kern.device_init()
     Kern.keyboard_init()
@@ -274,20 +275,22 @@ func kernel_main() {
     VFS.init(limine_get_modules())
     "Spawning init <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/init")
-    "Init spawned\n" |> Terminal.write
+    "Init spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/kbd_echo")
-    "kbd_echo spawned\n" |> Terminal.write
+    "kbd_echo spawned <green>ok</>\n" |> Terminal.write
+    Kern.spawn_shm_demo()
+    "shm demo spawned <green>ok</>\n" |> Terminal.write
 
     //demo_hhdm( memmap, hhdm )
 
     alias tw = Terminal.write
 
-    draw_demo(fb)
-    draw_memmap(fb, memmap)
+    //draw_demo(fb)
+    //draw_memmap(fb, memmap)
     tw( "<bright-green>DimensionOS kernel booting</>: TrueType + <cyan>ANSI</>\n" )
-    tw( "Limine framebuffer: \(fb.address:hex) \(fb.width)x\(fb.height) pitch=\(fb.pitch) bpp=\(fb.bpp)\n" )
-    tw( "Limine memory map: <magenta>\(memmap.entry_count)</> entries\n" )
-    tw( "Running on CPU \(HAL.cpu_id())\n" )
+    tw( "Limine framebuffer: \(fb.address:hex) \(fb.width)x\(fb.height) pitch=\(fb.pitch) bpp=\(fb.bpp)< green>ok</>\n" )
+    tw( "Limine memory map: <magenta>\(memmap.entry_count)</> entries <green>ok</>\n" )
+    tw( "Running on CPU \(HAL.cpu_id()) <green>ok</>\n" )
 
     "Kernel initialization complete. Halting.\n" |> hsw
 

@@ -7,12 +7,13 @@ import std.collections.linked_list
 using namespace std.collections
 
 namespace Kern {
-    const MAX_PROCESSES = 64
     let kproc: Process = null
     let next_pid: uint = 1
-    let process_table: void*[MAX_PROCESSES]
-
-    let processes: DoublyLinkedList<Process>
+    // Keyed by pid rather than a fixed-size array indexed directly by pid -
+    // no cap on how many processes can ever be created (the old
+    // void*[MAX_PROCESSES] silently stopped recording anything past the
+    // 64th process ever spawned, not 64 alive at once).
+    let process_table: HashMap<u64, Process>
 
     const USER_MMAP_BASE = 0x1000_0000
     const USER_MMAP_END  = 0x0000_8000_0000_0000
@@ -62,14 +63,11 @@ namespace Kern {
             holding lock {
                 self.pid = next_pid
                 next_pid++
-                if self.pid < MAX_PROCESSES {
-                    process_table[self.pid] = self as void*
-                }
+                process_table.insert(self.pid as u64, self)
                 if parent != null {
                     self.child_next = parent.child_head
                     parent.child_head = self as void*
                 }
-                Kern.processes.push_back( self )
             }
         }
 
@@ -83,17 +81,12 @@ namespace Kern {
             self.name.put() // free name string
 
             delete threads // free thread list
-
-            holding lock {
-                Kern.processes.remove( self ) 
-            }
         }
     }
 
     func proc_init() {
-        processes = new DoublyLinkedList<Process>()
-        for pid in 0..MAX_PROCESSES { process_table[pid] = null }
-        
+        process_table = new HashMap<u64, Process>()
+
         kproc = new Process( "kernel" )
         kproc.aspace.put()
         kproc.aspace = MM.kas
@@ -161,9 +154,7 @@ namespace Kern {
                 let found_pid = (found as Process).pid
                 if status_out != null { status_out[0] = (found as Process).exit_status }
                 holding lock {
-                    if (found as Process).pid < MAX_PROCESSES {
-                        process_table[(found as Process).pid] = null
-                    }
+                    process_table.remove((found as Process).pid as u64)
                 }
                 reap_process_resources(found as Process)
                 return found_pid as int

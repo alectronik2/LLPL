@@ -1,11 +1,12 @@
 import hal
 import lib
 
-namespace Kern {
-    const MAX_DEVICES = 16
+import std.collections.linked_list
 
-    let devices: Device[MAX_DEVICES]
-    let device_count: uint
+using namespace std.collections
+
+namespace Kern {
+    let devices: DoublyLinkedList<Device>
 
     // Base class for pluggable character devices, mirroring VFS.Filesystem's
     // virtual-method shape (kern/vfs.llpl) but for live, non-file-backed
@@ -26,16 +27,14 @@ namespace Kern {
     }
 
     func device_init() {
-        device_count = 0
-        for i in 0..MAX_DEVICES { devices[i] = null }
+        devices = new DoublyLinkedList<Device>()
     }
 
     func register_device(dev: Device) -> bool {
-        if dev == null || device_count >= MAX_DEVICES {
+        if dev == null {
             return false
         }
-        devices[device_count] = dev
-        device_count++
+        devices.push_back(dev)
         return true
     }
 
@@ -43,10 +42,13 @@ namespace Kern {
         if name == null {
             return null
         }
-        for i in 0..device_count {
-            if devices[i] != null && devices[i].name() == name {
-                return devices[i]
+        let node = devices.head
+        while node != null {
+            let dev = (*node).value
+            if dev != null && dev.name() == name {
+                return dev
             }
+            node = (*node).next
         }
         return null
     }

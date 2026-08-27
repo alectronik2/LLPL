@@ -1,0 +1,238 @@
+import hal
+import mm
+
+namespace Kern {
+    // A named, page-backed region that unrelated processes (not
+    // parent/child - see Pipe for that case) can rendezvous on by name.
+    // Every attach - the creator's own first attach included - goes
+    // through map_shm_pages, which acquires one PageFrame reference per
+    // page before mapping it; detach is plain SYS_MUNMAP, which already
+    // releases one reference per unmapped PTE (mm/vmm.llpl's
+    // vm_drop_memory/release_paddr_frame, unchanged). The refcount each
+    // frame starts at (from MM.alloc_pageframe) is never claimed by any
+    // attacher - it belongs to the segment itself, and is only released,
+    // one frame at a time, by this class's own destructor. That destructor
+    // only runs once nothing references the segment any more: neither the
+    // registry (shm_unlink removes it) nor any still-attached VmArea (each
+    // attach retains the segment into vma.backing, exactly like file-backed
+    // mmap already does - see map_user_file/mm/aspace.llpl's VmArea
+    // destructor). So: shm_unlink stops future shm_open calls immediately,
+    // but memory already attached anywhere keeps working until the last
+    // attacher unmaps it.
+    class SharedMemorySegment : Object {
+        name: String
+        size: uint
+        page_count: uint
+        frame_paddrs: uint*
+
+        constructor(name: String, size: uint) {
+            self.name = name
+            self.size = size
+            self.page_count = size / MM.PAGE_SIZE
+            self.frame_paddrs = MM.malloc<uint>(self.page_count * sizeof(uint))
+            for i in 0..self.page_count {
+                let frame = MM.alloc_pageframe(MM.FrameType.Other)
+                let paddr = MM.pf2p(frame)
+                memset(MM.p2v(paddr) as void*, 0, MM.PAGE_SIZE)
+                self.frame_paddrs[i] = paddr
+            }
+        }
+
+        destructor() {
+            for i in 0..self.page_count {
+                MM.release_paddr_frame(self.frame_paddrs[i])
+            }
+            MM.free(self.frame_paddrs as void*)
+            self.name.put() if self.name
+        }
+    }
+
+    let shm_segments: HashMap<String, SharedMemorySegment>
+
+    func shm_init() {
+        shm_segments = new HashMap<String, SharedMemorySegment>()
+    }
+
+    // Same free-range scan as map_user_anonymous (kern/process.llpl) - kept
+    // as its own copy rather than factored out of that already-tested
+    // function, which isn't worth the regression risk for ~15 shared lines.
+    func find_free_shm_va(proc: Process, len: uint) -> (int, uint) {
+        let addr = proc.next_mmap
+        if addr < USER_MMAP_BASE {
+            addr = USER_MMAP_BASE
+        }
+        addr = (addr + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+
+        while addr + len <= USER_MMAP_END && proc.aspace.overlaps(addr, addr + len) {
+            addr = addr + len
+        }
+
+        if addr + len > USER_MMAP_END {
+            return (ENOMEM, 0)
+        }
+        return (EOK, addr)
+    }
+
+    func map_shm_pages(proc: Process, addr: uint, segment: SharedMemorySegment) -> bool {
+        for i in 0..segment.page_count {
+            let frame = (MM.pfdb as uint + (segment.frame_paddrs[i] >> MM.PAGE_SHIFT) * sizeof(MM.PageFrame)) as MM.PageFrame*
+            frame.acquire()
+            let page_flags = MM.PG_PRESENT | MM.PG_USER | MM.PG_WRITABLE
+            let mapped = MM.map_page(proc.pml4, addr + i * MM.PAGE_SIZE, segment.frame_paddrs[i], page_flags)
+            if !mapped {
+                frame.release()
+                return false
+            }
+        }
+        return true
+    }
+
+    func shm_create(proc: Process, name: String, size: uint) -> (int, uint) {
+        if proc == null || proc == kproc || name == null || size == 0 {
+            return (EINVAL, 0)
+        }
+
+        let len = (size + MM.PAGE_SIZE - 1) & ~(MM.PAGE_SIZE - 1)
+        if len < size {
+            return (EINVAL, 0)
+        }
+
+        let segment: SharedMemorySegment = null
+        holding lock {
+            if shm_segments.contains(name) {
+                return (EEXIST, 0)
+            }
+            segment = new SharedMemorySegment(name, len)
+            shm_segments.insert(name, segment)
+        }
+
+        let addr: uint
+        let failure: int = EOK
+        holding proc.aspace.lock {
+            let (rc, found_addr) = find_free_shm_va(proc, len)
+            if rc < 0 {
+                failure = rc
+            } else {
+                addr = found_addr
+                if !map_shm_pages(proc, addr, segment) {
+                    failure = ENOMEM
+                } else {
+                    let vma = new MM.VmArea(addr, addr + len)
+                    vma.flags = MM.MAP_USER | MM.MAP_SHARED
+                    vma.name = null
+                    vma.backing = segment as void*
+                    (vma.backing as Object).get()
+                    MM.rb_insert(proc.aspace, vma)
+                    proc.next_mmap = addr + len
+                }
+            }
+        }
+
+        if failure < 0 {
+            holding lock { shm_segments.remove(name) }
+            delete segment
+            return (failure, 0)
+        }
+        return (EOK, addr)
+    }
+
+    func shm_open(proc: Process, name: String) -> (int, uint) {
+        if proc == null || proc == kproc || name == null {
+            return (EINVAL, 0)
+        }
+
+        // Pin the segment (a temporary, extra reference of our own) while
+        // still holding the registry lock, so a concurrent shm_unlink on
+        // another CPU can't drop the segment's last reference and free it
+        // out from under us between this lookup and the vma.backing
+        // reference below - that reference is what keeps it alive
+        // afterward, but only once it actually exists.
+        let segment: SharedMemorySegment = null
+        holding lock {
+            let found = shm_segments.get(name)
+            if found.is_none() {
+                return (ENOENT, 0)
+            }
+            segment = found.get()
+            (segment as Object).get()
+        }
+        let len = segment.page_count * MM.PAGE_SIZE
+
+        let addr: uint
+        holding proc.aspace.lock {
+            let (rc, found_addr) = find_free_shm_va(proc, len)
+            if rc < 0 {
+                (segment as Object).put()
+                return (rc, 0)
+            }
+            addr = found_addr
+
+            if !map_shm_pages(proc, addr, segment) {
+                (segment as Object).put()
+                return (ENOMEM, 0)
+            }
+
+            let vma = new MM.VmArea(addr, addr + len)
+            vma.flags = MM.MAP_USER | MM.MAP_SHARED
+            vma.name = null
+            vma.backing = segment as void*
+            (vma.backing as Object).get()
+            MM.rb_insert(proc.aspace, vma)
+            proc.next_mmap = addr + len
+        }
+
+        (segment as Object).put()
+        return (EOK, addr)
+    }
+
+    // Proves the segment survives its creator: the writer creates it,
+    // writes into it, and exits completely (its own attachment unmapped,
+    // its own process torn down) *before* the reader is even spawned - the
+    // reader only finds the message because the registry (not any live
+    // process) is what's kept the frames alive in the meantime. Run as its
+    // own kernel thread (mirroring sync_test_report, kern/thread.llpl) so
+    // spawn_shm_demo can wait_process on the writer without blocking
+    // whatever thread called it - wait_process yields via the same int
+    // $0x80 scheduler primitive as everywhere else, so this needs no
+    // hardware timer interrupt to make progress.
+    func shm_demo_main(arg: void*) {
+        let writer_pid = spawn_user_process("/bin/shm_writer", kproc)
+        if writer_pid < 0 {
+            "shm demo: failed to spawn shm_writer\n" |> HAL.Serial.write
+            return
+        }
+        wait_process(kproc, writer_pid as uint)
+
+        let reader_pid = spawn_user_process("/bin/shm_reader", kproc)
+        if reader_pid < 0 {
+            "shm demo: failed to spawn shm_reader\n" |> HAL.Serial.write
+        }
+    }
+
+    func spawn_shm_demo() {
+        let demo_thread = new Thread(kproc, shm_demo_main, null, "shm-demo")
+        demo_thread |> mark_thread_ready
+    }
+
+    func shm_unlink(name: String) -> int {
+        if name == null {
+            return EINVAL
+        }
+        let segment: SharedMemorySegment = null
+        holding lock {
+            let found = shm_segments.get(name)
+            if found.is_none() {
+                return ENOENT
+            }
+            segment = found.get()
+            shm_segments.remove(name)
+        }
+        // Releases the registry's own reference (the one implicit in the
+        // segment's construction - see SharedMemorySegment's class comment).
+        // Any process still attached retains its own reference via
+        // vma.backing, so the segment and its frames stay alive until the
+        // last attacher unmaps.
+        delete segment
+        return EOK
+    }
+}

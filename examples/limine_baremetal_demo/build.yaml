@@ -128,6 +128,26 @@ extra_links:
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [build/kbd_echo.o]
+  - name: shm_writer
+    c_sources:
+      - path: user/shm_writer.c
+        output: build/shm_writer.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/shm_writer.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/shm_writer.o]
+  - name: shm_reader
+    c_sources:
+      - path: user/shm_reader.c
+        output: build/shm_reader.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/shm_reader.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/shm_reader.o]
 
 package:
   output: kernel.iso
@@ -158,6 +178,8 @@ package:
     - copy: {from: build/fdinherit.elf, to: initrd/bin/fdinherit}
     - copy: {from: build/fdcheck.elf, to: initrd/bin/fdcheck}
     - copy: {from: build/kbd_echo.elf, to: initrd/bin/kbd_echo}
+    - copy: {from: build/shm_writer.elf, to: initrd/bin/shm_writer}
+    - copy: {from: build/shm_reader.elf, to: initrd/bin/shm_reader}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}

@@ -4,7 +4,6 @@ import mm
 import kern
 
 namespace Kern {
-    const MAX_FDS = 64
     const FIRST_USER_FD = 3
     const PIPE_CAPACITY = 4096
     const EPIPE = -11
@@ -238,73 +237,61 @@ namespace Kern {
 
     class DescriptorTable : Object {
         lock: SpinLock
-        entries: FileDescriptor[MAX_FDS]
-        close_exec: bool[MAX_FDS]
+        // Keyed by fd number (cast to u64 - HashMap<K: Hashable, V> has no
+        // impl for uint, only i64/u64/u8/char*/String) instead of a fixed
+        // FileDescriptor[MAX_FDS] array - no cap on how many fds a process
+        // can hold open at once. close_exec stays a second, parallel map
+        // rather than a field on FileDescriptor itself: dup()/dup2() share
+        // the same underlying FileDescriptor object across multiple fd
+        // numbers, and close-on-exec is a per-fd-*number* attribute (POSIX
+        // semantics - a dup'd fd defaults to NOT close-on-exec regardless
+        // of the original's setting), not a property of the shared object.
+        entries: HashMap<u64, FileDescriptor>
+        close_exec: HashMap<u64, bool>
 
         constructor() {
-            // entries is an array of FileDescriptor *references* (each slot
-            // is a pointer), not inline FileDescriptor objects - sizing this
-            // zero-fill by sizeof(FileDescriptor) (the pointed-to object's
-            // own size, tens of bytes) instead of the pointer width wrote
-            // MAX_FDS times too much, stomping on whatever heap memory
-            // happened to follow this array (observed corrupting an
-            // unrelated Process's AddressSpace a few allocations away).
-            memset(self.entries as void*, 0, MAX_FDS * sizeof(FileDescriptor*))
-            memset(self.close_exec as void*, 0, MAX_FDS * sizeof(bool))
+            self.entries = new HashMap<u64, FileDescriptor>()
+            self.close_exec = new HashMap<u64, bool>()
         }
 
         destructor() {
-            for fd in 0..MAX_FDS {
-                if self.entries[fd] != null {
-                    delete self.entries[fd]
-                    self.entries[fd] = null
-                }
+            self.entries.iter_reset()
+            while self.entries.iter_has_next() {
+                let item = self.entries.iter_next()
+                delete item.value
             }
         }
 
         func install(file: VFS.FileHandle) -> int {
             if file == null { return VFS.EBADF }
-            let result: int = VFS.EBADF
             holding self.lock {
-                for fd in FIRST_USER_FD..MAX_FDS {
-                    if self.entries[fd] == null {
-                        self.entries[fd] = new FileDescriptor(file)
-                        result = fd as int
-                        return result
-                    }
-                }
+                let fd = FIRST_USER_FD
+                while self.entries.contains(fd as u64) { fd++ }
+                self.entries.insert(fd as u64, new FileDescriptor(file))
+                return fd as int
             }
-            return result
         }
 
         func install_device(dev: Device) -> int {
             if dev == null { return VFS.EBADF }
-            let result: int = VFS.EBADF
             holding self.lock {
-                for fd in FIRST_USER_FD..MAX_FDS {
-                    if self.entries[fd] == null {
-                        self.entries[fd] = new FileDescriptor(dev)
-                        result = fd as int
-                        return result
-                    }
-                }
+                let fd = FIRST_USER_FD
+                while self.entries.contains(fd as u64) { fd++ }
+                self.entries.insert(fd as u64, new FileDescriptor(dev))
+                return fd as int
             }
-            return result
         }
 
         func install_descriptor(descriptor: FileDescriptor, minimum: uint = FIRST_USER_FD) -> int {
-            return VFS.EBADF if descriptor == null || minimum >= MAX_FDS
+            return VFS.EBADF if descriptor == null
             holding self.lock {
-                for fd in minimum..MAX_FDS {
-                    if self.entries[fd] == null {
-                        rc_retain(descriptor as char*)
-                        self.entries[fd] = descriptor
-                        self.close_exec[fd] = false
-                        return fd as int
-                    }
-                }
+                let fd = minimum
+                while self.entries.contains(fd as u64) { fd++ }
+                rc_retain(descriptor as char*)
+                self.entries.insert(fd as u64, descriptor)
+                self.close_exec.insert(fd as u64, false)
+                return fd as int
             }
-            return VFS.EBADF
         }
 
         func create_pipe(fds: int*) -> int {
@@ -325,39 +312,41 @@ namespace Kern {
         }
 
         func duplicate(old_fd: uint, minimum: uint = FIRST_USER_FD) -> int {
-            return VFS.EBADF if old_fd >= MAX_FDS
             let descriptor = self.get(old_fd)
             return VFS.EBADF if descriptor == null
             return self.install_descriptor(descriptor, minimum)
         }
 
         func duplicate_to(old_fd: uint, new_fd: uint) -> int {
-            return VFS.EBADF if old_fd >= MAX_FDS || new_fd >= MAX_FDS
             return new_fd as int if old_fd == new_fd && self.get(old_fd) != null
             let descriptor = self.get(old_fd)
             return VFS.EBADF if descriptor == null
             self.close(new_fd) if self.get(new_fd) != null
             rc_retain(descriptor as char*)
             holding self.lock {
-                self.entries[new_fd] = descriptor
-                self.close_exec[new_fd] = false
+                self.entries.insert(new_fd as u64, descriptor)
+                self.close_exec.insert(new_fd as u64, false)
             }
             return new_fd as int
         }
 
         func set_close_exec(fd: uint, enabled: bool) -> int {
-            return VFS.EBADF if fd >= MAX_FDS || self.get(fd) == null
-            holding self.lock { self.close_exec[fd] = enabled }
+            return VFS.EBADF if self.get(fd) == null
+            holding self.lock { self.close_exec.insert(fd as u64, enabled) }
             return EOK
         }
 
         func clone_for_exec() -> DescriptorTable {
             let copy = new DescriptorTable()
             holding self.lock {
-                for fd in 0..MAX_FDS {
-                    if self.entries[fd] != null && !self.close_exec[fd] {
-                        rc_retain(self.entries[fd] as char*)
-                        copy.entries[fd] = self.entries[fd]
+                self.entries.iter_reset()
+                while self.entries.iter_has_next() {
+                    let item = self.entries.iter_next()
+                    let exec_flag = self.close_exec.get(item.key)
+                    let inherited = !(exec_flag.is_some() && exec_flag.get())
+                    if inherited {
+                        rc_retain(item.value as char*)
+                        copy.entries.insert(item.key, item.value)
                     }
                 }
             }
@@ -365,18 +354,21 @@ namespace Kern {
         }
 
         func get(fd: uint) -> FileDescriptor {
-            if fd >= MAX_FDS { return null }
             let result: FileDescriptor = null
-            holding self.lock { result = self.entries[fd] }
+            holding self.lock {
+                let found = self.entries.get(fd as u64)
+                if found.is_some() { result = found.get() }
+            }
             return result
         }
 
         func close(fd: uint) -> int {
-            if fd >= MAX_FDS { return VFS.EBADF }
             let descriptor: FileDescriptor = null
             holding self.lock {
-                descriptor = self.entries[fd]
-                self.entries[fd] = null
+                let found = self.entries.get(fd as u64)
+                if found.is_some() { descriptor = found.get() }
+                self.entries.remove(fd as u64)
+                self.close_exec.remove(fd as u64)
             }
             if descriptor == null { return VFS.EBADF }
             delete descriptor

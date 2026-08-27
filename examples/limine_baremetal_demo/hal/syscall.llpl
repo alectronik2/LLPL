@@ -30,6 +30,9 @@ const SYS_DUP2 = 23
 const SYS_CLOEXEC = 24
 const SYS_BRK = 25
 const SYS_SBRK = 26
+const SYS_SHM_CREATE = 27
+const SYS_SHM_OPEN = 28
+const SYS_SHM_UNLINK = 29
 
 // Returns the device name after "/dev/" if path starts with that prefix,
 // null otherwise - manual byte comparison since there's no String.starts_with
@@ -524,6 +527,36 @@ func syscall_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
             let (rc, old) = Kern.process_sbrk(syscall_process(), ctx.rdi as int)
             ctx.rax = rc as u64 if rc < 0
             if rc >= 0 { ctx.rax = old }
+        }
+        SYS_SHM_CREATE => {
+            let proc = syscall_process()
+            let name = copy_user_string(ctx.rdi)
+            if proc == null || name == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let (rc, addr) = Kern.shm_create(proc, name, ctx.rsi as uint)
+                ctx.rax = rc as u64 if rc < 0
+                if rc >= 0 { ctx.rax = addr }
+            }
+        }
+        SYS_SHM_OPEN => {
+            let proc = syscall_process()
+            let name = copy_user_string(ctx.rdi)
+            if proc == null || name == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let (rc, addr) = Kern.shm_open(proc, name)
+                ctx.rax = rc as u64 if rc < 0
+                if rc >= 0 { ctx.rax = addr }
+            }
+        }
+        SYS_SHM_UNLINK => {
+            let name = copy_user_string(ctx.rdi)
+            if name == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                ctx.rax = Kern.shm_unlink(name) as u64
+            }
         }
         _ => {
             ctx.rax = 0xFFFF_FFFF_FFFF_FFDA
