@@ -103,6 +103,12 @@ namespace Kern {
         return proc.pid
     }
 
+    func find_process(pid: uint) -> Process {
+        let found = process_table.get(pid as u64)
+        return null if found.is_none()
+        return found.get()
+    }
+
     func mark_process_exited(proc: Process, status: uint) {
         return if proc == null || proc == kproc
         holding proc.lock {

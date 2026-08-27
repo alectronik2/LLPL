@@ -42,6 +42,22 @@ namespace Kern {
     let thread_table: void*[MAX_THREADS]
     let next_tid: uint = 1
 
+    // One queued Asynchronous Procedure Call: a user-mode (callback, arg)
+    // pair to run in a specific thread's own context, the next time the
+    // kernel is about to return that thread to user mode - see
+    // maybe_deliver_apc's own comment for the full delivery mechanism.
+    class ApcEntry : Object {
+        callback: uint
+        arg: uint
+        next: ApcEntry
+
+        constructor(callback: uint, arg: uint) {
+            self.callback = callback
+            self.arg = arg
+            self.next = null
+        }
+    }
+
     class Thread : Object {
         stack:      char*
         stack_size: u64
@@ -72,6 +88,12 @@ namespace Kern {
         lifecycle_lock: SpinLock
         tid: uint
         tls_base: uint
+
+        apc_head: ApcEntry
+        apc_tail: ApcEntry
+        apc_lock: SpinLock
+        in_apc: bool
+        saved_apc_ctx: HAL.IDT.Context
 
         runtime_ticks: uint
         context_switches: uint
@@ -115,6 +137,9 @@ namespace Kern {
             self.sleep_ticks_total = 0
             self.sleep_started_tick = 0
             self.tls_base = 0
+            self.apc_head = null
+            self.apc_tail = null
+            self.in_apc = false
             holding lock {
                 self.tid = next_tid
                 next_tid++
@@ -645,6 +670,18 @@ namespace Kern {
         }
     }
 
+    // NT TerminateProcess-equivalent: unconditional, no cooperation from
+    // the target needed - unlike exit_current_process_from_syscall (which
+    // this shares its two building blocks with), the caller is never one
+    // of the target's own threads, so there's no `ctx` to hand back and no
+    // `except` thread to skip.
+    func terminate_process(target: Process, status: uint) -> int {
+        return EINVAL if target == null || target == kproc
+        terminate_process_threads(target, null, status)
+        mark_process_exited(target, status)
+        return EOK
+    }
+
     func thread_trampoline() {
         let thread: Thread = HAL.current().thread
         if thread != null {
@@ -926,6 +963,100 @@ namespace Kern {
         }
 
         return next_ctx
+    }
+
+    // 36 hand-encoded x86-64 bytes, written onto the target thread's own
+    // user stack at delivery time (user pages carry no PG_NOEXEC bit
+    // anywhere in this kernel - see resolve_user_page_fault's page_flags,
+    // kern/process.llpl - so no separate executable scratch page is
+    // needed): mov rdi, arg; mov rax, callback; call rax; mov rax,
+    // apc_return_syscall; syscall; ud2. An indirect `call rax` (not a
+    // relative call) avoids computing a displacement to a dynamically
+    // placed target. `ud2` is a safety net - `syscall` should never return
+    // here, since SYS_APC_RETURN's handler fully replaces this context.
+    const APC_TRAMPOLINE_SIZE = 36
+
+    func write_apc_trampoline(addr: uint, callback: uint, arg: uint, apc_return_syscall: uint) {
+        let buf: u8[APC_TRAMPOLINE_SIZE]
+        buf[0] = 0x48                                // mov rdi, imm64
+        buf[1] = 0xBF
+        *((&buf[2]) as u64*) = arg
+        buf[10] = 0x48                               // mov rax, imm64
+        buf[11] = 0xB8
+        *((&buf[12]) as u64*) = callback
+        buf[20] = 0xFF                                // call rax
+        buf[21] = 0xD0
+        buf[22] = 0x48                                // mov rax, imm64
+        buf[23] = 0xB8
+        *((&buf[24]) as u64*) = apc_return_syscall as u64
+        buf[32] = 0x0F                                // syscall
+        buf[33] = 0x05
+        buf[34] = 0x0F                                // ud2
+        buf[35] = 0x0B
+        memcpy(addr as void*, &buf[0] as void*, APC_TRAMPOLINE_SIZE)
+    }
+
+    // Delivers at most one pending APC, called from both isr_handler and
+    // syscall_handler's thin wrappers (hal/idt.llpl, hal/syscall.llpl) right
+    // before they hand a Context* back to hal/isr.m64 to resume - covering
+    // every return-to-user-mode path (including early `return
+    // Kern.exit_...(ctx, ...)`-style branches inside syscall_handler's
+    // match) uniformly, without auditing each one individually. Only fires
+    // when actually returning to ring 3: kernel-mode contexts (nested
+    // interrupts, syscall handlers themselves) are never touched. Redirects
+    // execution the same way thread switching already does for vector 0x80
+    // (hal/isr.m64 treats whatever Context* comes back as "the context to
+    // resume") - this just mutates rip/rsp on the pointer rather than
+    // swapping to a different thread's, and by the time this runs, CR3 has
+    // already been switched to whatever thread is about to resume (see
+    // schedule_from_interrupt's switch_thread_address_space call), so
+    // writing into that thread's own user-mode stack here is always safe.
+    func maybe_deliver_apc(ctx: HAL.IDT.Context*, apc_return_syscall: uint) -> HAL.IDT.Context* {
+        if ctx == null || (ctx.cs & 3) != 3 {
+            return ctx
+        }
+        // Raw pointer, not Thread: this runs directly on an interrupt-gate
+        // frame (called from isr_handler/syscall_handler), same as
+        // schedule_from_interrupt's own current/next locals just above -
+        // see its comment. An owning Thread-typed local here would emit an
+        // rc_release on every single interrupt/syscall return (not just
+        // when an APC is actually pending), eventually freeing the
+        // currently-running thread out from under itself even though
+        // thread_table/the scheduler still reference it.
+        let thread = current_thread() as void*
+        if thread == null || (thread as Thread).in_apc {
+            return ctx
+        }
+
+        // Explicit acquire/release, not `holding`: this runs directly on
+        // an interrupt-gate frame (called from isr_handler) - same reason
+        // resolve_user_page_fault (kern/process.llpl) avoids `holding`'s
+        // exception-cleanup machinery there.
+        let entry: ApcEntry = null
+        (thread as Thread).apc_lock.acquire()
+        if (thread as Thread).apc_head != null {
+            entry = (thread as Thread).apc_head
+            (thread as Thread).apc_head = entry.next
+            if (thread as Thread).apc_head == null { (thread as Thread).apc_tail = null }
+        }
+        (thread as Thread).apc_lock.release()
+        if entry == null {
+            return ctx
+        }
+
+        memcpy(&(thread as Thread).saved_apc_ctx as void*, ctx as void*, sizeof(HAL.IDT.Context))
+        (thread as Thread).in_apc = true
+
+        // 128 bytes of slack below the interrupted rsp preserves a red
+        // zone the interrupted code may have been using; the rest is the
+        // trampoline itself.
+        let new_rsp = (ctx.rsp - 128 - APC_TRAMPOLINE_SIZE) & ~0xF as uint
+        write_apc_trampoline(new_rsp, entry.callback, entry.arg, apc_return_syscall)
+        delete entry
+
+        ctx.rsp = new_rsp
+        ctx.rip = new_rsp
+        return ctx
     }
 
     inline func current_thread() -> Thread {

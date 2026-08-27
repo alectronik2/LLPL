@@ -148,6 +148,26 @@ extra_links:
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [build/shm_reader.o]
+  - name: apc_target
+    c_sources:
+      - path: user/apc_target.c
+        output: build/apc_target.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/apc_target.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/apc_target.o]
+  - name: apc_sender
+    c_sources:
+      - path: user/apc_sender.c
+        output: build/apc_sender.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/apc_sender.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/apc_sender.o]
 
 package:
   output: kernel.iso
@@ -180,6 +200,8 @@ package:
     - copy: {from: build/kbd_echo.elf, to: initrd/bin/kbd_echo}
     - copy: {from: build/shm_writer.elf, to: initrd/bin/shm_writer}
     - copy: {from: build/shm_reader.elf, to: initrd/bin/shm_reader}
+    - copy: {from: build/apc_target.elf, to: initrd/bin/apc_target}
+    - copy: {from: build/apc_sender.elf, to: initrd/bin/apc_sender}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}

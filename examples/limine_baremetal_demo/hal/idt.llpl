@@ -150,7 +150,16 @@ namespace HAL {
     }
 }
 
+// Thin wrapper around the real handler: every return-to-ring-3 path needs
+// a pending-APC check (see Kern.maybe_deliver_apc, kern/thread.llpl), and
+// isr_handler_inner has several early-return branches - wrapping the one
+// symbol hal/isr.m64 actually calls covers all of them uniformly instead
+// of auditing each one.
 func isr_handler( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
+    return Kern.maybe_deliver_apc( isr_handler_inner( ctx ), SYS_APC_RETURN )
+}
+
+func isr_handler_inner( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
     if ctx.vector == 0x80 {
         return Kern.schedule_from_interrupt( ctx )
     }

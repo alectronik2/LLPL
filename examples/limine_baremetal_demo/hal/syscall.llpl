@@ -33,6 +33,10 @@ const SYS_SBRK = 26
 const SYS_SHM_CREATE = 27
 const SYS_SHM_OPEN = 28
 const SYS_SHM_UNLINK = 29
+const SYS_TERMINATE = 30
+const SYS_QUEUE_APC = 31
+const SYS_APC_RETURN = 32
+const SYS_GETTID = 33
 
 // Returns the device name after "/dev/" if path starts with that prefix,
 // null otherwise - manual byte comparison since there's no String.starts_with
@@ -253,7 +257,15 @@ func syscall_process() -> Kern.Process {
     return thread.proc
 }
 
+// Thin wrapper for the same reason isr_handler has one (hal/idt.llpl) -
+// several `match` cases below return early (SYS_EXEC, SYS_THREAD_EXIT,
+// etc.), so wrapping the one symbol hal/isr.m64 actually calls is what
+// makes the pending-APC check apply to every case uniformly.
 func syscall_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
+    return Kern.maybe_deliver_apc( syscall_handler_inner( ctx ), SYS_APC_RETURN )
+}
+
+func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
     match ctx.rax {
         0 => {
             ctx.rax = 0
@@ -557,6 +569,60 @@ func syscall_handler(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
             } else {
                 ctx.rax = Kern.shm_unlink(name) as u64
             }
+        }
+        SYS_TERMINATE => {
+            let target: Kern.Process = Kern.find_process(ctx.rdi as uint)
+            if target == null {
+                ctx.rax = ENOENT as u64
+            } else {
+                ctx.rax = Kern.terminate_process(target, ctx.rsi as uint) as u64
+            }
+        }
+        SYS_QUEUE_APC => {
+            let target: Kern.Process = Kern.find_process(ctx.rdi as uint)
+            let target_thread: Kern.Thread = null
+            if target != null { target_thread = Kern.find_process_thread(target, ctx.rsi as uint) }
+            if target_thread == null {
+                ctx.rax = ENOENT as u64
+            } else {
+                // Explicit acquire/release rather than `holding`: this
+                // syscall case nests a lock scope inside an if/else inside
+                // a match case, and `holding`'s own defer-cleanup codegen
+                // replays the lock release at the function's final return
+                // regardless of C-level block scoping - referencing
+                // target_thread there when it's actually out of scope and
+                // failing to compile. Same avoidance resolve_user_page_fault
+                // already uses (kern/process.llpl) for its own reasons.
+                target_thread.apc_lock.acquire()
+                let entry = new Kern.ApcEntry(ctx.rdx, ctx.r10)
+                if target_thread.apc_tail == null {
+                    target_thread.apc_head = entry
+                    target_thread.apc_tail = entry
+                } else {
+                    target_thread.apc_tail.next = entry
+                    target_thread.apc_tail = entry
+                }
+                target_thread.apc_lock.release()
+                ctx.rax = EOK as u64
+            }
+        }
+        SYS_APC_RETURN => {
+            // Raw pointer, not Kern.Thread - see maybe_deliver_apc's own
+            // comment (kern/thread.llpl): an owning local for the current
+            // thread inside a syscall handler emits an rc_release that
+            // can free it out from under itself.
+            let thread = Kern.current_thread() as void*
+            if thread != null && (thread as Kern.Thread).in_apc {
+                memcpy(ctx as void*, &(thread as Kern.Thread).saved_apc_ctx as void*, sizeof(HAL.IDT.Context))
+                (thread as Kern.Thread).in_apc = false
+            } else {
+                ctx.rax = EINVAL as u64
+            }
+        }
+        SYS_GETTID => {
+            let thread = Kern.current_thread() as void*
+            ctx.rax = 0
+            if thread != null { ctx.rax = (thread as Kern.Thread).tid }
         }
         _ => {
             ctx.rax = 0xFFFF_FFFF_FFFF_FFDA

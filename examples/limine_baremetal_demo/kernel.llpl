@@ -280,6 +280,9 @@ func kernel_main() {
     "kbd_echo spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_shm_demo()
     "shm demo spawned <green>ok</>\n" |> Terminal.write
+    Kern.spawn_elf("/bin/apc_target")
+    Kern.spawn_elf("/bin/apc_sender")
+    "apc demo spawned <green>ok</>\n" |> Terminal.write
 
     //demo_hhdm( memmap, hhdm )
 
