@@ -1,0 +1,54 @@
+async func delayed(value: int, delay: u64) -> int {
+    let ignored = await sleep_ms(delay)
+    return value
+}
+
+async func channel_send(ch: AsyncChannel<int>, value: int) -> int {
+    while !(await ch.send(value)) {
+        let ignored = await sleep_ms(1)
+    }
+    return value
+}
+
+async func channel_recv(ch: AsyncChannel<int>) -> int {
+    let value: int = 0
+    while !(await ch.recv(&value)) {
+        let ignored = await sleep_ms(1)
+    }
+    return value
+}
+
+func main() -> int {
+    let cancelled: AsyncTask<int> = new AsyncTask<int>(async_start(delayed(1, 10)))
+    cancelled.cancel()
+
+    let timed: AsyncTask<int> = new AsyncTask<int>(async_start(delayed(2, 20)))
+    let timed_value: int = 0
+    let timed_ready = timed.join_timeout(1, &timed_value)
+    timed.cancel()
+
+    let ch: AsyncChannel<int> = new AsyncChannel<int>(1)
+    let recv: AsyncTask<int> = new AsyncTask<int>(async_start(channel_recv(ch)))
+    let send: AsyncTask<int> = new AsyncTask<int>(async_start(channel_send(ch, 42)))
+
+    while !(recv.is_done() && send.is_done()) {
+        recv.poll()
+        send.poll()
+    }
+
+    let total = recv.join() + send.join()
+    if cancelled.is_cancelled() {
+        total = total + 10
+    }
+    if !timed_ready {
+        total = total + 20
+    }
+    let ignored = puts("\(total)")
+
+    delete cancelled
+    delete timed
+    delete recv
+    delete send
+    delete ch
+    return 0
+}

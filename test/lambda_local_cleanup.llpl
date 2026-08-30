@@ -1,0 +1,24 @@
+extern func puts(s: char*) -> i64
+
+class Marker {
+    constructor() {}
+
+    destructor() {
+        puts("lambda cleanup")
+    }
+}
+
+func make_worker() -> () -> i64 {
+    return func() -> i64 {
+        let marker: Marker = new Marker()
+        return 7
+    }
+}
+
+func main() -> i64 {
+    let worker = make_worker()
+    let value = worker()
+    puts("worker complete")
+    return 0 if value != 7
+    return 0
+}

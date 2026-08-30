@@ -100,6 +100,7 @@ namespace Kern {
         lock: SpinLock
         read_waiters: WaitQueue
         shift_held: bool
+        extended_prefix: bool
         device_name: String
 
         constructor() {
@@ -108,6 +109,7 @@ namespace Kern {
             self.count = 0
             self.read_waiters = new WaitQueue()
             self.shift_held = false
+            self.extended_prefix = false
             // A bare string literal returned where a String is expected
             // isn't a real String object (no vtable/refcount header) -
             // constructing one here, once, is what made find_device's
@@ -129,6 +131,13 @@ namespace Kern {
                 }
             }
             wake_all(self.read_waiters)
+        }
+
+        func push_escape(final: char, tilde: bool = false) {
+            self.push(27 as char)
+            self.push('[')
+            self.push(final)
+            if tilde { self.push('~') }
         }
 
         func read(buf: char*, size: uint) -> int {
@@ -159,6 +168,27 @@ namespace Kern {
 
     func keyboard_irq_handler(arg: void*) {
         let scancode = HAL.inb(KBD_DATA_PORT)
+
+        if scancode == 0xE0 as u8 {
+            keyboard_device.extended_prefix = true
+            return
+        }
+
+        if keyboard_device.extended_prefix {
+            keyboard_device.extended_prefix = false
+            if (scancode & 0x80) != 0 { return }
+            match scancode {
+                case 0x48 => { keyboard_device.push_escape('A') } // up
+                case 0x50 => { keyboard_device.push_escape('B') } // down
+                case 0x4D => { keyboard_device.push_escape('C') } // right
+                case 0x4B => { keyboard_device.push_escape('D') } // left
+                case 0x47 => { keyboard_device.push_escape('H') } // home
+                case 0x4F => { keyboard_device.push_escape('F') } // end
+                case 0x53 => { keyboard_device.push_escape('3', true) } // delete
+                case _ => {}
+            }
+            return
+        }
 
         if scancode == SC_LEFT_SHIFT_DOWN as u8 || scancode == SC_RIGHT_SHIFT_DOWN as u8 {
             keyboard_device.shift_held = true

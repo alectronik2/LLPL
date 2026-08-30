@@ -1,0 +1,29 @@
+async func pending_worker(value: int) -> int {
+    let ignored = await sleep_ms(100)
+    return value
+}
+
+func main() -> int {
+    llpl_async_set_now_ms(0)
+
+    let task: AsyncTask<int> = new AsyncTask<int>(async_start(pending_worker(7)))
+    let before_status = task.status()
+    task.poll()
+    let running_status = task.status()
+    task.cancel()
+    let cancelled_status = task.status()
+
+    let executor: AsyncExecutor = new AsyncExecutor()
+    executor.spawn(async_start(pending_worker(1)))
+    executor.spawn(async_start(pending_worker(2)))
+    let remaining = executor.run_all_timeout(0)
+    let cancelled = executor.cancel_all()
+    let after = executor.poll()
+
+    let total = before_status + running_status + cancelled_status + remaining + cancelled + after
+    let ignored = puts("\(total)")
+
+    delete task
+    delete executor
+    return 0
+}

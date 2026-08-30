@@ -55,6 +55,19 @@ namespace HAL {
                 Kern.Deferred.queue(deferred_tick_report)
             }
 
+            // The mouse cursor/window sprites (kern/mouse.llpl) only
+            // repaint themselves on mouse packets, but any console text
+            // write - from any thread, at any time - scrolls the same
+            // framebuffer and erases them until the next packet. A small,
+            // steady redraw here (~33Hz) keeps them visibly on top
+            // without needing Terminal to know anything about the mouse
+            // (which would require importing kern from lib/terminal.llpl,
+            // a real circular import given kern/mouse.llpl already does
+            // `import terminal`).
+            if ticks % 3 == 0 {
+                Kern.Deferred.queue(Kern.compose_frame_work)
+            }
+
             schedule_requested = true
         }
 

@@ -7,6 +7,16 @@ import std.collections.linked_list
 using namespace std.collections
 
 namespace Kern {
+    const PROCESS_NAME_MAX = 64
+
+    struct ProcessInfo {
+        pid: u64
+        parent_pid: u64
+        thread_count: u64
+        exited: u64
+        name: char[PROCESS_NAME_MAX]
+    }
+
     let kproc: Process = null
     let next_pid: uint = 1
     // Keyed by pid rather than a fixed-size array indexed directly by pid -
@@ -124,6 +134,22 @@ namespace Kern {
         "Kern.proc.init()\n" |> HAL.Serial.write
     }
 
+    // Installs fd 0 (keyboard, the same device object /dev/kbd resolves
+    // to) and fd 1/2 (the new console device, kern/device.llpl) onto
+    // kproc's own, still-empty fd table. Every spawned process's parent
+    // chain traces back to kproc, and clone_for_exec (kern/handle.llpl)
+    // already inherits whatever is in a parent's table at spawn time - so
+    // installing these three fds once here is enough for every process,
+    // no Process constructor change needed. Must run after keyboard_init
+    // (the device has to exist) and before the first process is spawned.
+    func install_console_fds() {
+        let keyboard = find_device(new String("kbd"))
+        let console = new ConsoleDevice()
+        kproc.fds.install_descriptor(new FileDescriptor(keyboard), 0)
+        kproc.fds.install_descriptor(new FileDescriptor(console as Device), 1)
+        kproc.fds.install_descriptor(new FileDescriptor(console as Device), 2)
+    }
+
     func process_id(proc: Process) -> uint {
         return 0 if proc == null
         return proc.pid
@@ -133,6 +159,46 @@ namespace Kern {
         let found = process_table.get(pid as u64)
         return null if found.is_none()
         return found.get()
+    }
+
+    // Capture a bounded, value-only view of the process table for user-mode
+    // tools.  No Process references or kernel addresses cross the ABI.
+    func snapshot_processes(out: ProcessInfo*, capacity: uint) -> uint {
+        if out == null || capacity == 0 { return 0 }
+        let count: uint = 0
+        holding lock {
+            for entry in process_table {
+                if count >= capacity { break }
+                let proc = entry.value
+                let computed_parent_pid: u64 = 0
+                if proc.parent != null {
+                    computed_parent_pid = (proc.parent as Process).pid as u64
+                }
+                let computed_exited: u64 = 0
+                if proc.exited { computed_exited = 1 }
+                with out[count] {
+                    .pid = proc.pid as u64
+                    .parent_pid = computed_parent_pid
+                    .thread_count = proc.threads.size() as u64
+                    .exited = computed_exited
+                }
+
+                // char[PROCESS_NAME_MAX] can't be assigned from a String
+                // directly - copy byte by byte (PROCESS_NAME_MAX is tiny,
+                // 64) and truncate rather than overflow a name that's too
+                // long for the fixed buffer.
+                let name_str = proc.name.c_str()
+                let name_len = proc.name.byte_len()
+                if name_len >= PROCESS_NAME_MAX { name_len = PROCESS_NAME_MAX - 1 }
+                for i in 0..name_len {
+                    out[count].name[i] = name_str[i]
+                }
+                out[count].name[name_len] = 0 as char
+
+                count++
+            }
+        }
+        return count
     }
 
     func mark_process_exited(proc: Process, status: uint) {
@@ -209,6 +275,7 @@ namespace Kern {
             proc.pml4 = 0
             proc.aspace.pml4 = 0
         }
+        "REAP pid=\(proc.pid) fds=\((proc.fds as uint):hex)\n" |> HAL.Serial.write
         if proc.fds != null {
             // Field reassignment doesn't auto-release the old value - this
             // real delete is what actually frees the fd table.

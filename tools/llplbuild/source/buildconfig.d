@@ -54,6 +54,12 @@ struct ExtraLink {
     LinkSpec link;
 }
 
+struct StaticLibrary {
+    string name;
+    CSource[] cSources;
+    string output;
+}
+
 enum ActionKind { mkdir, copy, write, run, requireFile }
 
 struct PackageAction {
@@ -99,6 +105,7 @@ struct BuildConfig {
     string m64 = "../../tools/assembler/build/m64";
     string cc = "gcc";
     string ld = "ld";
+    string ar = "ar";
     string qemu = "qemu-system-x86_64";
 
     string[] commonCflags;
@@ -113,6 +120,8 @@ struct BuildConfig {
     LinkSpec link;
 
     ExtraLink[] extraLinks;
+
+    StaticLibrary[] staticLibraries;
 
     bool hasPackage;
     PackageSpec pkg;
@@ -271,6 +280,7 @@ BuildConfig loadConfig(string path) {
         cfg.m64 = getStr(*v, "m64", "../../tools/assembler/build/m64");
         cfg.cc = getStr(*v, "cc", "gcc");
         cfg.ld = getStr(*v, "ld", "ld");
+        cfg.ar = getStr(*v, "ar", "ar");
         cfg.qemu = getStr(*v, "qemu", "qemu-system-x86_64");
     }
 
@@ -316,6 +326,16 @@ BuildConfig loadConfig(string path) {
             el.cSources = parseCSources(entry, absPath ~ ".extra_links." ~ el.name);
             el.link = parseLink(entry["link"], absPath ~ ".extra_links." ~ el.name ~ ".link");
             cfg.extraLinks ~= el;
+        }
+    }
+
+    if (auto v = "static_libraries" in root) {
+        foreach (Node entry; *v) {
+            StaticLibrary lib;
+            lib.name = requireStr(entry, "name", absPath ~ ".static_libraries[]");
+            lib.cSources = parseCSources(entry, absPath ~ ".static_libraries." ~ lib.name);
+            lib.output = requireStr(entry, "output", absPath ~ ".static_libraries." ~ lib.name);
+            cfg.staticLibraries ~= lib;
         }
     }
 
@@ -415,6 +435,13 @@ void substituteVariables(ref BuildConfig cfg, const string[string] vars) {
         link.objects = substituteList(link.objects, vars);
     }
     if (cfg.hasLink) substLink(cfg.link);
+    foreach (ref lib; cfg.staticLibraries) {
+        foreach (ref src; lib.cSources) {
+            src.path = substitute(src.path, vars);
+            src.includeDirs = substituteList(src.includeDirs, vars);
+        }
+        lib.output = substitute(lib.output, vars);
+    }
     foreach (ref el; cfg.extraLinks) {
         foreach (ref src; el.llplSources) substLlpl(src);
         foreach (ref a; el.asmSources) {

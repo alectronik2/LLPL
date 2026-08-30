@@ -1,0 +1,8 @@
+func main() -> int {
+    let mutex: Mutex = new Mutex()
+    llpl_irq_enter()
+    mutex.lock()
+    llpl_irq_exit()
+    delete mutex
+    return 0
+}

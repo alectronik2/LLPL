@@ -1,0 +1,43 @@
+func main() -> int {
+    let a: AtomicI64 = new AtomicI64(5)
+    let before = a.fetch_add(3)
+    let expected: i64 = 8
+    let swapped = a.compare_exchange(&expected, 20)
+    let old = a.exchange(2)
+
+    let flag: AtomicBool = new AtomicBool(false)
+    flag.store(true)
+    let was_true = flag.exchange(false)
+
+    let mutex: Mutex = new Mutex()
+    mutex.lock()
+    let protected_value: i64 = 10
+    mutex.unlock()
+
+    let rw: RwLock = new RwLock()
+    rw.read_lock()
+    let read_seen = protected_value
+    rw.read_unlock()
+    rw.write_lock()
+    let write_seen: i64 = 4
+    rw.write_unlock()
+
+    let local: TaskLocalI64 = new TaskLocalI64(7)
+    local.set(local.get() + 1)
+
+    let total = before + a.load() + old + read_seen + write_seen + local.get()
+    if swapped {
+        total = total + 30
+    }
+    if was_true {
+        total = total + 40
+    }
+    let ignored = puts("\(total)")
+
+    delete a
+    delete flag
+    delete mutex
+    delete rw
+    delete local
+    return 0
+}

@@ -1,0 +1,92 @@
+import hal
+
+namespace HAL {
+    namespace MTRR {
+        const IA32_MTRRCAP = 0xFE
+        const IA32_MTRR_DEF_TYPE = 0x2FF
+        const IA32_MTRR_PHYSBASE0 = 0x200 // PHYSBASEn = 0x200 + 2n
+        const IA32_MTRR_PHYSMASK0 = 0x201 // PHYSMASKn = 0x201 + 2n
+
+        const TYPE_WC = 1
+
+        const DEF_TYPE_ENABLE = 1 << 11
+        const PHYSMASK_VALID  = 1 << 11
+
+        const CR0_CD = 1 << 30
+        const CR0_NW = 1 << 29
+        const CR4_PGE = 1 << 7
+
+        func supported() -> bool {
+            let (_, _, _, edx) = HAL.cpuid(1)
+            (edx & (1 << 12)) != 0
+        }
+
+        func physical_address_bits() -> u32 {
+            let (max_ext, _, _, _) = HAL.cpuid(0x8000_0000)
+            if max_ext < 0x8000_0008 {
+                return 36 // conservative fallback for CPUs without the leaf
+            }
+            let (eax, _, _, _) = HAL.cpuid(0x8000_0008)
+            eax & 0xFF
+        }
+
+        // Marks [phys_base, phys_base + size) Write-Combining via a free
+        // variable-range MTRR. size is rounded up to a power of two (the
+        // minimum a variable MTRR can express); phys_base must already be
+        // aligned to that power of two, or this fails closed rather than
+        // covering unrelated memory. Never fatal on failure - the caller
+        // just keeps whatever default caching the range already had.
+        func set_write_combining(phys_base: uint, size: uint) -> bool {
+            return false if !supported()
+
+            let aligned_size: uint = 0x1000
+            while aligned_size < size { aligned_size = aligned_size << 1 }
+            return false if (phys_base & (aligned_size - 1)) != 0
+
+            let cap = HAL.read_msr(IA32_MTRRCAP)
+            let vcnt = (cap & 0xFF) as uint
+
+            let slot: uint = 0xFFFF_FFFF
+            for i in 0..vcnt {
+                let mask = HAL.read_msr(IA32_MTRR_PHYSMASK0 + 2 * i)
+                if (mask & PHYSMASK_VALID) == 0 {
+                    slot = i
+                    break
+                }
+            }
+            return false if slot == 0xFFFF_FFFF
+
+            let phys_bits = physical_address_bits()
+            let phys_mask_all: uint = ((1 as uint) << phys_bits) - 1
+
+            // Intel SDM Vol. 3A S12.11.7's documented safe MTRR-update
+            // sequence - changing a range's memory type while it may still
+            // be cached under a conflicting type is the genuinely unsafe
+            // part on real silicon (QEMU is lenient about it), so this is
+            // worth doing properly rather than a bare MSR write.
+            let irq_was_enabled = HAL.interrupt_save()
+            let saved_cr4 = HAL.read_cr4()
+            HAL.write_cr4(saved_cr4 & ~(CR4_PGE as u64))
+            let saved_cr0 = HAL.read_cr0()
+            HAL.write_cr0((saved_cr0 | (CR0_CD as u64)) & ~(CR0_NW as u64))
+            HAL.wbinvd()
+            HAL.write_cr3(HAL.read_cr3())
+
+            let def_type = HAL.read_msr(IA32_MTRR_DEF_TYPE)
+            HAL.write_msr(IA32_MTRR_DEF_TYPE, def_type & ~(DEF_TYPE_ENABLE as uint))
+
+            HAL.write_msr(IA32_MTRR_PHYSBASE0 + 2 * slot, (phys_base & ~(aligned_size - 1)) | TYPE_WC)
+            HAL.write_msr(IA32_MTRR_PHYSMASK0 + 2 * slot, (phys_mask_all & ~(aligned_size - 1)) | PHYSMASK_VALID)
+
+            HAL.write_msr(IA32_MTRR_DEF_TYPE, def_type | DEF_TYPE_ENABLE)
+
+            HAL.wbinvd()
+            HAL.write_cr3(HAL.read_cr3())
+            HAL.write_cr0(saved_cr0)
+            HAL.write_cr4(saved_cr4)
+            HAL.interrupt_restore(irq_was_enabled)
+
+            true
+        }
+    }
+}

@@ -154,7 +154,7 @@ namespace CrashLog {
     }
 
     func record_with_message(k: char*, msg: char*, is_user: bool, fault: u64, err: u64, frame_rip: u64, frame_rbp: u64, frame_rsp: u64) {
-        CrashLog.valid = true
+        /*CrashLog.valid = true
         copy(CrashLog.kind as char*, k, 32)
         copy(CrashLog.detail as char*, msg, 96)
         CrashLog.user_mode = is_user
@@ -184,7 +184,7 @@ namespace CrashLog {
             copy(CrashLog.file as char*, "?", 32)
             CrashLog.line = 0
         }
-        push_history()
+        push_history()*/
     }
 
     func record(k: char*, is_user: bool, fault: u64, err: u64, frame_rip: u64, frame_rbp: u64, frame_rsp: u64) {
@@ -192,7 +192,7 @@ namespace CrashLog {
     }
 
     func clear() {
-        CrashLog.valid = false
+        //CrashLog.valid = false
         history_count = 0
         let i: i64 = 0
         while i < HISTORY_MAX {

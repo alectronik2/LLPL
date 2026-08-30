@@ -58,9 +58,36 @@ func console_tag_code(text: string, pos: uint) -> u16 {
 }
 
 namespace Terminal {
+    const CURSOR_HISTORY_MAX = 512
     let console_font_asset = embed("console.ttf")
     let console_font: TtfFont
     let active_console: LimineFramebufferConsole*
+
+    // scroll() shifts every pixel in the framebuffer up by one text line -
+    // including any sprite an overlay (e.g. kern/mouse.llpl's cursor/
+    // windows) previously drew there. An overlay that needs to keep its
+    // own persistent pixels correct across scrolling registers here
+    // (set_scroll_hooks) rather than Terminal needing to know anything
+    // about what an overlay is: pre_scroll_hook runs immediately before
+    // the pixel shift (so an overlay can erase itself back to true
+    // background first), post_scroll_hook immediately after (so it can
+    // redraw fresh) - both bracket the shift synchronously, so there's no
+    // window where a scroll can happen without the overlay knowing, and
+    // no drift arithmetic needed to reconstruct where things ended up.
+    // Closures can't be compared/initialized against `null` as a whole in
+    // this compiler - only their .fn/.env fields individually (matches
+    // kern/deferred.llpl's WorkItem.callback, the same pattern already
+    // proven for a stored, later-invoked callback). No initializer here:
+    // default zero-init already leaves .fn == null, exactly the "no hook
+    // registered" state these are checked against.
+    alias ScrollHookFn = func(void*)
+    let pre_scroll_hook: ScrollHookFn
+    let post_scroll_hook: ScrollHookFn
+
+    func set_scroll_hooks(pre: ScrollHookFn, post: ScrollHookFn) {
+        pre_scroll_hook = pre
+        post_scroll_hook = post
+    }
 
     class Console {
         let width: uint
@@ -83,6 +110,8 @@ namespace Terminal {
         let ansi_state: u8
         let ansi_value: u16
         let ansi_have_value: bool
+        let cursor_history: uint*
+        let cursor_history_count: uint
 
         constructor( l: LimineFramebuffer* ) {
             fb = l
@@ -93,6 +122,12 @@ namespace Terminal {
             ansi_state = 0
             ansi_value = 0
             ansi_have_value = false
+            cursor_history = llpl_alloc(CURSOR_HISTORY_MAX * sizeof(uint)) as uint*
+            cursor_history_count = 0
+        }
+
+        destructor() {
+            llpl_free(cursor_history as char*)
         }
 
         func color_from_sgr(code: u16, bright: bool) -> u32 {
@@ -141,6 +176,14 @@ namespace Terminal {
                 let pixels = fb.address as u32*
                 pixels[(y * (fb.pitch / 4)) + x] = color
             }
+        }
+
+        func get_pixel(x: uint, y: uint) -> u32 {
+            if x < fb.width && y < fb.height {
+                let pixels = fb.address as u32*
+                return pixels[(y * (fb.pitch / 4)) + x]
+            }
+            return 0
         }
 
         func draw_glyph(c: char) -> uint {
@@ -203,6 +246,8 @@ namespace Terminal {
                 return
             }
 
+            if pre_scroll_hook.fn != null { pre_scroll_hook(null) }
+
             let pixels = fb.address as u32*
             let stride = fb.pitch / 4
             let y: uint = 20
@@ -225,14 +270,47 @@ namespace Terminal {
                 clear_y = clear_y + 1
             }
             cursor_y = fb.height - 20
+
+            if post_scroll_hook.fn != null { post_scroll_hook(null) }
         }
 
         func newline() {
             cursor_x = 0
             cursor_y = cursor_y + 20
+            cursor_history_count = 0
             if cursor_y + 20 >= fb.height {
                 self.scroll()
             }
+        }
+
+        func backspace() {
+            if cursor_history_count == 0 { return }
+            cursor_history_count--
+            let previous_x = cursor_history[cursor_history_count]
+            let end_x = cursor_x
+            let y: uint = 0
+            while y < 20 && cursor_y + y < fb.height {
+                let x = previous_x
+                while x < end_x && x < fb.width {
+                    self.put_pixel(x, cursor_y + y, bg)
+                    x++
+                }
+                y++
+            }
+            cursor_x = previous_x
+        }
+
+        func erase_line() {
+            let y: uint = 0
+            while y < 20 && cursor_y + y < fb.height {
+                let x: uint = 0
+                while x < fb.width {
+                    self.put_pixel(x, cursor_y + y, bg)
+                    x++
+                }
+                y++
+            }
+            cursor_history_count = 0
         }
 
         func render( text: string ) {
@@ -262,9 +340,14 @@ namespace Terminal {
                         self.newline()
                     } else if c == 13 {
                         cursor_x = 0
+                        cursor_history_count = 0
                     } else if c == 8 {
-                        if cursor_x >= 8 { cursor_x = cursor_x - 8 }
+                        self.backspace()
                     } else {
+                        if cursor_history_count < CURSOR_HISTORY_MAX {
+                            cursor_history[cursor_history_count] = cursor_x
+                            cursor_history_count++
+                        }
                         cursor_x = cursor_x + self.draw_glyph(c)
                         if cursor_x + 8 >= fb.width { self.newline() }
                     }
@@ -286,6 +369,9 @@ namespace Terminal {
                         ansi_have_value = false
                     } else if c == 109 {
                         if ansi_have_value { self.apply_sgr(ansi_value) } else { self.apply_sgr(0) }
+                        ansi_state = 0
+                    } else if c == 75 {
+                        self.erase_line()
                         ansi_state = 0
                     } else {
                         ansi_state = 0
@@ -316,5 +402,38 @@ namespace Terminal {
         if active_console != null {
             active_console.render(text)
         }
+    }
+
+    // Raw pixel access for callers outside this module (e.g. the mouse
+    // cursor, kern/mouse.llpl) that need to draw/read individual pixels
+    // without going through character rendering. active_console already
+    // owns the only framebuffer pointer/dimensions in the kernel - these
+    // just delegate to its own bounds-checked put_pixel/get_pixel rather
+    // than duplicating the addressing math.
+    func put_pixel(x: uint, y: uint, color: u32) {
+        if active_console != null {
+            active_console.put_pixel(x, y, color)
+        }
+    }
+
+    func get_pixel(x: uint, y: uint) -> u32 {
+        if active_console != null {
+            return active_console.get_pixel(x, y)
+        }
+        return 0
+    }
+
+    func width() -> uint {
+        if active_console != null {
+            return active_console.fb.width
+        }
+        return 0
+    }
+
+    func height() -> uint {
+        if active_console != null {
+            return active_console.fb.height
+        }
+        return 0
     }
 }

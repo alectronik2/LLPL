@@ -1,0 +1,31 @@
+// `check` is a statement keyword, but it is still a valid contextual name
+// for declarations and member access. This also keeps constructor default
+// arguments covered in the same parser path that previously failed.
+
+extern func puts(s: char*) -> i64
+
+class ParserLike {
+    let emit_parse: bool
+
+    constructor(emit_parse: bool = true) {
+        self.emit_parse = emit_parse
+    }
+
+    func check() -> bool {
+        return self.emit_parse
+    }
+}
+
+func main() -> i64 {
+    let p: ParserLike = new ParserLike()
+    if p.check() {
+        puts("default-on")
+    }
+
+    let q: ParserLike = new ParserLike(false)
+    if !q.check() {
+        puts("explicit-off")
+    }
+
+    return 0
+}

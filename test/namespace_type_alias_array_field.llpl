@@ -1,0 +1,22 @@
+extern func puts(s: char*) -> i64
+
+func alloc<T>(bytes: i64) -> T* {
+    return null
+}
+
+namespace Kern {
+    alias Handle = Object
+    class HandleTable {
+        table: Handle[]
+
+        constructor() {
+            self.table = alloc<Handle>(256 * sizeof(Handle))
+        }
+    }
+}
+
+func main() -> i64 {
+    let t = new Kern.HandleTable()
+    puts("namespace alias array field ok")
+    return 0
+}

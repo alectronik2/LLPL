@@ -1,0 +1,38 @@
+extern func puts(s: char*) -> i64
+
+trait NamedDriver {
+    func driver_name() -> String
+}
+
+func driver_label<T: NamedDriver>(driver: T) -> String {
+    return driver.driver_name()
+}
+
+class BaseDriver {
+    virtual func name() -> String {
+        return new String("base-driver")
+    }
+}
+
+class ChildDriver : BaseDriver {
+}
+
+impl NamedDriver for ChildDriver {
+    func driver_name() -> String {
+        return self.name()
+    }
+}
+
+func main() -> i64 {
+    try {
+        let driver = new ChildDriver()
+        let label = driver_label(driver)
+        puts(label.c_str())
+        throw -7
+    } catch (e: int) {
+        puts("caught")
+    } finally {
+        puts("finally")
+    }
+    return 0
+}

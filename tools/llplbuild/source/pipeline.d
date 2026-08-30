@@ -51,7 +51,7 @@ private bool isUpToDate(const string[] outputs, const string[] inputs, string co
 // One thing to do. Steps sharing the same positive `parallelGroup` are
 // independent of each other and may be launched together (see
 // runPlan) - `0` means "run alone, in plan order".
-private enum StepKind { compileLlpl, assemble, compileC, link, action, persistentCreate, packageGate }
+private enum StepKind { compileLlpl, assemble, compileC, link, archive, action, persistentCreate, packageGate }
 
 private struct PlanStep {
     StepKind kind;
@@ -79,6 +79,8 @@ private string stepVerb(const PlanStep step) {
             return "Assembling";
         case StepKind.link:
             return "Linking";
+        case StepKind.archive:
+            return "Archiving";
         case StepKind.packageGate:
             return "Packaging";
         case StepKind.persistentCreate:
@@ -248,6 +250,30 @@ private PlanStep[] buildPlan(const BuildConfig cfg, const Configuration* config,
             [obj],
             cmd,
             PackageAction.init, "", "", false, 1);
+    }
+
+    foreach (i, lib; cfg.staticLibraries) {
+        int group = 200 + cast(int)i;
+        string[] objs;
+        foreach (src; lib.cSources) {
+            string obj = objPathFor(src.path, src.objOutput);
+            string[] cmd = [cfg.cc] ~ cflags ~ src.cflags;
+            foreach (dir; src.includeDirs) cmd ~= ["-I", dir];
+            cmd ~= ["-c", src.path, "-o", obj];
+            plan ~= PlanStep(StepKind.compileC,
+                format("%s (%s)", src.path, lib.name),
+                [src.path, configStampPath],
+                [obj],
+                cmd,
+                PackageAction.init, "", "", false, group);
+            objs ~= obj;
+        }
+        plan ~= PlanStep(StepKind.archive,
+            lib.name,
+            objs,
+            [lib.output],
+            [cfg.ar, "rcs", lib.output] ~ objs,
+            PackageAction.init, "", "", false, group);
     }
 
     if (cfg.hasLink) {
@@ -452,6 +478,7 @@ private void executeStep(PlanStep step) {
         case StepKind.assemble:
         case StepKind.compileC:
         case StepKind.link:
+        case StepKind.archive:
             runCommand(step.cmd, false, step.description);
             break;
         case StepKind.action:
@@ -797,6 +824,10 @@ void clean(BuildConfig cfg) {
     foreach (a; cfg.asmSources) files ~= a.output;
     foreach (a; cfg.m64Sources) files ~= a.output;
     if (cfg.hasLink) files ~= cfg.link.output;
+    foreach (lib; cfg.staticLibraries) {
+        foreach (src; lib.cSources) files ~= objPathFor(src.path, src.objOutput);
+        files ~= lib.output;
+    }
     foreach (el; cfg.extraLinks) {
         foreach (src; el.llplSources) {
             files ~= src.cOutput;

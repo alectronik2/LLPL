@@ -1960,8 +1960,17 @@ class Parser {
         string name = canonicalIntTypeName(nameTok.value);
         // Namespace-qualified type name, e.g. Graphics.Point -> mangled as
         // Graphics_Point, matching how the code generator mangles namespaced
-        // class declarations.
-        while (match(TokenType.Dot)) {
+        // class declarations. Newline-guarded like the pointer-`*` loop
+        // below and postfix()'s own member-access dot: without this, a
+        // statement that starts on the next line with a leading '.field'
+        // (the `with` block shorthand - primary() rewrites a bare leading
+        // dot to `<with-context>.field`) gets misread as this type name
+        // continuing onto that dot, e.g. `x as u64\n.thread_count = 1`
+        // inside a `with` block parsing as `x as u64.thread_count` (a
+        // bogus mangled type `u64_thread_count`) `= 1`, silently merging
+        // two separate statements into one nonsensical expression.
+        while (check(TokenType.Dot) && !newlineBeforeCurrent()) {
+            advance();
             name ~= "_" ~ expectName("Expected type name after '.'").value;
         }
 

@@ -1,0 +1,201 @@
+// Example: 2D Graphics & Sprite System Demo
+//
+// Showcases Canvas drawing primitives, Sprites, Camera, Animations,
+// and Particles on top of SDL3.
+
+import std.sdl.sdl
+import std.sdl.sdl_graphics
+
+#link "SDL3"
+#link "m"
+
+extern func cos(x: float) -> float
+extern func sin(x: float) -> float
+
+using namespace std.sdl
+using namespace std.graphics
+
+func main() -> int {
+    let init_result = SDL.init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)
+    if !init_result.is_ok() {
+        return 1
+    }
+
+    let window: Window = new Window(new String("LLPL 2D Graphics Demo"), 800, 600, SDL_WINDOW_RESIZABLE as uint)
+    if !window.is_valid() {
+        SDL.quit()
+        return 1
+    }
+
+    let renderer: Renderer = new Renderer(window)
+    if !renderer.is_valid() {
+        SDL.quit()
+        return 1
+    }
+
+    let canvas: Canvas = new Canvas(renderer)
+    let events: EventHandler = new EventHandler()
+    let camera: Camera = new Camera(800.0, 600.0)
+
+    // ── Create a particle emitter at the center ──
+    let emitter: ParticleEmitter = new ParticleEmitter(400.0, 300.0)
+    emitter.rate = 30
+    emitter.min_speed = 0.02
+    emitter.max_speed = 0.08
+    emitter.color = Color.from_hsl(30, 100, 60)
+    emitter.particle_size = 3.0
+    emitter.spread = 360.0
+
+    // ── Animation (4 frames, 150ms each, looping) ──
+    let anim: Animation = new Animation(32, 32, 150, true)
+    anim.add_frames(0, 3)
+    anim.play()
+
+    // ── State ──
+    let last_time: u64 = SDL.get_ticks()
+    let running: bool = true
+    let frame: i64 = 0
+
+    // Precompute some polygon points (pentagon)
+    let poly_x: float[5]
+    let poly_y: float[5]
+    let pi: i64 = 0
+    while pi < 5 {
+        let angle: float = (pi as float) * 2.0 * 3.14159265 / 5.0 - 3.14159265 / 2.0
+        poly_x[pi] = 600.0 + 50.0 * cos(angle)
+        poly_y[pi] = 450.0 + 50.0 * sin(angle)
+        pi = pi + 1
+    }
+
+    while running {
+        // ── Timing ──
+        let now: u64 = SDL.get_ticks()
+        let dt_ms: u64 = now - last_time
+        last_time = now
+
+        // ── Events ──
+        while events.poll() {
+            if events.is_quit() {
+                running = false
+            }
+            if events.is_key_down() {
+                let ke: SDL_KeyboardEvent* = events.get_key_event()
+                if (*ke).key == SDLK_ESCAPE {
+                    running = false
+                }
+            }
+        }
+
+        // ── Update ──
+        emitter.update(dt_ms as i64)
+        anim.update(dt_ms)
+        camera.update()
+        frame = frame + 1
+
+        // ── Clear ──
+        renderer.set_draw_color(20, 20, 30, 255)
+        renderer.clear()
+
+        // ── Draw background grid ──
+        canvas.set_color(new Color(40, 40, 60, 255))
+        let gx: i64 = 0
+        while gx < 800 {
+            canvas.draw_line(gx as float, 0.0, gx as float, 600.0)
+            gx = gx + 40
+        }
+        let gy: i64 = 0
+        while gy < 600 {
+            canvas.draw_line(0.0, gy as float, 800.0, gy as float)
+            gy = gy + 40
+        }
+
+        // ── Filled shapes ──
+
+        // Red filled circle
+        canvas.set_color(new Color(220, 50, 50, 200))
+        canvas.fill_circle(150.0, 150.0, 60.0)
+
+        // Green outlined circle
+        canvas.set_color(new Color(50, 220, 50, 255))
+        canvas.draw_circle(150.0, 150.0, 60.0)
+
+        // Blue filled rectangle
+        canvas.set_color(new Color(50, 80, 220, 200))
+        canvas.fill_rect(250.0, 80.0, 120.0, 80.0)
+
+        // Yellow outlined rectangle
+        canvas.set_color(new Color(240, 220, 50, 255))
+        canvas.draw_rect(250.0, 80.0, 120.0, 80.0)
+
+        // Purple filled rounded rect
+        canvas.set_color(new Color(160, 50, 200, 220))
+        canvas.fill_rounded_rect(420.0, 80.0, 140.0, 80.0, 20.0)
+
+        // White outlined rounded rect
+        canvas.set_color(new Color(255, 255, 255, 200))
+        canvas.draw_rounded_rect(420.0, 80.0, 140.0, 80.0, 20.0)
+
+        // Cyan filled triangle
+        canvas.set_color(new Color(0, 220, 220, 200))
+        canvas.fill_triangle(100.0, 280.0, 50.0, 380.0, 150.0, 380.0)
+
+        // Orange outlined triangle
+        canvas.set_color(new Color(255, 160, 0, 255))
+        canvas.draw_triangle(100.0, 280.0, 50.0, 380.0, 150.0, 380.0)
+
+        // Pink filled pentagon
+        canvas.set_color(new Color(220, 100, 180, 200))
+        canvas.fill_polygon(poly_x, poly_y, 5)
+
+        // Light green outlined pentagon
+        canvas.set_color(new Color(100, 255, 150, 255))
+        canvas.draw_polygon(poly_x, poly_y, 5)
+
+        // ── Arc ──
+        canvas.set_color(new Color(255, 128, 0, 255))
+        canvas.draw_arc(300.0, 300.0, 40.0, 0, 270)
+
+        // ── Gradient fills ──
+        canvas.fill_gradient_v(250.0, 200.0, 120.0, 60.0,
+            new Color(255, 0, 0), new Color(0, 0, 255))
+        canvas.fill_gradient_h(420.0, 200.0, 140.0, 60.0,
+            new Color(0, 255, 0), new Color(255, 0, 255))
+
+        // ── Particles ──
+        emitter.draw(canvas)
+
+        // ── Bouncing sprites (using rectangles as placeholders) ──
+        let t: float = (now as float) / 1000.0
+
+        // Animated bouncing square
+        let bx: float = 400.0 + sin(t * 80.0) * 150.0
+        let by: float = 450.0 + cos(t * 120.0) * 80.0
+        canvas.set_color(Color.from_hsl((t * 60.0) as i64 % 360, 80, 60))
+        canvas.fill_rounded_rect(bx - 20.0, by - 20.0, 40.0, 40.0, 8.0)
+
+        // Second bouncing square (phase shifted)
+        let bx2: float = 400.0 + sin((t + 2.0) * 70.0) * 180.0
+        let by2: float = 500.0 + cos((t + 1.0) * 90.0) * 50.0
+        canvas.set_color(Color.from_hsl(((t * 40.0) as i64 + 180) % 360, 80, 60))
+        canvas.fill_rounded_rect(bx2 - 15.0, by2 - 15.0, 30.0, 30.0, 6.0)
+
+        // ── Animated line (rotating) ──
+        let angle: float = t * 2.0
+        canvas.set_color(new Color(255, 255, 255, 150))
+        canvas.draw_line(650.0, 300.0,
+                         650.0 + cos(angle) * 80.0,
+                         300.0 + sin(angle) * 80.0)
+
+        // ── Info text area ──
+        canvas.set_color(new Color(180, 180, 200, 255))
+        canvas.fill_rounded_rect(10.0, 540.0, 780.0, 50.0, 8.0)
+        canvas.set_color(new Color(30, 30, 40, 255))
+
+        // ── Present ──
+        renderer.present()
+        SDL.delay(16) // ~60 FPS
+    }
+
+    SDL.quit()
+    return 0
+}

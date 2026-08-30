@@ -1,0 +1,21 @@
+async func wait_two_ticks() -> int {
+    let ignored = await sleep_ms(20)
+    return 42
+}
+
+func main() -> int {
+    llpl_async_set_now_ms(0)
+
+    let task = async_start(wait_two_ticks())
+    let out: int = 0
+
+    llpl_async_poll(task, (&out) as char*)
+    llpl_async_advance_ms(10)
+    llpl_async_poll(task, (&out) as char*)
+    llpl_async_advance_ms(10)
+    llpl_async_poll(task, (&out) as char*)
+
+    llpl_async_destroy(task)
+    let ignored = puts("\(out)")
+    return 0
+}

@@ -1,0 +1,8 @@
+func main() -> int {
+    let lock: RwLock = new RwLock()
+    llpl_irq_enter()
+    lock.write_lock()
+    llpl_irq_exit()
+    delete lock
+    return 0
+}

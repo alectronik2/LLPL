@@ -1,0 +1,15 @@
+class Box {
+    value: int
+
+    constructor( value: int ) {
+        self.value = value
+    }
+}
+
+func main() -> int {
+    llpl_irq_enter()
+    let box = new Box( 1 )
+    llpl_irq_exit()
+    delete box
+    return 0
+}

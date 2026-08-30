@@ -324,7 +324,19 @@ namespace Kern {
             holding self.lock {
                 let fd = minimum
                 while self.entries.contains(fd as u64) { fd++ }
-                rc_retain(descriptor as char*)
+                // entries.insert() already retains (HashMap<K,V>.insert -
+                // confirmed via generated C) - an extra explicit rc_retain
+                // here double-retained every installed fd. close()'s
+                // single delete/release could never fully unwind that:
+                // every install/dup/clone_for_exec event left a permanent
+                // +1 residue no amount of later closing could cancel, so
+                // a pipe's write end could never actually reach ref=0 once
+                // it had been duplicated or inherited by a spawned child -
+                // Pipe.writers (kern/handle.llpl) would never reach 0,
+                // and a reader looping until EOF would block forever.
+                // None of the existing pipe self-tests read until EOF
+                // (they all read a known, fixed byte count), so this went
+                // unnoticed until a real EOF-driven reader exercised it.
                 self.entries.insert(fd as u64, descriptor)
                 self.close_exec.insert(fd as u64, false)
                 return fd as int
@@ -359,7 +371,8 @@ namespace Kern {
             let descriptor = self.get(old_fd)
             return VFS.EBADF if descriptor == null
             self.close(new_fd) if self.get(new_fd) != null
-            rc_retain(descriptor as char*)
+            // entries.insert() already retains - see install_descriptor's
+            // matching comment above.
             holding self.lock {
                 self.entries.insert(new_fd as u64, descriptor)
                 self.close_exec.insert(new_fd as u64, false)
@@ -382,7 +395,8 @@ namespace Kern {
                     let exec_flag = self.close_exec.get(item.key)
                     let inherited = !(exec_flag.is_some() && exec_flag.get())
                     if inherited {
-                        rc_retain(item.value as char*)
+                        // entries.insert() already retains - see
+                        // install_descriptor's matching comment above.
                         copy.entries.insert(item.key, item.value)
                     }
                 }
@@ -394,7 +408,27 @@ namespace Kern {
             let result: FileDescriptor = null
             holding self.lock {
                 let found = self.entries.get(fd as u64)
-                if found.is_some() { result = found.get() }
+                if found.is_some() {
+                    result = found.get()
+                    // Every caller assigns this return value into its own
+                    // top-level local (e.g. `let descriptor =
+                    // proc.fds.get(fd)`), which the compiler auto-releases
+                    // at that caller's function end - confirmed via
+                    // generated C (duplicate()'s own `descriptor` local
+                    // gets a real rc_release the compiler emits, unlike
+                    // Optional<T> locals such as `found` here). So this
+                    // function's return value must itself carry a real,
+                    // separate retain for the caller to legitimately
+                    // consume - `found`'s own retain (from
+                    // Optional<T>.set(), released via delete below) is a
+                    // distinct, internal-only bookkeeping retain that
+                    // doesn't satisfy that on its own.
+                    rc_retain(result as char*)
+                }
+                // See close()'s matching comment: Optional<T> locals are
+                // never auto-released by the compiler, so found's own
+                // retain would otherwise leak.
+                delete found
             }
             return result
         }
@@ -404,6 +438,21 @@ namespace Kern {
             holding self.lock {
                 let found = self.entries.get(fd as u64)
                 if found.is_some() { descriptor = found.get() }
+                // Optional<T> locals are never auto-released by the
+                // compiler at function end (confirmed via generated C -
+                // unlike a plain class-typed local such as `descriptor`
+                // above, no epilogue rc_release is emitted for `found`
+                // here), even though Optional<T>.set() (called inside
+                // HashMap.get()) does retain the value it wraps. Without
+                // this explicit delete, that retain is permanently stuck,
+                // making every close() net zero instead of net -1 on the
+                // real object - it can never actually reach ref=0 through
+                // ordinary closing. This is a real, general LLPL compiler
+                // gap (generic-class-typed locals), not specific to this
+                // kernel; delete here so this and every other explicit
+                // consumer of HashMap.get()'s Optional isn't silently
+                // broken by it.
+                delete found
                 self.entries.remove(fd as u64)
                 self.close_exec.remove(fd as u64)
             }

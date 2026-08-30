@@ -1,0 +1,519 @@
+// Standard library: Reflection-based struct JSON serialization
+// Namespace: std::json
+//
+// Automatically serializes any struct to/from JSON using the runtime
+// reflection metadata (LLPL_TypeInfo / LLPL_FieldInfo) emitted by the
+// compiler.  Primitive fields (integers, floats, bools, char) and
+// String (char*) fields are handled directly; nested struct fields are
+// recursively serialized.
+//
+// Usage:
+//
+//   import std.json.struct_json
+//   using namespace std.json
+//
+//   struct Point {
+//       let x: i64
+//       let y: i64
+//   }
+//
+//   let p: Point = Point { x: 10, y: 20 }
+//   let json: String = struct_to_json("Point", &p as char*)
+//   // json == {"x":10,"y":20}
+//
+//   let p2: Point
+//   json_to_struct("Point", json, &p2 as char*)
+//   // p2.x == 10, p2.y == 20
+
+import std.reflection
+import std.text.string_utils
+import std.json.json_parser
+
+using namespace std.text
+
+namespace std {
+namespace json {
+
+// ── low-level helpers ──────────────────────────────────────────────
+
+// Read an integer field from a struct buffer at `offset`, interpreting
+// `type_name` to pick the right width and signedness.
+func read_int_field(buf: char*, offset: u64, type_name: string) -> i64 {
+    if tn_eq(type_name, "i8") {
+        return (buf[offset] as i8) as i64
+    }
+    if tn_eq(type_name, "u8") {
+        return (buf[offset] as u8) as i64
+    }
+    if tn_eq(type_name, "i16") {
+        let v: i16 = 0
+        llpl_memcpy(&v as char*, buf + offset, 2)
+        return v as i64
+    }
+    if tn_eq(type_name, "u16") {
+        let v: u16 = 0
+        llpl_memcpy(&v as char*, buf + offset, 2)
+        return v as i64
+    }
+    if tn_eq(type_name, "i32") {
+        let v: i32 = 0
+        llpl_memcpy(&v as char*, buf + offset, 4)
+        return v as i64
+    }
+    if tn_eq(type_name, "u32") {
+        let v: u32 = 0
+        llpl_memcpy(&v as char*, buf + offset, 4)
+        return v as i64
+    }
+    if tn_eq(type_name, "i64") {
+        let v: i64 = 0
+        llpl_memcpy(&v as char*, buf + offset, 8)
+        return v
+    }
+    if tn_eq(type_name, "u64") {
+        let v: u64 = 0
+        llpl_memcpy(&v as char*, buf + offset, 8)
+        return v as i64
+    }
+    if tn_eq(type_name, "int") {
+        let v: int = 0
+        llpl_memcpy(&v as char*, buf + offset, sizeof(int))
+        return v as i64
+    }
+    if tn_eq(type_name, "uint") {
+        let v: uint = 0
+        llpl_memcpy(&v as char*, buf + offset, sizeof(uint))
+        return v as i64
+    }
+    if tn_eq(type_name, "bool") {
+        return (buf[offset] as bool) as i64
+    }
+    if tn_eq(type_name, "char") {
+        return (buf[offset] as char) as i64
+    }
+    return 0
+}
+
+// Read a float field from a struct buffer.
+func read_float_field(buf: char*, offset: u64, type_name: string) -> float {
+    let v: float = 0.0
+    if tn_eq(type_name, "float") || tn_eq(type_name, "f32") {
+        llpl_memcpy(&v as char*, buf + offset, 8)
+        return v
+    }
+    return 0.0
+}
+
+// Read a char* / string field from a struct buffer.
+func read_string_field(buf: char*, offset: u64) -> char* {
+    let ptr: char* = null
+    llpl_memcpy(&ptr as char*, buf + offset, sizeof(char*))
+    return ptr
+}
+
+// Write an integer value back into a struct buffer.
+func write_int_field(buf: char*, offset: u64, type_name: string, value: i64) {
+    if tn_eq(type_name, "i8") {
+        let v: i8 = value as i8
+        llpl_memcpy(buf + offset, &v as char*, 1)
+        return
+    }
+    if tn_eq(type_name, "u8") {
+        let v: u8 = value as u8
+        llpl_memcpy(buf + offset, &v as char*, 1)
+        return
+    }
+    if tn_eq(type_name, "i16") {
+        let v: i16 = value as i16
+        llpl_memcpy(buf + offset, &v as char*, 2)
+        return
+    }
+    if tn_eq(type_name, "u16") {
+        let v: u16 = value as u16
+        llpl_memcpy(buf + offset, &v as char*, 2)
+        return
+    }
+    if tn_eq(type_name, "i32") {
+        let v: i32 = value as i32
+        llpl_memcpy(buf + offset, &v as char*, 4)
+        return
+    }
+    if tn_eq(type_name, "u32") {
+        let v: u32 = value as u32
+        llpl_memcpy(buf + offset, &v as char*, 4)
+        return
+    }
+    if tn_eq(type_name, "i64") {
+        let v: i64 = value
+        llpl_memcpy(buf + offset, &v as char*, 8)
+        return
+    }
+    if tn_eq(type_name, "u64") {
+        let v: u64 = value as u64
+        llpl_memcpy(buf + offset, &v as char*, 8)
+        return
+    }
+    if tn_eq(type_name, "int") {
+        let v: int = value as int
+        llpl_memcpy(buf + offset, &v as char*, sizeof(int))
+        return
+    }
+    if tn_eq(type_name, "uint") {
+        let v: uint = value as uint
+        llpl_memcpy(buf + offset, &v as char*, sizeof(uint))
+        return
+    }
+    if tn_eq(type_name, "bool") {
+        let v: bool = value != 0
+        llpl_memcpy(buf + offset, &v as char*, 1)
+        return
+    }
+    if tn_eq(type_name, "char") {
+        let v: char = value as char
+        llpl_memcpy(buf + offset, &v as char*, 1)
+        return
+    }
+}
+
+// Write a float value back into a struct buffer.
+func write_float_field(buf: char*, offset: u64, type_name: string, value: float) {
+    if tn_eq(type_name, "float") || tn_eq(type_name, "f32") {
+        let v: float = value
+        llpl_memcpy(buf + offset, &v as char*, 8)
+        return
+    }
+}
+
+// Write a char* / string pointer back into a struct buffer.
+func write_string_field(buf: char*, offset: u64, value: char*) {
+    llpl_memcpy(buf + offset, &value as char*, sizeof(char*))
+}
+
+// ── kind classification ────────────────────────────────────────────
+
+// char* == char* compares pointer identity in LLPL; wrap in String for
+// content comparison (the type_name from reflection metadata is a string
+// literal in the generated C, not the same pointer as a source literal).
+func tn_eq(type_name: string, literal: string) -> bool {
+    return new String(type_name) == literal
+}
+
+func is_integer_type(type_name: string) -> bool {
+    return tn_eq(type_name, "i8") || tn_eq(type_name, "u8") ||
+           tn_eq(type_name, "i16") || tn_eq(type_name, "u16") ||
+           tn_eq(type_name, "i32") || tn_eq(type_name, "u32") ||
+           tn_eq(type_name, "i64") || tn_eq(type_name, "u64") ||
+           tn_eq(type_name, "int") || tn_eq(type_name, "uint")
+}
+
+func is_float_type(type_name: string) -> bool {
+    return tn_eq(type_name, "float") || tn_eq(type_name, "f32")
+}
+
+func is_bool_type(type_name: string) -> bool {
+    return tn_eq(type_name, "bool")
+}
+
+func is_char_type(type_name: string) -> bool {
+    return tn_eq(type_name, "char")
+}
+
+func is_string_type(type_name: string) -> bool {
+    return tn_eq(type_name, "char*") || tn_eq(type_name, "string") || tn_eq(type_name, "String")
+}
+
+// Format a float value for JSON output (handles negative, integer-only,
+// and fractional values).  ksnprintf doesn't support %g on bare-metal,
+// so we do it by hand.
+func fmt_json_float(sb: StringBuilder, value: float) {
+    if value < 0.0 {
+        sb.append_char('-')
+        value = -value
+    }
+    // Integer part
+    let int_part: i64 = value as i64
+    sb.append_int(int_part)
+    // Fractional part: scale the whole value, subtract integer*scale,
+    // keep 6 digits, strip trailing zeros.
+    let scaled: i64 = (value * 1000000.0 + 0.5) as i64
+    let frac_scaled: i64 = scaled - (int_part * 1000000)
+    if frac_scaled == 0 {
+        return
+    }
+    sb.append_char('.')
+    // Strip trailing zeros from frac_scaled
+    while frac_scaled % 10 == 0 && frac_scaled > 0 {
+        frac_scaled = frac_scaled / 10
+    }
+    // Build digits right-to-left
+    let digits: char[8]
+    let j: i64 = 0
+    let temp: i64 = frac_scaled
+    while temp > 0 {
+        digits[j] = ((temp % 10) as i64 + 48) as char
+        temp = temp / 10
+        j = j + 1
+    }
+    // Reverse and append
+    let k: i64 = j - 1
+    while k >= 0 {
+        sb.append_char(digits[k])
+        k = k - 1
+    }
+}
+
+// ── public API ─────────────────────────────────────────────────────
+
+// Serialize a struct to a JSON string.
+//
+// `type_name` must be a struct type registered with the reflection
+// metadata (all user-declared structs are automatically included).
+// `struct_ptr` is a raw pointer to the struct's memory (typically
+// obtained with `&my_struct as char*`).
+func struct_to_json(type_name: string, struct_ptr: char*) -> String {
+    let rt: ReflectType = reflect_type(type_name)
+    if !rt.exists() {
+        // Fallback: emit null if the type isn't in the reflection table
+        return new String("null")
+    }
+
+    let sb: StringBuilder = new StringBuilder()
+    sb.append_char('{')
+    let count: i64 = rt.field_count()
+    let first: bool = true
+    let i: i64 = 0
+    while i < count {
+        let f: ReflectField = rt.field(i)
+        if !f.exists() {
+            i = i + 1
+            continue
+        }
+
+        let fname: string = f.name()
+        let ftype: string = f.type_name()
+        let foffset: u64 = f.offset() as u64
+
+        if !first {
+            sb.append_char(',')
+        }
+        first = false
+
+        // Key
+        write_json_string(sb, new String(fname))
+        sb.append_char(':')
+
+        // Value
+        if is_integer_type(ftype) {
+            let v: i64 = read_int_field(struct_ptr, foffset, ftype)
+            sb.append_int(v)
+        } else if is_float_type(ftype) {
+            let v: float = read_float_field(struct_ptr, foffset, ftype)
+            fmt_json_float(sb, v)
+        } else if is_bool_type(ftype) {
+            let v: i64 = read_int_field(struct_ptr, foffset, ftype)
+            if v != 0 {
+                sb.append(new String("true"))
+            } else {
+                sb.append(new String("false"))
+            }
+        } else if is_char_type(ftype) {
+            // Single char → JSON string of length 1
+            let v: char = struct_ptr[foffset]
+            sb.append_char('\"')
+            if v == '\"' {
+                sb.append(new String("\\\""))
+            } else if v == '\\' {
+                sb.append(new String("\\\\"))
+            } else if v == '\n' {
+                sb.append(new String("\\n"))
+            } else if v == '\t' {
+                sb.append(new String("\\t"))
+            } else if v == '\r' {
+                sb.append(new String("\\r"))
+            } else {
+                sb.append_char(v)
+            }
+            sb.append_char('\"')
+        } else if is_string_type(ftype) {
+            let ptr: char* = read_string_field(struct_ptr, foffset)
+            if ptr == null {
+                sb.append(new String("null"))
+            } else {
+                write_json_string(sb, new String(ptr))
+            }
+        } else {
+            // Unknown type → null
+            sb.append(new String("null"))
+        }
+
+        i = i + 1
+    }
+    sb.append_char('}')
+    return sb.to_string()
+}
+
+// Deserialize a JSON string into a struct.
+//
+// Returns `true` on success.  Fields present in the JSON object are
+// written into the struct buffer; fields missing from the JSON are
+// left unchanged (the caller should zero-init the struct first).
+func json_to_struct(type_name: string, json_text: String, struct_ptr: char*) -> bool {
+    let rt: ReflectType = reflect_type(type_name)
+    if !rt.exists() {
+        return false
+    }
+
+    let doc: JsonValue = parse(json_text)
+    if !doc.is_object() {
+        return false
+    }
+
+    let count: i64 = rt.field_count()
+    let i: i64 = 0
+    while i < count {
+        let f: ReflectField = rt.field(i)
+        if !f.exists() {
+            i = i + 1
+            continue
+        }
+
+        let fname: string = f.name()
+        let ftype: string = f.type_name()
+        let foffset: u64 = f.offset() as u64
+
+        let key: String = new String(fname)
+        let opt_val: Optional<JsonValue> = doc.get(key)
+        if !opt_val.is_some() {
+            i = i + 1
+            continue
+        }
+        let val: JsonValue = opt_val.get()
+
+        if is_integer_type(ftype) {
+            if val.is_int() {
+                write_int_field(struct_ptr, foffset, ftype, val.as_int())
+            } else if val.is_string() {
+                // Try parsing string as int (common in JSON APIs)
+                let s: String = val.as_string()
+                write_int_field(struct_ptr, foffset, ftype, parse_int_from_string(s))
+            }
+        } else if is_float_type(ftype) {
+            if val.is_float() {
+                write_float_field(struct_ptr, foffset, ftype, val.as_float())
+            } else if val.is_int() {
+                write_float_field(struct_ptr, foffset, ftype, val.as_int() as float)
+            }
+        } else if is_bool_type(ftype) {
+            if val.is_bool() {
+                write_int_field(struct_ptr, foffset, ftype, val.as_bool() as i64)
+            } else if val.is_int() {
+                write_int_field(struct_ptr, foffset, ftype, val.as_int())
+            }
+        } else if is_char_type(ftype) {
+            if val.is_string() && val.as_string().byte_len() > 0 {
+                struct_ptr[foffset] = val.as_string().byte_at(0)
+            }
+        } else if is_string_type(ftype) {
+            if val.is_string() {
+                let s: String = val.as_string()
+                // Allocate a copy of the string for the struct to own
+                let s_len: i64 = s.byte_len()
+                let buf: char* = llpl_alloc((s_len + 1) as u64)
+                llpl_memcpy(buf, s.c_str(), (s_len + 1) as u64)
+                write_string_field(struct_ptr, foffset, buf)
+            } else if val.is_null() {
+                write_string_field(struct_ptr, foffset, null)
+            }
+        }
+
+        i = i + 1
+    }
+    return true
+}
+
+// Pretty-print a JSON string with indentation.
+func pretty_json(json_text: String) -> String {
+    let sb: StringBuilder = new StringBuilder()
+    let indent: i64 = 0
+    let len: i64 = json_text.byte_len()
+    let i: i64 = 0
+    let in_string: bool = false
+    while i < len {
+        let c: char = json_text.byte_at(i)
+
+        if c == '"' && (i == 0 || json_text.byte_at(i - 1) != '\\') {
+            in_string = !in_string
+            sb.append_char(c)
+            i = i + 1
+            continue
+        }
+
+        if in_string {
+            sb.append_char(c)
+            i = i + 1
+            continue
+        }
+
+        if c == '{' || c == '[' {
+            sb.append_char(c)
+            sb.append_char('\n')
+            indent = indent + 1
+            let j: i64 = 0
+            while j < indent {
+                sb.append_char(' ')
+                sb.append_char(' ')
+                j = j + 1
+            }
+            i = i + 1
+            continue
+        }
+
+        if c == '}' || c == ']' {
+            indent = indent - 1
+            if indent < 0 { indent = 0 }
+            sb.append_char('\n')
+            let j: i64 = 0
+            while j < indent {
+                sb.append_char(' ')
+                sb.append_char(' ')
+                j = j + 1
+            }
+            sb.append_char(c)
+            i = i + 1
+            continue
+        }
+
+        if c == ',' {
+            sb.append_char(c)
+            sb.append_char('\n')
+            let j: i64 = 0
+            while j < indent {
+                sb.append_char(' ')
+                sb.append_char(' ')
+                j = j + 1
+            }
+            i = i + 1
+            continue
+        }
+
+        if c == ':' {
+            sb.append_char(':')
+            sb.append_char(' ')
+            i = i + 1
+            continue
+        }
+
+        // whitespace
+        if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+            i = i + 1
+            continue
+        }
+
+        sb.append_char(c)
+        i = i + 1
+    }
+    return sb.to_string()
+}
+
+}
+}

@@ -1,6 +1,7 @@
 import hal
 import mm
 import kern
+import terminal
 
 extern func syscall_entry()
 
@@ -55,6 +56,10 @@ const SYS_RELEASE_MUTEX = 47
 const SYS_CREATE_SEMAPHORE = 48
 const SYS_RELEASE_SEMAPHORE = 49
 const SYS_GET_COMMAND_LINE = 50
+const SYS_PROCESS_SNAPSHOT = 51
+const SYS_LIST_DIRECTORY = 52
+const SYS_CHDIR = 53
+const SYS_GETCWD = 54
 
 struct AsyncIoParams {
     buf: u64
@@ -318,7 +323,24 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
             }
             buf[len] = 0
 
-            HAL.Serial.write(buf)
+            let proc = syscall_process()
+            let stdout_fd: Kern.FileDescriptor = null
+            if proc != null { stdout_fd = proc.fds.get(1) }
+            if stdout_fd != null {
+                stdout_fd.write(buf, len)
+            } else {
+                HAL.Serial.write(buf)
+                Terminal.write(buf)
+            }
+            // DescriptorTable.get() (kern/handle.llpl) hands back a
+            // retained reference the caller owns and must release -
+            // without this, every SYS_WRITE call leaked one retain on
+            // whatever fd 1 currently resolves to, so a pipe's write end
+            // (once dup2'd onto fd 1, the shell.c redirection pattern)
+            // could never actually reach ref=0 even after every fd table
+            // entry referencing it was properly closed - a reader relying
+            // on EOF (Kern.Pipe.writers == 0) would hang forever.
+            delete stdout_fd
             ctx.rax = 1
 
             MM.free( buf )
@@ -381,6 +403,9 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                         ctx.rax = result as u64
                     }
                     MM.free(buffer)
+                    // See SYS_WRITE's matching comment: DescriptorTable.get()
+                    // hands back a retained reference the caller must release.
+                    delete descriptor
                 }
             }
         }
@@ -402,6 +427,9 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                         ctx.rax = descriptor.write(buffer, size) as u64
                     }
                     MM.free(buffer)
+                    // See SYS_WRITE's matching comment: DescriptorTable.get()
+                    // hands back a retained reference the caller must release.
+                    delete descriptor
                 }
             }
         }
@@ -423,6 +451,9 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                     ctx.rax = VFS.EBADF as u64
                 } else {
                     ctx.rax = descriptor.seek(ctx.rsi as uint, ctx.rdx as uint) as u64
+                    // See SYS_WRITE's matching comment: DescriptorTable.get()
+                    // hands back a retained reference the caller must release.
+                    delete descriptor
                 }
             }
         }
@@ -445,6 +476,10 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 ctx.rax = rc as u64 if rc < 0
                 if rc >= 0 { ctx.rax = addr }
             }
+            // map_user_file takes its own independent retain (see its
+            // comment in kern/process.llpl) rather than consuming this
+            // one - see SYS_WRITE's matching comment on DescriptorTable.get().
+            delete descriptor
         }
         SYS_MSYNC => {
             let proc = syscall_process()
@@ -698,6 +733,8 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 (descriptor.waitable as Kern.KernelEvent).set()
                 ctx.rax = EOK as u64
             }
+            // See SYS_WRITE's matching comment on DescriptorTable.get().
+            delete descriptor
         }
         SYS_RESET_EVENT => {
             let proc = syscall_process()
@@ -709,6 +746,8 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 (descriptor.waitable as Kern.KernelEvent).reset()
                 ctx.rax = EOK as u64
             }
+            // See SYS_WRITE's matching comment on DescriptorTable.get().
+            delete descriptor
         }
         SYS_WAIT_HANDLE => {
             let proc = syscall_process()
@@ -719,6 +758,8 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
             } else {
                 ctx.rax = descriptor.wait() as u64
             }
+            // See SYS_WRITE's matching comment on DescriptorTable.get().
+            delete descriptor
         }
         SYS_OPEN_PROCESS => {
             let proc = syscall_process()
@@ -777,6 +818,8 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                     ctx.rax = EINVAL as u64
                 }
             }
+            // See SYS_WRITE's matching comment on DescriptorTable.get().
+            delete descriptor
         }
         SYS_READ_ASYNC => {
             let proc = syscall_process()
@@ -793,12 +836,18 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                     ctx.rax = ENOENT as u64
                 } else {
                     let iocp = iocp_descriptor.waitable as Kern.IoCompletionPort
+                    // spawn_async_io's AsyncIoRequest takes its own
+                    // independent retain on descriptor (field-assignment
+                    // semantics, kern/asyncio.llpl) rather than consuming
+                    // this one - see SYS_WRITE's matching comment.
                     let ok = Kern.spawn_async_io(proc, descriptor, params.buf as uint, params.size as uint,
                         false, iocp, params.key as uint, params.context as uint)
                     ctx.rax = EOK as u64 if ok
                     if !ok { ctx.rax = EINVAL as u64 }
                 }
+                delete iocp_descriptor
             }
+            delete descriptor
         }
         SYS_WRITE_ASYNC => {
             let proc = syscall_process()
@@ -815,12 +864,15 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                     ctx.rax = ENOENT as u64
                 } else {
                     let iocp = iocp_descriptor.waitable as Kern.IoCompletionPort
+                    // See SYS_READ_ASYNC's matching comment.
                     let ok = Kern.spawn_async_io(proc, descriptor, params.buf as uint, params.size as uint,
                         true, iocp, params.key as uint, params.context as uint)
                     ctx.rax = EOK as u64 if ok
                     if !ok { ctx.rax = EINVAL as u64 }
                 }
+                delete iocp_descriptor
             }
+            delete descriptor
         }
         SYS_CREATE_MUTEX => {
             let proc = syscall_process()
@@ -843,6 +895,8 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 ctx.rax = EOK as u64 if released
                 if !released { ctx.rax = EINVAL as u64 }
             }
+            // See SYS_WRITE's matching comment on DescriptorTable.get().
+            delete descriptor
         }
         SYS_CREATE_SEMAPHORE => {
             let proc = syscall_process()
@@ -864,6 +918,8 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 ctx.rax = EOK as u64 if posted
                 if !posted { ctx.rax = EINVAL as u64 }
             }
+            // See SYS_WRITE's matching comment on DescriptorTable.get().
+            delete descriptor
         }
         SYS_GET_COMMAND_LINE => {
             let proc = syscall_process()
@@ -880,6 +936,89 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 } else {
                     ctx.rax = copy_len as u64
                 }
+            }
+        }
+        SYS_PROCESS_SNAPSHOT => {
+            let capacity = ctx.rsi as uint
+            if capacity == 0 || capacity > 256 {
+                ctx.rax = EINVAL as u64
+            } else {
+                let entries = MM.malloc<Kern.ProcessInfo>(capacity * sizeof(Kern.ProcessInfo))
+                let count = Kern.snapshot_processes(entries, capacity)
+                if !copy_to_user(ctx.rdi, entries as void*, count * sizeof(Kern.ProcessInfo)) {
+                    ctx.rax = EINVAL as u64
+                } else {
+                    ctx.rax = count as u64
+                }
+                MM.free(entries)
+            }
+        }
+        SYS_LIST_DIRECTORY => {
+            let path = copy_user_string(ctx.rdi)
+            let capacity = ctx.rdx as uint
+            if path == null || capacity == 0 || capacity > USER_IO_MAX {
+                ctx.rax = EINVAL as u64
+            } else {
+                let listing = VFS.list(path)
+                if listing == null {
+                    ctx.rax = ENOENT as u64
+                } else {
+                    let copy_len = listing.byte_len()
+                    if copy_len >= capacity { copy_len = capacity - 1 }
+                    let buffer = MM.malloc<char>(copy_len + 1)
+                    if copy_len > 0 {
+                        memcpy(buffer as void*, listing.c_str() as void*, copy_len)
+                    }
+                    buffer[copy_len] = 0
+                    if !copy_to_user(ctx.rsi, buffer as void*, copy_len + 1) {
+                        ctx.rax = EINVAL as u64
+                    } else {
+                        ctx.rax = copy_len as u64
+                    }
+                    MM.free(buffer)
+                }
+            }
+        }
+        SYS_CHDIR => {
+            let thread = Kern.current_thread()
+            let path = copy_user_string(ctx.rdi)
+            if thread == null || path == null {
+                ctx.rax = EINVAL as u64
+            } else {
+                let result: int = EOK
+                try {
+                    let canonical = VFS.canonicalize(path)
+                    let node = VFS.stat(canonical)
+                    if !node.is_dir() {
+                        result = VFS.ENOTDIR
+                    } else {
+                        if thread.curdir != null { delete thread.curdir }
+                        thread.curdir = canonical
+                    }
+                } catch (e: int) {
+                    result = e
+                }
+                ctx.rax = result as u64
+            }
+        }
+        SYS_GETCWD => {
+            let thread = Kern.current_thread()
+            let cwd: String = null
+            if thread != null { cwd = thread.curdir }
+            let capacity = ctx.rsi as uint
+            let required: uint = 2
+            if cwd != null { required = cwd.byte_len() + 1 }
+            if capacity < required {
+                ctx.rax = EINVAL as u64
+            } else if cwd == null {
+                let root: char[2] = ['/', 0]
+                let copied = copy_to_user(ctx.rdi, &root[0] as void*, 2)
+                ctx.rax = 1 if copied
+                if !copied { ctx.rax = EINVAL as u64 }
+            } else if copy_to_user(ctx.rdi, cwd.c_str() as void*, required) {
+                ctx.rax = (required - 1) as u64
+            } else {
+                ctx.rax = EINVAL as u64
             }
         }
         _ => {

@@ -1,0 +1,29 @@
+func main() -> int {
+    let counter: AtomicI64 = new AtomicI64(0)
+    let local: TaskLocalI64 = new TaskLocalI64(3)
+
+    let first: Thread<i64> = new Thread<i64>(func[counter, local]() -> i64 {
+        local.set(11)
+        thread_yield()
+        let before = counter.fetch_add(10)
+        return before + local.get()
+    })
+
+    let second: Thread<i64> = new Thread<i64>(func[counter, local]() -> i64 {
+        local.set(21)
+        thread_sleep_ms(1)
+        let before = counter.fetch_add(10)
+        return before + local.get()
+    })
+
+    let a = first.join()
+    let b = second.join()
+    let total = a + b + counter.load() + local.get()
+    let ignored = puts("\(total)")
+
+    delete first
+    delete second
+    delete counter
+    delete local
+    return 0
+}

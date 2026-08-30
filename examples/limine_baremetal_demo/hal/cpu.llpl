@@ -57,6 +57,42 @@ namespace HAL {
         asm("mov %0, %%cr3" : : "r"(cr3) : "memory")
     }
 
+    func read_cr0() -> u64 {
+        let cr0: u64
+        asm("mov %%cr0, %0" : "=r"(cr0))
+        cr0
+    }
+
+    func write_cr0(cr0: u64) {
+        asm("mov %0, %%cr0" : : "r"(cr0) : "memory")
+    }
+
+    func read_cr4() -> u64 {
+        let cr4: u64
+        asm("mov %%cr4, %0" : "=r"(cr4))
+        cr4
+    }
+
+    func write_cr4(cr4: u64) {
+        asm("mov %0, %%cr4" : : "r"(cr4) : "memory")
+    }
+
+    func wbinvd() {
+        asm("wbinvd" : : : "memory")
+    }
+
+    // General form of cpu_id()/cpuid_num() below, which only ever return
+    // ebx from leaf 1 - MTRR setup (hal/mtrr.llpl) needs edx from leaf 1
+    // and eax from leaf 0x80000008.
+    func cpuid(leaf: u32) -> (u32, u32, u32, u32) {
+        let eax = leaf
+        let ebx: u32
+        let ecx: u32
+        let edx: u32
+        asm("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx))
+        (eax, ebx, ecx, edx)
+    }
+
     func write_msr(msr: u32, value: uint) {
         let low = value as u32
         let high = (value >> 32) as u32

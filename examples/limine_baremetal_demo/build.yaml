@@ -67,6 +67,17 @@ link:
   ldflags: [-m, elf_x86_64, -nostdlib]
   objects: [build/kernel.o, build/runtime.o, build/isr.o]
 
+static_libraries:
+  - name: libsys
+    c_sources:
+      - path: user/lib/syscall.c
+        output: build/libsys_syscall.o
+        cflags: [-mcmodel=small, -fno-pie]
+      - path: user/lib/stdio.c
+        output: build/libsys_stdio.o
+        cflags: [-mcmodel=small, -fno-pie]
+    output: build/libsys.a
+
 extra_links:
   - name: init
     c_sources:
@@ -77,7 +88,7 @@ extra_links:
       output: build/init.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/init.o]
+      objects: [build/init.o, build/libsys.a]
   - name: child
     c_sources:
       - path: user/child.c
@@ -87,7 +98,7 @@ extra_links:
       output: build/child.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/child.o]
+      objects: [build/child.o, build/libsys.a]
   - name: execer
     c_sources:
       - path: user/execer.c
@@ -97,7 +108,7 @@ extra_links:
       output: build/execer.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/execer.o]
+      objects: [build/execer.o, build/libsys.a]
   - name: fdinherit
     c_sources:
       - path: user/fdinherit.c
@@ -107,7 +118,7 @@ extra_links:
       output: build/fdinherit.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/fdinherit.o]
+      objects: [build/fdinherit.o, build/libsys.a]
   - name: fdcheck
     c_sources:
       - path: user/fdcheck.c
@@ -117,7 +128,7 @@ extra_links:
       output: build/fdcheck.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/fdcheck.o]
+      objects: [build/fdcheck.o, build/libsys.a]
   - name: kbd_echo
     c_sources:
       - path: user/kbd_echo.c
@@ -127,7 +138,27 @@ extra_links:
       output: build/kbd_echo.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/kbd_echo.o]
+      objects: [build/kbd_echo.o, build/libsys.a]
+  - name: mouse_demo
+    c_sources:
+      - path: user/mouse_demo.c
+        output: build/mouse_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/mouse_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/mouse_demo.o, build/libsys.a]
+  - name: shell
+    c_sources:
+      - path: user/shell.c
+        output: build/shell.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/shell.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/shell.o, build/libsys.a]
   - name: shm_writer
     c_sources:
       - path: user/shm_writer.c
@@ -137,7 +168,7 @@ extra_links:
       output: build/shm_writer.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/shm_writer.o]
+      objects: [build/shm_writer.o, build/libsys.a]
   - name: shm_reader
     c_sources:
       - path: user/shm_reader.c
@@ -147,7 +178,7 @@ extra_links:
       output: build/shm_reader.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/shm_reader.o]
+      objects: [build/shm_reader.o, build/libsys.a]
   - name: apc_target
     c_sources:
       - path: user/apc_target.c
@@ -157,7 +188,7 @@ extra_links:
       output: build/apc_target.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/apc_target.o]
+      objects: [build/apc_target.o, build/libsys.a]
   - name: apc_sender
     c_sources:
       - path: user/apc_sender.c
@@ -167,7 +198,7 @@ extra_links:
       output: build/apc_sender.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/apc_sender.o]
+      objects: [build/apc_sender.o, build/libsys.a]
   - name: seh_demo
     c_sources:
       - path: user/seh_demo.c
@@ -177,7 +208,7 @@ extra_links:
       output: build/seh_demo.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/seh_demo.o]
+      objects: [build/seh_demo.o, build/libsys.a]
   - name: wait_target
     c_sources:
       - path: user/wait_target.c
@@ -187,7 +218,7 @@ extra_links:
       output: build/wait_target.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/wait_target.o]
+      objects: [build/wait_target.o, build/libsys.a]
   - name: wait_demo
     c_sources:
       - path: user/wait_demo.c
@@ -197,7 +228,7 @@ extra_links:
       output: build/wait_demo.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/wait_demo.o]
+      objects: [build/wait_demo.o, build/libsys.a]
   - name: iocp_demo
     c_sources:
       - path: user/iocp_demo.c
@@ -207,7 +238,7 @@ extra_links:
       output: build/iocp_demo.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/iocp_demo.o]
+      objects: [build/iocp_demo.o, build/libsys.a]
   - name: sync_handle_demo
     c_sources:
       - path: user/sync_handle_demo.c
@@ -217,7 +248,47 @@ extra_links:
       output: build/sync_handle_demo.elf
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
-      objects: [build/sync_handle_demo.o]
+      objects: [build/sync_handle_demo.o, build/libsys.a]
+  - name: pipe_writer_demo
+    c_sources:
+      - path: user/pipe_writer_demo.c
+        output: build/pipe_writer_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/pipe_writer_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/pipe_writer_demo.o, build/libsys.a]
+  - name: pipe_reader_demo
+    c_sources:
+      - path: user/pipe_reader_demo.c
+        output: build/pipe_reader_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/pipe_reader_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/pipe_reader_demo.o, build/libsys.a]
+  - name: pipe_pipeline_demo
+    c_sources:
+      - path: user/pipe_pipeline_demo.c
+        output: build/pipe_pipeline_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/pipe_pipeline_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/pipe_pipeline_demo.o, build/libsys.a]
+  - name: pipe_simple_demo
+    c_sources:
+      - path: user/pipe_simple_demo.c
+        output: build/pipe_simple_demo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/pipe_simple_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/pipe_simple_demo.o, build/libsys.a]
 
 package:
   output: kernel.iso
@@ -248,6 +319,8 @@ package:
     - copy: {from: build/fdinherit.elf, to: initrd/bin/fdinherit}
     - copy: {from: build/fdcheck.elf, to: initrd/bin/fdcheck}
     - copy: {from: build/kbd_echo.elf, to: initrd/bin/kbd_echo}
+    - copy: {from: build/mouse_demo.elf, to: initrd/bin/mouse_demo}
+    - copy: {from: build/shell.elf, to: initrd/bin/sh}
     - copy: {from: build/shm_writer.elf, to: initrd/bin/shm_writer}
     - copy: {from: build/shm_reader.elf, to: initrd/bin/shm_reader}
     - copy: {from: build/apc_target.elf, to: initrd/bin/apc_target}
@@ -257,6 +330,10 @@ package:
     - copy: {from: build/wait_demo.elf, to: initrd/bin/wait_demo}
     - copy: {from: build/iocp_demo.elf, to: initrd/bin/iocp_demo}
     - copy: {from: build/sync_handle_demo.elf, to: initrd/bin/sync_handle_demo}
+    - copy: {from: build/pipe_writer_demo.elf, to: initrd/bin/pipe_writer_demo}
+    - copy: {from: build/pipe_reader_demo.elf, to: initrd/bin/pipe_reader_demo}
+    - copy: {from: build/pipe_pipeline_demo.elf, to: initrd/bin/pipe_pipeline_demo}
+    - copy: {from: build/pipe_simple_demo.elf, to: initrd/bin/pipe_simple_demo}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}
@@ -269,4 +346,4 @@ package:
     - run: "${LIMINE_DIR}/limine bios-install kernel.iso"
 
 run:
-  args: ["-cdrom", "kernel.iso", "-serial", "stdio", "-m", "256"]
+  args: ["-cdrom", "kernel.iso", "-serial", "stdio", "-m", "256", "-accel", "kvm"]

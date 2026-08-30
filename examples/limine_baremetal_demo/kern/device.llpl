@@ -26,6 +26,34 @@ namespace Kern {
         }
     }
 
+    // Backs fd 1/2 (stdout/stderr) for every process (installed once on
+    // kproc.fds by install_console_fds, kern/process.llpl - every other
+    // process inherits it via clone_for_exec). write() does exactly what
+    // SYS_WRITE's handler (hal/syscall.llpl) used to do unconditionally -
+    // now SYS_WRITE routes through fd 1 instead, so dup2ing a pipe/file
+    // onto fd 1 before a spawn actually redirects a program's output.
+    class ConsoleDevice : Device {
+        device_name: String
+
+        constructor() {
+            // A bare string literal isn't a real String object (no
+            // vtable/refcount header) - construct one here, once, same
+            // fix KeyboardDevice's constructor already needed (kern/
+            // keyboard.llpl) for find_device's name() == name comparison.
+            self.device_name = new String("console")
+        }
+
+        func name() -> String {
+            return self.device_name
+        }
+
+        func write(buf: char*, size: uint) -> int {
+            HAL.Serial.write(buf)
+            Terminal.write(buf)
+            return size as int
+        }
+    }
+
     func device_init() {
         devices = new DoublyLinkedList<Device>()
     }

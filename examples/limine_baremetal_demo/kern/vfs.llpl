@@ -834,10 +834,15 @@ namespace VFS {
             } else if len == 1 && path.byte_at(path_pos - 1) == '.' {
                 pos -= 2
             } else if len == 2 && path.byte_at(path_pos - 2) == '.' && path.byte_at(path_pos - 1) == '.' {
-                pos -= 4
-                throw EINVAL if pos < 0
-                while buffer[pos] != '/' {
-                    pos--
+                // Clamp parent traversal at the VFS root, as normal chdir
+                // semantics require for `cd ..` while already at `/`.
+                if pos <= 3 {
+                    pos = 0
+                } else {
+                    pos -= 4
+                    while buffer[pos] != '/' {
+                        pos--
+                    }
                 }
             }
         }

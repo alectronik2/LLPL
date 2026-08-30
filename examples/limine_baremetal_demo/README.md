@@ -22,6 +22,8 @@ early operating-system subsystems.
 - an ELF64 loader and a ring 3 `/bin/init` process using `syscall`/`sysret`,
   checked user-memory copies, anonymous `mmap`, file descriptors, serial
   output, and thread exit
+- an interactive ring 3 shell using the keyboard device and serial console, with
+  built-ins and synchronous launch/wait of programs from `/bin`
 - reference-counted kernel objects and handles
 - an in-memory VFS populated from a tar initrd supplied as a Limine module
 - framebuffer memory-map visualization and serial memory diagnostics
@@ -115,6 +117,15 @@ map bar. Its colors are:
 - yellow: ACPI NVS and kernel/modules
 - red: bad memory
 - pink: framebuffer memory
+
+After boot, click the QEMU display to direct keyboard input to the guest and
+use the `$` prompt shown in the serial terminal. The shell supports
+`help`, `echo`, `cat`, `ls`, `cd`, `clear`, `pid`, `ps`, and `exit`, with ANSI-colored
+prompts and command output; any other command is resolved
+under `/bin` and run as a child process. For example, `cat /etc/motd` reads a
+file from the initrd and `child` runs `/bin/child`.
+The line editor supports insertion at the cursor, Backspace/Delete,
+Left/Right, Home/End, and Up/Down command history.
 
 Serial output includes initialization diagnostics, initrd/VFS checks, kernel
 thread activity, and `/bin/init` output. The init program prints a greeting,

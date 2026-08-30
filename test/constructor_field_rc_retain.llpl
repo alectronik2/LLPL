@@ -1,0 +1,39 @@
+extern func puts(s: char*) -> i64
+
+func print_int(label: char*, value: i64) {
+    let buf: char[64]
+    ksnprintf(buf as char*, 64, "%s = %d", label, value)
+    puts(buf as char*)
+}
+
+class Box {
+    let value: i64
+
+    constructor(value: i64) {
+        self.value = value
+    }
+}
+
+class Holder {
+    let box: Box
+
+    constructor(box: Box) {
+        self.box = box
+    }
+
+    func value() -> i64 {
+        return self.box.value
+    }
+}
+
+func make_holder() -> Holder {
+    let box = new Box(77)
+    let holder = new Holder(box)
+    return holder
+}
+
+func main() -> i64 {
+    let holder = make_holder()
+    print_int("held", holder.value())
+    return 0
+}

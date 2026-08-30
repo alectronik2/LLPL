@@ -251,6 +251,25 @@ func kernel_main() {
     assert( hhdm != null, "No Limine HHDM response" )
     assert( fb != null, "No Limine framebuffer response" )
 
+    // Mark the framebuffer's physical range Write-Combining before
+    // anything (including Terminal.init below) ever writes to it - the
+    // range must not already be cached under a conflicting type when the
+    // MTRR is programmed. fb.address may already be HHDM/virtual, so the
+    // physical base/length come from the memmap's own Framebuffer-typed
+    // entry instead (memmap entries are always physical).
+    {
+        let entries = memmap.entries as u64*
+        let i = 0
+        while i < memmap.entry_count {
+            let entry = entries[i] as LimineMemmapEntry*
+            if entry.type == MemMapType.Framebuffer {
+                HAL.MTRR.set_write_combining(entry.base, entry.length)
+                break
+            }
+            i = i + 1
+        }
+    }
+
     HAL.GDT.init()
     HAL.IDT.init()
     HAL.Syscall.init()
@@ -270,14 +289,31 @@ func kernel_main() {
     Kern.keyboard_init()
 
     Terminal.init( fb )
+    // mouse_init() must run after Terminal.init() - it reads
+    // Terminal.width()/height() to place the initial cursor and window
+    // position, which return 0 until active_console is set.
+    let mouse_ok = Kern.mouse_init()
     "Welcome to DimensionOS!\n" |> Terminal.write
+    // Terminal.write only draws to the framebuffer (unlike ConsoleDevice's
+    // write(), used by user-mode SYS_WRITE, which also goes to serial) -
+    // this print also needs to reach serial directly to be visible in a
+    // headless (-display none) boot log for automated verification.
+    if mouse_ok {
+        "Mouse init self-test: PASS\n" |> Terminal.write
+        "Mouse init self-test: PASS\n" |> HAL.Serial.write
+    } else {
+        "Mouse init self-test: FAIL\n" |> Terminal.write
+        "Mouse init self-test: FAIL\n" |> HAL.Serial.write
+    }
+
+    Kern.install_console_fds()
 
     VFS.init(limine_get_modules())
     "Spawning init <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/init")
     "Init spawned <green>ok</>\n" |> Terminal.write
-    Kern.spawn_elf("/bin/kbd_echo")
-    "kbd_echo spawned <green>ok</>\n" |> Terminal.write
+    Kern.spawn_elf("/bin/sh")
+    "User shell spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_shm_demo()
     "shm demo spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/apc_target")
@@ -292,6 +328,20 @@ func kernel_main() {
     "iocp demo spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/sync_handle_demo")
     "sync handle demo spawned <green>ok</>\n" |> Terminal.write
+    // pipe_pipeline_demo/pipe_simple_demo (user/*.c) are diagnostic repros
+    // for the pipe write-end refcounting investigation - not auto-spawned
+    // since a reader blocked on EOF still hangs in some scenarios even
+    // after the confirmed leak fix in hal/syscall.llpl (DescriptorTable.get()
+    // returning a retained reference that went unreleased at 14 call
+    // sites). Root cause of the remaining hang wasn't fully pinned down;
+    // build/run manually to continue the investigation.
+    // mouse_demo (user/mouse_demo.c) prints dx/dy/buttons on every packet
+    // via SYS_WRITE, which now also renders to the framebuffer console -
+    // that constant scrolling text painted over the cursor/window sprites
+    // drawn directly by kern/mouse.llpl. Left available to build and run
+    // manually (e.g. from the shell) but no longer auto-spawned, since
+    // the cursor + draggable window are now the visual proof mouse input
+    // works.
 
     //demo_hhdm( memmap, hhdm )
 

@@ -1,0 +1,101 @@
+// Example: Struct JSON Serialization
+//
+// Demonstrates automatic serialization of structs to/from JSON
+// using runtime reflection metadata.
+
+import std.json.struct_json
+import std.json.json_parser
+
+using namespace std.json
+
+@reflect
+struct Point {
+    let x: i64
+    let y: i64
+}
+
+@reflect
+struct Config {
+    let width: i64
+    let height: i64
+    let title: string
+    let fullscreen: bool
+    let fps: i64
+}
+
+@reflect
+struct Person {
+    let name: string
+    let age: i64
+    let score: float
+    let active: bool
+}
+
+func print_buf(buf: char*) {
+    puts(buf)
+}
+
+func main() -> i64 {
+    let buf: char[256]
+
+    // ── Example 1: Simple struct ──
+    let p: Point = Point { x: 42, y: 100 }
+    let json_p: String = struct_to_json("Point", &p as char*)
+    puts("Point → JSON:")
+    puts(json_p.c_str())
+    puts("")
+
+    // Round-trip: JSON back to struct
+    let p2: Point = Point { x: 0, y: 0 }
+    json_to_struct("Point", json_p, &p2 as char*)
+    puts("Point round-trip:")
+    ksnprintf(buf, 256, "  x=%d y=%d", p2.x, p2.y)
+    puts(buf)
+    puts("")
+
+    // ── Example 2: Mixed types ──
+    let cfg: Config = Config {
+        width: 1920,
+        height: 1080,
+        title: "My App",
+        fullscreen: true,
+        fps: 60
+    }
+    let json_cfg: String = struct_to_json("Config", &cfg as char*)
+    puts("Config → JSON:")
+    puts(json_cfg.c_str())
+    puts("")
+
+    // Pretty-printed
+    let pretty: String = pretty_json(json_cfg)
+    puts("Config → Pretty JSON:")
+    puts(pretty.c_str())
+    puts("")
+
+    // ── Example 3: Deserialize from JSON string ──
+    let json_str: String = new String("{\"name\":\"Alice\",\"age\":30,\"score\":9.5,\"active\":true}")
+    let person: Person = Person { name: "", age: 0, score: 0.0, active: false }
+    let ok: bool = json_to_struct("Person", json_str, &person as char*)
+    puts("JSON → Person:")
+    ksnprintf(buf, 256, "  name=%s age=%d score=%d active=%d",
+        person.name, person.age, person.score as i64, person.active as i64)
+    puts(buf)
+
+    // Serialize it back
+    let json_out: String = struct_to_json("Person", &person as char*)
+    puts("Person → JSON (round-trip):")
+    puts(json_out.c_str())
+    puts("")
+
+    // ── Example 4: Parse real JSON into struct ──
+    let api_json: String = new String("{\"x\":-5,\"y\":12}")
+    let p3: Point = Point { x: 0, y: 0 }
+    json_to_struct("Point", api_json, &p3 as char*)
+    puts("API JSON → Point:")
+    ksnprintf(buf, 256, "  x=%d y=%d", p3.x, p3.y)
+    puts(buf)
+    puts("")
+
+    puts("Done!")
+    return 0
+}

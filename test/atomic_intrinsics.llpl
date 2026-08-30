@@ -1,0 +1,41 @@
+func main() -> int {
+    let a8: i8 = 1
+    let old8 = atomic_fetch_add(&a8, 2)
+    let exp8: i8 = 3
+    let swapped8 = atomic_compare_exchange(&a8, &exp8, 10)
+    atomic_store(&a8, 5)
+    let loaded8 = atomic_load(&a8)
+    let ex8 = atomic_exchange(&a8, 9)
+
+    let a16: i16 = 100
+    let old16 = atomic_fetch_add(&a16, 5)
+    let loaded16 = atomic_load(&a16)
+
+    let a32: u32 = 1000
+    let old32 = atomic_fetch_add(&a32, 50)
+    let loaded32 = atomic_load(&a32)
+
+    let flag: bool = false
+    atomic_store(&flag, true)
+    let loaded_flag = atomic_load(&flag)
+
+    let boxed: Atomic<i32> = new Atomic<i32>(7)
+    let boxed_old = boxed.fetch_add(3)
+    let boxed_loaded = boxed.load()
+
+    let total = (old8 as i64) + (loaded8 as i64) + (ex8 as i64)
+        + (old16 as i64) + (loaded16 as i64)
+        + (old32 as i64) + (loaded32 as i64)
+        + (boxed_old as i64) + (boxed_loaded as i64)
+
+    if swapped8 {
+        total = total + 1000
+    }
+    if loaded_flag {
+        total = total + 2000
+    }
+
+    let ignored = puts("\(total)")
+    delete boxed
+    return 0
+}

@@ -47,7 +47,18 @@ func something( k: Klass ) {
     puts("Something called")
 }
 
+func fun( k: Klass ) {
+    delete k
+}
+
 func main() {
+    let k = new Klass()
+    puts("K constructed\n")
+    fun(k)
+    puts("after fun()")
+}
+
+func old() {
     let x = 128
 
     match x {
@@ -124,6 +135,8 @@ func main() {
 
     let f: func() = some_function
     f()
+
+
 }
 
 func some_function() {
