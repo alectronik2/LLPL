@@ -190,6 +190,26 @@ func isr_handler_inner( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
         return ctx
     }
 
+    // Second, parallel IRQ-dispatch range for IOAPIC-routed interrupts
+    // (hal/apic.llpl) - kept entirely separate from the PIC range above
+    // rather than merged into it, so existing PIC-routed devices
+    // (keyboard/mouse/PIT) are untouched. Acknowledged via the LAPIC's own
+    // EOI register instead of HAL.PIC.eoi() - this range is never reached
+    // from a PIC-delivered interrupt, so there's no PIC EOI to send here.
+    if ctx.vector >= 0x50 && ctx.vector < 0x60 {
+        llpl_irq_enter()
+
+        let intr = HAL.interrupts[ctx.vector]
+        while intr != null {
+            intr.handler( intr.arg )
+            intr = intr.next
+        }
+
+        HAL.LAPIC.eoi()
+        llpl_irq_exit()
+        return ctx
+    }
+
     match ctx.vector {
         0  => hs.write( "\x1b[1;31mDIVIDE BY ZERO:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 
         6  => hs.write( "\x1b[1;31mINVALID OPCODE:\x1b[0m rip=\(ctx.rip:hex) rsp=\(ctx.rsp:hex)\n" ) 

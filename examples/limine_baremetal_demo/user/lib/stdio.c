@@ -10,6 +10,10 @@ void write_n(const char *s, u64 n) {
     call2(SYS_WRITE, n, (u64)s);
 }
 
+void write_c(char c) {
+    call2(SYS_WRITE, 1, (u64)&c);
+}
+
 void write_s(const char *s) {
     write_n(s, str_len(s));
 }

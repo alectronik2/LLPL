@@ -1,0 +1,91 @@
+// Legacy PCI configuration-space access (port 0xCF8/0xCFC) and a brute-
+// force bus/device/function enumerator. Foundation for any future PCI
+// device driver, not just AHCI - kept purely at the "raw hardware access"
+// level (no policy, no driver-specific logic), matching this codebase's
+// hal/ convention (see e.g. hal/pic.llpl, hal/pit.llpl).
+
+namespace HAL {
+    namespace PCI {
+        const CONFIG_ADDRESS = 0xCF8
+        const CONFIG_DATA = 0xCFC
+
+        struct PciDevice {
+            bus: uint
+            device: uint
+            function: uint
+            vendor_id: u16
+            device_id: u16
+            class_code: u8
+            subclass: u8
+            prog_if: u8
+            bar5: u64
+            interrupt_line: u8
+        }
+
+        func read_config32(bus: uint, device: uint, function: uint, offset: uint) -> u32 {
+            let address = (1 << 31) | (bus << 16) | (device << 11) | (function << 8) |
+                (offset & 0xFC)
+            HAL.outl(CONFIG_ADDRESS, address as u32)
+            return HAL.inl(CONFIG_DATA)
+        }
+
+        func write_config32(bus: uint, device: uint, function: uint, offset: uint, value: u32) {
+            let address = (1 << 31) | (bus << 16) | (device << 11) | (function << 8) |
+                (offset & 0xFC)
+            HAL.outl(CONFIG_ADDRESS, address as u32)
+            HAL.outl(CONFIG_DATA, value)
+        }
+
+        func vendor_id(bus: uint, device: uint, function: uint) -> u16 {
+            return (read_config32(bus, device, function, 0x00) & 0xFFFF) as u16
+        }
+
+        // Reads one PCI function's identifying header fields into a
+        // PciDevice record - callers must have already confirmed the
+        // function is present (vendor_id != 0xFFFF).
+        func probe_function(bus: uint, device: uint, function: uint) -> PciDevice {
+            let ids = read_config32(bus, device, function, 0x00)
+            let class_reg = read_config32(bus, device, function, 0x08)
+            let bar5 = read_config32(bus, device, function, 0x24) & ~0xF as u32
+            let irq = read_config32(bus, device, function, 0x3C)
+
+            let dev: PciDevice
+            dev.bus = bus
+            dev.device = device
+            dev.function = function
+            dev.vendor_id = (ids & 0xFFFF) as u16
+            dev.device_id = ((ids >> 16) & 0xFFFF) as u16
+            dev.prog_if = ((class_reg >> 8) & 0xFF) as u8
+            dev.subclass = ((class_reg >> 16) & 0xFF) as u8
+            dev.class_code = ((class_reg >> 24) & 0xFF) as u8
+            dev.bar5 = bar5 as u64
+            dev.interrupt_line = (irq & 0xFF) as u8
+            return dev
+        }
+
+        // Brute-force scan of every bus/device/function (256*32*8 config
+        // reads, all cheap port I/O) - simple and reliable over trusting
+        // header-type bit 7 (multi-function) bookkeeping, matching this
+        // codebase's general preference for straightforward over clever
+        // (see e.g. allLlplSources' own "conservative over-approximation"
+        // comment, tools/llplbuild/source/pipeline.d).
+        func find_device(class_code: u8, subclass: u8, prog_if: u8) -> (bool, PciDevice) {
+            for let bus: uint = 0; bus < 256; bus++ {
+                for let device: uint = 0; device < 32; device++ {
+                    for let function: uint = 0; function < 8; function++ {
+                        if vendor_id(bus, device, function) == 0xFFFF {
+                            continue
+                        }
+                        let dev = probe_function(bus, device, function)
+                        if dev.class_code == class_code && dev.subclass == subclass &&
+                            dev.prog_if == prog_if {
+                            return (true, dev)
+                        }
+                    }
+                }
+            }
+            let empty: PciDevice
+            return (false, empty)
+        }
+    }
+}

@@ -1,0 +1,61 @@
+import hal
+import lib
+
+import std.collections.linked_list
+
+using namespace std.collections
+
+namespace Kern {
+    let block_devices: DoublyLinkedList<BlockDevice>
+
+    // Base class for LBA/sector-addressed storage drivers - a sibling of
+    // Kern.Device (kern/device.llpl), not a subclass of it, for the same
+    // reason VFS.Filesystem (kern/vfs.llpl) already isn't: block/file
+    // content isn't a "live, non-file-backed stream" the way a keyboard or
+    // console is (see Kern.Device's own comment). Read-only for now - no
+    // write_sectors yet.
+    class BlockDevice : Object {
+        virtual func name() -> String {
+            return null
+        }
+
+        virtual func sector_size() -> u64 {
+            return 512
+        }
+
+        virtual func sector_count() -> u64 {
+            return 0
+        }
+
+        virtual func read_sectors(lba: u64, count: u64, buf: void*) -> bool {
+            return false
+        }
+    }
+
+    func blockdevice_init() {
+        block_devices = new DoublyLinkedList<BlockDevice>()
+    }
+
+    func register_block_device(dev: BlockDevice) -> bool {
+        if dev == null {
+            return false
+        }
+        block_devices.push_back(dev)
+        return true
+    }
+
+    func find_block_device(name: String) -> BlockDevice {
+        if name == null {
+            return null
+        }
+        let node = block_devices.head
+        while node != null {
+            let dev = (*node).value
+            if dev != null && dev.name() == name {
+                return dev
+            }
+            node = (*node).next
+        }
+        return null
+    }
+}

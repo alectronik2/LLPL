@@ -68,8 +68,18 @@ u64 call4(u64 n, u64 a, u64 b, u64 c, u64 d);
 
 u64 str_len(const char *s);
 void write_n(const char *s, u64 n);
+void write_c(char c);
 void write_s(const char *s);
 void write_i64(i64 value);
 void write_u64(u64 value);
+
+void *malloc(u64 size);
+void free(void *ptr);
+void *calloc(u64 nmemb, u64 size);
+void *realloc(void *ptr, u64 size);
+
+void parse_args(void);
+u64 argc(void);
+char *arg_at(u64 i);
 
 #endif

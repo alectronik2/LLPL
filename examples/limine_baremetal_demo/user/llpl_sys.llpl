@@ -1,0 +1,184 @@
+// Shared syscall/runtime FFI surface for LLPL user-mode programs - the LLPL
+// side of user/lib/llpl_sys.h. Keep the two in sync: every extern here binds
+// to the matching C symbol in libsys.a, and every SYS_* value mirrors the
+// canonical table in hal/syscall.llpl.
+
+namespace Sys {
+    const SYS_WRITE = 1
+    const SYS_EXIT = 2
+    const SYS_MMAP = 3
+    const SYS_OPEN = 4
+    const SYS_FD_READ = 5
+    const SYS_FD_WRITE = 6
+    const SYS_CLOSE = 7
+    const SYS_SEEK = 8
+    const SYS_GETPID = 9
+    const SYS_MUNMAP = 10
+    const SYS_MMAP_FILE = 11
+    const SYS_MSYNC = 12
+    const SYS_SPAWN = 13
+    const SYS_EXEC = 14
+    const SYS_WAITPID = 15
+    const SYS_THREAD_CREATE = 16
+    const SYS_THREAD_EXIT = 17
+    const SYS_THREAD_JOIN = 18
+    const SYS_THREAD_DETACH = 19
+    const SYS_GET_TLS = 20
+    const SYS_PIPE = 21
+    const SYS_DUP = 22
+    const SYS_DUP2 = 23
+    const SYS_CLOEXEC = 24
+    const SYS_BRK = 25
+    const SYS_SBRK = 26
+    const SYS_SHM_CREATE = 27
+    const SYS_SHM_OPEN = 28
+    const SYS_SHM_UNLINK = 29
+    const SYS_TERMINATE = 30
+    const SYS_QUEUE_APC = 31
+    const SYS_APC_RETURN = 32
+    const SYS_GETTID = 33
+    const SYS_SET_EXCEPTION_HANDLER = 34
+    const SYS_EXCEPTION_RETURN = 35
+    const SYS_CREATE_EVENT = 36
+    const SYS_SET_EVENT = 37
+    const SYS_RESET_EVENT = 38
+    const SYS_WAIT_HANDLE = 39
+    const SYS_OPEN_PROCESS = 40
+    const SYS_OPEN_THREAD = 41
+    const SYS_CREATE_IOCP = 42
+    const SYS_GET_QUEUED_COMPLETION = 43
+    const SYS_READ_ASYNC = 44
+    const SYS_WRITE_ASYNC = 45
+    const SYS_CREATE_MUTEX = 46
+    const SYS_RELEASE_MUTEX = 47
+    const SYS_CREATE_SEMAPHORE = 48
+    const SYS_RELEASE_SEMAPHORE = 49
+    const SYS_GET_COMMAND_LINE = 50
+    const SYS_PROCESS_SNAPSHOT = 51
+    const SYS_LIST_DIRECTORY = 52
+    const SYS_CHDIR = 53
+    const SYS_GETCWD = 54
+
+    extern func call1(n: u64, a: u64) -> u64
+    extern func call2(n: u64, a: u64, b: u64) -> u64
+    extern func call3(n: u64, a: u64, b: u64, c: u64) -> u64
+    extern func call4(n: u64, a: u64, b: u64, c: u64, d: u64) -> u64
+
+    extern func write_s(s: string)
+    extern func write_n(s: string, n: u64)
+    extern func write_c(c: char)
+    extern func write_i64(value: i64)
+    extern func write_u64(value: u64)
+
+    extern func malloc(size: u64) -> void*
+    extern func free(ptr: void*)
+    extern func calloc(nmemb: u64, size: u64) -> void*
+    extern func realloc(ptr: void*, size: u64) -> void*
+
+    // Splits the raw SYS_GET_COMMAND_LINE string into argc/argv - call
+    // parse_args() once at startup before argc()/arg_at() are meaningful.
+    extern func parse_args()
+    extern func argc() -> u64
+    extern func arg_at(i: u64) -> string
+
+    func exit( status: int ) {
+        Sys.call2(Sys.SYS_EXIT, status, 0)
+    }
+
+    const O_READ = 1
+    const O_WRITE = 2
+    const O_CREATE = 4
+    const O_TRUNC = 8
+
+    func getpid() -> i64 {
+        return Sys.call2(Sys.SYS_GETPID, 0, 0) as i64
+    }
+
+    func gettid() -> i64 {
+        return Sys.call2(Sys.SYS_GETTID, 0, 0) as i64
+    }
+
+    func mmap(addr: u64, len: u64) -> i64 {
+        return Sys.call2(Sys.SYS_MMAP, addr, len) as i64
+    }
+
+    func munmap(addr: u64, len: u64) -> i64 {
+        return Sys.call2(Sys.SYS_MUNMAP, addr, len) as i64
+    }
+
+    func brk(addr: u64) -> i64 {
+        return Sys.call2(Sys.SYS_BRK, addr, 0) as i64
+    }
+
+    func sbrk(increment: i64) -> i64 {
+        return Sys.call2(Sys.SYS_SBRK, increment as u64, 0) as i64
+    }
+
+    func open(path: string, flags: u64) -> i64 {
+        return Sys.call2(Sys.SYS_OPEN, path as u64, flags) as i64
+    }
+
+    func close(fd: u64) -> i64 {
+        return Sys.call2(Sys.SYS_CLOSE, fd, 0) as i64
+    }
+
+    func read(fd: u64, buf: void*, size: u64) -> i64 {
+        return Sys.call3(Sys.SYS_FD_READ, fd, buf as u64, size) as i64
+    }
+
+    func write(fd: u64, buf: void*, size: u64) -> i64 {
+        return Sys.call3(Sys.SYS_FD_WRITE, fd, buf as u64, size) as i64
+    }
+
+    func seek(fd: u64, offset: u64, whence: u64) -> i64 {
+        return Sys.call3(Sys.SYS_SEEK, fd, offset, whence) as i64
+    }
+
+    func pipe(fds: void*) -> i64 {
+        return Sys.call1(Sys.SYS_PIPE, fds as u64) as i64
+    }
+
+    func dup(fd: u64) -> i64 {
+        return Sys.call2(Sys.SYS_DUP, fd, 0) as i64
+    }
+
+    func dup2(fd: u64, target: u64) -> i64 {
+        return Sys.call2(Sys.SYS_DUP2, fd, target) as i64
+    }
+
+    func set_cloexec(fd: u64, enabled: bool) -> i64 {
+        let flag: u64 = 0
+        if enabled { flag = 1 }
+        return Sys.call2(Sys.SYS_CLOEXEC, fd, flag) as i64
+    }
+
+    // `command_line` may be null - matches SYS_SPAWN/SYS_EXEC's own
+    // "0 means no args" convention (see hal/syscall.llpl).
+    func spawn(path: string, command_line: string) -> i64 {
+        return Sys.call2(Sys.SYS_SPAWN, path as u64, command_line as u64) as i64
+    }
+
+    func exec(path: string, command_line: string) -> i64 {
+        return Sys.call2(Sys.SYS_EXEC, path as u64, command_line as u64) as i64
+    }
+
+    func waitpid(pid: u64, status_out: u64*) -> i64 {
+        return Sys.call2(Sys.SYS_WAITPID, pid, status_out as u64) as i64
+    }
+
+    func thread_create(entry: void*, arg: u64, extra: u64) -> i64 {
+        return Sys.call3(Sys.SYS_THREAD_CREATE, entry as u64, arg, extra) as i64
+    }
+
+    func thread_exit(status: u64) {
+        Sys.call2(Sys.SYS_THREAD_EXIT, status, 0)
+    }
+
+    func thread_join(tid: u64, value_out: u64*) -> i64 {
+        return Sys.call2(Sys.SYS_THREAD_JOIN, tid, value_out as u64) as i64
+    }
+
+    func thread_detach(tid: u64) -> i64 {
+        return Sys.call2(Sys.SYS_THREAD_DETACH, tid, 0) as i64
+    }
+}

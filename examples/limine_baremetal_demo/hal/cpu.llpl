@@ -11,6 +11,16 @@ namespace HAL {
         value
     }
 
+    func outl(port: u64, value: u32) {
+        asm("outl %0, %w1" : : "a"(value), "Nd"(port))
+    }
+
+    func inl(port: u64) -> u32 {
+        let value: u32 = 0
+        asm("inl %w1, %0" : "=a"(value) : "Nd"(port))
+        value
+    }
+
     func halt() {
         asm("hlt")
     }

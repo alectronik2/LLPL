@@ -1,0 +1,365 @@
+import hal
+import mm
+import lib
+import kern
+
+namespace Kern {
+    // Outside the PIC's 32-47 range (hal/idt.llpl's second dispatch
+    // branch handles this) - never collides with keyboard/mouse/PIT.
+    const AHCI_VECTOR = 0x50
+    const MAX_AHCI_PORTS = 8
+
+    // No working time source during controller/port bring-up -
+    // kernel_main only enables interrupts at the very end, so PIT ticks
+    // haven't advanced yet at this point. Bounded iteration count instead,
+    // mirroring kern/mouse.llpl's own PS2_POLL_LIMIT for the exact same
+    // reason.
+    const AHCI_POLL_LIMIT = 100_000_000
+
+    let ahci_devices: AhciDevice[MAX_AHCI_PORTS]
+
+    class AhciDevice : BlockDevice {
+        hba:         HAL.AHCI.HbaRegs*
+        port_index:  uint
+        port:        HAL.AHCI.PortRegs*
+        clb_vaddr:   uint // command list, kernel-writable
+        table_vaddr: uint // this port's single command table (slot 0 only)
+        drive_sectors: u64
+        waiters:     WaitQueue
+        lock:        SpinLock
+        device_name: String
+
+        constructor(hba: HAL.AHCI.HbaRegs*, port_index: uint, port: HAL.AHCI.PortRegs*) {
+            self.hba = hba
+            self.port_index = port_index
+            self.port = port
+            self.clb_vaddr = 0
+            self.table_vaddr = 0
+            self.drive_sectors = 0
+            self.waiters = new WaitQueue()
+            self.device_name = new String("ahci\(port_index)")
+        }
+
+        func name() -> String {
+            return self.device_name
+        }
+
+        func sector_size() -> u64 {
+            return 512
+        }
+
+        func sector_count() -> u64 {
+            return self.drive_sectors
+        }
+
+        func read_sectors(lba: u64, count: u64, buf: void*) -> bool {
+            return ahci_issue_command(self, HAL.AHCI.ATA_CMD_READ_DMA_EXT,
+                lba, count, buf, count * 512, false)
+        }
+    }
+
+    func ahci_port_regs(hba: HAL.AHCI.HbaRegs*, port_index: uint) -> HAL.AHCI.PortRegs* {
+        let addr = (hba as uint) + HAL.AHCI.PORT_REGS_OFFSET +
+            port_index * HAL.AHCI.PORT_REGS_SIZE
+        return addr as HAL.AHCI.PortRegs*
+    }
+
+    // Builds the command FIS + PRDT for `command` and issues it on this
+    // device's single command slot (slot 0 - no command queueing in this
+    // driver). `use_polling` is true only during controller/port bring-up
+    // (IDENTIFY, before interrupts are globally enabled - see
+    // AHCI_POLL_LIMIT's own comment); everything after boot blocks the
+    // calling thread on `dev.waiters` instead, woken by ahci_irq_handler -
+    // exactly KeyboardDevice.read()'s own check-condition-and-register-
+    // under-the-same-lock pattern (kern/keyboard.llpl), avoiding the lost-
+    // wakeup race between issuing the command and registering as a waiter.
+    func ahci_issue_command(dev: AhciDevice, command: u8, lba: u64,
+            sector_count: u64, buf: void*, byte_size: u64, use_polling: bool) -> bool {
+        let busy_spins: u64 = 0
+        while (dev.port.tfd & 0x88) != 0 {
+            busy_spins++
+            return false if busy_spins >= AHCI_POLL_LIMIT
+        }
+
+        let pf = MM.v2pf(buf)
+        let buf_paddr = MM.pf2p(pf)
+
+        let table = dev.table_vaddr as HAL.AHCI.CommandTable*
+        for let i: u64 = 0; i < 64; i++ {
+            table.cfis[i] = 0 as u8
+        }
+
+        let fis = &table.cfis[0] as HAL.AHCI.FisRegH2D*
+        fis.fis_type = HAL.AHCI.FIS_TYPE_REG_H2D
+        fis.pm_and_c = HAL.AHCI.FIS_H2D_COMMAND_BIT as u8
+        fis.command = command
+        fis.device = 0x40
+        fis.lba0 = (lba & 0xFF) as u8
+        fis.lba1 = ((lba >> 8) & 0xFF) as u8
+        fis.lba2 = ((lba >> 16) & 0xFF) as u8
+        fis.lba3 = ((lba >> 24) & 0xFF) as u8
+        fis.lba4 = ((lba >> 32) & 0xFF) as u8
+        fis.lba5 = ((lba >> 40) & 0xFF) as u8
+        fis.countl = (sector_count & 0xFF) as u8
+        fis.counth = ((sector_count >> 8) & 0xFF) as u8
+
+        table.prdt[0].data_base = (buf_paddr & 0xFFFF_FFFF) as u32
+        table.prdt[0].data_baseu = ((buf_paddr >> 32) & 0xFFFF_FFFF) as u32
+        table.prdt[0].byte_count_and_flags = ((byte_size - 1) as u32) | HAL.AHCI.PRDT_IOC as u32
+
+        let hdr = dev.clb_vaddr as HAL.AHCI.CommandHeader*
+        hdr.flags = HAL.AHCI.CMDHDR_FIS_LEN_DWORDS as u16
+        hdr.prdtl = 1
+        hdr.prdbc = 0
+
+        dev.port.is_ = 0xFFFF_FFFF
+
+        if use_polling {
+            dev.port.ci = dev.port.ci | 1
+            let wait_spins: u64 = 0
+            while (dev.port.ci & 1) != 0 {
+                return false if (dev.port.is_ & HAL.AHCI.PXIS_TFES) != 0
+                wait_spins++
+                return false if wait_spins >= AHCI_POLL_LIMIT
+            }
+            return true
+        }
+
+        let prepared = false
+        holding dev.lock {
+            dev.port.ci = dev.port.ci | 1
+            prepared = prepare_block_current(dev.waiters)
+        }
+        return false if !prepared
+        scheduler_yield()
+
+        while (dev.port.ci & 1) != 0 {
+            if (dev.port.is_ & HAL.AHCI.PXIS_TFES) != 0 {
+                return false
+            }
+            let prepared2 = false
+            holding dev.lock {
+                if (dev.port.ci & 1) == 0 {
+                    return true
+                }
+                prepared2 = prepare_block_current(dev.waiters)
+            }
+            return false if !prepared2
+            scheduler_yield()
+        }
+        return true
+    }
+
+    // Split out of ahci_irq_handler's loop body - a `holding dev.lock { }`
+    // where `dev` is a loop-local variable (rather than a function
+    // parameter, as here) miscompiled: the lock-release call in the
+    // function's own exit-cleanup path referenced `dev` outside the
+    // scope it was declared in. `dev` as a parameter (matching
+    // ahci_issue_command's own working `holding dev.lock` usage) avoids
+    // the issue entirely.
+    func ahci_irq_wake_port(dev: AhciDevice) {
+        holding dev.lock {
+            dev.port.is_ = 0xFFFF_FFFF
+        }
+        wake_all(dev.waiters)
+    }
+
+    // Called from HAL.IDT's second dispatch branch (hal/idt.llpl) on the
+    // AHCI controller's routed vector. `arg` is the HbaRegs* passed at
+    // registration time (ahci_init).
+    func ahci_irq_handler(arg: void*) {
+        let hba = arg as HAL.AHCI.HbaRegs*
+        let is_bits = hba.is_
+        hba.is_ = is_bits
+
+        for let port_index: uint = 0; port_index < MAX_AHCI_PORTS; port_index++ {
+            if (is_bits & (1 << port_index)) == 0 {
+                continue
+            }
+            let dev = ahci_devices[port_index]
+            if dev == null {
+                continue
+            }
+            ahci_irq_wake_port(dev)
+        }
+    }
+
+    // Stops the port command engine (clears ST, waits for CR to drop) -
+    // needed before (re)programming PxCLB/PxFB, per the AHCI spec. A
+    // freshly-booted QEMU AHCI port is normally already stopped, but this
+    // is cheap and safe to do unconditionally.
+    func ahci_stop_port(port: HAL.AHCI.PortRegs*) -> bool {
+        port.cmd = port.cmd & ~HAL.AHCI.PXCMD_ST as u32
+        let spins: u64 = 0
+        while (port.cmd & HAL.AHCI.PXCMD_CR) != 0 {
+            spins++
+            return false if spins >= AHCI_POLL_LIMIT
+        }
+        return true
+    }
+
+    func ahci_start_port(port: HAL.AHCI.PortRegs*) -> bool {
+        let spins: u64 = 0
+        while (port.cmd & HAL.AHCI.PXCMD_CR) != 0 {
+            spins++
+            return false if spins >= AHCI_POLL_LIMIT
+        }
+        port.cmd = port.cmd | HAL.AHCI.PXCMD_FRE
+        port.cmd = port.cmd | HAL.AHCI.PXCMD_ST
+        return true
+    }
+
+    // IDENTIFY DEVICE (0xEC) - only the LBA48 total-sector-count field
+    // (word offset 100, a qword) is actually read out; the rest of the
+    // 512-byte response is unused by this driver.
+    func ahci_identify(dev: AhciDevice) -> bool {
+        let buf_pf = MM.alloc_pageframe(MM.FrameType.Other)
+        let buf_vaddr = MM.pf2v(buf_pf)
+        memset(buf_vaddr as void*, 0, MM.PAGE_SIZE)
+
+        let ok = ahci_issue_command(dev, HAL.AHCI.ATA_CMD_IDENTIFY, 0, 0,
+            buf_vaddr as void*, 512, true)
+        if ok {
+            let words = buf_vaddr as u16*
+            let sectors: u64 = 0
+            sectors |= words[100] as u64
+            sectors |= (words[101] as u64) << 16
+            sectors |= (words[102] as u64) << 32
+            sectors |= (words[103] as u64) << 48
+            dev.drive_sectors = sectors
+        }
+
+        buf_pf.release()
+        return ok
+    }
+
+    func ahci_init_port(hba: HAL.AHCI.HbaRegs*, port_index: uint) {
+        let port = ahci_port_regs(hba, port_index)
+
+        let det = port.ssts & 0xF
+        let sig = port.sig
+        if det != HAL.AHCI.SSTS_DET_PRESENT || sig != HAL.AHCI.SATA_SIG_ATA {
+            return
+        }
+
+        if !ahci_stop_port(port) {
+            "AHCI: port \(port_index) failed to stop command engine\n" |> HAL.Serial.write
+            return
+        }
+
+        let clb_pf = MM.alloc_pageframe(MM.FrameType.Other)
+        let fis_pf = MM.alloc_pageframe(MM.FrameType.Other)
+        let table_pf = MM.alloc_pageframe(MM.FrameType.Other)
+        let clb_vaddr = MM.pf2v(clb_pf)
+        let fis_vaddr = MM.pf2v(fis_pf)
+        let table_vaddr = MM.pf2v(table_pf)
+        memset(clb_vaddr as void*, 0, MM.PAGE_SIZE)
+        memset(fis_vaddr as void*, 0, MM.PAGE_SIZE)
+        memset(table_vaddr as void*, 0, MM.PAGE_SIZE)
+
+        let clb_paddr = MM.pf2p(clb_pf)
+        let fis_paddr = MM.pf2p(fis_pf)
+        let table_paddr = MM.pf2p(table_pf)
+
+        port.clb = (clb_paddr & 0xFFFF_FFFF) as u32
+        port.clbu = ((clb_paddr >> 32) & 0xFFFF_FFFF) as u32
+        port.fb = (fis_paddr & 0xFFFF_FFFF) as u32
+        port.fbu = ((fis_paddr >> 32) & 0xFFFF_FFFF) as u32
+
+        let hdr = clb_vaddr as HAL.AHCI.CommandHeader*
+        hdr.cmd_table_base = (table_paddr & 0xFFFF_FFFF) as u32
+        hdr.cmd_table_baseu = ((table_paddr >> 32) & 0xFFFF_FFFF) as u32
+
+        if !ahci_start_port(port) {
+            "AHCI: port \(port_index) failed to start command engine\n" |> HAL.Serial.write
+            return
+        }
+
+        // Per-port interrupt-enable register - separate from GHC.IE (the
+        // HBA-wide switch, set once in ahci_init). Without this, the port
+        // never actually asserts the HBA interrupt line on command
+        // completion even though GHC.IE is set and the command itself
+        // completes fine (which is why polling-based IDENTIFY above still
+        // works) - the classic AHCI gotcha of forgetting PxIE.
+        port.ie = 0xFFFF_FFFF
+
+        let dev = new AhciDevice(hba, port_index, port)
+        dev.clb_vaddr = clb_vaddr
+        dev.table_vaddr = table_vaddr
+
+        if !ahci_identify(dev) {
+            "AHCI: port \(port_index) IDENTIFY failed\n" |> HAL.Serial.write
+            return
+        }
+
+        ahci_devices[port_index] = dev
+        register_block_device(dev)
+        "AHCI: port \(port_index) drive ready, \(dev.drive_sectors) sectors\n" |> HAL.Serial.write
+    }
+
+    func ahci_init() {
+        let (found, pci_dev) = HAL.PCI.find_device(0x01, 0x06, 0x01)
+        if !found {
+            "AHCI: no controller found\n" |> HAL.Serial.write
+            return
+        }
+
+        let hba = MM.p2v(pci_dev.bar5 as uint) as HAL.AHCI.HbaRegs*
+        hba.ghc = hba.ghc | HAL.AHCI.GHC_AE
+
+        HAL.IOAPIC.set_irq(pci_dev.interrupt_line as u32, AHCI_VECTOR)
+        ahci_interrupt = new HAL.Interrupt()
+        let handler: HAL.proc = ahci_irq_handler
+        ahci_interrupt.register(AHCI_VECTOR, handler, hba as void*)
+
+        hba.ghc = hba.ghc | HAL.AHCI.GHC_IE
+
+        for let port_index: uint = 0; port_index < MAX_AHCI_PORTS; port_index++ {
+            if (hba.pi & (1 << port_index)) != 0 {
+                ahci_init_port(hba, port_index)
+            }
+        }
+    }
+
+    // Module-level, not a local in ahci_init() - HAL.Interrupt.register
+    // stores a raw, non-owning pointer into HAL.interrupts[vector]; a
+    // stack-local would be freed the moment ahci_init() returns (same
+    // gotcha already documented at kern/keyboard.llpl's own interrupt
+    // global).
+    let ahci_interrupt: HAL.Interrupt
+
+    // Runs as its own kernel thread (see ahci_start_self_test), rather
+    // than inline in kernel_main after HAL.enable_interrupts() - every
+    // other thread/process creation in this kernel has always happened
+    // with interrupts still disabled (every Kern.spawn_elf call in
+    // kernel_main runs before HAL.enable_interrupts(); every syscall-
+    // triggered thread creation runs inside a trap-gate handler with IF
+    // already clear). Creating a Thread with interrupts already live -
+    // the one combination never previously exercised - reliably hung
+    // read_sectors's interrupt-driven wait; ahci_start_self_test spawns
+    // this before HAL.enable_interrupts() instead, matching that
+    // established pattern.
+    func ahci_self_test(arg: void*) {
+        let ahci0 = find_block_device(new String("ahci0"))
+        if ahci0 == null {
+            "AHCI self-test: FAIL (no drive found)\n" |> HAL.Serial.write
+            return
+        }
+
+        let buf_pf = MM.alloc_pageframe(MM.FrameType.Other)
+        let buf = MM.pf2v(buf_pf) as void*
+        let read_ok = ahci0.read_sectors(0, 1, buf)
+        buf_pf.release()
+
+        if read_ok {
+            "AHCI self-test: PASS\n" |> HAL.Serial.write
+        } else {
+            "AHCI self-test: FAIL\n" |> HAL.Serial.write
+        }
+    }
+
+    func ahci_start_self_test() {
+        let test_thread = new Thread(kproc, ahci_self_test, null, "ahci_test")
+        test_thread |> mark_thread_ready
+    }
+}

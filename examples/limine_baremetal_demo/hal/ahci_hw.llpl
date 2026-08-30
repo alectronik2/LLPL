@@ -1,0 +1,148 @@
+// AHCI 1.3.1 register/structure layout - pure hardware definitions, no
+// driver logic (see kern/ahci.llpl for that), matching this codebase's
+// hal/ convention (e.g. kern/elf.llpl's packed Elf64Header/
+// Elf64ProgramHeader for a similar "raw on-disk/on-wire layout" role).
+
+namespace HAL {
+    namespace AHCI {
+        // HBA (host bus adapter) global register block, at ABAR (PCI BAR5).
+        packed struct HbaRegs {
+            cap:      u32  // host capabilities
+            ghc:      u32  // global host control
+            is_:      u32  // interrupt status (one bit per implemented port)
+            pi:       u32  // ports implemented (bitmask)
+            vs:       u32  // version
+            ccc_ctl:  u32
+            ccc_pts:  u32
+            em_loc:   u32
+            em_ctl:   u32
+            cap2:     u32
+            bohc:     u32
+            reserved: u8[116]
+            vendor:   u8[96]
+            // Port register blocks follow at offset 0x100, 0x80 bytes each -
+            // accessed directly via port_regs() (kern/ahci.llpl), not as a
+            // fixed-size array field here, since only PI's implemented bits
+            // are ever valid.
+        }
+
+        const GHC_AE = 1 << 31 // AHCI Enable
+        const GHC_IE = 1 << 1  // Interrupt Enable
+        const GHC_HR = 1 << 0  // HBA Reset
+
+        // One port's register block (kern/ahci.llpl indexes these off
+        // HbaRegs's own base address at offset 0x100 + port*0x80).
+        packed struct PortRegs {
+            clb:      u32  // command list base (physical, low 32 bits)
+            clbu:     u32  // command list base (physical, high 32 bits)
+            fb:       u32  // FIS base (physical, low 32 bits)
+            fbu:      u32  // FIS base (physical, high 32 bits)
+            is_:      u32  // interrupt status
+            ie:       u32  // interrupt enable
+            cmd:      u32  // command and status
+            reserved0: u32
+            tfd:      u32  // task file data
+            sig:      u32  // signature
+            ssts:     u32  // SATA status
+            sctl:     u32  // SATA control
+            serr:     u32  // SATA error
+            sact:     u32  // SATA active
+            ci:       u32  // command issue
+            sntf:     u32
+            fbs:      u32
+            reserved1: u8[44]
+            vendor:   u8[16]
+        }
+
+        const PORT_REGS_OFFSET = 0x100
+        const PORT_REGS_SIZE = 0x80
+
+        const PXCMD_ST = 1 << 0   // start
+        const PXCMD_FRE = 1 << 4  // FIS receive enable
+        const PXCMD_FR = 1 << 14  // FIS receive running
+        const PXCMD_CR = 1 << 15  // command list running
+
+        const PXIS_TFES = 1 << 30 // task file error status
+
+        const SATA_SIG_ATA = 0x00000101      // real SATA drive
+        const SATA_SIG_ATAPI = 0xEB140101
+        const SATA_SIG_SEMB = 0xC33C0101
+        const SATA_SIG_PM = 0x96690101
+
+        // PxSSTS.DET (device detection) == 3 means a device is present and
+        // PHY communication is established - the only state this driver
+        // treats as "a drive is here".
+        const SSTS_DET_PRESENT = 3
+
+        // One command-list entry (32 bytes) - HbaRegs.PxCLB points at an
+        // array of 32 of these, one per command slot. cmd_table_base
+        // points at this slot's CommandTable.
+        packed struct CommandHeader {
+            flags:          u16 // bits 0-4: command FIS length in dwords; bit 6: write
+            prdtl:          u16 // number of PRDT entries
+            prdbc:          u32 // physical region descriptor byte count (transferred)
+            cmd_table_base: u32 // physical, low 32 bits
+            cmd_table_baseu: u32 // physical, high 32 bits
+            reserved:       u32[4]
+        }
+
+        const CMDHDR_FIS_LEN_DWORDS = 5 // a plain H2D register FIS is 20 bytes
+
+        // One PRDT (Physical Region Descriptor Table) entry - describes one
+        // physically-contiguous data buffer chunk for a command's transfer.
+        packed struct PrdtEntry {
+            data_base:  u32 // physical, low 32 bits
+            data_baseu: u32 // physical, high 32 bits
+            reserved0:  u32
+            byte_count_and_flags: u32 // bits 0-21: byte count - 1; bit 31: interrupt on completion
+        }
+
+        const PRDT_IOC = 1 << 31
+
+        // A command table: the H2D register FIS (issuing the ATA command)
+        // followed by PRDT entries. This driver only ever uses one PRDT
+        // entry per command (a single, page-sized-or-smaller buffer), so
+        // the table is sized for exactly one.
+        packed struct CommandTable {
+            cfis:     u8[64]  // command FIS (only the first 20 bytes used)
+            acmd:     u8[16]  // ATAPI command, unused (not an ATAPI driver)
+            reserved: u8[48]
+            prdt:     PrdtEntry[1]
+        }
+
+        // Host-to-Device register FIS (Frame Information Structure) - what
+        // gets written into CommandTable.cfis to issue an ATA command.
+        packed struct FisRegH2D {
+            fis_type:  u8  // 0x27
+            pm_and_c:  u8  // bit 7 = "this is a command" (C bit)
+            command:   u8
+            featurel:  u8
+            lba0:      u8
+            lba1:      u8
+            lba2:      u8
+            device:    u8
+            lba3:      u8
+            lba4:      u8
+            lba5:      u8
+            featureh:  u8
+            countl:    u8
+            counth:    u8
+            icc:       u8
+            control:   u8
+            reserved:  u32
+        }
+
+        const FIS_TYPE_REG_H2D = 0x27
+        const FIS_H2D_COMMAND_BIT = 1 << 7
+
+        const ATA_CMD_IDENTIFY = 0xEC
+        const ATA_CMD_READ_DMA_EXT = 0x25
+
+        // Received-FIS area layout (HbaRegs.PxFB points at one of these
+        // per port) - only the sizing matters here (256 bytes total,
+        // 256-byte aligned), not the individual FIS slots within it, since
+        // this driver never inspects it directly (completion is detected
+        // via PxCI/PxIS, not by reading the D2H FIS back).
+        const RECEIVED_FIS_SIZE = 256
+    }
+}

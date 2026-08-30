@@ -281,12 +281,20 @@ func kernel_main() {
     MM.aspace_init()
     HAL.percpu_init()
 
+    // Additive alongside HAL.PIC - keyboard/mouse/PIT stay PIC-routed
+    // exactly as before. Needs MM.p2v (hhdm_offset), hence after MM.init.
+    HAL.LAPIC.init()
+    HAL.IOAPIC.init()
+
     Kern.proc_init()
     Kern.thread_init()
     Kern.shm_init()
 
     Kern.device_init()
     Kern.keyboard_init()
+
+    Kern.blockdevice_init()
+    Kern.ahci_init()
 
     Terminal.init( fb )
     // mouse_init() must run after Terminal.init() - it reads
@@ -355,6 +363,15 @@ func kernel_main() {
     tw( "Running on CPU \(HAL.cpu_id()) <green>ok</>\n" )
 
     "Kernel initialization complete. Halting.\n" |> hsw
+
+    // Runs as its own kernel thread, not inline here - see
+    // Kern.ahci_start_self_test's own comment for why. Created here,
+    // alongside every other Kern.spawn_elf call above, rather than after
+    // HAL.enable_interrupts() below - every other thread/process creation
+    // in this kernel has always happened with interrupts still disabled;
+    // creating one with interrupts already live was the one combination
+    // never previously exercised.
+    Kern.ahci_start_self_test()
 
     HAL.enable_interrupts()
 

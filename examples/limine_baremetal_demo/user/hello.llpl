@@ -1,0 +1,45 @@
+// First LLPL source compiled straight to a user-mode ELF, proving the
+// llpl -> C -> tcc -> user/linker.ld pipeline works outside the kernel
+// itself. Syscall/runtime FFI lives in llpl_sys.llpl (see Sys.*). argc/argv
+// arrive for free via `_start(args: string[])` - real compiler support
+// (source/codegen.d's isMainArgsFunction/generateMainWrapper), backed by
+// Kern.load_elf_process building the argv block and setting rdi/rsi/rsp
+// (kern/elf.llpl) - no syscall needed.
+
+import llpl_sys
+
+func llpl_panic_putc(c: char) {
+    Sys.write_c(c)
+}
+
+func llpl_panic_halt() {
+    Sys.exit(1)
+}
+
+func _start(args: string[]) {
+    Sys.write_s("Hello from LLPL user mode!\n")
+    for arg in args {
+        Sys.write_s("arg: \(arg)\n")
+    }
+
+    Sys.write_s("pid=")
+    Sys.write_i64(Sys.getpid())
+    Sys.write_s(" tid=")
+    Sys.write_i64(Sys.gettid())
+    Sys.write_s("\n")
+
+    let fd = Sys.open("/hello.txt", Sys.O_READ)
+    if fd >= 0 {
+        let buf: char[64]
+        let got = Sys.read(fd as u64, &buf[0] as void*, 63)
+        if got > 0 {
+            buf[got as u64] = 0 as char
+            Sys.write_s("read /hello.txt: ")
+            Sys.write_n(&buf[0] as string, got as u64)
+            Sys.write_s("\n")
+        }
+        Sys.close(fd as u64)
+    }
+
+    Sys.exit(0)
+}

@@ -76,6 +76,12 @@ static_libraries:
       - path: user/lib/stdio.c
         output: build/libsys_stdio.o
         cflags: [-mcmodel=small, -fno-pie]
+      - path: user/lib/malloc.c
+        output: build/libsys_malloc.o
+        cflags: [-mcmodel=small, -fno-pie]
+      - path: user/lib/args.c
+        output: build/libsys_args.o
+        cflags: [-mcmodel=small, -fno-pie]
     output: build/libsys.a
 
 extra_links:
@@ -289,6 +295,23 @@ extra_links:
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [build/pipe_simple_demo.o, build/libsys.a]
+  - name: hello
+    llpl_sources:
+      - src: user/hello.llpl
+        c_output: build/hello.c
+        output: build/hello.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    c_sources:
+      - path: ../../runtime/runtime.c
+        output: build/hello_runtime.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/hello.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/hello.o, build/hello_runtime.o, build/libsys.a]
 
 package:
   output: kernel.iso
@@ -334,6 +357,7 @@ package:
     - copy: {from: build/pipe_reader_demo.elf, to: initrd/bin/pipe_reader_demo}
     - copy: {from: build/pipe_pipeline_demo.elf, to: initrd/bin/pipe_pipeline_demo}
     - copy: {from: build/pipe_simple_demo.elf, to: initrd/bin/pipe_simple_demo}
+    - copy: {from: build/hello.elf, to: initrd/bin/hello}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}
@@ -345,5 +369,12 @@ package:
     - run: "xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label isodir -o kernel.iso"
     - run: "${LIMINE_DIR}/limine bios-install kernel.iso"
 
+persistent_files:
+  - path: disk.img
+    create: "dd if=/dev/zero of=disk.img bs=1M count=16"
+
 run:
-  args: ["-cdrom", "kernel.iso", "-serial", "stdio", "-m", "256", "-accel", "kvm"]
+  args: ["-cdrom", "kernel.iso", "-serial", "stdio", "-m", "256", "-accel", "kvm",
+    "-device", "ahci,id=ahci0",
+    "-drive", "id=disk0,file=disk.img,format=raw,if=none",
+    "-device", "ide-hd,drive=disk0,bus=ahci0.0"]

@@ -6361,20 +6361,28 @@ class CodeGenerator {
         return new Type(key);
     }
 
-    // The real C `int main(int argc, char** argv)` entry point for a
-    // `func main(args: string[]) -> ...` - the one shape that can't just be
-    // an ordinary function the way `func main(argc: i32, argv: char**)`
-    // or plain `func main()` already are (see isMainArgsFunction's own
-    // comment): the C runtime always calls main with (argc, argv[, envp]),
-    // never a single char** - a real int32_t-argc, char** parameter list
-    // is the only one that's ABI-correct to *be* main, regardless of how
-    // this language would rather let a program spell "give me my args".
+    // The real C entry point for a `func main(args: string[])` or `func
+    // _start(args: string[])` - the one shape that can't just be an
+    // ordinary function the way `func main(argc: i32, argv: char**)` or
+    // plain `func main()`/`func _start()` already are (see
+    // isMainArgsFunction's own comment). `main` needs the C runtime's own
+    // `int main(int argc, char** argv)` shape - the C runtime always calls
+    // it with (argc, argv[, envp]), never a single char**, and it must
+    // return an int. `_start` is a raw process entry point instead - no C
+    // runtime involved, no caller to return an int to - so it's emitted as
+    // `void _start(uint64_t argc, char** argv)`, matching how a loader
+    // hands argc/argv to it directly in registers (see
+    // Kern.load_elf_process in the Limine kernel example, which sets
+    // rdi/rsi to exactly this pair before jumping to entry).
     // `args` itself skips argv[0] (the program's own path, never something
     // callers of this shape want to see) - argv + 1 is still a valid,
-    // null-terminated char** since the C runtime always null-terminates
-    // argv at argv[argc], and adding 1 doesn't undo that.
+    // null-terminated char** since both callers here null-terminate argv
+    // at argv[argc], and adding 1 doesn't undo that.
     private string generateMainWrapper(FunctionDecl funcDecl) {
         string call = format("%s(argv + 1)", mainArgsImplName);
+        if (funcDecl.name == "_start") {
+            return format("\nvoid _start(uint64_t argc, char** argv) {\n    %s;\n}\n", call);
+        }
         string body = funcDecl.returnType.name == "void" ?
             format("%s;\n    return 0;\n", call) :
             format("return (int)%s;\n", call);
@@ -7449,24 +7457,36 @@ class CodeGenerator {
             indentLevel--;
             code ~= indent() ~ "} while (" ~ generateCondition(doWhileStmt.condition) ~ ");\n";
         } else if (auto forStmt = cast(ForStmt)node) {
+            // A real C `for (; cond; update)` - not `while (cond) { body;
+            // update; }` - specifically so `continue` inside the body gets
+            // C's own native for-loop semantics (jump to `update`, then
+            // re-check `cond`) instead of a while-loop's (jump straight to
+            // re-checking `cond`, skipping `update` entirely). The while-
+            // loop shape silently skipped the update on every `continue`,
+            // leaving the loop variable stuck and looping forever. The
+            // init clause stays a separate statement before the loop
+            // (rather than living in the for-loop's own init slot) since
+            // forStmt.initializers can be more than one full statement,
+            // not just a single comma-separable declaration.
             code ~= indent() ~ "{\n";
             indentLevel++;
             foreach (init; forStmt.initializers) {
                 code ~= generateStatement(init, isDeferred);
             }
-            code ~= indent() ~ "while (";
+            code ~= indent() ~ "for (; ";
             if (forStmt.condition) {
                 code ~= generateExpression(forStmt.condition);
             } else {
                 code ~= "1";
             }
+            code ~= "; ";
+            if (forStmt.update) {
+                code ~= generateExpression(forStmt.update);
+            }
             code ~= ") {\n";
             indentLevel++;
             foreach (stmt; forStmt.body_.statements) {
                 code ~= generateStatement(stmt, isDeferred);
-            }
-            if (forStmt.update) {
-                code ~= indent() ~ generateExpression(forStmt.update) ~ ";\n";
             }
             indentLevel--;
             code ~= indent() ~ "}\n";
@@ -10467,18 +10487,19 @@ class CodeGenerator {
     private FunctionDecl[][string] functionCandidates;
 
     // True for exactly one shape: a top-level, unnamespaced `func main(args:
-    // string[])`, in either its as-parsed form (name "string", pointerDepth
-    // 0 - resolveType hasn't run yet) or its post-resolveType one (`string`
-    // canonicalized to name "char", pointerDepth bumped to 1 - see
-    // resolveType's own "Built-in lowercase `string`..." comment). Checked
-    // both ways since callers reach this at different points in the
-    // pipeline (before/after that function's own params are resolved) -
-    // see generateMainWrapper's own comment for why this shape specifically
-    // needs real main-specific codegen, unlike `func main(argc: i32, argv:
-    // char**)` or plain `func main()`, which already just work as ordinary
-    // functions with no special-casing at all.
+    // string[])` or `func _start(args: string[])`, in either its as-parsed
+    // form (name "string", pointerDepth 0 - resolveType hasn't run yet) or
+    // its post-resolveType one (`string` canonicalized to name "char",
+    // pointerDepth bumped to 1 - see resolveType's own "Built-in lowercase
+    // `string`..." comment). Checked both ways since callers reach this at
+    // different points in the pipeline (before/after that function's own
+    // params are resolved) - see generateMainWrapper's own comment for why
+    // this shape specifically needs real entry-point-specific codegen,
+    // unlike `func main(argc: i32, argv: char**)`/`func _start(argc: ...,
+    // argv: ...)` or plain `func main()`/`func _start()`, which already
+    // just work as ordinary functions with no special-casing at all.
     private bool isMainArgsFunction(FunctionDecl fn) {
-        if (fn.name != "main" || fn.namespaceSegments.length != 0) return false;
+        if ((fn.name != "main" && fn.name != "_start") || fn.namespaceSegments.length != 0) return false;
         if (fn.params.length != 1) return false;
         Type t = fn.params[0].type;
         if (!t.isArray || t.arraySize != 0) return false;
@@ -10487,18 +10508,21 @@ class CodeGenerator {
         return false;
     }
 
-    // The internal C symbol a `func main(args: string[])`'s own body is
-    // emitted under - never "main" itself, since real main-specific codegen
-    // (generateMainWrapper) generates the actual `int main(int argc, char**
-    // argv)` C entry point separately and calls this.
+    // The internal C symbol a `func main(args: string[])`'s or `func
+    // _start(args: string[])`'s own body is emitted under - never "main" or
+    // "_start" themselves, since real entry-point-specific codegen
+    // (generateMainWrapper) generates the actual C entry point separately
+    // and calls this. A program only ever has one such entry, so the two
+    // shapes safely share this one impl name.
     private static immutable string mainArgsImplName = "__llpl_main_args_impl";
 
     // `mangledFunc(fn)` (today's plain namespace_name) if `fn` is the only
     // function registered under that name, else suffixed per its own
     // parameter types. Extern functions are never suffixed - their C
     // symbol is a real, fixed external name that can't be invented a
-    // second spelling for. A `func main(args: string[])` is named
-    // mainArgsImplName instead of either scheme - see its own comment.
+    // second spelling for. A `func main(args: string[])`/`func
+    // _start(args: string[])` is named mainArgsImplName instead of either
+    // scheme - see its own comment.
     private string mangleFreeFunctionName(FunctionDecl fn) {
         if (isMainArgsFunction(fn)) return mainArgsImplName;
         string plain = mangledFunc(fn);

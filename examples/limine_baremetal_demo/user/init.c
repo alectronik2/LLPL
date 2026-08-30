@@ -167,7 +167,53 @@ __attribute__((noreturn)) void _start(void) {
     write_s(heap_ok ? "brk/sbrk self-test: PASS\n" :
                             "brk/sbrk self-test: FAIL\n");
 
-    call2(SYS_EXIT, (spawn_ok && exec_ok && fd_ok && thread_ok && pipe_ok && heap_ok) ? 0 : 1, 0);
+    void *m1 = malloc(64);
+    void *m2 = malloc(128);
+    int malloc_ok = m1 != 0 && m2 != 0 && m1 != m2;
+    if (malloc_ok) {
+        char *b1 = (char *)m1;
+        b1[0] = 'A';
+        b1[63] = 'Z';
+        char *b2 = (char *)m2;
+        b2[0] = 'B';
+        b2[127] = 'Y';
+        malloc_ok = b1[0] == 'A' && b1[63] == 'Z' && b2[0] == 'B' && b2[127] == 'Y';
+    }
+    free(m1);
+
+    void *m3 = calloc(16, 4);
+    if (malloc_ok && m3 != 0) {
+        char *b3 = (char *)m3;
+        int all_zero = 1;
+        for (int i = 0; i < 64; i++) {
+            if (b3[i] != 0) all_zero = 0;
+        }
+        malloc_ok = malloc_ok && all_zero;
+    } else {
+        malloc_ok = 0;
+    }
+
+    char *m4 = (char *)realloc(m2, 256);
+    if (malloc_ok && m4 != 0) {
+        malloc_ok = m4[0] == 'B' && m4[127] == 'Y'; // realloc preserved old contents
+        m4[255] = 'Q';
+        malloc_ok = malloc_ok && m4[255] == 'Q';
+    } else {
+        malloc_ok = 0;
+    }
+    free(m3);
+    free(m4);
+    write_s(malloc_ok ? "malloc self-test: PASS\n" : "malloc self-test: FAIL\n");
+
+    u64 hello_status = 1;
+    i64 hello_pid = (i64)call2(SYS_SPAWN, (u64)"/bin/hello", (u64)"foo bar baz");
+    int hello_ok = hello_pid > 0 &&
+        (i64)call2(SYS_WAITPID, (u64)hello_pid, (u64)&hello_status) == hello_pid &&
+        hello_status == 0;
+    write_s(hello_ok ? "LLPL user program self-test: PASS\n" :
+                       "LLPL user program self-test: FAIL\n");
+
+    call2(SYS_EXIT, (spawn_ok && exec_ok && fd_ok && thread_ok && pipe_ok && heap_ok && malloc_ok && hello_ok) ? 0 : 1, 0);
     for (;;) {
         __asm__ volatile("pause");
     }

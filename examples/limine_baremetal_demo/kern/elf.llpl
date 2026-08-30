@@ -123,6 +123,112 @@ namespace Kern {
         return true
     }
 
+    const MAX_ARGS = 32
+    const MAX_ARG_SLOTS = 33 // MAX_ARGS + 1, for the trailing NULL argv slot
+
+    // Writes `size` bytes from kernel memory `src` into `proc`'s user
+    // address space starting at `dest`, a page at a time - mirrors
+    // map_elf_segment's own copy loop, just for an arbitrary buffer
+    // instead of ELF segment data. hal/syscall.llpl's copy_to_user can't
+    // be reused here: it copies into the *current* process
+    // (HAL.read_cr3()), but `proc` isn't scheduled yet at this point in
+    // load_elf_process.
+    func write_user_bytes(proc: Process, dest: uint, src: char*, size: u64) -> bool {
+        let copied: u64 = 0
+        while copied < size {
+            let user_addr = dest + copied
+            let (mapped, paddr) = user_v2p(proc.pml4, user_addr)
+            return false if !mapped
+            let page_left = (MM.PAGE_SIZE - (user_addr & (MM.PAGE_SIZE - 1))) as u64
+            let chunk = size - copied
+            if page_left < chunk {
+                chunk = page_left
+            }
+            memcpy(MM.p2v(paddr) as void*, (src + copied) as void*, chunk)
+            copied += chunk
+        }
+        return true
+    }
+
+    // Builds a real argv block at the top of proc's already-mapped user
+    // stack - argv[0] = the program's own invocation path, argv[1..] =
+    // command_line split on spaces - and points rdi/rsi/rsp at it, so a
+    // `func _start(args: string[])` entry (see source/codegen.d's
+    // isMainArgsFunction/generateMainWrapper) receives real argc/argv:
+    // the same SysV register pair a hosted `main(argc, argv)` gets from
+    // the C runtime, just supplied by this loader instead. argv[0] always
+    // exists, so argc is never 0.
+    func setup_user_args(proc: Process, thread: Thread, path: String, command_line: String) -> bool {
+        let starts: u64[MAX_ARG_SLOTS]
+        let lens: u64[MAX_ARG_SLOTS]
+        let argc: u64 = 1 // argv[0] = path, always present
+
+        if command_line != null {
+            let cmd = command_line.c_str()
+            let cmd_len = command_line.byte_len() as u64
+            let i: u64 = 0
+            while i < cmd_len && argc < MAX_ARGS {
+                while i < cmd_len && cmd[i] == ' ' { i++ }
+                if i >= cmd_len { break }
+                let start = i
+                while i < cmd_len && cmd[i] != ' ' { i++ }
+                starts[argc] = start
+                lens[argc] = i - start
+                argc++
+            }
+        }
+
+        let path_len = path.byte_len() as u64
+        let strings_bytes: u64 = path_len + 1
+        for let a: u64 = 1; a < argc; a++ {
+            strings_bytes += lens[a] + 1
+        }
+        let ptr_bytes = (argc + 1) * 8
+        let total: u64 = ptr_bytes + strings_bytes
+        while (USER_STACK_TOP - total) % 16 != 8 {
+            total++
+        }
+
+        let dest = MM.malloc<char>(total)
+        return false if dest == null
+
+        let block_addr = USER_STACK_TOP - total
+        let argv_slots = dest as u64*
+        let write_off = ptr_bytes
+
+        let path_str = path.c_str()
+        argv_slots[0] = (block_addr + write_off) as u64
+        for let k: u64 = 0; k < path_len; k++ {
+            dest[write_off + k] = path_str[k]
+        }
+        dest[write_off + path_len] = 0 as char
+        write_off += path_len + 1
+
+        if command_line != null {
+            let cmd = command_line.c_str()
+            for let a: u64 = 1; a < argc; a++ {
+                argv_slots[a] = (block_addr + write_off) as u64
+                let off = starts[a]
+                let len = lens[a]
+                for let k: u64 = 0; k < len; k++ {
+                    dest[write_off + k] = cmd[off + k]
+                }
+                dest[write_off + len] = 0 as char
+                write_off += len + 1
+            }
+        }
+        argv_slots[argc] = 0
+
+        let ok = write_user_bytes(proc, block_addr, dest, total)
+        MM.free(dest)
+        return false if !ok
+
+        thread.ctx.rdi = argc
+        thread.ctx.rsi = block_addr as u64
+        thread.ctx.rsp = block_addr as u64
+        return true
+    }
+
     func load_elf_process(path: String, parent: Process, command_line: String = null) -> Process {
         let (file, size) = VFS.read_binary(path)
         if !elf_valid(file, size) {
@@ -159,11 +265,10 @@ namespace Kern {
         // Reuse the process name rather than allocating after page-table work.
         let thread = new Thread(proc, user_entry_placeholder, null, proc.name, THREAD_USER)
         thread.ctx.rip = hdr.entry
-        // SysV AMD64 process entry uses the same alignment as a function
-        // reached through CALL: RSP is 8 modulo 16 on entry.
-        thread.ctx.rsp = USER_STACK_TOP - 8
-        thread.ctx.rdi = 0
-        thread.ctx.rsi = 0
+        if !setup_user_args(proc, thread, path, command_line) {
+            "ELF: failed to set up argv\n" |> HAL.Serial.write
+            return null
+        }
         thread |> mark_thread_ready
 
         return proc
