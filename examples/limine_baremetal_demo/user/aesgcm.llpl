@@ -1,0 +1,344 @@
+// AES-128 (encrypt-only - GCM's CTR mode never needs AES-decrypt) and
+// AES-128-GCM (RFC 5288 framing as used by TLS 1.2's
+// TLS_ECDHE_*_WITH_AES_128_GCM_SHA256 cipher suites). GHASH is a table-free
+// bit-serial GF(2^128) multiply rather than a lookup-table implementation -
+// simpler and adequate for one interactive TCP connection's worth of
+// traffic, at the cost of being far slower than a table-driven or
+// PCLMULQDQ-based GHASH.
+namespace AesGcm {
+    const NB: uint = 4
+    const NK: uint = 4
+    const NR: uint = 10
+
+    let SBOX: u8[256] = [
+        0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+        0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+        0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+        0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+        0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+        0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+        0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+        0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+        0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+        0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+        0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+        0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+        0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+        0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+        0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+        0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
+    ]
+
+    struct AesKey {
+        round_keys: u32[44]
+    }
+
+    func zero16(buf: u8*) {
+        let i: uint = 0
+        while i < 16 {
+            buf[i] = 0
+            i++
+        }
+    }
+
+    func copy_bytes(dst: u8*, src: u8*, len: uint) {
+        let i: uint = 0
+        while i < len {
+            dst[i] = src[i]
+            i++
+        }
+    }
+
+    func sub_word(w: u32) -> u32 {
+        let b0 = SBOX[(w >> 24) & 0xFF]
+        let b1 = SBOX[(w >> 16) & 0xFF]
+        let b2 = SBOX[(w >> 8) & 0xFF]
+        let b3 = SBOX[w & 0xFF]
+        return ((b0 as u32) << 24) | ((b1 as u32) << 16) | ((b2 as u32) << 8) | (b3 as u32)
+    }
+
+    func rot_word(w: u32) -> u32 {
+        return (w << 8) | (w >> 24)
+    }
+
+    func xtime(a: u8) -> u8 {
+        let hi = (a & 0x80) != 0
+        let r = (a << 1) as u8
+        if hi { r = r ^ 0x1B }
+        return r
+    }
+
+    func key_expand(key: u8*, out: AesKey*) {
+        let i: uint = 0
+        while i < NK {
+            out.round_keys[i] = ((key[4 * i] as u32) << 24) | ((key[4 * i + 1] as u32) << 16) |
+                ((key[4 * i + 2] as u32) << 8) | (key[4 * i + 3] as u32)
+            i++
+        }
+        let rcon: u8 = 0x01
+        i = NK
+        while i < NB * (NR + 1) {
+            let temp = out.round_keys[i - 1]
+            if i % NK == 0 {
+                temp = sub_word(rot_word(temp)) ^ ((rcon as u32) << 24)
+                rcon = xtime(rcon)
+            }
+            out.round_keys[i] = out.round_keys[i - NK] ^ temp
+            i++
+        }
+    }
+
+    func add_round_key(state: u8*, key: AesKey*, round: uint) {
+        let c: uint = 0
+        while c < 4 {
+            let w = key.round_keys[round * 4 + c]
+            state[4 * c + 0] = state[4 * c + 0] ^ ((w >> 24) as u8)
+            state[4 * c + 1] = state[4 * c + 1] ^ ((w >> 16) as u8)
+            state[4 * c + 2] = state[4 * c + 2] ^ ((w >> 8) as u8)
+            state[4 * c + 3] = state[4 * c + 3] ^ (w as u8)
+            c++
+        }
+    }
+
+    func sub_bytes(state: u8*) {
+        let i: uint = 0
+        while i < 16 {
+            state[i] = SBOX[state[i]]
+            i++
+        }
+    }
+
+    func shift_rows(state: u8*) {
+        let tmp: u8[16]
+        let col: uint = 0
+        while col < 4 {
+            let row: uint = 0
+            while row < 4 {
+                tmp[row + 4 * col] = state[row + 4 * ((col + row) % 4)]
+                row++
+            }
+            col++
+        }
+        copy_bytes(state, &tmp[0], 16)
+    }
+
+    func mix_single_column(col: u8*) {
+        let a0 = col[0]
+        let a1 = col[1]
+        let a2 = col[2]
+        let a3 = col[3]
+        let t = a0 ^ a1 ^ a2 ^ a3
+        col[0] = a0 ^ t ^ xtime(a0 ^ a1)
+        col[1] = a1 ^ t ^ xtime(a1 ^ a2)
+        col[2] = a2 ^ t ^ xtime(a2 ^ a3)
+        col[3] = a3 ^ t ^ xtime(a3 ^ a0)
+    }
+
+    func mix_columns(state: u8*) {
+        let c: uint = 0
+        while c < 4 {
+            mix_single_column(&state[4 * c])
+            c++
+        }
+    }
+
+    func encrypt_block(key: AesKey*, input_block: u8*, out: u8*) {
+        let state: u8[16]
+        copy_bytes(&state[0], input_block, 16)
+
+        add_round_key(&state[0], key, 0)
+        let round: uint = 1
+        while round < NR {
+            sub_bytes(&state[0])
+            shift_rows(&state[0])
+            mix_columns(&state[0])
+            add_round_key(&state[0], key, round)
+            round++
+        }
+        sub_bytes(&state[0])
+        shift_rows(&state[0])
+        add_round_key(&state[0], key, NR)
+
+        copy_bytes(out, &state[0], 16)
+    }
+
+    // --- GHASH: GF(2^128) multiply under x^128 + x^7 + x^2 + x + 1, using
+    // GCM's bit ordering (leftmost bit of the first byte is the x^0
+    // coefficient). Bit-serial "shift and conditionally reduce" form -
+    // the standard reference algorithm for a table-free GHASH.
+    func ghash_mul(x: u8*, y: u8*, z: u8*) {
+        let v: u8[16]
+        copy_bytes(&v[0], y, 16)
+        zero16(z)
+
+        let i: uint = 0
+        while i < 128 {
+            let byte_index = i / 8
+            let bit_index = i % 8
+            if (x[byte_index] & ((0x80 >> bit_index) as u8)) != 0 {
+                let j: uint = 0
+                while j < 16 {
+                    z[j] = z[j] ^ v[j]
+                    j++
+                }
+            }
+            let lsb_set = (v[15] & 1) != 0
+            let j: uint = 15
+            while j > 0 {
+                v[j] = (v[j] >> 1) | ((v[j - 1] & 1) << 7)
+                j--
+            }
+            v[0] = v[0] >> 1
+            if lsb_set { v[0] = v[0] ^ 0xe1 }
+            i++
+        }
+    }
+
+    struct GhashState {
+        h: u8[16]
+        y: u8[16]
+    }
+
+    func ghash_init(state: GhashState*, key: AesKey*) {
+        let zero: u8[16]
+        zero16(&zero[0])
+        zero16(&state.y[0])
+        encrypt_block(key, &zero[0], &state.h[0])
+    }
+
+    func ghash_update_block(state: GhashState*, block: u8*) {
+        let x: u8[16]
+        let i: uint = 0
+        while i < 16 {
+            x[i] = state.y[i] ^ block[i]
+            i++
+        }
+        ghash_mul(&x[0], &state.h[0], &state.y[0])
+    }
+
+    // --- AES-128-GCM (RFC 5288 nonce/AAD framing).
+    struct GcmContext {
+        key: AesKey
+    }
+
+    func gcm_init(ctx: GcmContext*, raw_key: u8*) {
+        key_expand(raw_key, &ctx.key)
+    }
+
+    // GHASH over `aad` followed by `data` (both zero-padded to a 16-byte
+    // boundary per block), followed by the 64-bit bit-length pair, XORed
+    // with E(K, J0). Shared by seal (data = ciphertext just produced) and
+    // open (data = ciphertext being verified) so both directions compute
+    // the tag identically.
+    func compute_tag(key: AesKey*, nonce: u8*, aad: u8*, aad_len: uint,
+            data: u8*, data_len: uint, out_tag: u8*) {
+        let j0: u8[16]
+        copy_bytes(&j0[0], nonce, 12)
+        j0[12] = 0
+        j0[13] = 0
+        j0[14] = 0
+        j0[15] = 1
+
+        let ghash: GhashState
+        ghash_init(&ghash, key)
+
+        let offset: uint = 0
+        while offset < aad_len {
+            let block: u8[16]
+            zero16(&block[0])
+            let take = aad_len - offset
+            if take > 16 { take = 16 }
+            copy_bytes(&block[0], &aad[offset], take)
+            ghash_update_block(&ghash, &block[0])
+            offset += 16
+        }
+
+        offset = 0
+        while offset < data_len {
+            let block: u8[16]
+            zero16(&block[0])
+            let take = data_len - offset
+            if take > 16 { take = 16 }
+            copy_bytes(&block[0], &data[offset], take)
+            ghash_update_block(&ghash, &block[0])
+            offset += 16
+        }
+
+        let len_block: u8[16]
+        let aad_bits = (aad_len as u64) * 8
+        let data_bits = (data_len as u64) * 8
+        let i: uint = 0
+        while i < 8 {
+            len_block[i] = (aad_bits >> ((7 - i) * 8)) as u8
+            len_block[8 + i] = (data_bits >> ((7 - i) * 8)) as u8
+            i++
+        }
+        ghash_update_block(&ghash, &len_block[0])
+
+        let ek_j0: u8[16]
+        encrypt_block(key, &j0[0], &ek_j0[0])
+        i = 0
+        while i < 16 {
+            out_tag[i] = ghash.y[i] ^ ek_j0[i]
+            i++
+        }
+    }
+
+    // AES-CTR with the GCM counter convention: block counter starts at 2
+    // (inc32 of J0, whose counter field is 1) and increments per 16-byte
+    // block. Safe in place (input == output).
+    func ctr_crypt(key: AesKey*, nonce: u8*, input: u8*, input_len: uint, output: u8*) {
+        let counter_block: u8[16]
+        copy_bytes(&counter_block[0], nonce, 12)
+        let counter: u32 = 2
+
+        let offset: uint = 0
+        while offset < input_len {
+            counter_block[12] = (counter >> 24) as u8
+            counter_block[13] = (counter >> 16) as u8
+            counter_block[14] = (counter >> 8) as u8
+            counter_block[15] = counter as u8
+
+            let keystream: u8[16]
+            encrypt_block(key, &counter_block[0], &keystream[0])
+
+            let take = input_len - offset
+            if take > 16 { take = 16 }
+            let k: uint = 0
+            while k < take {
+                output[offset + k] = input[offset + k] ^ keystream[k]
+                k++
+            }
+            counter++
+            offset += 16
+        }
+    }
+
+    // `nonce` is 12 bytes (RFC 5288: 4-byte fixed IV || 8-byte explicit
+    // nonce). `out_ciphertext` must hold `plaintext_len` bytes, `out_tag`
+    // 16 bytes.
+    func gcm_seal(ctx: GcmContext*, nonce: u8*, aad: u8*, aad_len: uint,
+            plaintext: u8*, plaintext_len: uint, out_ciphertext: u8*, out_tag: u8*) {
+        ctr_crypt(&ctx.key, nonce, plaintext, plaintext_len, out_ciphertext)
+        compute_tag(&ctx.key, nonce, aad, aad_len, out_ciphertext, plaintext_len, out_tag)
+    }
+
+    // Verifies `tag` before decrypting; returns false (leaving
+    // out_plaintext untouched) on mismatch.
+    func gcm_open(ctx: GcmContext*, nonce: u8*, aad: u8*, aad_len: uint,
+            ciphertext: u8*, ciphertext_len: uint, tag: u8*, out_plaintext: u8*) -> bool {
+        let computed_tag: u8[16]
+        compute_tag(&ctx.key, nonce, aad, aad_len, ciphertext, ciphertext_len, &computed_tag[0])
+
+        let diff: u8 = 0
+        let i: uint = 0
+        while i < 16 {
+            diff = diff | (computed_tag[i] ^ tag[i])
+            i++
+        }
+        if diff != 0 { return false }
+
+        ctr_crypt(&ctx.key, nonce, ciphertext, ciphertext_len, out_plaintext)
+        return true
+    }
+}

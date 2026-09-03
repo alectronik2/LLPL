@@ -1,0 +1,404 @@
+// DimensionOS user shell, implemented entirely in LLPL.
+// Keeps the kernel-facing ABI in llpl_sys.llpl and uses no hosted libc.
+
+import llpl_sys
+
+const LINE_SIZE: u64 = 256
+const PATH_SIZE: u64 = 128
+const HISTORY_SIZE: u64 = 12
+const LS_SIZE: u64 = 2048
+
+const RESET: string = "\x1b[0m"
+const BOLD: string = "\x1b[1m"
+const RED: string = "\x1b[31m"
+const GREEN: string = "\x1b[32m"
+const YELLOW: string = "\x1b[33m"
+const BLUE: string = "\x1b[34m"
+const CYAN: string = "\x1b[36m"
+
+struct ProcessInfo {
+    pid: u64
+    parent_pid: u64
+    thread_count: u64
+    exited: u64
+    name: char[64]
+}
+
+func llpl_panic_putc(c: char) { Sys.write_c(c) }
+func llpl_panic_halt() { Sys.exit(1) }
+
+func copy_text(destination: char*, source: string, capacity: u64) {
+    let i: u64 = 0
+    while source[i] != 0 && i + 1 < capacity {
+        destination[i] = source[i]
+        i++
+    }
+    destination[i] = 0
+}
+
+func skip_spaces(s: char*) -> char* {
+    while (*s == ' ' || *s == '\t') { s++ }
+    return s
+}
+
+func first_argument(line: char*) -> char* {
+    while *line != 0 && *line != ' ' && *line != '\t' { line++ }
+    if *line != 0 {
+        *line = 0
+        line++
+    }
+    return skip_spaces(line)
+}
+
+func write_width(value: u64, width: u64) {
+    let divisor: u64 = 1
+    let digits: u64 = 1
+    while value / divisor >= 10 {
+        divisor = divisor * 10
+        digits++
+    }
+    while digits < width {
+        Sys.write_s(" ")
+        digits++
+    }
+    Sys.write_u64(value)
+}
+
+func prompt(cwd: string) {
+    Sys.write_s("\(BOLD)\(GREEN)user\(RESET):\(BLUE)\(cwd)\(RESET)$ ")
+}
+
+func redraw(cwd: string, line: char*, length: u64, cursor: u64) {
+    Sys.write_s("\r\x1b[2K")
+    prompt(cwd)
+    Sys.write_n(line, length)
+    Sys.write_s("\r")
+    prompt(cwd)
+    Sys.write_n(line, cursor)
+}
+
+func cat_file(path: string) {
+    let fd = Sys.open(path, Sys.O_READ)
+    if fd < 0 {
+        Sys.write_s("\(RED)cat: cannot open \(RESET)\(path)\n")
+        return
+    }
+    let buffer: char[128]
+    while true {
+        let got = Sys.read(fd as u64, &buffer[0] as void*, 128)
+        if got <= 0 { break }
+        Sys.write_n(&buffer[0] as string, got as u64)
+    }
+    Sys.close(fd as u64)
+}
+
+func head_file(path: string, wanted: u64) {
+    let fd = Sys.open(path, Sys.O_READ)
+    if fd < 0 {
+        Sys.write_s("\(RED)head: cannot open \(RESET)\(path)\n")
+        return
+    }
+    let buffer: char[128]
+    let lines: u64 = 0
+    while lines < wanted {
+        let got = Sys.read(fd as u64, &buffer[0] as void*, 128)
+        if got <= 0 { break }
+        let used: u64 = 0
+        while used < got as u64 && lines < wanted {
+            Sys.write_c(buffer[used])
+            if buffer[used] == '\n' { lines++ }
+            used++
+        }
+    }
+    Sys.close(fd as u64)
+}
+
+func count_file(path: string) {
+    let fd = Sys.open(path, Sys.O_READ)
+    if fd < 0 {
+        Sys.write_s("\(RED)wc: cannot open \(RESET)\(path)\n")
+        return
+    }
+    let buffer: char[128]
+    let bytes: u64 = 0
+    let lines: u64 = 0
+    let words: u64 = 0
+    let in_word = false
+    while true {
+        let got = Sys.read(fd as u64, &buffer[0] as void*, 128)
+        if got <= 0 { break }
+        for let i: u64 = 0; i < got as u64; i++ {
+            let c = buffer[i]
+            bytes++
+            if c == '\n' { lines++ }
+            let space = c == ' ' || c == '\t' || c == '\n' || c == '\r'
+            if !space && !in_word {
+                words++
+                in_word = true
+            }
+            if space { in_word = false }
+        }
+    }
+    Sys.close(fd as u64)
+    write_width(lines, 6)
+    write_width(words, 7)
+    write_width(bytes, 7)
+    Sys.write_s(" \(path)\n")
+}
+
+func list_directory(path: string) {
+    let listing: char[2048]
+    let length = Sys.call3(Sys.SYS_LIST_DIRECTORY, path as u64,
+    &listing[0] as u64, LS_SIZE) as i64
+    if length < 0 {
+        Sys.write_s("\(RED)ls: cannot access \(RESET)\(path)\n")
+        return
+    }
+    if length == 0 {
+        Sys.write_s("\(YELLOW)(empty)\(RESET)\n")
+        return
+    }
+    let start: u64 = 0
+    for let i: u64 = 0; i <= length as u64; i++ {
+        if i != length as u64 && listing[i] != '\n' { continue }
+        if i > start {
+            if listing[i - 1] == '/' { Sys.write_s("\(BOLD)\(BLUE)") }
+            else { Sys.write_s(CYAN) }
+            Sys.write_n((&listing[0] + start) as string, i - start)
+            Sys.write_s("\(RESET)\n")
+        }
+        start = i + 1
+    }
+}
+
+func list_processes() {
+    let entries: ProcessInfo[64]
+    let count = Sys.call2(Sys.SYS_PROCESS_SNAPSHOT, &entries[0] as u64, 64) as i64
+    if count < 0 {
+        Sys.write_s("\(RED)ps: snapshot failed\(RESET)\n")
+        return
+    }
+    Sys.write_s("\(BOLD)\(CYAN)  PID  PPID  THR  STATE    NAME\n\(RESET)")
+    for let i: i64 = 0; i < count; i++ {
+        write_width(entries[i].pid, 5)
+        Sys.write_s(" ")
+        write_width(entries[i].parent_pid, 5)
+        Sys.write_s(" ")
+        write_width(entries[i].thread_count, 4)
+        Sys.write_s("  ")
+        if entries[i].exited != 0 { Sys.write_s("\(RED)exited   ") }
+        else { Sys.write_s("\(GREEN)running  ") }
+        let name = &entries[i].name[0] as string
+        Sys.write_s("\(BLUE)\(name)\(RESET)\n")
+    }
+}
+
+func spawn_program(command: string, command_line: string) {
+    let path: char[128]
+    let at: u64 = 0
+    if command[0] != '/' {
+        copy_text(&path[0], "/bin/", PATH_SIZE)
+        at = 5
+    }
+    let i: u64 = 0
+    while command[i] != 0 && at + 1 < PATH_SIZE {
+        path[at] = command[i]
+        at++
+        i++
+    }
+    path[at] = 0
+    let pid = Sys.spawn(&path[0] as string, command_line)
+    if pid < 0 {
+        Sys.write_s("\(RED)\(command): command not found\(RESET)\n")
+        return
+    }
+    let status: u64 = 0
+    Sys.set_foreground(pid as u64)
+    let waited = Sys.waitpid(pid as u64, &status)
+    Sys.set_foreground(0)
+    if waited < 0 {
+        Sys.write_s("\(RED)shell: wait failed\(RESET)\n")
+    }
+    else if status != 0 {
+        Sys.write_s("\(YELLOW)[exit \(status)]\(RESET)\n")
+    }
+}
+
+func show_history(history: char*, count: u64) {
+    for let i: u64 = 0; i < count; i++ {
+        write_width(i + 1, 3)
+        let item = (history + i * LINE_SIZE) as string
+        Sys.write_s("  \(item)\n")
+    }
+}
+
+func execute(line: char*, history: char*, history_count: u64) -> bool {
+    let original: char[256]
+    copy_text(&original[0], line as string, LINE_SIZE)
+    let args = first_argument(line)
+    if *line == 0 { return true }
+    if (line as string) == "exit" { return false }
+    if (line as string) == "help" {
+        Sys.write_s("\(BOLD)\(CYAN)LLPL shell built-ins\n\(RESET)  help echo cat head wc ls cd pwd history which clear pid ps exit\n  External programs resolve through /bin. Arrow keys edit/history.\n")
+    } else if (line as string) == "echo" {
+        Sys.write_s("\(args)\n")
+    } else if (line as string) == "cat" {
+        if *args != 0 { cat_file(args as string) }
+        else { Sys.write_s("usage: cat PATH\n") }
+    } else if (line as string) == "head" {
+        if *args != 0 { head_file(args as string, 10) }
+        else { Sys.write_s("usage: head PATH\n") }
+    } else if (line as string) == "wc" {
+        if *args != 0 { count_file(args as string) }
+        else { Sys.write_s("usage: wc PATH\n") }
+    } else if (line as string) == "ls" {
+        if *args != 0 { list_directory(args as string) }
+        else { list_directory(".") }
+    } else if (line as string) == "cd" {
+        let path: string = "/"
+        if *args != 0 { path = args as string }
+        if (Sys.call2(Sys.SYS_CHDIR, path as u64, 0) as i64) < 0 {
+            Sys.write_s("\(RED)cd: no such directory: \(path)\(RESET)\n")
+        }
+    } else if (line as string) == "pwd" {
+        let cwd: char[128]
+        if (Sys.call2(Sys.SYS_GETCWD, &cwd[0] as u64, PATH_SIZE) as i64) >= 0 {
+            let path = &cwd[0] as string
+            Sys.write_s("\(path)\n")
+        }
+    } else if (line as string) == "history" {
+        show_history(history, history_count)
+    } else if (line as string) == "which" {
+        if *args == 0 { Sys.write_s("usage: which COMMAND\n") }
+        else { Sys.write_s("/bin/\(args)\n") }
+    } else if (line as string) == "clear" {
+        Sys.write_s("\x1b[2J\x1b[H")
+    } else if (line as string) == "pid" {
+        Sys.write_s("\(Sys.getpid())\n")
+    } else if (line as string) == "ps" {
+        list_processes()
+    } else {
+        spawn_program(line as string, &original[0] as string)
+    }
+    return true
+}
+
+func _start(args: string[]) {
+    let keyboard = Sys.open("/dev/kbd", Sys.O_READ)
+    if keyboard < 0 {
+        Sys.write_s("shell: cannot open /dev/kbd\n")
+        Sys.exit(1)
+    }
+    Sys.write_s("\n\(BOLD)\(CYAN)DimensionOS LLPL shell\n\(RESET)Type \(YELLOW)help\(RESET) for commands.\n")
+
+    let line: char[256]
+    let history: char[12][256]
+    let history_count: u64 = 0
+    while true {
+        let cwd: char[128]
+        if Sys.call2(Sys.SYS_GETCWD, &cwd[0] as u64, PATH_SIZE) < 0 {
+            cwd[0] = '/'
+            cwd[1] = 0
+        }
+        prompt(&cwd[0] as string)
+        let length: u64 = 0
+        let cursor: u64 = 0
+        let history_position = history_count
+        let saved_line: char[256]
+        saved_line[0] = 0
+        while true {
+            let c: char = 0
+            continue if Sys.read(keyboard as u64, &c as void*, 1) != 1
+            if c == '\r' || c == '\n' {
+                Sys.write_s("\n")
+                line[length] = 0
+                break
+            }
+            if (c as u8) == 27 {
+                let bracket: char = 0
+                let key: char = 0
+                continue if Sys.read(keyboard as u64, &bracket as void*, 1) != 1 || bracket != '['
+                continue if Sys.read(keyboard as u64, &key as void*, 1) != 1
+                if key == 'D' && cursor > 0 {
+                    cursor--
+                    redraw(&cwd[0] as string, &line[0], length, cursor)
+                } else if key == 'C' && cursor < length {
+                    cursor++
+                    redraw(&cwd[0] as string, &line[0], length, cursor)
+                } else if key == 'H' {
+                    cursor = 0
+                    redraw(&cwd[0] as string, &line[0], length, cursor)
+                } else if key == 'F' {
+                    cursor = length
+                    redraw(&cwd[0] as string, &line[0], length, cursor)
+                } else if key == '3' {
+                    let tilde: char = 0
+                    Sys.read(keyboard as u64, &tilde as void*, 1)
+                    if cursor < length {
+                        for let i: u64 = cursor; i < length; i++ { line[i] = line[i + 1] }
+                        length--
+                        redraw(&cwd[0] as string, &line[0], length, cursor)
+                    }
+                } else if key == 'A' && history_position > 0 {
+                    if history_position == history_count {
+                        line[length] = 0
+                        copy_text(&saved_line[0], &line[0] as string, LINE_SIZE)
+                    }
+                    history_position--
+                    copy_text(&line[0], &history[history_position][0] as string, LINE_SIZE)
+                    length = (&line[0] as string).sizeof
+                    cursor = length
+                    redraw(&cwd[0] as string, &line[0], length, cursor)
+                } else if key == 'B' && history_position < history_count {
+                    history_position++
+                    if history_position == history_count {
+                        copy_text(&line[0], &saved_line[0] as string, LINE_SIZE)
+                    } else {
+                        copy_text(&line[0], &history[history_position][0] as string, LINE_SIZE)
+                    }
+                    length = (&line[0] as string).sizeof
+                    cursor = length
+                    redraw(&cwd[0] as string, &line[0], length, cursor)
+                }
+                continue
+            }
+            // LLPL's short `\b` character escape currently lowers as the
+            // literal letter 'b'; use the keyboard protocol byte explicitly.
+            if c == '\x08' {
+                if cursor > 0 {
+                    for let i: u64 = cursor - 1; i < length; i++ { line[i] = line[i + 1] }
+                    length--
+                    cursor--
+                    redraw(&cwd[0] as string, &line[0], length, cursor)
+                }
+                continue
+            }
+            if c >= ' ' && c <= '~' && length + 1 < LINE_SIZE {
+                for let i: u64 = length; i > cursor; i-- { line[i] = line[i - 1] }
+                line[cursor] = c
+                cursor++
+                length++
+                line[length] = 0
+                redraw(&cwd[0] as string, &line[0], length, cursor)
+            }
+        }
+        if length > 0 {
+            let duplicate = false
+            if history_count > 0 {
+                duplicate = (&line[0] as string) ==
+                (&history[history_count - 1][0] as string)
+            }
+            if !duplicate {
+                if history_count == HISTORY_SIZE {
+                    for let i: u64 = 1; i < HISTORY_SIZE; i++ { copy_text(&history[i - 1][0], &history[i][0] as string, LINE_SIZE) }
+                    history_count--
+                }
+                copy_text(&history[history_count][0], &line[0] as string, LINE_SIZE)
+                history_count++
+            }
+        }
+        if !execute(skip_spaces(&line[0]), &history[0][0], history_count) { break }
+    }
+    Sys.close(keyboard as u64)
+    Sys.exit(0)
+}

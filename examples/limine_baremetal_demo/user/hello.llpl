@@ -22,11 +22,7 @@ func _start(args: string[]) {
         Sys.write_s("arg: \(arg)\n")
     }
 
-    Sys.write_s("pid=")
-    Sys.write_i64(Sys.getpid())
-    Sys.write_s(" tid=")
-    Sys.write_i64(Sys.gettid())
-    Sys.write_s("\n")
+    Sys.write_s("pid=\(Sys.getpid()) tid=\(Sys.gettid())\n")
 
     let fd = Sys.open("/hello.txt", Sys.O_READ)
     if fd >= 0 {

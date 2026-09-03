@@ -7,13 +7,11 @@
 // register instead of HAL.PIC.eoi().
 //
 // The IOAPIC's MMIO base has no MSR/CPUID discovery path - it's normally
-// found via the ACPI MADT table, which this kernel doesn't parse (no ACPI
-// support exists at all yet - a bigger, separate undertaking). 0xFEC00000
-// is hardcoded instead: it's both QEMU's fixed default (i440fx and q35
-// alike) and the de-facto standard PC address predating strict ACPI
-// requirements. Full hardware portability would need real MADT parsing;
-// this kernel already targets QEMU specifically (`-accel kvm` is already
-// in build.yaml's run.args).
+// found via the ACPI MADT table (hal/acpi.llpl). IOAPIC.base() tries that
+// first and falls back to MMIO_BASE below (QEMU's fixed default, and the
+// de-facto standard PC address predating strict ACPI requirements) if
+// ACPI discovery fails for any reason - missing RSDP, missing MADT, no
+// IOAPIC entry, bad checksum.
 
 import mm
 
@@ -66,10 +64,15 @@ namespace HAL {
         const REDTBL_MASKED = 1 << 16
 
         // See HAL.LAPIC.base's own comment - recomputed rather than
-        // cached, for the same reason. MMIO_BASE is a fixed constant, so
-        // this is just an add (hhdm_offset + MMIO_BASE), not a real
-        // recomputation cost.
+        // cached, for the same reason. Tries real ACPI MADT discovery
+        // first (hal/acpi.llpl); falls back to the hardcoded MMIO_BASE
+        // if that fails for any reason, so this never regresses below
+        // the previous always-hardcoded behavior.
         func base() -> uint {
+            let (found, paddr) = HAL.ACPI.find_ioapic()
+            if found {
+                return MM.p2v(paddr)
+            }
             return MM.p2v(MMIO_BASE)
         }
 
@@ -86,11 +89,12 @@ namespace HAL {
         func init() {
         }
 
-        // Routes GSI `gsi` (== the legacy ISA IRQ number for the identity-
-        // mapped lines 0-15, which is all this kernel ever deals with - no
-        // ACPI Interrupt Source Override parsing, matching the rest of
-        // this file's scope) to `vector`, targeting the boot CPU (APIC ID
-        // 0 - this kernel has no SMP support). Level-triggered/active-low,
+        // Routes GSI `gsi` to `vector`, targeting the boot CPU (APIC ID 0
+        // - this kernel has no SMP support). Callers going from a legacy
+        // ISA/PCI IRQ line to a GSI should resolve it via
+        // HAL.ACPI.legacy_irq_to_gsi first (honors any ACPI Interrupt
+        // Source Override; identity-mapped when none exists). Level-
+        // triggered/active-low,
         // the standard PCI INTx convention (as opposed to ISA's edge/
         // active-high default) - the AHCI driver's own IRQ handler must
         // clear the device's interrupt-status bits itself, exactly the

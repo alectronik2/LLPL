@@ -1,0 +1,206 @@
+import hal
+import lib
+import mm
+import kern
+
+namespace Kern {
+    const MESSAGE_MAX_SIZE = 4096
+    const MESSAGE_QUEUE_MAX_DEPTH = 1024
+    const EMSGSIZE = -12
+
+    class QueuedMessage : Object {
+        data: char*
+        size: uint
+        priority: uint
+        next: QueuedMessage
+
+        constructor(data: char*, size: uint, priority: uint) {
+            self.data = data
+            self.size = size
+            self.priority = priority
+            self.next = null
+        }
+
+        destructor() {
+            MM.free(self.data as void*)
+        }
+    }
+
+    // A bounded, message-oriented IPC endpoint. Unlike a pipe, each receive
+    // returns exactly one send and priority ordering is preserved. Equal
+    // priorities remain FIFO. The queue is also a waitable handle: it becomes
+    // signaled whenever at least one complete message is available.
+    class MessageQueue : Waitable {
+        name: String
+        capacity: uint
+        count: uint
+        head: QueuedMessage
+        lock: SpinLock
+        readers: WaitQueue
+        writers: WaitQueue
+
+        constructor(name: String, capacity: uint) {
+            self.name = name
+            self.capacity = capacity
+            self.count = 0
+            self.head = null
+            self.readers = new WaitQueue()
+            self.writers = new WaitQueue()
+        }
+
+        destructor() {
+            let message = self.head
+            while message != null {
+                let next = message.next
+                message.next = null
+                delete message
+                message = next
+            }
+        }
+
+        func is_signaled() -> bool {
+            return self.count != 0
+        }
+
+        func is_message_queue() -> bool {
+            return true
+        }
+
+        func wait() -> bool {
+            while true {
+                let prepared = false
+                holding self.lock {
+                    return true if self.count != 0
+                    prepared = prepare_block_current(self.readers)
+                }
+                return false if !prepared
+                scheduler_yield()
+            }
+            return false
+        }
+
+        func send(data: char*, size: uint, priority: uint) -> int {
+            if data == null || size == 0 || size > MESSAGE_MAX_SIZE { return EINVAL }
+
+            // Allocate before sleeping; once space exists, enqueue cannot fail.
+            let copy = MM.malloc<char>(size)
+            memcpy(copy as void*, data as void*, size)
+            let message = new QueuedMessage(copy, size, priority)
+
+            while true {
+                let prepared = false
+                holding self.lock {
+                    if self.count < self.capacity {
+                        let previous: QueuedMessage = null
+                        let cursor = self.head
+                        // Higher numeric priority is delivered first. Using >=
+                        // here inserts after peers and therefore preserves FIFO.
+                        while cursor != null && cursor.priority >= priority {
+                            previous = cursor
+                            cursor = cursor.next
+                        }
+                        if previous == null {
+                            message.next = self.head
+                            self.head = message
+                        } else {
+                            message.next = cursor
+                            previous.next = message
+                        }
+                        self.count++
+                        wake_all(self.readers)
+                        return size as int
+                    }
+                    prepared = prepare_block_current(self.writers)
+                }
+                if !prepared {
+                    delete message
+                    return EINVAL
+                }
+                scheduler_yield()
+            }
+            return EINVAL
+        }
+
+        func receive(dest: char*, capacity: uint, priority: uint*) -> int {
+            if dest == null { return EINVAL }
+            while true {
+                let prepared = false
+                holding self.lock {
+                    if self.head != null {
+                        // Do not consume a message when the caller's buffer is
+                        // too small, allowing it to retry with a larger buffer.
+                        if capacity < self.head.size { return EMSGSIZE }
+                        let message = self.head
+                        self.head = message.next
+                        message.next = null
+                        self.count--
+                        memcpy(dest as void*, message.data as void*, message.size)
+                        if priority != null { *priority = message.priority }
+                        let size = message.size
+                        delete message
+                        wake_all(self.writers)
+                        return size as int
+                    }
+                    prepared = prepare_block_current(self.readers)
+                }
+                return EINVAL if !prepared
+                scheduler_yield()
+            }
+            return EINVAL
+        }
+    }
+
+    let message_queues: HashMap<String, MessageQueue>
+
+    func message_queue_init() {
+        message_queues = new HashMap<String, MessageQueue>()
+    }
+
+    func message_queue_create(proc: Process, name: String, capacity: uint) -> int {
+        if proc == null || name == null || name.byte_len() == 0 || capacity == 0 ||
+                capacity > MESSAGE_QUEUE_MAX_DEPTH {
+            return EINVAL
+        }
+        let queue: MessageQueue = null
+        holding lock {
+            if message_queues.contains(name) { return EEXIST }
+            queue = new MessageQueue(name, capacity)
+            message_queues.insert(name, queue)
+        }
+        let fd = proc.fds.install_waitable(queue as Waitable)
+        if fd < 0 {
+            holding lock { message_queues.remove(name) }
+        }
+        delete queue
+        return fd
+    }
+
+    func message_queue_open(proc: Process, name: String) -> int {
+        if proc == null || name == null || name.byte_len() == 0 { return EINVAL }
+        let queue: MessageQueue = null
+        holding lock {
+            let found = message_queues.get(name)
+            if found.is_none() { return ENOENT }
+            queue = found.get()
+            rc_retain(queue as char*)
+            delete found
+        }
+        let fd = proc.fds.install_waitable(queue as Waitable)
+        delete queue
+        return fd
+    }
+
+    func message_queue_unlink(name: String) -> int {
+        if name == null { return EINVAL }
+        let queue: MessageQueue = null
+        holding lock {
+            let found = message_queues.get(name)
+            if found.is_none() { return ENOENT }
+            queue = found.get()
+            message_queues.remove(name)
+            delete found
+        }
+        delete queue
+        return EOK
+    }
+}

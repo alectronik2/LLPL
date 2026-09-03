@@ -84,6 +84,8 @@ typedef struct String String;
 typedef struct OwnedBuffer OwnedBuffer;
 typedef struct ParseNode ParseNode;
 typedef struct Object Object;
+typedef struct Sys_NetworkConfig Sys_NetworkConfig;
+typedef struct Sys_ProbeResult Sys_ProbeResult;
 
 typedef struct {
     void (*destroy)(void*);
@@ -395,6 +397,27 @@ extern const intptr_t Sys_SYS_PROCESS_SNAPSHOT;
 extern const intptr_t Sys_SYS_LIST_DIRECTORY;
 extern const intptr_t Sys_SYS_CHDIR;
 extern const intptr_t Sys_SYS_GETCWD;
+extern const intptr_t Sys_SYS_SET_FOREGROUND;
+extern const intptr_t Sys_SYS_DHCP_CONFIGURE;
+extern const intptr_t Sys_SYS_ICMP_PROBE;
+extern const intptr_t Sys_SYS_DNS_RESOLVE;
+extern const intptr_t Sys_SYS_TCP_CONNECT;
+extern const intptr_t Sys_SYS_TCP_SEND;
+extern const intptr_t Sys_SYS_TCP_RECEIVE;
+extern const intptr_t Sys_SYS_TCP_CLOSE;
+extern const intptr_t Sys_SYS_RAND_BYTES;
+extern const intptr_t Sys_SYS_GET_TIME;
+extern const intptr_t Sys_SYS_MONOTONIC_MS;
+extern const intptr_t Sys_SYS_MQ_CREATE;
+extern const intptr_t Sys_SYS_MQ_OPEN;
+extern const intptr_t Sys_SYS_MQ_UNLINK;
+extern const intptr_t Sys_SYS_MQ_SEND;
+extern const intptr_t Sys_SYS_MQ_RECEIVE;
+extern const intptr_t Sys_SYS_FB_INFO;
+extern const intptr_t Sys_SYS_FB_PRESENT;
+extern const intptr_t Sys_SYS_UNLINK;
+extern const intptr_t Sys_SYS_MKDIR;
+extern const intptr_t Sys_SYS_TOUCH;
 extern const intptr_t Sys_O_READ;
 extern const intptr_t Sys_O_WRITE;
 extern const intptr_t Sys_O_CREATE;
@@ -413,6 +436,7 @@ static Object_VTable Object_vtable = {
 
 // String-interpolation scratch buffers (one per `\(...)` call site)
 static char __llpl_interp0[256];
+static char __llpl_interp1[256];
 
 struct SleepFuture {
     intptr_t state;
@@ -423,6 +447,20 @@ struct SleepFuture {
 struct EmbeddedFile {
     char* data;
     uint64_t len;
+};
+
+struct Sys_NetworkConfig {
+    uint32_t address;
+    uint32_t netmask;
+    uint32_t router;
+    uint32_t dhcp_server;
+    uint32_t nameserver;
+};
+
+struct Sys_ProbeResult {
+    uint32_t responder;
+    uint32_t kind;
+    uint32_t ticks;
 };
 
 struct AsyncExecutor {
@@ -771,6 +809,9 @@ Slice_ParseNode Vector_ParseNode_as_slice(Vector_ParseNode* self) {
 
 
 // Module: /home/nix/Code/LLPL/prelude.llpl (structs)
+
+
+// Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl (structs)
 
 
 // Module: /home/nix/Code/LLPL/prelude.llpl
@@ -2462,81 +2503,144 @@ const intptr_t Sys_SYS_CHDIR = 53;
 #line 60 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 const intptr_t Sys_SYS_GETCWD = 54;
 
+#line 61 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+const intptr_t Sys_SYS_SET_FOREGROUND = 55;
+
 #line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern uint64_t call1(uint64_t n, uint64_t a);
+const intptr_t Sys_SYS_DHCP_CONFIGURE = 56;
 
 #line 63 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern uint64_t call2(uint64_t n, uint64_t a, uint64_t b);
+const intptr_t Sys_SYS_ICMP_PROBE = 57;
 
 #line 64 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern uint64_t call3(uint64_t n, uint64_t a, uint64_t b, uint64_t c);
+const intptr_t Sys_SYS_DNS_RESOLVE = 58;
 
 #line 65 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern uint64_t call4(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t d);
+const intptr_t Sys_SYS_TCP_CONNECT = 59;
+
+#line 66 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+const intptr_t Sys_SYS_TCP_SEND = 60;
 
 #line 67 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void write_s(char* s);
+const intptr_t Sys_SYS_TCP_RECEIVE = 61;
 
 #line 68 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void write_n(char* s, uint64_t n);
+const intptr_t Sys_SYS_TCP_CLOSE = 62;
 
 #line 69 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void write_c(char c);
+const intptr_t Sys_SYS_RAND_BYTES = 63;
 
 #line 70 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void write_i64(int64_t value);
+const intptr_t Sys_SYS_GET_TIME = 64;
 
 #line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void write_u64(uint64_t value);
+const intptr_t Sys_SYS_MONOTONIC_MS = 65;
+
+#line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+const intptr_t Sys_SYS_MQ_CREATE = 66;
 
 #line 73 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void* malloc(uint64_t size);
+const intptr_t Sys_SYS_MQ_OPEN = 67;
 
 #line 74 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void free(void* ptr);
+const intptr_t Sys_SYS_MQ_UNLINK = 68;
 
 #line 75 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void* calloc(uint64_t nmemb, uint64_t size);
+const intptr_t Sys_SYS_MQ_SEND = 69;
 
 #line 76 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void* realloc(void* ptr, uint64_t size);
+const intptr_t Sys_SYS_MQ_RECEIVE = 70;
+
+#line 77 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+const intptr_t Sys_SYS_FB_INFO = 71;
+
+#line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+const intptr_t Sys_SYS_FB_PRESENT = 72;
+
+#line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+const intptr_t Sys_SYS_UNLINK = 73;
 
 #line 80 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
-extern void parse_args();
+const intptr_t Sys_SYS_MKDIR = 74;
 
 #line 81 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+const intptr_t Sys_SYS_TOUCH = 75;
+
+#line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern uint64_t call1(uint64_t n, uint64_t a);
+
+#line 98 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern uint64_t call2(uint64_t n, uint64_t a, uint64_t b);
+
+#line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern uint64_t call3(uint64_t n, uint64_t a, uint64_t b, uint64_t c);
+
+#line 100 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern uint64_t call4(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t d);
+
+#line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void write_s(char* s);
+
+#line 103 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void write_n(char* s, uint64_t n);
+
+#line 104 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void write_c(char c);
+
+#line 105 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void write_i64(int64_t value);
+
+#line 106 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void write_u64(uint64_t value);
+
+#line 108 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void* malloc(uint64_t size);
+
+#line 109 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void free(void* ptr);
+
+#line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void* calloc(uint64_t nmemb, uint64_t size);
+
+#line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void* realloc(void* ptr, uint64_t size);
+
+#line 115 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+extern void parse_args();
+
+#line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 extern uint64_t argc();
 
-#line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 extern char* arg_at(uint64_t i);
 
-#line 84 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 119 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 void Sys_exit(intptr_t status) {
     call2(((uint64_t)Sys_SYS_EXIT), ((uint64_t)status), ((uint64_t)0));
 }
 
-#line 88 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 123 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 const intptr_t Sys_O_READ = 1;
 
-#line 89 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 124 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 const intptr_t Sys_O_WRITE = 2;
 
-#line 90 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 const intptr_t Sys_O_CREATE = 4;
 
-#line 91 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 126 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 const intptr_t Sys_O_TRUNC = 8;
 
-#line 93 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 int64_t Sys_getpid() {
-#line 94 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 129 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
     int64_t __llpl_ret147 = ((int64_t)call2(((uint64_t)Sys_SYS_GETPID), ((uint64_t)0), ((uint64_t)0)));
     return __llpl_ret147;
 }
 
-#line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 132 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 int64_t Sys_gettid() {
-#line 98 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 133 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
     int64_t __llpl_ret148 = ((int64_t)call2(((uint64_t)Sys_SYS_GETTID), ((uint64_t)0), ((uint64_t)0)));
     return __llpl_ret148;
 }
@@ -2545,26 +2649,42 @@ int64_t Sys_gettid() {
 
 
 
-#line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 152 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 int64_t Sys_open(char* path, uint64_t flags) {
-#line 118 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 153 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
     int64_t __llpl_ret149 = ((int64_t)call2(((uint64_t)Sys_SYS_OPEN), ((uint64_t)path), flags));
     return __llpl_ret149;
 }
 
-#line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 156 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 int64_t Sys_close(uint64_t fd) {
-#line 122 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 157 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
     int64_t __llpl_ret150 = ((int64_t)call2(((uint64_t)Sys_SYS_CLOSE), fd, ((uint64_t)0)));
     return __llpl_ret150;
 }
 
-#line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
 int64_t Sys_read(uint64_t fd, void* buf, uint64_t size) {
-#line 126 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
+#line 161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/llpl_sys.llpl"
     int64_t __llpl_ret151 = ((int64_t)call3(((uint64_t)Sys_SYS_FD_READ), fd, ((uint64_t)buf), size));
     return __llpl_ret151;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2603,22 +2723,18 @@ void __llpl_main_args_impl(char** args) {
             __foreach_i152 = __foreach_i152 + 1;
         }
     }
-    write_s("pid=");
-    write_i64(Sys_getpid());
-    write_s(" tid=");
-    write_i64(Sys_gettid());
-    write_s("\n");
-#line 31 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/hello.llpl"
+    write_s(({ ksnprintf(__llpl_interp1, 256, "pid=%d tid=%d\n", ((long long)(Sys_getpid())), ((long long)(Sys_gettid()))); (char*)__llpl_interp1; }));
+#line 27 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/hello.llpl"
     int64_t fd = Sys_open("/hello.txt", ((uint64_t)Sys_O_READ));
     if ((fd >= 0)) {
-#line 33 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/hello.llpl"
+#line 29 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/hello.llpl"
         char buf[64];
-#line 34 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/hello.llpl"
-        int64_t got = Sys_read(((uint64_t)fd), ((void*)&(*(char*)__llpl_check_index(buf, 0, 64, sizeof(char), "hello.llpl", 34))), ((uint64_t)63));
+#line 30 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/user/hello.llpl"
+        int64_t got = Sys_read(((uint64_t)fd), ((void*)&(*(char*)__llpl_check_index(buf, 0, 64, sizeof(char), "hello.llpl", 30))), ((uint64_t)63));
         if ((got > 0)) {
-            (*(char*)__llpl_check_index(buf, ((uint64_t)got), 64, sizeof(char), "hello.llpl", 36)) = ((char)0);
+            (*(char*)__llpl_check_index(buf, ((uint64_t)got), 64, sizeof(char), "hello.llpl", 32)) = ((char)0);
             write_s("read /hello.txt: ");
-            write_n(((char*)&(*(char*)__llpl_check_index(buf, 0, 64, sizeof(char), "hello.llpl", 38))), ((uint64_t)got));
+            write_n(((char*)&(*(char*)__llpl_check_index(buf, 0, 64, sizeof(char), "hello.llpl", 34))), ((uint64_t)got));
             write_s("\n");
         }
         Sys_close(((uint64_t)fd));
@@ -2805,20 +2921,20 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "llpl_panic_halt", (void*)llpl_panic_halt, "hello.llpl", 15, "llpl_panic_halt" },
     { "ClosureAllocator_deallocate", (void*)ClosureAllocator_deallocate, "?", 738, "ClosureAllocator_deallocate" },
     { "async_sleep_until", (void*)async_sleep_until, "prelude.llpl", 151, "async_sleep_until" },
-    { "Sys_read", (void*)Sys_read, "llpl_sys.llpl", 125, "Sys.read" },
+    { "Sys_read", (void*)Sys_read, "llpl_sys.llpl", 160, "Sys.read" },
     { "u8_hash", (void*)u8_hash, "?", 2169, "u8_hash" },
-    { "Sys_gettid", (void*)Sys_gettid, "llpl_sys.llpl", 97, "Sys.gettid" },
+    { "Sys_gettid", (void*)Sys_gettid, "llpl_sys.llpl", 132, "Sys.gettid" },
     { "String_hash", (void*)String_hash, "?", 2201, "String_hash" },
     { "__llpl_main_args_impl", (void*)__llpl_main_args_impl, "hello.llpl", 19, "_start" },
     { "int_compare", (void*)int_compare, "?", 2234, "int_compare" },
-    { "Sys_getpid", (void*)Sys_getpid, "llpl_sys.llpl", 93, "Sys.getpid" },
+    { "Sys_getpid", (void*)Sys_getpid, "llpl_sys.llpl", 128, "Sys.getpid" },
     { "char_ptr_equals", (void*)char_ptr_equals, "?", 2193, "char_ptr_equals" },
-    { "Sys_close", (void*)Sys_close, "llpl_sys.llpl", 121, "Sys.close" },
+    { "Sys_close", (void*)Sys_close, "llpl_sys.llpl", 156, "Sys.close" },
     { "i64_hash", (void*)i64_hash, "?", 2151, "i64_hash" },
     { "i64_equals", (void*)i64_equals, "?", 2154, "i64_equals" },
     { "timeout_ms", (void*)timeout_ms, "prelude.llpl", 159, "timeout_ms" },
-    { "Sys_open", (void*)Sys_open, "llpl_sys.llpl", 117, "Sys.open" },
-    { "Sys_exit", (void*)Sys_exit, "llpl_sys.llpl", 84, "Sys.exit" },
+    { "Sys_open", (void*)Sys_open, "llpl_sys.llpl", 152, "Sys.open" },
+    { "Sys_exit", (void*)Sys_exit, "llpl_sys.llpl", 119, "Sys.exit" },
     { "u64_hash", (void*)u64_hash, "?", 2160, "u64_hash" },
     { "RegexMatchIterator_new", (void*)RegexMatchIterator_new, "prelude.llpl", 909, "RegexMatchIterator.new" },
     { "RegexMatchIterator_advance", (void*)RegexMatchIterator_advance, "prelude.llpl", 929, "RegexMatchIterator.advance" },

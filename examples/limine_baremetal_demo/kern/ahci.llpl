@@ -307,7 +307,8 @@ namespace Kern {
         let hba = MM.p2v(pci_dev.bar5 as uint) as HAL.AHCI.HbaRegs*
         hba.ghc = hba.ghc | HAL.AHCI.GHC_AE
 
-        HAL.IOAPIC.set_irq(pci_dev.interrupt_line as u32, AHCI_VECTOR)
+        let gsi = HAL.ACPI.legacy_irq_to_gsi(pci_dev.interrupt_line as uint)
+        HAL.IOAPIC.set_irq(gsi as u32, AHCI_VECTOR)
         ahci_interrupt = new HAL.Interrupt()
         let handler: HAL.proc = ahci_irq_handler
         ahci_interrupt.register(AHCI_VECTOR, handler, hba as void*)

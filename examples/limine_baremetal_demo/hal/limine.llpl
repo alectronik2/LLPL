@@ -59,6 +59,17 @@ packed struct LimineHhdmResponse {
     let offset: u64
 }
 
+packed struct LimineRsdpRequest {
+    let id: u64[4]
+    let revision: u64
+    let response: LimineRsdpResponse*
+}
+
+packed struct LimineRsdpResponse {
+    let revision: u64
+    let address: void*
+}
+
 packed struct LimineUuid {
     let a: u32
     let b: u16
@@ -138,6 +149,12 @@ alias limine_hhdm_request_id = [
     limine_common_magic,
     0x48dcf1cb8ad2b852,
     0x63984e959a98244b
+]
+
+alias limine_rsdp_request_id = [
+    limine_common_magic,
+    0xc5e77b6b397e7b43,
+    0x27637845accdcf3c
 ]
 
 alias limine_module_request_id = [

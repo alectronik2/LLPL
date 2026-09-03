@@ -1,0 +1,180 @@
+import hal
+import mm
+import lib
+import kern
+
+namespace Kern {
+    const E1000_VENDOR: u16 = 0x8086
+    const E1000_82540EM: u16 = 0x100E
+    const E1000_RX_COUNT: uint = 16
+    const E1000_TX_COUNT: uint = 16
+    const E1000_BUFFER_SIZE: uint = 2048
+
+    const E1000_STATUS: uint = 0x0008
+    const E1000_ICR: uint = 0x00C0
+    const E1000_IMC: uint = 0x00D8
+    const E1000_RCTL: uint = 0x0100
+    const E1000_TCTL: uint = 0x0400
+    const E1000_TIPG: uint = 0x0410
+    const E1000_RDBAL: uint = 0x2800
+    const E1000_RDBAH: uint = 0x2804
+    const E1000_RDLEN: uint = 0x2808
+    const E1000_RDH: uint = 0x2810
+    const E1000_RDT: uint = 0x2818
+    const E1000_TDBAL: uint = 0x3800
+    const E1000_TDBAH: uint = 0x3804
+    const E1000_TDLEN: uint = 0x3808
+    const E1000_TDH: uint = 0x3810
+    const E1000_TDT: uint = 0x3818
+    const E1000_RAL: uint = 0x5400
+    const E1000_RAH: uint = 0x5404
+
+    packed struct E1000RxDescriptor {
+        address: u64
+        length: u16
+        checksum: u16
+        status: u8
+        errors: u8
+        special: u16
+    }
+
+    packed struct E1000TxDescriptor {
+        address: u64
+        length: u16
+        checksum_offset: u8
+        command: u8
+        status: u8
+        checksum_start: u8
+        special: u16
+    }
+
+    class E1000Device : NetworkDevice {
+        mmio: uint
+        mac: u8[6]
+        rx_ring_frame: MM.PageFrame*
+        tx_ring_frame: MM.PageFrame*
+        rx_frames: MM.PageFrame*[E1000_RX_COUNT]
+        tx_frames: MM.PageFrame*[E1000_TX_COUNT]
+        rx_ring: E1000RxDescriptor*
+        tx_ring: E1000TxDescriptor*
+        rx_index: uint
+        tx_index: uint
+        lock: SpinLock
+
+        constructor(mmio: uint) {
+            self.mmio = mmio
+            self.rx_index = 0
+            self.tx_index = 0
+        }
+
+        func read_reg(offset: uint) -> u32 {
+            return *((self.mmio + offset) as u32*)
+        }
+
+        func write_reg(offset: uint, value: u32) {
+            *((self.mmio + offset) as u32*) = value
+        }
+
+        func link_up() -> bool { return (self.read_reg(E1000_STATUS) & 0x2) != 0 }
+
+        func mac_byte(index: uint) -> u8 {
+            if index >= 6 { return 0 }
+            return self.mac[index]
+        }
+
+        func initialize() {
+            self.write_reg(E1000_IMC, 0xFFFF_FFFF)
+            self.read_reg(E1000_ICR)
+
+            let ral = self.read_reg(E1000_RAL)
+            let rah = self.read_reg(E1000_RAH)
+            self.mac[0] = (ral & 0xFF) as u8
+            self.mac[1] = ((ral >> 8) & 0xFF) as u8
+            self.mac[2] = ((ral >> 16) & 0xFF) as u8
+            self.mac[3] = ((ral >> 24) & 0xFF) as u8
+            self.mac[4] = (rah & 0xFF) as u8
+            self.mac[5] = ((rah >> 8) & 0xFF) as u8
+
+            self.rx_ring_frame = MM.alloc_pageframe(MM.FrameType.Other)
+            self.tx_ring_frame = MM.alloc_pageframe(MM.FrameType.Other)
+            let rx_ring_paddr = MM.pf2p(self.rx_ring_frame)
+            let tx_ring_paddr = MM.pf2p(self.tx_ring_frame)
+            self.rx_ring = MM.pf2v(self.rx_ring_frame) as E1000RxDescriptor*
+            self.tx_ring = MM.pf2v(self.tx_ring_frame) as E1000TxDescriptor*
+            memset(self.rx_ring as void*, 0, MM.PAGE_SIZE)
+            memset(self.tx_ring as void*, 0, MM.PAGE_SIZE)
+
+            for let i: uint = 0; i < E1000_RX_COUNT; i++ {
+                self.rx_frames[i] = MM.alloc_pageframe(MM.FrameType.Other)
+                self.rx_ring[i].address = MM.pf2p(self.rx_frames[i])
+                self.rx_ring[i].status = 0
+            }
+            for let i: uint = 0; i < E1000_TX_COUNT; i++ {
+                self.tx_frames[i] = MM.alloc_pageframe(MM.FrameType.Other)
+                self.tx_ring[i].address = MM.pf2p(self.tx_frames[i])
+                self.tx_ring[i].status = 1
+            }
+
+            self.write_reg(E1000_RDBAL, (rx_ring_paddr & 0xFFFF_FFFF) as u32)
+            self.write_reg(E1000_RDBAH, (rx_ring_paddr >> 32) as u32)
+            self.write_reg(E1000_RDLEN, E1000_RX_COUNT * 16)
+            self.write_reg(E1000_RDH, 0)
+            self.write_reg(E1000_RDT, E1000_RX_COUNT - 1)
+
+            self.write_reg(E1000_TDBAL, (tx_ring_paddr & 0xFFFF_FFFF) as u32)
+            self.write_reg(E1000_TDBAH, (tx_ring_paddr >> 32) as u32)
+            self.write_reg(E1000_TDLEN, E1000_TX_COUNT * 16)
+            self.write_reg(E1000_TDH, 0)
+            self.write_reg(E1000_TDT, 0)
+            self.write_reg(E1000_TIPG, 10 | (8 << 10) | (6 << 20))
+            self.write_reg(E1000_TCTL, 0x2 | 0x8 | (0x10 << 4) | (0x40 << 12))
+            self.write_reg(E1000_RCTL, 0x2 | 0x8000 | 0x0400_0000)
+        }
+
+        func send(frame: u8*, length: uint) -> bool {
+            if length == 0 || length > ETHERNET_FRAME_MAX { return false }
+            holding self.lock {
+                let desc = &self.tx_ring[self.tx_index]
+                if (desc.status & 1) == 0 { return false }
+                let buffer = MM.pf2v(self.tx_frames[self.tx_index]) as u8*
+                memcpy(buffer as void*, frame as void*, length)
+                desc.length = length as u16
+                desc.command = 0x0B
+                desc.status = 0
+                self.tx_index = (self.tx_index + 1) % E1000_TX_COUNT
+                self.write_reg(E1000_TDT, self.tx_index as u32)
+            }
+            return true
+        }
+
+        func receive(frame: u8*, capacity: uint) -> int {
+            let desc = &self.rx_ring[self.rx_index]
+            if (desc.status & 1) == 0 { return 0 }
+            let length = desc.length as uint
+            let amount = length
+            if amount > capacity { amount = capacity }
+            let buffer = MM.pf2v(self.rx_frames[self.rx_index]) as u8*
+            memcpy(frame as void*, buffer as void*, amount)
+            desc.status = 0
+            let completed = self.rx_index
+            self.rx_index = (self.rx_index + 1) % E1000_RX_COUNT
+            self.write_reg(E1000_RDT, completed as u32)
+            return amount as int
+        }
+    }
+
+    func e1000_init() -> bool {
+        let (found, pci_dev) = HAL.PCI.find_vendor_device(E1000_VENDOR, E1000_82540EM)
+        if !found {
+            "E1000: Intel 82540EM not found\n" |> HAL.Serial.write
+            return false
+        }
+        HAL.PCI.enable_bus_master(pci_dev)
+        let device = new E1000Device(MM.p2v(pci_dev.bar0 as uint))
+        device.initialize()
+        register_network_device(device)
+        "E1000: MAC \(device.mac[0]:hex):\(device.mac[1]:hex):\(device.mac[2]:hex):\(device.mac[3]:hex):\(device.mac[4]:hex):\(device.mac[5]:hex), link=\(device.link_up())\n" |>
+            HAL.Serial.write
+        return true
+    }
+}

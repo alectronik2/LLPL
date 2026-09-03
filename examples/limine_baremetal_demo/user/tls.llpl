@@ -1,0 +1,886 @@
+import llpl_sys
+import sha256
+import aesgcm
+import x25519
+
+// Minimal TLS 1.2 client (RFC 5246 + RFC 5288 AES-GCM cipher suites +
+// RFC 7748 X25519). Built specifically for examples/limine_baremetal_demo's
+// `fetch` utility.
+//
+// Deliberately NOT implemented, by design (agreed scope: real encryption,
+// no MITM protection):
+//   - certificate chain validation, signature verification, hostname
+//     checking - the Certificate message and the ServerKeyExchange
+//     signature are read off the wire (so the transcript hash and byte
+//     framing stay correct) and then discarded unchecked.
+//   - any cipher suite besides ECDHE_(RSA|ECDSA)_WITH_AES_128_GCM_SHA256,
+//     any key-exchange group besides X25519, TLS 1.3, session resumption,
+//     renegotiation.
+// This client protects traffic against passive eavesdropping only. Treat
+// it the same as an unauthenticated http:// connection with respect to an
+// active attacker.
+namespace Tls {
+    const CONTENT_CHANGE_CIPHER_SPEC: u8 = 20
+    const CONTENT_ALERT: u8 = 21
+    const CONTENT_HANDSHAKE: u8 = 22
+    const CONTENT_APPLICATION_DATA: u8 = 23
+
+    const HS_CLIENT_HELLO: u8 = 1
+    const HS_SERVER_HELLO: u8 = 2
+    const HS_CERTIFICATE: u8 = 11
+    const HS_SERVER_KEY_EXCHANGE: u8 = 12
+    const HS_CERTIFICATE_REQUEST: u8 = 13
+    const HS_SERVER_HELLO_DONE: u8 = 14
+    const HS_CLIENT_KEY_EXCHANGE: u8 = 16
+    const HS_FINISHED: u8 = 20
+
+    const CIPHER_ECDHE_RSA_AES128_GCM_SHA256: u16 = 0xC02F
+    const CIPHER_ECDHE_ECDSA_AES128_GCM_SHA256: u16 = 0xC02B
+    const GROUP_X25519: u16 = 0x001d
+
+    // Max GCM ciphertext record payload (RFC 5246 6.2.3: plaintext capped
+    // at 2^14 = 16384, plus GCM's 8-byte explicit nonce + 16-byte tag, plus
+    // slack) - the buffer size a peer's single largest record could need.
+    const MAX_RECORD_PAYLOAD: uint = 16384 + 2048
+    const RECV_BUF_SIZE: uint = MAX_RECORD_PAYLOAD + 5
+    // Handshake byte-stream reassembly buffer: generous headroom over one
+    // record's worth, since a coalesced ServerHello+Certificate+
+    // ServerKeyExchange+ServerHelloDone flight commonly arrives as a
+    // single record but is occasionally split across two.
+    const HS_BUF_SIZE: uint = MAX_RECORD_PAYLOAD * 2
+    // Cap on a single Tls.write() record's plaintext - purely a scratch
+    // buffer sizing choice (ciphertext is sent via as many chunked
+    // Sys.tcp_send calls as needed, so this is not limited by the
+    // kernel's 1400-byte-per-call ceiling the way a single tcp_send would
+    // be).
+    const MAX_PLAINTEXT_FRAGMENT: uint = 4096
+
+    struct State {
+        connected: bool
+        handshake_done: bool
+        server_encrypted: bool
+
+        client_write_key: u8[16]
+        server_write_key: u8[16]
+        client_write_iv: u8[4]
+        server_write_iv: u8[4]
+        client_seq: u64
+        server_seq: u64
+        client_gcm: AesGcm.GcmContext
+        server_gcm: AesGcm.GcmContext
+
+        transcript: Sha256.Context
+
+        recv_buf: u8[RECV_BUF_SIZE]
+        recv_len: uint
+        recv_pos: uint
+
+        plain_buf: u8[MAX_RECORD_PAYLOAD]
+        plain_len: uint
+        plain_pos: uint
+    }
+    let state: State
+
+    struct HandshakeReader {
+        buf: u8[HS_BUF_SIZE]
+        len: uint
+        pos: uint
+    }
+    let hs_reader: HandshakeReader
+
+    struct Builder {
+        buf: u8[1024]
+        len: uint
+    }
+
+    func b_u8(b: Builder*, v: u8) {
+        b.buf[b.len] = v
+        b.len++
+    }
+
+    func b_u16(b: Builder*, v: u16) {
+        b_u8(b, (v >> 8) as u8)
+        b_u8(b, v as u8)
+    }
+
+    func b_u24(b: Builder*, v: uint) {
+        b_u8(b, (v >> 16) as u8)
+        b_u8(b, (v >> 8) as u8)
+        b_u8(b, v as u8)
+    }
+
+    func b_bytes(b: Builder*, data: u8*, len: uint) {
+        let i: uint = 0
+        while i < len {
+            b.buf[b.len + i] = data[i]
+            i++
+        }
+        b.len += len
+    }
+
+    func finish_handshake_message(b: Builder*, msg_type: u8, msg_start: uint) {
+        let body_len = b.len - msg_start - 4
+        b.buf[msg_start] = msg_type
+        b.buf[msg_start + 1] = (body_len >> 16) as u8
+        b.buf[msg_start + 2] = (body_len >> 8) as u8
+        b.buf[msg_start + 3] = body_len as u8
+    }
+
+    // ---- raw TCP-level record reassembly (shared by handshake and
+    // application-data phases) ----
+
+    func fill_more() -> bool {
+        if state.recv_pos > 0 {
+            let remaining = state.recv_len - state.recv_pos
+            let i: uint = 0
+            while i < remaining {
+                state.recv_buf[i] = state.recv_buf[state.recv_pos + i]
+                i++
+            }
+            state.recv_len = remaining
+            state.recv_pos = 0
+        }
+        let capacity = RECV_BUF_SIZE - state.recv_len
+        if capacity == 0 { return false }
+        let chunk = capacity
+        if chunk > 1400 { chunk = 1400 }
+        let got = Sys.tcp_receive(&state.recv_buf[state.recv_len] as void*, chunk as u64)
+        if got <= 0 { return false }
+        state.recv_len += got as uint
+        return true
+    }
+
+    func ensure(need: uint) -> bool {
+        while state.recv_len - state.recv_pos < need {
+            if !fill_more() { return false }
+        }
+        return true
+    }
+
+    func put_seq_aad(aad: u8*, seq: u64, content_type: u8, length: uint) {
+        let i: uint = 0
+        while i < 8 {
+            aad[i] = (seq >> ((7 - i) * 8)) as u8
+            i++
+        }
+        aad[8] = content_type
+        aad[9] = 0x03
+        aad[10] = 0x03
+        aad[11] = (length >> 8) as u8
+        aad[12] = length as u8
+    }
+
+    // ---- handshake-phase record/message reader ----
+    // Pulls exactly one TLS record off the wire (decrypting it if the
+    // server's side of the connection has switched to encrypted records),
+    // appending its plaintext onto hs_reader so a handshake message that
+    // spans record boundaries can still be read contiguously. Returns the
+    // record's content type, or 0xFF on any I/O, framing, or
+    // authentication error.
+    func hs_pull_record() -> u8 {
+        if hs_reader.pos > 0 {
+            let remaining = hs_reader.len - hs_reader.pos
+            let i: uint = 0
+            while i < remaining {
+                hs_reader.buf[i] = hs_reader.buf[hs_reader.pos + i]
+                i++
+            }
+            hs_reader.len = remaining
+            hs_reader.pos = 0
+        }
+
+        if !ensure(5) { return 0xFF }
+        let content_type = state.recv_buf[state.recv_pos]
+        let length = ((state.recv_buf[state.recv_pos + 3] as uint) << 8) |
+            (state.recv_buf[state.recv_pos + 4] as uint)
+        if length > MAX_RECORD_PAYLOAD { return 0xFF }
+        if !ensure(5 + length) { return 0xFF }
+        let body = &state.recv_buf[state.recv_pos + 5]
+
+        if state.server_encrypted {
+            if length < 24 { return 0xFF }
+            let nonce: u8[12]
+            let i: uint = 0
+            while i < 4 {
+                nonce[i] = state.server_write_iv[i]
+                i++
+            }
+            while i < 12 {
+                nonce[i] = body[i - 4]
+                i++
+            }
+
+            let ciphertext_len = length - 8 - 16
+            let ciphertext = &body[8]
+            let tag = &body[8 + ciphertext_len]
+
+            let aad: u8[13]
+            put_seq_aad(&aad[0], state.server_seq, content_type, ciphertext_len)
+
+            if hs_reader.len + ciphertext_len > HS_BUF_SIZE { return 0xFF }
+            let ok = AesGcm.gcm_open(&state.server_gcm, &nonce[0], &aad[0], 13,
+                ciphertext, ciphertext_len, tag, &hs_reader.buf[hs_reader.len])
+            state.server_seq += 1
+            if !ok { return 0xFF }
+            hs_reader.len += ciphertext_len
+        } else {
+            if hs_reader.len + length > HS_BUF_SIZE { return 0xFF }
+            let i: uint = 0
+            while i < length {
+                hs_reader.buf[hs_reader.len + i] = body[i]
+                i++
+            }
+            hs_reader.len += length
+        }
+
+        state.recv_pos += 5 + length
+        return content_type
+    }
+
+    func hs_ensure(n: uint) -> bool {
+        while hs_reader.len - hs_reader.pos < n {
+            let ct = hs_pull_record()
+            if ct != CONTENT_HANDSHAKE { return false }
+        }
+        return true
+    }
+
+    func hs_read_raw(dst: u8*, n: uint) -> bool {
+        if !hs_ensure(n) { return false }
+        if dst != null {
+            let i: uint = 0
+            while i < n {
+                dst[i] = hs_reader.buf[hs_reader.pos + i]
+                i++
+            }
+        }
+        hs_reader.pos += n
+        return true
+    }
+
+    // Same as hs_read_raw, but also feeds the bytes into the running
+    // handshake transcript hash - the right choice for every handshake
+    // message except the server's Finished (whose verify_data is computed
+    // over the transcript *excluding* itself; see connect() below).
+    func hs_read(dst: u8*, n: uint) -> bool {
+        // `start` must be captured *after* hs_ensure(), not before: if the
+        // requested bytes aren't buffered yet, hs_ensure() pulls another
+        // record via hs_pull_record(), which compacts hs_reader (shifting
+        // already-consumed bytes out and resetting hs_reader.pos to 0)
+        // whenever hs_reader.pos > 0 - i.e. on essentially every read that
+        // crosses a record boundary. Capturing `start` first (the original
+        // bug here) meant hashing bytes at a stale offset into the
+        // post-compaction buffer instead of the ones just read, silently
+        // corrupting the handshake transcript and breaking Finished
+        // verification against any real peer.
+        if !hs_ensure(n) { return false }
+        let start = hs_reader.pos
+        if dst != null {
+            let i: uint = 0
+            while i < n {
+                dst[i] = hs_reader.buf[hs_reader.pos + i]
+                i++
+            }
+        }
+        hs_reader.pos += n
+        Sha256.update(&state.transcript, &hs_reader.buf[start], n)
+        return true
+    }
+
+    func hs_skip(n: uint) -> bool {
+        return hs_read(null, n)
+    }
+
+    func hs_next_header() -> (bool, u8, uint) {
+        let header: u8[4]
+        if !hs_read(&header[0], 4) { return (false, 0, 0) }
+        let len = ((header[1] as uint) << 16) | ((header[2] as uint) << 8) | (header[3] as uint)
+        return (true, header[0], len)
+    }
+
+    func hs_next_header_raw() -> (bool, u8, uint) {
+        let header: u8[4]
+        if !hs_read_raw(&header[0], 4) { return (false, 0, 0) }
+        let len = ((header[1] as uint) << 16) | ((header[2] as uint) << 8) | (header[3] as uint)
+        return (true, header[0], len)
+    }
+
+    // ---- record senders ----
+
+    func send_bytes_chunked(data: u8*, len: uint) -> bool {
+        let offset: uint = 0
+        while offset < len {
+            let chunk = len - offset
+            if chunk > 1400 { chunk = 1400 }
+            if Sys.tcp_send(&data[offset] as void*, chunk as u64) < 0 { return false }
+            offset += chunk
+        }
+        return true
+    }
+
+    func send_plain_record(content_type: u8, data: u8*, length: uint) -> bool {
+        let header: u8[5]
+        header[0] = content_type
+        header[1] = 0x03
+        header[2] = 0x03
+        header[3] = (length >> 8) as u8
+        header[4] = length as u8
+        if !send_bytes_chunked(&header[0], 5) { return false }
+        if length > 0 && !send_bytes_chunked(data, length) { return false }
+        if content_type == CONTENT_HANDSHAKE {
+            Sha256.update(&state.transcript, data, length)
+        }
+        return true
+    }
+
+    func send_encrypted_record(content_type: u8, plaintext: u8*, length: uint) -> bool {
+        if length > MAX_PLAINTEXT_FRAGMENT { return false }
+
+        let nonce: u8[12]
+        let i: uint = 0
+        while i < 4 {
+            nonce[i] = state.client_write_iv[i]
+            i++
+        }
+        while i < 12 {
+            nonce[i] = (state.client_seq >> ((11 - i) * 8)) as u8
+            i++
+        }
+
+        let aad: u8[13]
+        put_seq_aad(&aad[0], state.client_seq, content_type, length)
+
+        let ciphertext: u8[MAX_PLAINTEXT_FRAGMENT]
+        let tag: u8[16]
+        AesGcm.gcm_seal(&state.client_gcm, &nonce[0], &aad[0], 13, plaintext, length, &ciphertext[0], &tag[0])
+
+        let record_len = 8 + length + 16
+        let header: u8[5]
+        header[0] = content_type
+        header[1] = 0x03
+        header[2] = 0x03
+        header[3] = (record_len >> 8) as u8
+        header[4] = record_len as u8
+
+        if !send_bytes_chunked(&header[0], 5) { return false }
+        if !send_bytes_chunked(&nonce[4], 8) { return false }
+        if !send_bytes_chunked(&ciphertext[0], length) { return false }
+        if !send_bytes_chunked(&tag[0], 16) { return false }
+
+        state.client_seq += 1
+
+        // The client's own Finished message plaintext still needs to be in
+        // the transcript: the *server's* Finished verify_data is computed
+        // over "all handshake messages" up to but not including itself,
+        // which includes the client's Finished that came before it.
+        if content_type == CONTENT_HANDSHAKE {
+            Sha256.update(&state.transcript, plaintext, length)
+        }
+        return true
+    }
+
+    func build_client_hello_body(hostname: string, client_random: u8*, b: Builder*) {
+        b_u16(b, 0x0303)
+        b_bytes(b, client_random, 32)
+        b_u8(b, 0) // session_id length
+
+        b_u16(b, 4) // cipher_suites length in bytes
+        b_u16(b, CIPHER_ECDHE_RSA_AES128_GCM_SHA256)
+        b_u16(b, CIPHER_ECDHE_ECDSA_AES128_GCM_SHA256)
+
+        b_u8(b, 1) // compression_methods length
+        b_u8(b, 0) // null compression
+
+        let ext_len_pos = b.len
+        b_u16(b, 0) // extensions length placeholder, backfilled below
+
+        let hostname_len = hostname.sizeof as uint
+
+        // server_name (SNI)
+        b_u16(b, 0x0000)
+        b_u16(b, (5 + hostname_len) as u16)
+        b_u16(b, (3 + hostname_len) as u16)
+        b_u8(b, 0)
+        b_u16(b, hostname_len as u16)
+        let i: uint = 0
+        while i < hostname_len {
+            b_u8(b, hostname[i] as u8)
+            i++
+        }
+
+        // supported_groups: x25519 only
+        b_u16(b, 0x000a)
+        b_u16(b, 4)
+        b_u16(b, 2)
+        b_u16(b, GROUP_X25519)
+
+        // ec_point_formats: uncompressed only
+        b_u16(b, 0x000b)
+        b_u16(b, 2)
+        b_u8(b, 1)
+        b_u8(b, 0)
+
+        // signature_algorithms - required by RFC 5246 when offering ECDHE
+        // suites; we never actually check a signature against these, but
+        // servers expect the extension to be present.
+        b_u16(b, 0x000d)
+        b_u16(b, 6)
+        b_u16(b, 4)
+        b_u16(b, 0x0401) // rsa_pkcs1_sha256
+        b_u16(b, 0x0403) // ecdsa_secp256r1_sha256
+
+        // renegotiation_info, empty - some middleboxes/servers expect it.
+        b_u16(b, 0xff01)
+        b_u16(b, 1)
+        b_u8(b, 0)
+
+        let extensions_total = b.len - (ext_len_pos + 2)
+        b.buf[ext_len_pos] = (extensions_total >> 8) as u8
+        b.buf[ext_len_pos + 1] = extensions_total as u8
+    }
+
+    // Establishes a TCP connection to (address, port) and completes a full
+    // TLS 1.2 handshake against `hostname` (sent via SNI). On success,
+    // Tls.read/Tls.write/Tls.close can be used exactly like
+    // Sys.tcp_receive/Sys.tcp_send/Sys.tcp_close. On failure, the TCP
+    // connection is already closed.
+    func connect(address: u32, port: u16, hostname: string) -> bool {
+        state.recv_len = 0
+        state.recv_pos = 0
+        state.plain_len = 0
+        state.plain_pos = 0
+        state.client_seq = 0
+        state.server_seq = 0
+        state.server_encrypted = false
+        state.handshake_done = false
+        state.connected = false
+        hs_reader.len = 0
+        hs_reader.pos = 0
+        Sha256.init(&state.transcript)
+
+        if Sys.tcp_connect(address, port) < 0 {
+            return false
+        }
+        state.connected = true
+
+        let client_random: u8[32]
+        Sys.rand_bytes(&client_random[0] as void*, 32)
+
+        let hello: Builder
+        hello.len = 0
+        let hello_start = hello.len
+        b_u8(&hello, 0)
+        b_u8(&hello, 0)
+        b_u8(&hello, 0)
+        b_u8(&hello, 0)
+        build_client_hello_body(hostname, &client_random[0], &hello)
+        finish_handshake_message(&hello, HS_CLIENT_HELLO, hello_start)
+        if !send_plain_record(CONTENT_HANDSHAKE, &hello.buf[0], hello.len) {
+            Sys.tcp_close()
+            return false
+        }
+
+        // ServerHello
+        let (ok1, mt1, sh_len) = hs_next_header()
+        if !ok1 || mt1 != HS_SERVER_HELLO {
+            Sys.tcp_close()
+            return false
+        }
+
+        let server_version: u8[2]
+        hs_read(&server_version[0], 2)
+        let server_random: u8[32]
+        hs_read(&server_random[0], 32)
+        let session_id_len: u8[1]
+        hs_read(&session_id_len[0], 1)
+        if session_id_len[0] > 0 { hs_skip(session_id_len[0] as uint) }
+        let cipher_bytes: u8[2]
+        hs_read(&cipher_bytes[0], 2)
+        let chosen_cipher = ((cipher_bytes[0] as u16) << 8) | (cipher_bytes[1] as u16)
+        if chosen_cipher != CIPHER_ECDHE_RSA_AES128_GCM_SHA256 &&
+                chosen_cipher != CIPHER_ECDHE_ECDSA_AES128_GCM_SHA256 {
+            Sys.tcp_close()
+            return false
+        }
+        let compression: u8[1]
+        hs_read(&compression[0], 1)
+        let consumed_sh: uint = 2 + 32 + 1 + (session_id_len[0] as uint) + 2 + 1
+        if consumed_sh < sh_len {
+            let ext_len_bytes: u8[2]
+            hs_read(&ext_len_bytes[0], 2)
+            let ext_len = ((ext_len_bytes[0] as uint) << 8) | (ext_len_bytes[1] as uint)
+            if ext_len > 0 { hs_skip(ext_len) }
+        }
+
+        // Certificate - contents are never validated (see file header
+        // comment); read off the wire (for correct framing/transcript
+        // hashing) and discarded.
+        let (ok2, mt2, cert_len) = hs_next_header()
+        if !ok2 || mt2 != HS_CERTIFICATE {
+            Sys.tcp_close()
+            return false
+        }
+        if cert_len > 0 { hs_skip(cert_len) }
+
+        // ServerKeyExchange
+        let (ok3, mt3, ske_len) = hs_next_header()
+        if !ok3 || mt3 != HS_SERVER_KEY_EXCHANGE {
+            Sys.tcp_close()
+            return false
+        }
+        let curve_type: u8[1]
+        hs_read(&curve_type[0], 1)
+        let curve_id: u8[2]
+        hs_read(&curve_id[0], 2)
+        let curve = ((curve_id[0] as u16) << 8) | (curve_id[1] as u16)
+        if curve_type[0] != 3 || curve != GROUP_X25519 {
+            Sys.tcp_close()
+            return false
+        }
+        let pubkey_len: u8[1]
+        hs_read(&pubkey_len[0], 1)
+        if pubkey_len[0] != 32 {
+            Sys.tcp_close()
+            return false
+        }
+        let server_public: u8[32]
+        hs_read(&server_public[0], 32)
+        // Remainder is signature_algorithm(2) + signature_length(2) +
+        // signature - skipped unconditionally, we have no certificate
+        // chain to check it against.
+        let consumed_ske: uint = 1 + 2 + 1 + 32
+        if ske_len > consumed_ske { hs_skip(ske_len - consumed_ske) }
+
+        // Optional CertificateRequest -> respond with an empty client
+        // Certificate (no client-cert support).
+        let (ok4, mt4, len4) = hs_next_header()
+        if !ok4 {
+            Sys.tcp_close()
+            return false
+        }
+        let msg_type = mt4
+        let msg_len = len4
+        let need_empty_certificate = false
+        if msg_type == HS_CERTIFICATE_REQUEST {
+            if len4 > 0 { hs_skip(len4) }
+            need_empty_certificate = true
+            let (ok5, mt5, len5) = hs_next_header()
+            if !ok5 {
+                Sys.tcp_close()
+                return false
+            }
+            msg_type = mt5
+            msg_len = len5
+        }
+        if msg_type != HS_SERVER_HELLO_DONE || msg_len != 0 {
+            Sys.tcp_close()
+            return false
+        }
+
+        // Key exchange.
+        let client_private: u8[32]
+        Sys.rand_bytes(&client_private[0] as void*, 32)
+        let client_public: u8[32]
+        X25519.scalarmult_base(&client_public[0], &client_private[0])
+        let shared_secret: u8[32]
+        X25519.scalarmult(&shared_secret[0], &client_private[0], &server_public[0])
+
+        if need_empty_certificate {
+            let cert_msg: Builder
+            cert_msg.len = 0
+            let cm_start = cert_msg.len
+            b_u8(&cert_msg, 0)
+            b_u8(&cert_msg, 0)
+            b_u8(&cert_msg, 0)
+            b_u8(&cert_msg, 0)
+            b_u24(&cert_msg, 0) // empty certificate_list
+            finish_handshake_message(&cert_msg, HS_CERTIFICATE, cm_start)
+            if !send_plain_record(CONTENT_HANDSHAKE, &cert_msg.buf[0], cert_msg.len) {
+                Sys.tcp_close()
+                return false
+            }
+        }
+
+        let cke: Builder
+        cke.len = 0
+        let cke_start = cke.len
+        b_u8(&cke, 0)
+        b_u8(&cke, 0)
+        b_u8(&cke, 0)
+        b_u8(&cke, 0)
+        b_u8(&cke, 32)
+        b_bytes(&cke, &client_public[0], 32)
+        finish_handshake_message(&cke, HS_CLIENT_KEY_EXCHANGE, cke_start)
+        if !send_plain_record(CONTENT_HANDSHAKE, &cke.buf[0], cke.len) {
+            Sys.tcp_close()
+            return false
+        }
+
+        // Derive master_secret and the AES-128-GCM key block (RFC 5246 6.3,
+        // 8.1; RFC 5288 for AEAD's key-block shape: two 16-byte write keys
+        // plus two 4-byte fixed IVs, no separate MAC keys).
+        let seed_ms: u8[13 + 32 + 32]
+        let label_ms = "master secret"
+        let i: uint = 0
+        while i < 13 {
+            seed_ms[i] = label_ms[i] as u8
+            i++
+        }
+        let k: uint = 0
+        while k < 32 {
+            seed_ms[13 + k] = client_random[k]
+            k++
+        }
+        k = 0
+        while k < 32 {
+            seed_ms[13 + 32 + k] = server_random[k]
+            k++
+        }
+
+        let master_secret: u8[48]
+        Sha256.prf(&shared_secret[0], 32, &seed_ms[0], 13 + 32 + 32, &master_secret[0], 48)
+
+        let seed_kb: u8[13 + 32 + 32]
+        let label_kb = "key expansion"
+        i = 0
+        while i < 13 {
+            seed_kb[i] = label_kb[i] as u8
+            i++
+        }
+        k = 0
+        while k < 32 {
+            seed_kb[13 + k] = server_random[k]
+            k++
+        }
+        k = 0
+        while k < 32 {
+            seed_kb[13 + 32 + k] = client_random[k]
+            k++
+        }
+
+        let key_block: u8[40]
+        Sha256.prf(&master_secret[0], 48, &seed_kb[0], 13 + 32 + 32, &key_block[0], 40)
+
+        i = 0
+        while i < 16 {
+            state.client_write_key[i] = key_block[i]
+            i++
+        }
+        i = 0
+        while i < 16 {
+            state.server_write_key[i] = key_block[16 + i]
+            i++
+        }
+        i = 0
+        while i < 4 {
+            state.client_write_iv[i] = key_block[32 + i]
+            i++
+        }
+        i = 0
+        while i < 4 {
+            state.server_write_iv[i] = key_block[36 + i]
+            i++
+        }
+
+        AesGcm.gcm_init(&state.client_gcm, &state.client_write_key[0])
+        AesGcm.gcm_init(&state.server_gcm, &state.server_write_key[0])
+
+        // Client ChangeCipherSpec + Finished. ChangeCipherSpec itself is
+        // excluded from the transcript hash (send_plain_record only hashes
+        // CONTENT_HANDSHAKE records).
+        let ccs: u8[1]
+        ccs[0] = 1
+        if !send_plain_record(CONTENT_CHANGE_CIPHER_SPEC, &ccs[0], 1) {
+            Sys.tcp_close()
+            return false
+        }
+
+        // verify_data for our own Finished uses the transcript hash up to
+        // (not including) this message - snapshot it before appending
+        // Finished itself.
+        let ctx_before_client_finished: Sha256.Context = state.transcript
+        let handshake_hash1: u8[32]
+        Sha256.final(&ctx_before_client_finished, &handshake_hash1[0])
+
+        let seed_cf: u8[15 + 32]
+        let label_cf = "client finished"
+        i = 0
+        while i < 15 {
+            seed_cf[i] = label_cf[i] as u8
+            i++
+        }
+        k = 0
+        while k < 32 {
+            seed_cf[15 + k] = handshake_hash1[k]
+            k++
+        }
+
+        let client_verify_data: u8[12]
+        Sha256.prf(&master_secret[0], 48, &seed_cf[0], 15 + 32, &client_verify_data[0], 12)
+
+        let fin: Builder
+        fin.len = 0
+        let fin_start = fin.len
+        b_u8(&fin, 0)
+        b_u8(&fin, 0)
+        b_u8(&fin, 0)
+        b_u8(&fin, 0)
+        b_bytes(&fin, &client_verify_data[0], 12)
+        finish_handshake_message(&fin, HS_FINISHED, fin_start)
+        if !send_encrypted_record(CONTENT_HANDSHAKE, &fin.buf[0], fin.len) {
+            Sys.tcp_close()
+            return false
+        }
+
+        // Server's ChangeCipherSpec, then its (encrypted) Finished.
+        if hs_reader.pos != hs_reader.len {
+            Sys.tcp_close()
+            return false
+        }
+        let ccs_type = hs_pull_record()
+        if ccs_type != CONTENT_CHANGE_CIPHER_SPEC {
+            Sys.tcp_close()
+            return false
+        }
+        state.server_encrypted = true
+        hs_reader.pos = hs_reader.len
+
+        // The server's Finished verify_data covers the transcript up to
+        // (not including) itself - which does include our own Finished,
+        // already appended to state.transcript by send_encrypted_record
+        // above. Snapshot now, then read the server's Finished WITHOUT
+        // hashing it (hs_*_raw), since it must not contribute to the hash
+        // used to check it.
+        let ctx_before_server_finished: Sha256.Context = state.transcript
+        let handshake_hash2: u8[32]
+        Sha256.final(&ctx_before_server_finished, &handshake_hash2[0])
+
+        let (ok6, mt6, len6) = hs_next_header_raw()
+        if !ok6 || mt6 != HS_FINISHED || len6 != 12 {
+            Sys.tcp_close()
+            return false
+        }
+        let server_verify_data: u8[12]
+        if !hs_read_raw(&server_verify_data[0], 12) {
+            Sys.tcp_close()
+            return false
+        }
+
+        let seed_sf: u8[15 + 32]
+        let label_sf = "server finished"
+        i = 0
+        while i < 15 {
+            seed_sf[i] = label_sf[i] as u8
+            i++
+        }
+        k = 0
+        while k < 32 {
+            seed_sf[15 + k] = handshake_hash2[k]
+            k++
+        }
+
+        let expected_verify_data: u8[12]
+        Sha256.prf(&master_secret[0], 48, &seed_sf[0], 15 + 32, &expected_verify_data[0], 12)
+
+        let diff: u8 = 0
+        i = 0
+        while i < 12 {
+            diff = diff | (expected_verify_data[i] ^ server_verify_data[i])
+            i++
+        }
+        if diff != 0 {
+            Sys.tcp_close()
+            return false
+        }
+
+        state.handshake_done = true
+        return true
+    }
+
+    // Decrypts and returns application data, mirroring Sys.tcp_receive's
+    // contract: >0 bytes read, 0 on clean stream end (EOF or a received
+    // alert), <0 on error.
+    func read(buf: void*, capacity: u64) -> i64 {
+        if !state.handshake_done { return -1 }
+        let out = buf as u8*
+        let cap = capacity as uint
+
+        while state.plain_pos >= state.plain_len {
+            if !ensure(5) { return 0 }
+            let content_type = state.recv_buf[state.recv_pos]
+            let length = ((state.recv_buf[state.recv_pos + 3] as uint) << 8) |
+                (state.recv_buf[state.recv_pos + 4] as uint)
+            if length > MAX_RECORD_PAYLOAD || length < 24 { return -1 }
+            if !ensure(5 + length) { return 0 }
+            let body = &state.recv_buf[state.recv_pos + 5]
+
+            let nonce: u8[12]
+            let i: uint = 0
+            while i < 4 {
+                nonce[i] = state.server_write_iv[i]
+                i++
+            }
+            while i < 12 {
+                nonce[i] = body[i - 4]
+                i++
+            }
+            let ciphertext_len = length - 8 - 16
+            let ciphertext = &body[8]
+            let tag = &body[8 + ciphertext_len]
+            let aad: u8[13]
+            put_seq_aad(&aad[0], state.server_seq, content_type, ciphertext_len)
+            let ok = AesGcm.gcm_open(&state.server_gcm, &nonce[0], &aad[0], 13,
+                ciphertext, ciphertext_len, tag, &state.plain_buf[0])
+            state.server_seq += 1
+            state.recv_pos += 5 + length
+            if !ok { return -1 }
+
+            state.plain_len = ciphertext_len
+            state.plain_pos = 0
+
+            if content_type == CONTENT_ALERT {
+                state.plain_len = 0
+                return 0
+            }
+        }
+
+        let available = state.plain_len - state.plain_pos
+        let take = available
+        if (take as u64) > capacity { take = cap }
+        let i: uint = 0
+        while i < take {
+            out[i] = state.plain_buf[state.plain_pos + i]
+            i++
+        }
+        state.plain_pos += take
+        return take as i64
+    }
+
+    func write(data: void*, length: u64) -> i64 {
+        if !state.handshake_done { return -1 }
+        let input_bytes = data as u8*
+        let len = length as uint
+        let offset: uint = 0
+        while offset < len {
+            let chunk = len - offset
+            if chunk > MAX_PLAINTEXT_FRAGMENT { chunk = MAX_PLAINTEXT_FRAGMENT }
+            if !send_encrypted_record(CONTENT_APPLICATION_DATA, &input_bytes[offset], chunk) { return -1 }
+            offset += chunk
+        }
+        return length as i64
+    }
+
+    func close() {
+        if state.connected {
+            if state.handshake_done {
+                let alert: u8[2]
+                alert[0] = 1
+                alert[1] = 0
+                send_encrypted_record(CONTENT_ALERT, &alert[0], 2)
+            }
+            Sys.tcp_close()
+            state.connected = false
+            state.handshake_done = false
+        }
+    }
+}

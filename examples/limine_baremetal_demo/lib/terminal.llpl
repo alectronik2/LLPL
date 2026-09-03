@@ -59,6 +59,9 @@ func console_tag_code(text: string, pos: uint) -> u16 {
 
 namespace Terminal {
     const CURSOR_HISTORY_MAX = 512
+    const FONT_SIZE = 14
+    const LINE_HEIGHT = 18
+    const CELL_WIDTH = 7
     let console_font_asset = embed("console.ttf")
     let console_font: TtfFont
     let active_console: LimineFramebufferConsole*
@@ -89,6 +92,46 @@ namespace Terminal {
         post_scroll_hook = post
     }
 
+    // A background image (kernel.llpl's draw_wallpaper) can't just be
+    // painted once and left alone: scroll() below normally shifts the
+    // *entire* framebuffer - including whatever background is sitting
+    // under the text - up by one line, which drags a static image along
+    // with the scroll instead of leaving it in place. Once a wallpaper is
+    // active, enable_text_buffer() switches scroll() from that raw pixel
+    // shift to a logical one: a small character+color grid records every
+    // glyph as it's drawn (see write() below), and scrolling instead
+    // shifts *that* grid, repaints the untouched wallpaper image fresh via
+    // this hook, then replays every remaining cell's glyph on top - so the
+    // image never moves and the text still scrolls correctly over it.
+    // Kept as a single hook slot, same as pre/post_scroll_hook, since
+    // there is at most one background image at a time.
+    alias FullRepaintFn = func(void*)
+    let wallpaper_repaint_hook: FullRepaintFn
+
+    func set_wallpaper_repaint_hook(fn: FullRepaintFn) {
+        wallpaper_repaint_hook = fn
+    }
+
+    // Same idea as wallpaper_repaint_hook but scoped to one text row - a
+    // full re-blit of the whole wallpaper on every erase_line() (which
+    // kilo, the shell, etc. all call on essentially every keystroke to
+    // redraw the current line) would mean copying the entire image on
+    // every key pressed, not just when the screen actually scrolls.
+    // Called with the row's absolute framebuffer y.
+    alias RowFillFn = func(uint)
+    let row_fill_hook: RowFillFn
+
+    func set_row_fill_hook(fn: RowFillFn) {
+        row_fill_hook = fn
+    }
+
+    func enable_text_buffer() -> bool {
+        if active_console != null {
+            return active_console.enable_text_buffer()
+        }
+        return false
+    }
+
     class Console {
         let width: uint
         let height: uint
@@ -107,11 +150,64 @@ namespace Terminal {
         let cursor_y: uint
         let fg: u32
         let bg: u32
+
+        // Where put_pixel/get_pixel/blit_rect actually write, and its row
+        // stride in pixels - defaults to the real framebuffer (fb.address,
+        // fb.pitch/4), so every existing caller is unaffected. scroll()'s
+        // grid-repaint path (once a wallpaper is active) briefly points
+        // these at compose_buffer instead: the wallpaper re-blit and every
+        // replayed glyph land off-screen first, then one blit_rect() flips
+        // render_target back and copies the whole finished frame to the
+        // real framebuffer in a single pass. Same "compose off-screen,
+        // blit once" idiom already used by kern/mu_demo.llpl, mu_gl.llpl
+        // and mu_term.llpl to avoid the display scanout catching a
+        // half-drawn frame - without it, repainting a full-screen image
+        // plus replaying every visible glyph as dozens of separate
+        // put_pixel/blend_pixel calls straight into VRAM is slow and
+        // piecemeal enough to visibly flicker on every scroll.
+        let render_target: u32*
+        let render_stride: uint
+        let compose_buffer: u32*
+
+        // Tracks an in-progress "erase this row, then draw its new
+        // content" cycle - see begin_row_paint/end_row_paint. Composing
+        // that whole cycle off-screen and flushing once is what stops the
+        // input row from visibly flashing to a blank strip before the new
+        // text lands, which a per-call flush (like scroll's) can't reach
+        // since erase_line() and the glyph writes that follow it are
+        // separate render() calls, often one per keystroke.
+        let row_paint_active: bool
+        let row_paint_row: uint
         let ansi_state: u8
         let ansi_value: u16
         let ansi_have_value: bool
+        let ansi_first_value: u16
+        let ansi_have_first: bool
         let cursor_history: uint*
         let cursor_history_count: uint
+
+        // Populated only once enable_text_buffer() is called (i.e. once a
+        // wallpaper is active) - null/0 otherwise, so nothing here changes
+        // behavior or costs memory for the common no-wallpaper case. See
+        // wallpaper_repaint_hook's comment above for why this exists.
+        //
+        // One append-only list per row rather than a fixed column-indexed
+        // grid: draw_glyph()'s advance width isn't a uniform CELL_WIDTH
+        // (space and the composite-glyph fallback for 'i' both return
+        // something else), so bucketing by cursor_x/CELL_WIDTH drifts out
+        // of sync with the real pixel positions over the length of a line -
+        // storing each character's exact cursor_x instead of a derived
+        // column sidesteps that entirely. grid_row_capacity is sized with
+        // slack over grid_cols for exactly this reason: a row of
+        // narrower-than-average glyphs can hold more than grid_cols of
+        // them.
+        let grid_chars: char*
+        let grid_colors: u32*
+        let grid_x: uint*
+        let grid_row_len: uint*
+        let grid_cols: uint
+        let grid_rows: uint
+        let grid_row_capacity: uint
 
         constructor( l: LimineFramebuffer* ) {
             fb = l
@@ -122,12 +218,224 @@ namespace Terminal {
             ansi_state = 0
             ansi_value = 0
             ansi_have_value = false
+            ansi_first_value = 0
+            ansi_have_first = false
             cursor_history = llpl_alloc(CURSOR_HISTORY_MAX * sizeof(uint)) as uint*
             cursor_history_count = 0
+            render_target = fb.address as u32*
+            render_stride = fb.pitch / 4
+            compose_buffer = null
+            row_paint_active = false
+            row_paint_row = 0
+            grid_chars = null
+            grid_colors = null
+            grid_x = null
+            grid_row_len = null
+            grid_cols = 0
+            grid_rows = 0
+            grid_row_capacity = 0
         }
 
         destructor() {
             llpl_free(cursor_history as char*)
+            if compose_buffer != null { llpl_free(compose_buffer as char*) }
+            if grid_chars != null { llpl_free(grid_chars) }
+            if grid_colors != null { llpl_free(grid_colors as char*) }
+            if grid_x != null { llpl_free(grid_x as char*) }
+            if grid_row_len != null { llpl_free(grid_row_len as char*) }
+        }
+
+        func enable_text_buffer() -> bool {
+            if grid_chars != null {
+                return true
+            }
+            grid_cols = fb.width / CELL_WIDTH
+            grid_rows = fb.height / LINE_HEIGHT
+            grid_row_capacity = grid_cols * 2
+            if grid_rows == 0 || grid_row_capacity == 0 {
+                return false
+            }
+            let cells = (grid_rows as u64) * (grid_row_capacity as u64)
+            grid_chars = llpl_alloc(cells * sizeof(char)) as char*
+            grid_colors = llpl_alloc(cells * sizeof(u32)) as u32*
+            grid_x = llpl_alloc(cells * sizeof(uint)) as uint*
+            grid_row_len = llpl_alloc(grid_rows * sizeof(uint)) as uint*
+            compose_buffer = llpl_alloc((fb.width as u64) * (fb.height as u64) * 4) as u32*
+            if grid_chars == null || grid_colors == null || grid_x == null || grid_row_len == null
+                    || compose_buffer == null {
+                return false
+            }
+            let i: uint = 0
+            while i < grid_rows {
+                grid_row_len[i] = 0
+                i = i + 1
+            }
+            return true
+        }
+
+        // Starts (or continues) buffering one text row's erase+redraw
+        // cycle off-screen instead of drawing it straight into VRAM - see
+        // this class's row_paint_active field. Switching to a different
+        // row flushes whatever was pending for the old one first, so
+        // nothing is ever silently dropped. No-op (falls back to the
+        // caller's normal direct-to-VRAM drawing) if compose_buffer isn't
+        // available.
+        func begin_row_paint(row: uint) {
+            if compose_buffer == null {
+                return
+            }
+            if row_paint_active && row_paint_row != row {
+                self.end_row_paint()
+            }
+            if row_paint_active {
+                return
+            }
+            render_target = compose_buffer
+            render_stride = fb.width
+            row_paint_active = true
+            row_paint_row = row
+            if row_fill_hook.fn != null {
+                row_fill_hook(row * LINE_HEIGHT)
+            } else {
+                let y: uint = 0
+                while y < LINE_HEIGHT && (row * LINE_HEIGHT) + y < fb.height {
+                    let x: uint = 0
+                    while x < fb.width {
+                        self.put_pixel(x, (row * LINE_HEIGHT) + y, bg)
+                        x = x + 1
+                    }
+                    y = y + 1
+                }
+            }
+        }
+
+        // Flushes whatever row_paint currently has buffered to the real
+        // framebuffer with a single blit_rect() call, then goes back to
+        // drawing straight into VRAM until the next begin_row_paint().
+        func end_row_paint() {
+            if !row_paint_active {
+                return
+            }
+            let buffered = render_target
+            render_target = fb.address as u32*
+            render_stride = fb.pitch / 4
+            let y0 = row_paint_row * LINE_HEIGHT
+            self.blit_rect(0, y0, fb.width, LINE_HEIGHT, buffered + (y0 * fb.width), fb.width)
+            row_paint_active = false
+        }
+
+        // Records the character/color/exact-pixel-x a normal glyph write
+        // just placed, appending to that row's list, so a later scroll can
+        // replay it after repainting the (unmoved) wallpaper. No-op when
+        // no text buffer is active. A row that's actually accumulated more
+        // glyphs than grid_row_capacity (extremely narrow glyphs packed
+        // wall to wall) silently stops recording rather than corrupting
+        // the next row - cosmetic-only, so dropping a few characters from
+        // the post-scroll replay beats crashing over it.
+        func grid_append(row: uint, c: char) {
+            if grid_chars == null || row >= grid_rows {
+                return
+            }
+            let pos = grid_row_len[row]
+            if pos >= grid_row_capacity {
+                return
+            }
+            let idx = (row * grid_row_capacity) + pos
+            grid_chars[idx] = c
+            grid_colors[idx] = fg
+            grid_x[idx] = cursor_x
+            grid_row_len[row] = pos + 1
+        }
+
+        // Marks one row's list empty - erase_line() below calls this so a
+        // later scroll-repaint doesn't resurrect text that was already
+        // erased on screen but never removed from the buffer. The row's
+        // old entries are left in place in memory; grid_append's next
+        // write for this row just starts overwriting from index 0 again.
+        func grid_clear_row(row: uint) {
+            if grid_chars == null || row >= grid_rows {
+                return
+            }
+            grid_row_len[row] = 0
+        }
+
+        // Logical scroll used in place of the raw pixel shift once a text
+        // buffer is active: shift each row's list up by one row, empty the
+        // new bottom row, repaint the untouched wallpaper image fresh (so
+        // it never appears to move), then replay every remaining row's
+        // glyphs - at their originally recorded exact pixel x, not a
+        // recomputed column - on top of it. draw_glyph() reads/writes
+        // cursor_x/cursor_y directly, so those are pointed at each
+        // recorded position in turn and restored to the real cursor
+        // position before returning.
+        func scroll_grid_and_repaint() {
+            // scroll() is also reached from newline(), which already
+            // flushes row_paint before calling it - but set_cursor_cell()
+            // never triggers a scroll, and clear_screen() doesn't call
+            // this at all, so this is a belt-and-suspenders guard against
+            // ever reusing compose_buffer for the full-screen repaint
+            // below while a row-paint still has unflushed content in it.
+            self.end_row_paint()
+            let row: uint = 1
+            while row < grid_rows {
+                let dst_row = row - 1
+                let len = grid_row_len[row]
+                grid_row_len[dst_row] = len
+                let i: uint = 0
+                while i < len {
+                    let dst_idx = (dst_row * grid_row_capacity) + i
+                    let src_idx = (row * grid_row_capacity) + i
+                    grid_chars[dst_idx] = grid_chars[src_idx]
+                    grid_colors[dst_idx] = grid_colors[src_idx]
+                    grid_x[dst_idx] = grid_x[src_idx]
+                    i = i + 1
+                }
+                row = row + 1
+            }
+            grid_row_len[grid_rows - 1] = 0
+
+            // Compose the wallpaper repaint and every replayed glyph into
+            // compose_buffer (an off-screen buffer the exact size of the
+            // framebuffer) instead of drawing straight into VRAM, then
+            // flip render_target back and copy the whole finished frame to
+            // the real framebuffer in one blit_rect() call - see this
+            // class's render_target/compose_buffer fields for why.
+            let have_compose_buffer = compose_buffer != null
+            let saved_target = render_target
+            let saved_stride = render_stride
+            if have_compose_buffer {
+                render_target = compose_buffer
+                render_stride = fb.width
+            }
+
+            if wallpaper_repaint_hook.fn != null { wallpaper_repaint_hook(null) }
+
+            let saved_cx = cursor_x
+            let saved_cy = cursor_y
+            let saved_fg = fg
+            let ry: uint = 0
+            while ry < grid_rows {
+                let len = grid_row_len[ry]
+                let i: uint = 0
+                while i < len {
+                    let idx = (ry * grid_row_capacity) + i
+                    cursor_x = grid_x[idx]
+                    cursor_y = ry * LINE_HEIGHT
+                    fg = grid_colors[idx]
+                    self.draw_glyph(grid_chars[idx])
+                    i = i + 1
+                }
+                ry = ry + 1
+            }
+            cursor_x = saved_cx
+            cursor_y = saved_cy
+            fg = saved_fg
+
+            if have_compose_buffer {
+                render_target = saved_target
+                render_stride = saved_stride
+                self.blit_rect(0, 0, fb.width, fb.height, compose_buffer, fb.width)
+            }
         }
 
         func color_from_sgr(code: u16, bright: bool) -> u32 {
@@ -173,17 +481,54 @@ namespace Terminal {
 
         func put_pixel(x: uint, y: uint, color: u32) {
             if x < fb.width && y < fb.height {
-                let pixels = fb.address as u32*
-                pixels[(y * (fb.pitch / 4)) + x] = color
+                render_target[(y * render_stride) + x] = color
             }
         }
 
         func get_pixel(x: uint, y: uint) -> u32 {
             if x < fb.width && y < fb.height {
-                let pixels = fb.address as u32*
-                return pixels[(y * (fb.pitch / 4)) + x]
+                return render_target[(y * render_stride) + x]
             }
             return 0
+        }
+
+        // Row-wise memcpy straight into the framebuffer instead of one
+        // put_pixel call per pixel - for a caller blitting a whole
+        // pre-composed off-screen buffer (e.g. lib/microui.llpl's render
+        // target), the per-pixel bounds check and function-call overhead
+        // dominates, stretching out exactly the window during which a
+        // display's own scanout can catch a half-written frame (visible
+        // as tearing/flicker). No blending - src is expected fully
+        // opaque, same assumption put_pixel already makes.
+        func blit_rect(x: uint, y: uint, w: uint, h: uint, src: u32*, src_stride: uint) {
+            let pixels = render_target
+            let dst_stride = render_stride
+            let row: uint = 0
+            while row < h {
+                let dy = y + row
+                if dy < fb.height && x < fb.width {
+                    let copy_w = w
+                    if x + copy_w > fb.width { copy_w = fb.width - x }
+                    memcpy((pixels + (dy * dst_stride) + x) as void*,
+                        (src + (row * src_stride)) as void*, (copy_w * 4) as uint)
+                }
+                row++
+            }
+        }
+
+        func blend_pixel(x: uint, y: uint, color: u32, alpha: u8) {
+            if alpha == 0 { return }
+            if alpha == 255 {
+                self.put_pixel(x, y, color)
+                return
+            }
+            let under = self.get_pixel(x, y)
+            let a = alpha as u32
+            let inv = 255 - a
+            let r = ((((color >> 16) & 255) * a) + (((under >> 16) & 255) * inv) + 127) / 255
+            let g = ((((color >> 8) & 255) * a) + (((under >> 8) & 255) * inv) + 127) / 255
+            let b = (((color & 255) * a) + ((under & 255) * inv) + 127) / 255
+            self.put_pixel(x, y, (r << 16) | (g << 8) | b)
         }
 
         func draw_glyph(c: char) -> uint {
@@ -196,18 +541,18 @@ namespace Terminal {
             let glyph_index = ttf_get_glyph_index(console_font, c as u32)
             if c == 32 {
                 let space_metrics = ttf_get_glyph_metrics(console_font, glyph_index)
-                let space_advance = ((space_metrics.advance_width as u64) * 16) / (console_font.units_per_em as u64)
+                let space_advance = ((space_metrics.advance_width as u64) * FONT_SIZE) / (console_font.units_per_em as u64)
                 if space_advance < 4 { return 4 }
                 return space_advance as uint
             }
-            let found = ttf_render_glyph(console_font, glyph_index, 16, glyph as u8*, 32, 20)
+            let found = ttf_render_glyph(console_font, glyph_index, FONT_SIZE as i16, glyph as u8*, 32, LINE_HEIGHT as i16)
             if !found {
                 // The current compact rasterizer skips composite glyphs.
                 // Keep the common lowercase i legible until composite
                 // component transforms are supported.
                 if c == 105 {
                     let y: uint = 5
-                    while y < 16 {
+                    while y < FONT_SIZE {
                         self.put_pixel(cursor_x + 2, cursor_y + y, fg)
                         self.put_pixel(cursor_x + 3, cursor_y + y, fg)
                         y = y + 1
@@ -216,18 +561,18 @@ namespace Terminal {
                     self.put_pixel(cursor_x + 3, cursor_y + 2, fg)
                     return 6
                 }
-                return 8
+                return CELL_WIDTH
             }
 
             let base_x = cursor_x
             let base_y = cursor_y
             let y: u16 = 0
-            while y < 20 {
+            while y < LINE_HEIGHT {
                 let x: u16 = 0
                 while x < 32 {
                     let alpha = glyph[(y * 32) + x]
                     if alpha != 0 {
-                        self.put_pixel(base_x + x, base_y + y, fg)
+                        self.blend_pixel(base_x + x, base_y + y, fg, alpha)
                     }
                     x = x + 1
                 }
@@ -235,50 +580,55 @@ namespace Terminal {
             }
 
             let metrics = ttf_get_glyph_metrics(console_font, glyph_index)
-            let advance = ((metrics.advance_width as u64) * 16) / (console_font.units_per_em as u64)
+            let advance = ((metrics.advance_width as u64) * FONT_SIZE) / (console_font.units_per_em as u64)
             if advance < 4 { return 4 }
             advance as uint
         }
 
         func scroll() {
-            if fb.height <= 20 {
+            if fb.height <= LINE_HEIGHT {
                 cursor_y = 0
                 return
             }
 
             if pre_scroll_hook.fn != null { pre_scroll_hook(null) }
 
-            let pixels = fb.address as u32*
-            let stride = fb.pitch / 4
-            let y: uint = 20
-            while y < fb.height {
-                let x: uint = 0
-                while x < fb.width {
-                    pixels[((y - 20) * stride) + x] = pixels[(y * stride) + x]
-                    x = x + 1
+            if grid_chars != null {
+                self.scroll_grid_and_repaint()
+            } else {
+                let pixels = fb.address as u32*
+                let stride = fb.pitch / 4
+                let y: uint = LINE_HEIGHT
+                while y < fb.height {
+                    let x: uint = 0
+                    while x < fb.width {
+                        pixels[((y - LINE_HEIGHT) * stride) + x] = pixels[(y * stride) + x]
+                        x = x + 1
+                    }
+                    y = y + 1
                 }
-                y = y + 1
-            }
 
-            let clear_y: uint = fb.height - 20
-            while clear_y < fb.height {
-                let x: uint = 0
-                while x < fb.width {
-                    pixels[(clear_y * stride) + x] = bg
-                    x = x + 1
+                let clear_y: uint = fb.height - LINE_HEIGHT
+                while clear_y < fb.height {
+                    let x: uint = 0
+                    while x < fb.width {
+                        pixels[(clear_y * stride) + x] = bg
+                        x = x + 1
+                    }
+                    clear_y = clear_y + 1
                 }
-                clear_y = clear_y + 1
             }
-            cursor_y = fb.height - 20
+            cursor_y = fb.height - LINE_HEIGHT
 
             if post_scroll_hook.fn != null { post_scroll_hook(null) }
         }
 
         func newline() {
+            self.end_row_paint()
             cursor_x = 0
-            cursor_y = cursor_y + 20
+            cursor_y = cursor_y + LINE_HEIGHT
             cursor_history_count = 0
-            if cursor_y + 20 >= fb.height {
+            if cursor_y + LINE_HEIGHT >= fb.height {
                 self.scroll()
             }
         }
@@ -289,7 +639,7 @@ namespace Terminal {
             let previous_x = cursor_history[cursor_history_count]
             let end_x = cursor_x
             let y: uint = 0
-            while y < 20 && cursor_y + y < fb.height {
+            while y < LINE_HEIGHT && cursor_y + y < fb.height {
                 let x = previous_x
                 while x < end_x && x < fb.width {
                     self.put_pixel(x, cursor_y + y, bg)
@@ -301,15 +651,58 @@ namespace Terminal {
         }
 
         func erase_line() {
+            if grid_chars != null {
+                self.begin_row_paint(cursor_y / LINE_HEIGHT)
+            } else {
+                let y: uint = 0
+                while y < LINE_HEIGHT && cursor_y + y < fb.height {
+                    let x: uint = 0
+                    while x < fb.width {
+                        self.put_pixel(x, cursor_y + y, bg)
+                        x++
+                    }
+                    y++
+                }
+            }
+            cursor_history_count = 0
+            self.grid_clear_row(cursor_y / LINE_HEIGHT)
+        }
+
+        func clear_screen() {
+            let pixels = fb.address as u32*
+            let stride = fb.pitch / 4
             let y: uint = 0
-            while y < 20 && cursor_y + y < fb.height {
+            while y < fb.height {
                 let x: uint = 0
                 while x < fb.width {
-                    self.put_pixel(x, cursor_y + y, bg)
+                    pixels[(y * stride) + x] = bg
                     x++
                 }
                 y++
             }
+            cursor_x = 0
+            cursor_y = 0
+            cursor_history_count = 0
+            if grid_chars != null {
+                let row: uint = 0
+                while row < grid_rows {
+                    self.grid_clear_row(row)
+                    row = row + 1
+                }
+            }
+        }
+
+        func set_cursor_cell(row: uint, column: uint) {
+            if row == 0 { row = 1 }
+            if column == 0 { column = 1 }
+            let new_cursor_y = (row - 1) * LINE_HEIGHT
+            if row_paint_active && (new_cursor_y / LINE_HEIGHT) != row_paint_row {
+                self.end_row_paint()
+            }
+            cursor_y = new_cursor_y
+            cursor_x = (column - 1) * CELL_WIDTH
+            if cursor_y >= fb.height { cursor_y = fb.height - LINE_HEIGHT }
+            if cursor_x >= fb.width { cursor_x = fb.width - CELL_WIDTH }
             cursor_history_count = 0
         }
 
@@ -348,14 +741,17 @@ namespace Terminal {
                             cursor_history[cursor_history_count] = cursor_x
                             cursor_history_count++
                         }
+                        self.grid_append(cursor_y / LINE_HEIGHT, c)
                         cursor_x = cursor_x + self.draw_glyph(c)
-                        if cursor_x + 8 >= fb.width { self.newline() }
+                        if cursor_x + CELL_WIDTH >= fb.width { self.newline() }
                     }
                 } else if ansi_state == 1 {
                     if c == 91 {
                         ansi_state = 2
                         ansi_value = 0
                         ansi_have_value = false
+                        ansi_first_value = 0
+                        ansi_have_first = false
                     } else {
                         ansi_state = 0
                     }
@@ -364,14 +760,30 @@ namespace Terminal {
                         ansi_value = ansi_value * 10 + (c - 48)
                         ansi_have_value = true
                     } else if c == 59 {
-                        if ansi_have_value { self.apply_sgr(ansi_value) }
+                        ansi_first_value = ansi_value
+                        ansi_have_first = ansi_have_value
                         ansi_value = 0
                         ansi_have_value = false
                     } else if c == 109 {
-                        if ansi_have_value { self.apply_sgr(ansi_value) } else { self.apply_sgr(0) }
+                        if ansi_have_first { self.apply_sgr(ansi_first_value) }
+                        if ansi_have_value { self.apply_sgr(ansi_value) }
+                        else if !ansi_have_first { self.apply_sgr(0) }
                         ansi_state = 0
                     } else if c == 75 {
                         self.erase_line()
+                        ansi_state = 0
+                    } else if c == 74 {
+                        if ansi_have_value && ansi_value == 2 { self.clear_screen() }
+                        ansi_state = 0
+                    } else if c == 72 || c == 102 {
+                        let row: uint = 1
+                        let column: uint = 1
+                        if ansi_have_first { row = ansi_first_value as uint }
+                        if ansi_have_value {
+                            if ansi_have_first { column = ansi_value as uint }
+                            else { row = ansi_value as uint }
+                        }
+                        self.set_cursor_cell(row, column)
                         ansi_state = 0
                     } else {
                         ansi_state = 0
@@ -379,6 +791,13 @@ namespace Terminal {
                 }
                 i++
             }
+            // Flush any row still buffered off-screen at the end of this
+            // call - callers very often erase and redraw a line without a
+            // trailing newline (e.g. the shell's per-keystroke prompt
+            // redraw), so without this the buffered row would just sit in
+            // compose_buffer, invisible, until some later call happened to
+            // flush it.
+            self.end_row_paint()
         }
     }
 
@@ -423,6 +842,23 @@ namespace Terminal {
         return 0
     }
 
+    // Alpha-blend a pixel against whatever's already there - same delegate-
+    // to-active_console shape as put_pixel/get_pixel above, for the same
+    // reason (e.g. lib/microui.llpl's glyph rasterization, which needs
+    // per-pixel coverage blending like Console.draw_glyph already does
+    // internally for terminal text).
+    func blend_pixel(x: uint, y: uint, color: u32, alpha: u8) {
+        if active_console != null {
+            active_console.blend_pixel(x, y, color, alpha)
+        }
+    }
+
+    func blit_rect(x: uint, y: uint, w: uint, h: uint, src: u32*, src_stride: uint) {
+        if active_console != null {
+            active_console.blit_rect(x, y, w, h, src, src_stride)
+        }
+    }
+
     func width() -> uint {
         if active_console != null {
             return active_console.fb.width
@@ -435,5 +871,16 @@ namespace Terminal {
             return active_console.fb.height
         }
         return 0
+    }
+
+    func present_row(pixels: u32*, image_width: uint, image_height: uint, row: uint) {
+        if active_console == null || pixels == null || row >= image_height { return }
+        let offset_x = (active_console.fb.width - image_width) / 2
+        let offset_y = (active_console.fb.height - image_height) / 2
+        let x: uint = 0
+        while x < image_width {
+            active_console.put_pixel(offset_x + x, offset_y + row, pixels[x] & 0x00FF_FFFF)
+            x++
+        }
     }
 }

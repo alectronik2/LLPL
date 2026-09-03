@@ -65,6 +65,16 @@ namespace HAL {
             // a real circular import given kern/mouse.llpl already does
             // `import terminal`).
             if ticks % 3 == 0 {
+                // Kern.run_window_ticks queued first so the cursor sprite
+                // (Kern.compose_frame_work) always ends up drawn on top of
+                // whatever the microui overlays just painted this tick -
+                // run_window_ticks itself decides which of the three
+                // windows paints last (i.e. on top of the other two) based
+                // on their current z-order, rather than the fixed
+                // mu_demo/mu_term/mu_gl order this used to queue directly.
+                if Kern.mu_demo_active {
+                    Kern.Deferred.queue(Kern.run_window_ticks)
+                }
                 Kern.Deferred.queue(Kern.compose_frame_work)
             }
 

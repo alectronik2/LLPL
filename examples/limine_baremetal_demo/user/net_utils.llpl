@@ -1,0 +1,36 @@
+import llpl_sys
+
+func parse_ipv4(text: string, out: u32*) -> bool {
+    let address: u32 = 0
+    let part: u32 = 0
+    let pieces: uint = 0
+    let i: u64 = 0
+    while true {
+        let c = text[i]
+        if c >= '0' && c <= '9' {
+            part = part * 10 + (c as u32 - '0' as u32)
+            if part > 255 { return false }
+        } else if c == '.' || c == 0 {
+            address = (address << 8) | part
+            pieces++
+            part = 0
+            if c == 0 { break }
+        } else { return false }
+        i++
+    }
+    if pieces != 4 { return false }
+    *out = address
+    return true
+}
+
+func write_ipv4(address: u32) {
+    Sys.write_s("\((address >> 24) & 255).\((address >> 16) & 255).\((address >> 8) & 255).\(address & 255)")
+}
+
+func resolve_host(text: string, out: u32*) -> bool {
+    if parse_ipv4(text, out) { return true }
+    return Sys.dns_resolve(text, out) >= 0
+}
+
+func net_panic_putc(c: char) { Sys.write_c(c) }
+func net_panic_halt() { Sys.exit(1) }

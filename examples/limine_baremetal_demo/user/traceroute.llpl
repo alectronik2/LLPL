@@ -1,0 +1,34 @@
+import llpl_sys
+import net_utils
+
+func llpl_panic_putc(c: char) { net_panic_putc(c) }
+func llpl_panic_halt() { net_panic_halt() }
+
+func _start(args: string[]) {
+    let target_text: string = null
+    let argument_index: uint = 0
+    for arg in args {
+        if argument_index == 1 { target_text = arg }
+        argument_index++
+    }
+    if (target_text as u64) == 0 { Sys.write_s("usage: traceroute HOST\n")
+    Sys.exit(1) }
+    let target: u32 = 0
+    if !resolve_host(target_text, &target) { Sys.write_s("traceroute: cannot resolve \(target_text)\n")
+    Sys.exit(1) }
+    Sys.write_s("traceroute to \(target_text) (")
+    write_ipv4(target)
+    Sys.write_s("), 16 hops max\n")
+    for let ttl: u8 = 1; ttl <= 16; ttl++ {
+        let result: Sys.ProbeResult
+        Sys.write_s("\(ttl)  ")
+        if Sys.icmp_probe(target, ttl, ttl as u16, &result) < 0 || result.kind == 0 {
+            Sys.write_s("*\n")
+        } else {
+            write_ipv4(result.responder)
+            Sys.write_s("  \(result.ticks * 10) ms\n")
+            if result.kind == 1 { Sys.exit(0) }
+        }
+    }
+    Sys.exit(1)
+}

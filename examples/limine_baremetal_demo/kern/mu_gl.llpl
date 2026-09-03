@@ -1,0 +1,397 @@
+import lib
+import terminal
+import hal
+import mm
+
+namespace Kern {
+    // ------------------------------------------------------------------
+    // A third microui window (see kern/mu_demo.llpl, kern/mu_term.llpl)
+    // hosting the TinyGL spinning-cube demo (user/tinygl_demo.c). TinyGL
+    // stays a normal user process rather than getting linked into the
+    // kernel image like lib/microui.llpl's own rendering: this kernel
+    // deliberately runs without FP/SSE context save/restore for
+    // kernel-thread switches (hal/fpu.llpl - only user threads get that),
+    // and TinyGL is FP-heavy throughout, so keeping it in userspace (where
+    // FP context switching is already exercised and correct, e.g. by the
+    // Lua self-tests) sidesteps that question entirely rather than
+    // needing to prove it safe for kernel-mode code.
+    //
+    // The two sides rendezvous through a named SharedMemorySegment
+    // (kern/shm.llpl) instead of a Pipe: a single 320x240 XRGB8888 frame
+    // is 300KB, both far more than a Pipe's fixed 4096-byte capacity and
+    // not the kind of thing that should be re-sent byte-by-byte through
+    // one anyway. There's no synchronization between the writer (user/
+    // tinygl_demo.c, rendering continuously) and this reader beyond "read
+    // whatever's there right now" - an occasional torn frame is a
+    // one-tick cosmetic glitch, not a correctness issue, for a live
+    // spinning demo. shm_create/shm_open (kern/shm.llpl) map a segment's
+    // physical frames into a *process's* address space and explicitly
+    // reject kproc, but the kernel doesn't need that path at all: every
+    // physical page is already kernel-visible through the HHDM
+    // (MM.p2v), so mu_gl_pump_frame below just walks the segment's own
+    // frame_paddrs directly.
+    // ------------------------------------------------------------------
+    const GL_WIDTH = 320
+    const GL_HEIGHT = 240
+    const GL_SHM_NAME: string = "tinygl-frame"
+
+    const MU_GL_CANVAS_W = GL_WIDTH
+    const MU_GL_CANVAS_H = GL_HEIGHT
+    const MU_GL_W = MU_GL_CANVAS_W + 16
+    const MU_GL_H = MU_GL_CANVAS_H + 40
+
+    let mu_gl_initialized: bool = false
+    let mu_gl_segment: SharedMemorySegment = null
+    // Local reconstruction of the shm segment's contents - copied fresh
+    // each tick (see mu_gl_pump_frame), since the segment's own pages
+    // aren't necessarily physically contiguous and this needs to be one
+    // flat buffer to hand to Mu.draw_rect/the row-copy below.
+    let mu_gl_frame: u32[GL_WIDTH * GL_HEIGHT]
+
+    let mu_gl_drawn: bool = false
+    let mu_gl_drawn_x: uint = 0
+    let mu_gl_drawn_y: uint = 0
+    let mu_gl_drawn_w: uint = 0
+    let mu_gl_drawn_h: uint = 0
+    let mu_gl_saved: u32[MU_GL_W * MU_GL_H]
+    let mu_gl_backbuffer: u32[MU_GL_W * MU_GL_H]
+    let mu_gl_last_blit: u32[MU_GL_W * MU_GL_H]
+    let mu_gl_last_blit_valid: bool = false
+
+    // Scratch space for moving the window without the two-step "erase at
+    // the old spot, draw at the new spot" flicker that direct-to-VRAM
+    // blit_rect calls used to cause (see mu_gl_capture_new_background/
+    // mu_gl_flush_move). mu_gl_move_compose is sized to comfortably cover
+    // the union of the old and new rects for a normal drag (the window
+    // moving by up to its own size in one ~33Hz tick); a jump bigger than
+    // that falls back to the old two-blit path rather than growing this
+    // further - see mu_gl_move_fits.
+    let mu_gl_temp: u32[MU_GL_W * MU_GL_H]
+    const MU_GL_MOVE_MAX_W = MU_GL_W * 2
+    const MU_GL_MOVE_MAX_H = MU_GL_H * 2
+    let mu_gl_move_compose: u32[MU_GL_MOVE_MAX_W * MU_GL_MOVE_MAX_H]
+
+    // Per-window Mu global save/restore - see kern/mu_demo.llpl's
+    // mu_demo_tick for why each independent window cycle needs its own
+    // copy of these three fields.
+    let mu_gl_saved_next_hover_root: int = -1
+    let mu_gl_saved_focus: u32 = 0
+    let mu_gl_saved_last_mouse_pos: Mu.Vec2
+    let mu_gl_last_left_down: bool = false
+
+    func mu_gl_spawn_thread(arg: void*) {
+        let pid = spawn_user_process(new String("/bin/tinygl"), kproc)
+        if pid < 0 {
+            "mu_gl: failed to spawn /bin/tinygl\n" |> HAL.Serial.write
+        }
+    }
+
+    func mu_gl_save_rect(x: uint, y: uint, w: uint, h: uint) {
+        let row: uint = 0
+        while row < h {
+            let col: uint = 0
+            while col < w {
+                mu_gl_saved[(row * w) + col] = Terminal.get_pixel(x + col, y + row)
+                col++
+            }
+            row++
+        }
+    }
+
+    func mu_gl_restore_rect() {
+        if !mu_gl_drawn { return }
+        Terminal.blit_rect(mu_gl_drawn_x, mu_gl_drawn_y, mu_gl_drawn_w, mu_gl_drawn_h,
+            mu_gl_saved as u32*, mu_gl_drawn_w)
+        mu_gl_drawn = false
+        mu_gl_last_blit_valid = false
+    }
+
+    // Whether the union of the old and new rects fits in
+    // mu_gl_move_compose - see that buffer's own comment.
+    func mu_gl_move_fits(old_x: uint, old_y: uint, old_w: uint, old_h: uint,
+            new_x: uint, new_y: uint, new_w: uint, new_h: uint) -> bool {
+        let union_x = old_x
+        if new_x < union_x { union_x = new_x }
+        let union_y = old_y
+        if new_y < union_y { union_y = new_y }
+        let union_r = old_x + old_w
+        if new_x + new_w > union_r { union_r = new_x + new_w }
+        let union_b = old_y + old_h
+        if new_y + new_h > union_b { union_b = new_y + new_h }
+        return (union_r - union_x) <= MU_GL_MOVE_MAX_W && (union_b - union_y) <= MU_GL_MOVE_MAX_H
+    }
+
+    // First half of the flicker-free move: works out what the window's
+    // background should look like at its NEW position, without touching
+    // the real screen. The old sprite hasn't actually been erased there
+    // yet (mu_gl_flush_move does that, off-screen, further down) - so for
+    // any cell that falls inside the not-yet-erased old rect, this reads
+    // the old rect's own saved background (mu_gl_saved, still valid at
+    // this point) instead of the real screen, which would still show the
+    // stale window pixels. Leaves the result in mu_gl_temp; mu_gl_saved
+    // itself is only overwritten once mu_gl_flush_move is done needing
+    // its old contents.
+    func mu_gl_capture_new_background(new_x: uint, new_y: uint, new_w: uint, new_h: uint,
+            old_x: uint, old_y: uint, old_w: uint, old_h: uint) {
+        let row: uint = 0
+        while row < new_h {
+            let col: uint = 0
+            while col < new_w {
+                let px = new_x + col
+                let py = new_y + row
+                let val: u32
+                if px >= old_x && px < old_x + old_w && py >= old_y && py < old_y + old_h {
+                    val = mu_gl_saved[((py - old_y) * old_w) + (px - old_x)]
+                } else {
+                    val = Terminal.get_pixel(px, py)
+                }
+                mu_gl_temp[(row * new_w) + col] = val
+                col++
+            }
+            row++
+        }
+    }
+
+    // Second half: composes the erased old rect and the freshly rendered
+    // new rect into mu_gl_move_compose and flushes the whole union with
+    // one blit_rect() call, so the real screen only ever sees the
+    // finished result - never a moment with the window erased at the old
+    // spot and not yet drawn at the new one. Must run after
+    // mu_gl_capture_new_background (still reads the old mu_gl_saved) and
+    // after the new frame has been rendered into mu_gl_backbuffer.
+    // Finalizes mu_gl_saved to mu_gl_temp's contents.
+    func mu_gl_flush_move(new_x: uint, new_y: uint, new_w: uint, new_h: uint,
+            old_x: uint, old_y: uint, old_w: uint, old_h: uint) {
+        let union_x = old_x
+        if new_x < union_x { union_x = new_x }
+        let union_y = old_y
+        if new_y < union_y { union_y = new_y }
+        let union_r = old_x + old_w
+        if new_x + new_w > union_r { union_r = new_x + new_w }
+        let union_b = old_y + old_h
+        if new_y + new_h > union_b { union_b = new_y + new_h }
+        let union_w = union_r - union_x
+        let union_h = union_b - union_y
+
+        // Baseline: current real screen content for the whole union rect
+        // - still accurate, since nothing has been written to the real
+        // screen for this move yet.
+        let row: uint = 0
+        while row < union_h {
+            let col: uint = 0
+            while col < union_w {
+                mu_gl_move_compose[(row * union_w) + col] = Terminal.get_pixel(union_x + col, union_y + row)
+                col++
+            }
+            row++
+        }
+
+        // Overlay the erased old rect.
+        row = 0
+        while row < old_h {
+            let col: uint = 0
+            while col < old_w {
+                let dst = ((old_y - union_y + row) * union_w) + (old_x - union_x + col)
+                mu_gl_move_compose[dst] = mu_gl_saved[(row * old_w) + col]
+                col++
+            }
+            row++
+        }
+
+        // mu_gl_saved's old contents aren't needed anymore - finalize it
+        // to the new position's background now.
+        memcpy(mu_gl_saved as void*, mu_gl_temp as void*, (new_w * new_h * 4) as uint)
+
+        // Overlay the freshly rendered new-position content on top.
+        row = 0
+        while row < new_h {
+            let col: uint = 0
+            while col < new_w {
+                let dst = ((new_y - union_y + row) * union_w) + (new_x - union_x + col)
+                mu_gl_move_compose[dst] = mu_gl_backbuffer[(row * new_w) + col]
+                col++
+            }
+            row++
+        }
+
+        Terminal.blit_rect(union_x, union_y, union_w, union_h, mu_gl_move_compose as u32*, union_w)
+    }
+
+    func mu_gl_build() -> Mu.Rect {
+        let r = Mu.rect(300, 420, MU_GL_W, MU_GL_H)
+        if Mu.begin_window_ex("TinyGL", r, Mu.OPT_NORESIZE | Mu.OPT_NOCLOSE | Mu.OPT_NOSCROLL) != 0 {
+            Mu.layout_row1(-1, MU_GL_CANVAS_H)
+            let canvas = Mu.layout_next()
+            Mu.draw_rect(canvas, Mu.color(0, 0, 0, 255))
+            Mu.end_window()
+            return canvas
+        }
+        let empty: Mu.Rect
+        return empty
+    }
+
+    // Walks the segment's physical pages via the HHDM (MM.p2v) straight
+    // into mu_gl_frame - see this file's own header comment for why the
+    // kernel doesn't go through shm_open's process-address-space mapping
+    // at all. Page i is always at byte offset i*PAGE_SIZE in the flat
+    // buffer both sides treat this segment as, regardless of the pages'
+    // physical scatter - shm_create (kern/shm.llpl) maps them into the
+    // writer's *virtual* address space in that same order, so a plain
+    // per-page copy in page order reconstructs the identical flat layout
+    // the writer's own pixel array has.
+    func mu_gl_pump_frame() {
+        if mu_gl_segment == null {
+            let found = shm_segments.get(new String(GL_SHM_NAME))
+            if found.is_none() { return }
+            mu_gl_segment = found.get()
+        }
+
+        let total_bytes = (GL_WIDTH * GL_HEIGHT * 4) as uint
+        let dst = mu_gl_frame as char*
+        let copied: uint = 0
+        for i in 0..mu_gl_segment.page_count {
+            if copied >= total_bytes { break }
+            let remaining = total_bytes - copied
+            let chunk = MM.PAGE_SIZE
+            if remaining < chunk { chunk = remaining }
+            memcpy((dst + copied) as void*, MM.p2v(mu_gl_segment.frame_paddrs[i]) as void*, chunk)
+            copied += chunk
+        }
+    }
+
+    func mu_gl_tick(arg: void*) {
+      holding gui_lock {
+        if !mu_gl_initialized {
+            mu_gl_initialized = true
+            let t = new Thread(kproc, mu_gl_spawn_thread, null, "mu-gl-spawn")
+            t |> mark_thread_ready
+        }
+
+        mu_gl_pump_frame()
+
+        // Same independent mouse-button edge detection as mu_term_tick,
+        // and for the identical reason: Mu.mouse_pressed is a single
+        // global that mu_demo_tick's own Mu.end() (always running first
+        // each PIT tick, see hal/pit.llpl) already clears before this
+        // cycle gets a turn.
+        // window_wants_input (kern/mouse.llpl, set by run_window_ticks
+        // right before calling this) gates all of this window's input on
+        // whether it's actually this tick's target - otherwise a click or
+        // drag meant for whatever's now drawn on top of this window would
+        // still reach and refocus it (this was the root cause of TinyGL
+        // "always being in focus": painting something else over it did
+        // nothing to stop it answering clicks, since z-order previously
+        // had no bearing on input at all).
+        let left_down = left_button_down
+        if window_wants_input {
+            Mu.input_mousemove(cursor_x, cursor_y)
+            if left_down && !mu_gl_last_left_down {
+                Mu.input_mousedown(cursor_x, cursor_y, Mu.MOUSE_LEFT)
+            } else if !left_down && mu_gl_last_left_down {
+                Mu.input_mouseup(cursor_x, cursor_y, Mu.MOUSE_LEFT)
+            }
+            mu_gl_last_left_down = left_down
+        }
+
+        Mu.set_next_hover_root(mu_gl_saved_next_hover_root)
+        Mu.set_focus(mu_gl_saved_focus)
+        Mu.set_last_mouse_pos(mu_gl_saved_last_mouse_pos)
+        Mu.begin()
+        let canvas = mu_gl_build()
+        Mu.end()
+        mu_gl_saved_next_hover_root = Mu.get_next_hover_root()
+        mu_gl_saved_focus = Mu.focus
+        mu_gl_saved_last_mouse_pos = Mu.get_last_mouse_pos()
+
+        if !Mu.frame_has_bounds {
+            mu_gl_restore_rect()
+        } else {
+            let new_x = Mu.frame_bounds.x as uint
+            let new_y = Mu.frame_bounds.y as uint
+            let new_w = Mu.frame_bounds.w as uint
+            let new_h = Mu.frame_bounds.h as uint
+
+            let old_x = mu_gl_drawn_x
+            let old_y = mu_gl_drawn_y
+            let old_w = mu_gl_drawn_w
+            let old_h = mu_gl_drawn_h
+            let moved = mu_gl_drawn && (old_x != new_x || old_y != new_y || old_w != new_w || old_h != new_h)
+            let compose_move = moved && mu_gl_move_fits(old_x, old_y, old_w, old_h, new_x, new_y, new_w, new_h)
+
+            if compose_move {
+                mu_gl_capture_new_background(new_x, new_y, new_w, new_h, old_x, old_y, old_w, old_h)
+            } else if moved {
+                // Jump too large for mu_gl_move_compose (a fast drag
+                // outrunning the ~33Hz tick rate) - fall back to the old
+                // two-step erase-then-redraw. Rare, and a single flickery
+                // frame beats growing that buffer to cover an unbounded
+                // jump.
+                mu_gl_restore_rect()
+                mu_gl_save_rect(new_x, new_y, new_w, new_h)
+            } else if !mu_gl_drawn {
+                mu_gl_save_rect(new_x, new_y, new_w, new_h)
+            }
+
+            Mu.set_render_target(mu_gl_backbuffer as u32*, new_w as int, new_h as int, new_x as int, new_y as int)
+            Mu.render()
+
+            // TinyGL's own frame is a flat GL_WIDTH x GL_HEIGHT XRGB8888
+            // buffer, byte-identical to this render target's own pixel
+            // format (lib/microui.llpl's blend_target_pixel packs the
+            // same (r<<16)|(g<<8)|b) - a straight per-row memcpy into the
+            // canvas's offset within the backbuffer, no per-pixel work.
+            let local_x = (canvas.x - (new_x as int)) as uint
+            let local_y = (canvas.y - (new_y as int)) as uint
+            let row: uint = 0
+            while row < GL_HEIGHT {
+                let dst_off = (((local_y + row) * new_w) + local_x) as uint
+                let src_off = (row * GL_WIDTH) as uint
+                memcpy((mu_gl_backbuffer + dst_off) as void*, (mu_gl_frame + src_off) as void*, (GL_WIDTH * 4) as uint)
+                row++
+            }
+
+            Mu.clear_render_target()
+
+            if compose_move {
+                // Position changed - always flush (there's no "unchanged"
+                // case for a move), in one shot covering both the erased
+                // old spot and the newly drawn one.
+                mu_gl_flush_move(new_x, new_y, new_w, new_h, old_x, old_y, old_w, old_h)
+                memcpy(mu_gl_last_blit as void*, mu_gl_backbuffer as void*, (new_w * new_h * 4) as uint)
+                mu_gl_last_blit_valid = true
+                mu_overlay_dirty = true
+            } else {
+                let changed = !mu_gl_last_blit_valid
+                if !changed {
+                    let row2: uint = 0
+                    while row2 < new_h && !changed {
+                        let col: uint = 0
+                        while col < new_w {
+                            let idx = (row2 * new_w) + col
+                            if mu_gl_last_blit[idx] != mu_gl_backbuffer[idx] {
+                                changed = true
+                                break
+                            }
+                            col++
+                        }
+                        row2++
+                    }
+                }
+
+                if changed {
+                    Terminal.blit_rect(new_x, new_y, new_w, new_h, mu_gl_backbuffer as u32*, new_w)
+                    memcpy(mu_gl_last_blit as void*, mu_gl_backbuffer as void*, (new_w * new_h * 4) as uint)
+                    mu_gl_last_blit_valid = true
+                    mu_overlay_dirty = true
+                }
+            }
+
+            mu_gl_drawn_x = new_x
+            mu_gl_drawn_y = new_y
+            mu_gl_drawn_w = new_w
+            mu_gl_drawn_h = new_h
+            mu_gl_drawn = true
+        }
+      }
+    }
+}

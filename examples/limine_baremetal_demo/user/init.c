@@ -1,4 +1,8 @@
 #include "lib/llpl_sys.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <setjmp.h>
 
 enum {
     O_READ = 1,
@@ -17,6 +21,7 @@ static int bytes_equal(const char *left, const char *right, u64 size) {
 }
 
 static volatile u64 thread_tls_seen;
+static volatile double fp_thread_result;
 
 __attribute__((noreturn)) static void user_thread_main(u64 expected_tls) {
     thread_tls_seen = call2(SYS_GET_TLS, 0, 0);
@@ -28,6 +33,18 @@ __attribute__((noreturn)) static void detached_thread_main(u64 unused) {
     (void)unused;
     call2(SYS_THREAD_EXIT, 0x88, 0);
     for (;;) __asm__ volatile("pause");
+}
+
+__attribute__((noreturn)) static void fp_thread_main(u64 unused) {
+    (void)unused;
+    volatile double numerator = 22.0;
+    volatile double denominator = 7.0;
+    fp_thread_result = numerator / denominator;
+    /* A syscall lets the scheduler preempt between FP operations. */
+    call2(SYS_MONOTONIC_MS, 0, 0);
+    call2(SYS_THREAD_EXIT,
+          fp_thread_result > 3.142 && fp_thread_result < 3.143 ? 0x99 : 0xEE, 0);
+    __builtin_unreachable();
 }
 
 __attribute__((noreturn)) void _start(void) {
@@ -114,6 +131,46 @@ __attribute__((noreturn)) void _start(void) {
     write_s(thread_ok ? "User thread/TLS self-test: PASS\n" :
                               "User thread/TLS self-test: FAIL\n");
 
+    volatile double fp_a = 1.25;
+    volatile double fp_b = 2.5;
+    volatile double fp_sum = fp_a + fp_b;
+    u64 fp_status = 0;
+    i64 fp_tid = (i64)call3(SYS_THREAD_CREATE, (u64)fp_thread_main, 0, 0);
+    int fp_ok = fp_sum == 3.75 && fp_tid > 0 &&
+        (i64)call2(SYS_THREAD_JOIN, (u64)fp_tid, (u64)&fp_status) == 0 &&
+        fp_status == 0x99 && fp_sum == 3.75;
+    write_s(fp_ok ? "Floating-point/SSE context self-test: PASS\n" :
+                    "Floating-point/SSE context self-test: FAIL\n");
+
+    char libc_number[32];
+    double parsed = strtod("-12.75e1", 0);
+    int formatted = snprintf(libc_number, sizeof(libc_number), "lua=%.*g", 3, 3.5);
+    FILE *libc_file = fopen("/var/lua-libc-test.txt", "w+");
+    static const char libc_payload[] = "lua stdio";
+    char libc_readback[sizeof(libc_payload)];
+    int libc_ok = parsed == -127.5 && formatted > 0 &&
+        strcmp(libc_number, "lua=3.500") == 0 && libc_file != 0;
+    if (parsed != -127.5) write_s("  libc strtod: FAIL\n");
+    if (formatted <= 0 || strcmp(libc_number, "lua=3.500") != 0)
+        write_s("  libc snprintf: FAIL\n");
+    if (!libc_file) write_s("  libc fopen: FAIL\n");
+    if (libc_file) {
+        int stdio_ok = fwrite(libc_payload, 1, sizeof(libc_payload), libc_file) ==
+            sizeof(libc_payload) && fseek(libc_file, 0, SEEK_SET) == 0 &&
+            fread(libc_readback, 1, sizeof(libc_readback), libc_file) ==
+            sizeof(libc_readback) &&
+            memcmp(libc_payload, libc_readback, sizeof(libc_payload)) == 0;
+        if (!stdio_ok) write_s("  libc stdio: FAIL\n");
+        libc_ok = libc_ok && stdio_ok && fclose(libc_file) == 0;
+    }
+    jmp_buf libc_jump;
+    volatile int jump_value = setjmp(libc_jump);
+    if (jump_value == 0) longjmp(libc_jump, 17);
+    if (jump_value != 17) write_s("  libc setjmp: FAIL\n");
+    libc_ok = libc_ok && jump_value == 17;
+    write_s(libc_ok ? "Lua libc compatibility self-test: PASS\n" :
+                      "Lua libc compatibility self-test: FAIL\n");
+
     /* Kernel syscall words are pointer-sized, including returned descriptors. */
     i64 pipefd[2];
     pipefd[0] = -1;
@@ -152,6 +209,33 @@ __attribute__((noreturn)) void _start(void) {
     write_s(pipe_ok ? "  close-on-exec: PASS\n" : "  close-on-exec: FAIL\n");
     write_s(pipe_ok ? "Pipe/dup inheritance self-test: PASS\n" :
                             "Pipe/dup inheritance self-test: FAIL\n");
+
+    i64 mq = (i64)call2(SYS_MQ_CREATE, (u64)"init-mq", 4);
+    static const char mq_low[] = "low";
+    static const char mq_high[] = "priority";
+    int mq_ok = mq >= 3 &&
+        (i64)call4(SYS_MQ_SEND, (u64)mq, (u64)mq_low,
+                      sizeof(mq_low), 1) == sizeof(mq_low) &&
+        (i64)call4(SYS_MQ_SEND, (u64)mq, (u64)mq_high,
+                      sizeof(mq_high), 9) == sizeof(mq_high);
+    char mq_readback[sizeof(mq_high)];
+    u64 mq_priority = 0;
+    /* A short receive must fail without consuming the queued message. */
+    mq_ok = mq_ok && (i64)call4(SYS_MQ_RECEIVE, (u64)mq,
+                                  (u64)mq_readback, 2, (u64)&mq_priority) < 0;
+    mq_ok = mq_ok &&
+        (i64)call4(SYS_MQ_RECEIVE, (u64)mq, (u64)mq_readback,
+                      sizeof(mq_readback), (u64)&mq_priority) == sizeof(mq_high) &&
+        mq_priority == 9 && bytes_equal(mq_high, mq_readback, sizeof(mq_high));
+    mq_ok = mq_ok &&
+        (i64)call4(SYS_MQ_RECEIVE, (u64)mq, (u64)mq_readback,
+                      sizeof(mq_readback), (u64)&mq_priority) == sizeof(mq_low) &&
+        mq_priority == 1 && bytes_equal(mq_low, mq_readback, sizeof(mq_low));
+    mq_ok = mq_ok && (i64)call2(SYS_MQ_UNLINK, (u64)"init-mq", 0) == 0 &&
+        (i64)call2(SYS_MQ_OPEN, (u64)"init-mq", 0) < 0 &&
+        (i64)call2(SYS_CLOSE, (u64)mq, 0) == 0;
+    write_s(mq_ok ? "Message queue IPC self-test: PASS\n" :
+                        "Message queue IPC self-test: FAIL\n");
 
     char *heap = (char *)call2(SYS_SBRK, 8192, 0);
     int heap_ok = (i64)heap > 0;
@@ -205,6 +289,13 @@ __attribute__((noreturn)) void _start(void) {
     free(m4);
     write_s(malloc_ok ? "malloc self-test: PASS\n" : "malloc self-test: FAIL\n");
 
+    struct llpl_framebuffer_info fb_info;
+    int framebuffer_ok = (i64)call1(SYS_FB_INFO, (u64)&fb_info) == 0 &&
+        fb_info.width >= 320 && fb_info.height >= 240 && fb_info.format == 1 &&
+        (i64)call4(SYS_FB_PRESENT, 0, 0, 0, 0) < 0;
+    write_s(framebuffer_ok ? "Userspace framebuffer self-test: PASS\n" :
+                             "Userspace framebuffer self-test: FAIL\n");
+
     u64 hello_status = 1;
     i64 hello_pid = (i64)call2(SYS_SPAWN, (u64)"/bin/hello", (u64)"foo bar baz");
     int hello_ok = hello_pid > 0 &&
@@ -213,7 +304,37 @@ __attribute__((noreturn)) void _start(void) {
     write_s(hello_ok ? "LLPL user program self-test: PASS\n" :
                        "LLPL user program self-test: FAIL\n");
 
-    call2(SYS_EXIT, (spawn_ok && exec_ok && fd_ok && thread_ok && pipe_ok && heap_ok && malloc_ok && hello_ok) ? 0 : 1, 0);
+    u64 lua_status = 1;
+    i64 lua_pid = (i64)call2(SYS_SPAWN, (u64)"/bin/lua",
+                                (u64)"lua /etc/lua_smoke.lua");
+    int lua_ok = lua_pid > 0 &&
+        (i64)call2(SYS_WAITPID, (u64)lua_pid, (u64)&lua_status) == lua_pid &&
+        lua_status == 0;
+    write_s(lua_ok ? "Lua interpreter integration self-test: PASS\n" :
+                     "Lua interpreter integration self-test: FAIL\n");
+
+    u64 dhcp_status = 1;
+    i64 dhcp_pid = (i64)call2(SYS_SPAWN, (u64)"/bin/dhcp", 0);
+    int network_ok = dhcp_pid > 0 &&
+        (i64)call2(SYS_WAITPID, (u64)dhcp_pid, (u64)&dhcp_status) == dhcp_pid &&
+        dhcp_status == 0;
+    u64 ping_status = 1;
+    i64 ping_pid = network_ok ?
+        (i64)call2(SYS_SPAWN, (u64)"/bin/ping", (u64)"google.com") : -1;
+    network_ok = network_ok && ping_pid > 0 &&
+        (i64)call2(SYS_WAITPID, (u64)ping_pid, (u64)&ping_status) == ping_pid &&
+        ping_status == 0;
+    u64 trace_status = 1;
+    i64 trace_pid = network_ok ?
+        (i64)call2(SYS_SPAWN, (u64)"/bin/traceroute", (u64)"10.0.2.2") : -1;
+    network_ok = network_ok && trace_pid > 0 &&
+        (i64)call2(SYS_WAITPID, (u64)trace_pid, (u64)&trace_status) == trace_pid &&
+        trace_status == 0;
+    write_s(network_ok ? "Network/DHCP/DNS/ICMP self-test: PASS\n" :
+                         "Network/DHCP/DNS/ICMP self-test: FAIL\n");
+
+    call2(SYS_EXIT, (spawn_ok && exec_ok && fd_ok && thread_ok && fp_ok && libc_ok &&
+        pipe_ok && heap_ok && malloc_ok && framebuffer_ok && hello_ok && lua_ok && network_ok) ? 0 : 1, 0);
     for (;;) {
         __asm__ volatile("pause");
     }

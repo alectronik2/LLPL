@@ -1,0 +1,482 @@
+import lib
+import terminal
+import hal
+
+namespace Kern {
+    // ------------------------------------------------------------------
+    // A second microui window (see kern/mu_demo.llpl for the first) that
+    // hosts a real, independent /bin/sh instance - not the same shell
+    // running on the physical console/keyboard, a second process the
+    // kernel itself spawns with its stdin/stdout redirected to two pipes
+    // it holds directly (kern/handle.llpl's Pipe, Kern.load_elf_process -
+    // kern/elf.llpl), and pumps through a small ANSI-subset terminal grid
+    // rendered with lib/microui.llpl's own glyph primitives.
+    //
+    // Why a "holder" process (mu_term_spawn_shell, below) instead of
+    // patching the child's fds after spawning it: Kern.load_elf_process
+    // sets a child's fd table by *inheriting* whatever its `parent`
+    // process's table already has (DescriptorTable.clone_for_exec) at
+    // spawn time, and its own returned thread is already runnable before
+    // it returns - there's no safe window afterward to fix up fd 0/1/2.
+    // So the pipes go into a throwaway parent process's table *first*,
+    // and /bin/sh is spawned as its child.
+    //
+    // /bin/sh (user/shell.c) doesn't read fd 0 by default - it opens
+    // /dev/kbd itself, same as the real console shell. Passed "--fd0" as
+    // its command line, it reads its inherited fd 0 instead (see the
+    // _start patch there) - the whole reason this needs a shell.c change
+    // at all rather than just piping stdin transparently.
+    //
+    // Reads/writes on the kernel's own pipe ends only ever happen in the
+    // "check count, then read/write" guarded shape (never the plain
+    // blocking Pipe.read/write) - kern/deferred.llpl's worker is a single
+    // thread shared with Kern.compose_frame_work and mu_demo_tick, and
+    // blocking it here would stall the entire GUI, not just this window.
+    // ------------------------------------------------------------------
+
+    const TERM_COLS = 60
+    const TERM_ROWS = 18
+    const TERM_CELL_W = 7
+    const TERM_LINE_H = 15
+    const MU_TERM_CANVAS_W = TERM_COLS * TERM_CELL_W
+    const MU_TERM_CANVAS_H = TERM_ROWS * TERM_LINE_H
+    // Padding/title-bar headroom around the canvas - generous rather than
+    // exact, since begin_window_ex draws its own frame regardless and any
+    // slack just becomes a little blank margin under the canvas.
+    const MU_TERM_W = MU_TERM_CANVAS_W + 16
+    const MU_TERM_H = MU_TERM_CANVAS_H + 40
+
+    const TERM_DEFAULT_FG: u32 = 0x00E6EDF3 as u32
+    const TERM_BG: u32 = 0x000B0F14 as u32
+
+    struct TermCell {
+        ch: char
+        fg: u32
+    }
+
+    let mu_term_grid: TermCell[TERM_ROWS * TERM_COLS]
+    let mu_term_row: int = 0
+    let mu_term_col: int = 0
+    let mu_term_fg: u32 = 0x00E6EDF3 as u32
+
+    let mu_term_ansi_state: u8 = 0
+    let mu_term_ansi_value: u16 = 0
+    let mu_term_ansi_have_value: bool = false
+    let mu_term_ansi_first_value: u16 = 0
+    let mu_term_ansi_have_first: bool = false
+
+    let mu_term_initialized: bool = false
+    let mu_term_shell_stdin: Pipe = null   // kernel's write end - shell's fd 0
+    let mu_term_shell_stdout: Pipe = null  // kernel's read end - shell's fd 1/2
+    // This window's own edge detection for the left mouse button,
+    // independent of mu_demo.llpl's - see mu_term_tick.
+    let mu_term_last_left_down: bool = false
+    // This window's own persistent Mu.next_hover_root/focus, saved/
+    // restored around each independent Mu.begin()/end() cycle - see
+    // mu_demo.llpl's mu_demo_tick for why this is necessary at all
+    // (Mu.hover_root and Mu.focus are single globals, and two
+    // independent per-window cycles share them).
+    let mu_term_saved_next_hover_root: int = -1
+    let mu_term_saved_focus: u32 = 0
+    // Same treatment for Mu.last_mouse_pos - this window ticks *second*
+    // every PIT tick (see hal/pit.llpl), so without this, mu_demo_tick's
+    // own end() call has already advanced the shared last_mouse_pos to
+    // match the current mouse_pos by the time this window's begin() runs,
+    // making mouse_delta permanently zero here and any drag on this
+    // window's own title bar/resize handle never actually move it.
+    let mu_term_saved_last_mouse_pos: Mu.Vec2
+
+    let mu_term_drawn: bool = false
+    let mu_term_drawn_x: uint = 0
+    let mu_term_drawn_y: uint = 0
+    let mu_term_drawn_w: uint = 0
+    let mu_term_drawn_h: uint = 0
+    let mu_term_saved: u32[MU_TERM_W * MU_TERM_H]
+    let mu_term_backbuffer: u32[MU_TERM_W * MU_TERM_H]
+    let mu_term_last_blit: u32[MU_TERM_W * MU_TERM_H]
+    let mu_term_last_blit_valid: bool = false
+
+    // Filled (IRQ-safe, no locks) by kern/keyboard.llpl's
+    // keyboard_irq_handler whenever the cursor is hovering this window;
+    // drained into mu_term_shell_stdin by mu_term_tick, on the Deferred
+    // worker thread where blocking briefly is actually safe.
+    const MU_TERM_KEY_RING_CAP = 64
+    let mu_term_key_ring: char[MU_TERM_KEY_RING_CAP]
+    let mu_term_key_head: uint = 0
+    let mu_term_key_tail: uint = 0
+
+    func mu_term_clear() {
+        for i in 0..(TERM_ROWS * TERM_COLS) {
+            mu_term_grid[i].ch = ' ' as char
+            mu_term_grid[i].fg = TERM_DEFAULT_FG
+        }
+        mu_term_row = 0
+        mu_term_col = 0
+    }
+
+    func mu_term_scroll_up() {
+        for row in 0..(TERM_ROWS - 1) {
+            for col in 0..TERM_COLS {
+                mu_term_grid[(row * TERM_COLS) + col] = mu_term_grid[((row + 1) * TERM_COLS) + col]
+            }
+        }
+        let last = TERM_ROWS - 1
+        for col in 0..TERM_COLS {
+            mu_term_grid[(last * TERM_COLS) + col].ch = ' ' as char
+            mu_term_grid[(last * TERM_COLS) + col].fg = TERM_DEFAULT_FG
+        }
+    }
+
+    func mu_term_newline() {
+        mu_term_col = 0
+        mu_term_row++
+        if mu_term_row >= TERM_ROWS {
+            mu_term_scroll_up()
+            mu_term_row = TERM_ROWS - 1
+        }
+    }
+
+    func mu_term_erase_row() {
+        let col = 0
+        while col < TERM_COLS {
+            mu_term_grid[(mu_term_row * TERM_COLS) + col].ch = ' ' as char
+            col++
+        }
+    }
+
+    // Same palette as lib/terminal.llpl's Console.color_from_sgr, applied
+    // to this grid's own color state instead of the live console's.
+    func mu_term_color_from_sgr(code: u16) -> u32 {
+        match code {
+            case 30 => { return 0x00101820 as u32 }
+            case 31 => { return 0x00F85149 as u32 }
+            case 32 => { return 0x003FB950 as u32 }
+            case 33 => { return 0x00D29922 as u32 }
+            case 34 => { return 0x0058A6FF as u32 }
+            case 35 => { return 0x00BC8CFF as u32 }
+            case 36 => { return 0x0039D0D8 as u32 }
+            case 37 => { return 0x00C9D1D9 as u32 }
+            case 90 => { return 0x006E7681 as u32 }
+            case 91 => { return 0x00FF7B72 as u32 }
+            case 92 => { return 0x0056D364 as u32 }
+            case 93 => { return 0x00E3B341 as u32 }
+            case 94 => { return 0x0079C0FF as u32 }
+            case 95 => { return 0x00D2A8FF as u32 }
+            case 96 => { return 0x0056D4DD as u32 }
+            case 97 => { return 0x00F0F6FC as u32 }
+            default => { return mu_term_fg }
+        }
+    }
+
+    func mu_term_apply_sgr(code: u16) {
+        if code == 0 || code == 39 {
+            mu_term_fg = TERM_DEFAULT_FG
+        } else if (code >= 30 && code <= 37) || (code >= 90 && code <= 97) {
+            mu_term_fg = mu_term_color_from_sgr(code)
+        }
+        // bold (1) is a no-op here - no separate bold glyph variant, and
+        // shell.c always follows BOLD with an explicit color code anyway.
+    }
+
+    // Same ANSI-subset state machine as lib/terminal.llpl's own
+    // Console.render(), minus the <tag> shortcut (irrelevant to shell
+    // output) and cursor-position escapes (shell.c never emits them -
+    // its own line-redraw uses \r + \x1b[2K instead, both handled below).
+    func mu_term_put_char(c: char) {
+        if mu_term_ansi_state == 0 {
+            if c == 27 {
+                mu_term_ansi_state = 1
+            } else if c == 10 {
+                mu_term_newline()
+            } else if c == 13 {
+                mu_term_col = 0
+            } else if c == 8 {
+                if mu_term_col > 0 { mu_term_col-- }
+            } else if c == 9 {
+                mu_term_col = ((mu_term_col / 8) + 1) * 8
+                if mu_term_col >= TERM_COLS { mu_term_newline() }
+            } else {
+                mu_term_grid[(mu_term_row * TERM_COLS) + mu_term_col].ch = c
+                mu_term_grid[(mu_term_row * TERM_COLS) + mu_term_col].fg = mu_term_fg
+                mu_term_col++
+                if mu_term_col >= TERM_COLS { mu_term_newline() }
+            }
+        } else if mu_term_ansi_state == 1 {
+            if c == 91 {
+                mu_term_ansi_state = 2
+                mu_term_ansi_value = 0
+                mu_term_ansi_have_value = false
+                mu_term_ansi_first_value = 0
+                mu_term_ansi_have_first = false
+            } else {
+                mu_term_ansi_state = 0
+            }
+        } else {
+            if c >= 48 && c <= 57 {
+                mu_term_ansi_value = mu_term_ansi_value * 10 + (c - 48)
+                mu_term_ansi_have_value = true
+            } else if c == 59 {
+                mu_term_ansi_first_value = mu_term_ansi_value
+                mu_term_ansi_have_first = mu_term_ansi_have_value
+                mu_term_ansi_value = 0
+                mu_term_ansi_have_value = false
+            } else if c == 109 {
+                if mu_term_ansi_have_first { mu_term_apply_sgr(mu_term_ansi_first_value) }
+                if mu_term_ansi_have_value { mu_term_apply_sgr(mu_term_ansi_value) }
+                else if !mu_term_ansi_have_first { mu_term_apply_sgr(0) }
+                mu_term_ansi_state = 0
+            } else if c == 75 {
+                // K/2K - both treated as "erase the whole visible row",
+                // the only variant shell.c's own \x1b[2K actually needs.
+                mu_term_erase_row()
+                mu_term_ansi_state = 0
+            } else if c == 74 {
+                if mu_term_ansi_have_value && mu_term_ansi_value == 2 { mu_term_clear() }
+                mu_term_ansi_state = 0
+            } else {
+                mu_term_ansi_state = 0
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // shell process spawn
+    // ------------------------------------------------------------------
+    func mu_term_spawn_shell() {
+        mu_term_shell_stdin = new Pipe()
+        mu_term_shell_stdout = new Pipe()
+
+        // Pure vehicle for handing /bin/sh an fd table with the pipes at
+        // 0/1/2 - never runs any code of its own. See file header.
+        let holder = new Process(new String("mu-term-host"), kproc)
+        holder.fds.install_descriptor(new FileDescriptor(mu_term_shell_stdin, false), 0)
+        holder.fds.install_descriptor(new FileDescriptor(mu_term_shell_stdout, true), 1)
+        holder.fds.install_descriptor(new FileDescriptor(mu_term_shell_stdout, true), 2)
+
+        let child = load_elf_process(new String("/bin/sh"), holder, new String("--fd0"))
+        if child == null {
+            "mu_term: failed to spawn /bin/sh\n" |> HAL.Serial.write
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // save/restore + compose, same shape as kern/mu_demo.llpl (see its
+    // own comments for why each piece exists - not repeated here)
+    // ------------------------------------------------------------------
+    func mu_term_save_rect(x: uint, y: uint, w: uint, h: uint) {
+        let row: uint = 0
+        while row < h {
+            let col: uint = 0
+            while col < w {
+                mu_term_saved[(row * w) + col] = Terminal.get_pixel(x + col, y + row)
+                col++
+            }
+            row++
+        }
+    }
+
+    func mu_term_restore_rect() {
+        if !mu_term_drawn { return }
+        Terminal.blit_rect(mu_term_drawn_x, mu_term_drawn_y, mu_term_drawn_w, mu_term_drawn_h,
+            mu_term_saved as u32*, mu_term_drawn_w)
+        mu_term_drawn = false
+        mu_term_last_blit_valid = false
+    }
+
+    func mu_term_build() -> Mu.Rect {
+        let r = Mu.rect(560, 80, MU_TERM_W, MU_TERM_H)
+        if Mu.begin_window_ex("Terminal", r, Mu.OPT_NORESIZE | Mu.OPT_NOCLOSE | Mu.OPT_NOSCROLL) != 0 {
+            Mu.layout_row1(-1, MU_TERM_CANVAS_H)
+            let canvas = Mu.layout_next()
+            Mu.draw_rect(canvas, Mu.color(11, 15, 20, 255))
+            Mu.end_window()
+            return canvas
+        }
+        let empty: Mu.Rect
+        return empty
+    }
+
+    func mu_term_draw_grid(canvas: Mu.Rect) {
+        let clip = canvas
+        let row = 0
+        while row < TERM_ROWS {
+            let col = 0
+            while col < TERM_COLS {
+                let cell = mu_term_grid[(row * TERM_COLS) + col]
+                if cell.ch != ' ' as char && cell.ch != 0 as char {
+                    let px = canvas.x + (col * TERM_CELL_W)
+                    let py = canvas.y + (row * TERM_LINE_H)
+                    let r = (cell.fg >> 16) & 255
+                    let g = (cell.fg >> 8) & 255
+                    let b = cell.fg & 255
+                    Mu.draw_glyph_at(px, py, cell.ch, Mu.color(r as int, g as int, b as int, 255), clip)
+                }
+                col++
+            }
+            row++
+        }
+    }
+
+    func mu_term_pump_io() {
+        // Drain queued keystrokes into the shell's stdin, never blocking:
+        // only ever writes as many bytes as there's already room for.
+        while mu_term_key_head != mu_term_key_tail {
+            let room: uint = 0
+            holding mu_term_shell_stdin.lock { room = PIPE_CAPACITY - mu_term_shell_stdin.count }
+            if room == 0 { break }
+            let c = mu_term_key_ring[mu_term_key_head]
+            mu_term_key_head = (mu_term_key_head + 1) % MU_TERM_KEY_RING_CAP
+            mu_term_shell_stdin.write(&c, 1)
+        }
+
+        // Drain available shell output into the grid, never blocking:
+        // only ever reads as many bytes as are already buffered.
+        let available: uint = 0
+        holding mu_term_shell_stdout.lock { available = mu_term_shell_stdout.count }
+        if available != 0 {
+            let chunk: char[256]
+            let to_read = available
+            if to_read > 256 { to_read = 256 }
+            let got = mu_term_shell_stdout.read(chunk as char*, to_read)
+            let i = 0
+            while i < got {
+                mu_term_put_char(chunk[i])
+                i++
+            }
+        }
+    }
+
+    func mu_term_wants_key() -> bool {
+        if !mu_demo_active || !mu_term_drawn { return false }
+        return cursor_x >= (mu_term_drawn_x as int) && cursor_x < (mu_term_drawn_x as int) + (mu_term_drawn_w as int) &&
+               cursor_y >= (mu_term_drawn_y as int) && cursor_y < (mu_term_drawn_y as int) + (mu_term_drawn_h as int)
+    }
+
+    func mu_term_push_key(c: char) {
+        let next = (mu_term_key_tail + 1) % MU_TERM_KEY_RING_CAP
+        if next != mu_term_key_head {
+            mu_term_key_ring[mu_term_key_tail] = c
+            mu_term_key_tail = next
+        }
+    }
+
+    // Runs load_elf_process (VFS reads, page-table setup) on its own
+    // thread instead of inline in mu_term_tick - that would otherwise run
+    // on Kern.Deferred's single shared worker thread the very first time
+    // the overlay opens, stalling Kern.compose_frame_work and
+    // Kern.mu_demo_tick (queued right alongside it, hal/pit.llpl) for
+    // however long the spawn takes. Same reasoning as kern/shm.llpl's
+    // spawn_shm_demo.
+    func mu_term_spawn_shell_thread(arg: void*) {
+        mu_term_spawn_shell()
+    }
+
+    func mu_term_tick(arg: void*) {
+      holding gui_lock {
+        if !mu_term_initialized {
+            mu_term_clear()
+            mu_term_initialized = true
+            let t = new Thread(kproc, mu_term_spawn_shell_thread, null, "mu-term-spawn")
+            t |> mark_thread_ready
+        }
+
+        // Pipes don't exist until the spawn thread above has actually
+        // run - skip pumping I/O until then rather than dereferencing
+        // null. The canvas just stays blank for that one brief window.
+        if mu_term_shell_stdin != null && mu_term_shell_stdout != null {
+            mu_term_pump_io()
+        }
+
+        // Mu.mouse_pressed is a single global, reset unconditionally by
+        // every Mu.end() call - mu_demo_tick (always ticking first, see
+        // hal/pit.llpl) already consumed and cleared it for its own
+        // widgets before this window ever gets a turn, so without this
+        // window doing its own independent edge detection here, its own
+        // update_control calls would never see mouse_pressed != 0, even
+        // on the exact tick the button genuinely went down - hover would
+        // still work (it doesn't depend on mouse_pressed), but nothing
+        // could ever actually take focus, silently breaking every
+        // click-and-hold interaction on this window (the title bar drag,
+        // the resize handle) while plain single-tick clicks elsewhere
+        // keep working fine.
+        // window_wants_input (kern/mouse.llpl, set by run_window_ticks
+        // right before calling this) gates all of this window's input on
+        // whether it's actually this tick's target - otherwise a click or
+        // drag meant for whatever's now drawn on top of this window would
+        // still reach and refocus it, since this cycle has no idea
+        // anything else is even on screen.
+        let left_down = left_button_down
+        if window_wants_input {
+            Mu.input_mousemove(cursor_x, cursor_y)
+            if left_down && !mu_term_last_left_down {
+                Mu.input_mousedown(cursor_x, cursor_y, Mu.MOUSE_LEFT)
+            } else if !left_down && mu_term_last_left_down {
+                Mu.input_mouseup(cursor_x, cursor_y, Mu.MOUSE_LEFT)
+            }
+            mu_term_last_left_down = left_down
+        }
+
+        Mu.set_next_hover_root(mu_term_saved_next_hover_root)
+        Mu.set_focus(mu_term_saved_focus)
+        Mu.set_last_mouse_pos(mu_term_saved_last_mouse_pos)
+        Mu.begin()
+        let canvas = mu_term_build()
+        Mu.end()
+        mu_term_saved_next_hover_root = Mu.get_next_hover_root()
+        mu_term_saved_focus = Mu.focus
+        mu_term_saved_last_mouse_pos = Mu.get_last_mouse_pos()
+
+        if !Mu.frame_has_bounds {
+            mu_term_restore_rect()
+        } else {
+            let new_x = Mu.frame_bounds.x as uint
+            let new_y = Mu.frame_bounds.y as uint
+            let new_w = Mu.frame_bounds.w as uint
+            let new_h = Mu.frame_bounds.h as uint
+
+            if mu_term_drawn && (mu_term_drawn_x != new_x || mu_term_drawn_y != new_y ||
+                    mu_term_drawn_w != new_w || mu_term_drawn_h != new_h) {
+                mu_term_restore_rect()
+            }
+            if !mu_term_drawn {
+                mu_term_save_rect(new_x, new_y, new_w, new_h)
+            }
+
+            Mu.set_render_target(mu_term_backbuffer as u32*, new_w as int, new_h as int, new_x as int, new_y as int)
+            Mu.render()
+            mu_term_draw_grid(canvas)
+            Mu.clear_render_target()
+
+            let changed = !mu_term_last_blit_valid
+            if !changed {
+                let row: uint = 0
+                while row < new_h && !changed {
+                    let col: uint = 0
+                    while col < new_w {
+                        let idx = (row * new_w) + col
+                        if mu_term_last_blit[idx] != mu_term_backbuffer[idx] {
+                            changed = true
+                            break
+                        }
+                        col++
+                    }
+                    row++
+                }
+            }
+
+            if changed {
+                Terminal.blit_rect(new_x, new_y, new_w, new_h, mu_term_backbuffer as u32*, new_w)
+                memcpy(mu_term_last_blit as void*, mu_term_backbuffer as void*, (new_w * new_h * 4) as uint)
+                mu_term_last_blit_valid = true
+                mu_overlay_dirty = true
+            }
+
+            mu_term_drawn_x = new_x
+            mu_term_drawn_y = new_y
+            mu_term_drawn_w = new_w
+            mu_term_drawn_h = new_h
+            mu_term_drawn = true
+        }
+      }
+    }
+}

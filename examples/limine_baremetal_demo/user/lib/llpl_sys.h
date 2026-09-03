@@ -58,8 +58,22 @@ enum {
     SYS_PROCESS_SNAPSHOT = 51,
     SYS_LIST_DIRECTORY = 52,
     SYS_CHDIR = 53,
-    SYS_GETCWD = 54
+    SYS_GETCWD = 54,
+    SYS_SET_FOREGROUND = 55,
+    SYS_MONOTONIC_MS = 65,
+    SYS_MQ_CREATE = 66,
+    SYS_MQ_OPEN = 67,
+    SYS_MQ_UNLINK = 68,
+    SYS_MQ_SEND = 69,
+    SYS_MQ_RECEIVE = 70,
+    SYS_FB_INFO = 71,
+    SYS_FB_PRESENT = 72
+    ,SYS_UNLINK = 73,
+    SYS_MKDIR = 74,
+    SYS_TOUCH = 75
 };
+
+struct llpl_framebuffer_info { u64 width, height, pitch, format; };
 
 u64 call1(u64 n, u64 a);
 u64 call2(u64 n, u64 a, u64 b);

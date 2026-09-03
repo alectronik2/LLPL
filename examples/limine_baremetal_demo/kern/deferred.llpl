@@ -15,7 +15,7 @@ namespace Kern {
 
         let items:   WorkItem[CAPACITY]
         let head:    uint = 0
-        let tail:    uint = 0
+        let tail:     uint = 0
         let count:   uint = 0
         let dropped: uint = 0
         let lock:    SpinLock
@@ -102,7 +102,7 @@ namespace Kern {
 
         func init() {
             head    = 0
-            tail    = 0
+            tail     = 0
             count   = 0
             dropped = 0
             waiters = new WaitQueue()

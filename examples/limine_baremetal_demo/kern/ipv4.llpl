@@ -1,0 +1,528 @@
+import hal
+import kern
+
+namespace Kern {
+    const ETH_ARP: u16 = 0x0806
+    const ETH_IPV4: u16 = 0x0800
+    const IP_ICMP: u8 = 1
+    const IP_UDP: u8 = 17
+    const IP_TCP: u8 = 6
+    const NET_WAIT_TICKS: uint = 300
+
+    struct NetworkConfig {
+        address: u32
+        netmask: u32
+        router: u32
+        dhcp_server: u32
+        nameserver: u32
+    }
+
+    struct ProbeResult {
+        responder: u32
+        kind: u32 // 0 timeout, 1 echo reply, 2 TTL exceeded, 3 unreachable
+        ticks: u32
+    }
+
+    let network_config: NetworkConfig
+    let ipv4_identification: u16 = 1
+
+    struct TcpConnection {
+        open: bool
+        target: u32
+        port: u16
+        local_port: u16
+        sequence: u32
+        acknowledge: u32
+        mac: u8[6]
+    }
+    let tcp_connection: TcpConnection
+
+    func be16(data: u8*, at: uint) -> u16 {
+        return ((data[at] as u16) << 8) | data[at + 1] as u16
+    }
+
+    func be32(data: u8*, at: uint) -> u32 {
+        return ((data[at] as u32) << 24) | ((data[at + 1] as u32) << 16) |
+            ((data[at + 2] as u32) << 8) | data[at + 3] as u32
+    }
+
+    func put16(data: u8*, at: uint, value: u16) {
+        data[at] = (value >> 8) as u8
+        data[at + 1] = value as u8
+    }
+
+    func put32(data: u8*, at: uint, value: u32) {
+        data[at] = (value >> 24) as u8
+        data[at + 1] = (value >> 16) as u8
+        data[at + 2] = (value >> 8) as u8
+        data[at + 3] = value as u8
+    }
+
+    func internet_checksum(data: u8*, length: uint) -> u16 {
+        let sum: u32 = 0
+        let at: uint = 0
+        while at + 1 < length {
+            sum += be16(data, at) as u32
+            at += 2
+        }
+        if at < length { sum += (data[at] as u32) << 8 }
+        while (sum >> 16) != 0 { sum = (sum & 0xFFFF) + (sum >> 16) }
+        return (~sum) as u16
+    }
+
+    func tcp_checksum(source: u32, destination: u32, tcp: u8*, length: uint) -> u16 {
+        let sum: u32 = ((source >> 16) + (source & 0xFFFF) +
+            (destination >> 16) + (destination & 0xFFFF) + IP_TCP as u32 + length as u32)
+        let at: uint = 0
+        while at + 1 < length {
+            sum += be16(tcp, at) as u32
+            at += 2
+        }
+        if at < length { sum += (tcp[at] as u32) << 8 }
+        while (sum >> 16) != 0 { sum = (sum & 0xFFFF) + (sum >> 16) }
+        return (~sum) as u16
+    }
+
+    func ethernet_header(frame: u8*, destination: u8*, ethertype: u16) {
+        for let i: uint = 0; i < 6; i++ {
+            frame[i] = destination[i]
+            frame[6 + i] = primary_network_device.mac_byte(i)
+        }
+        put16(frame, 12, ethertype)
+    }
+
+    func ipv4_header(ip: u8*, payload_length: uint, protocol: u8,
+            source: u32, destination: u32, ttl: u8) {
+        for let i: uint = 0; i < 20; i++ { ip[i] = 0 }
+        ip[0] = 0x45
+        put16(ip, 2, (20 + payload_length) as u16)
+        put16(ip, 4, ipv4_identification)
+        ipv4_identification++
+        put16(ip, 6, 0x4000)
+        ip[8] = ttl
+        ip[9] = protocol
+        put32(ip, 12, source)
+        put32(ip, 16, destination)
+        put16(ip, 10, internet_checksum(ip, 20))
+    }
+
+    func poll_frame(frame: u8*, deadline: uint) -> int {
+        while Timer.current_tick() < deadline {
+            let length = primary_network_device.receive(frame, E1000_BUFFER_SIZE)
+            if length > 0 { return length }
+            scheduler_yield()
+        }
+        return 0
+    }
+
+    func arp_resolve(address: u32, mac_out: u8*) -> bool {
+        let frame: u8[2048]
+        let broadcast: u8[6] = [255, 255, 255, 255, 255, 255]
+        ethernet_header(&frame[0], &broadcast[0], ETH_ARP)
+        put16(&frame[0], 14, 1)
+        put16(&frame[0], 16, ETH_IPV4)
+        frame[18] = 6
+        frame[19] = 4
+        put16(&frame[0], 20, 1)
+        for let i: uint = 0; i < 6; i++ { frame[22 + i] = primary_network_device.mac_byte(i) }
+        put32(&frame[0], 28, network_config.address)
+        for let i: uint = 0; i < 6; i++ { frame[32 + i] = 0 }
+        put32(&frame[0], 38, address)
+        if !primary_network_device.send(&frame[0], 42) { return false }
+
+        let deadline = Timer.current_tick() + NET_WAIT_TICKS
+        while Timer.current_tick() < deadline {
+            let length = poll_frame(&frame[0], deadline)
+            if length < 42 { return false }
+            if be16(&frame[0], 12) == ETH_ARP && be16(&frame[0], 20) == 2 &&
+                    be32(&frame[0], 28) == address {
+                for let i: uint = 0; i < 6; i++ { mac_out[i] = frame[22 + i] }
+                return true
+            }
+        }
+        return false
+    }
+
+    func dhcp_option(packet: u8*, length: uint, wanted: u8, value: u8*) -> uint {
+        let at: uint = 240
+        while at < length {
+            let kind = packet[at]
+            at++
+            if kind == 255 { break }
+            if kind == 0 { continue }
+            if at >= length { break }
+            let size = packet[at] as uint
+            at++
+            if at + size > length { break }
+            if kind == wanted {
+                for let i: uint = 0; i < size; i++ { value[i] = packet[at + i] }
+                return size
+            }
+            at += size
+        }
+        return 0
+    }
+
+    func send_dhcp(message_type: u8, requested: u32, server: u32, xid: u32) -> bool {
+        let frame: u8[2048]
+        let broadcast: u8[6] = [255, 255, 255, 255, 255, 255]
+        ethernet_header(&frame[0], &broadcast[0], ETH_IPV4)
+        let ip = &frame[14]
+        let udp = &frame[34]
+        let bootp = &frame[42]
+        for let i: uint = 0; i < 300; i++ { bootp[i] = 0 }
+        bootp[0] = 1
+        bootp[1] = 1
+        bootp[2] = 6
+        put32(bootp, 4, xid)
+        put16(bootp, 10, 0x8000)
+        for let i: uint = 0; i < 6; i++ { bootp[28 + i] = primary_network_device.mac_byte(i) }
+        put32(bootp, 236, 0x63825363)
+        let option: uint = 240
+        bootp[option] = 53
+        bootp[option + 1] = 1
+        bootp[option + 2] = message_type
+        option += 3
+        if requested != 0 {
+            bootp[option] = 50
+            bootp[option + 1] = 4
+            put32(bootp, option + 2, requested)
+            option += 6
+        }
+        if server != 0 {
+            bootp[option] = 54
+            bootp[option + 1] = 4
+            put32(bootp, option + 2, server)
+            option += 6
+        }
+        bootp[option] = 55
+        bootp[option + 1] = 3
+        bootp[option + 2] = 1
+        bootp[option + 3] = 3
+        bootp[option + 4] = 6
+        option += 5
+        bootp[option] = 255
+        option++
+        let bootp_length = option
+        put16(udp, 0, 68)
+        put16(udp, 2, 67)
+        put16(udp, 4, (8 + bootp_length) as u16)
+        put16(udp, 6, 0)
+        ipv4_header(ip, 8 + bootp_length, IP_UDP, 0, 0xFFFF_FFFF, 64)
+        return primary_network_device.send(&frame[0], 14 + 20 + 8 + bootp_length)
+    }
+
+    func wait_dhcp(xid: u32, wanted_type: u8, config: NetworkConfig*) -> bool {
+        let frame: u8[2048]
+        let deadline = Timer.current_tick() + NET_WAIT_TICKS
+        while Timer.current_tick() < deadline {
+            let length = poll_frame(&frame[0], deadline)
+            if length < 282 { continue }
+            if be16(&frame[0], 12) != ETH_IPV4 || frame[23] != IP_UDP { continue }
+            let bootp = &frame[42]
+            if be32(bootp, 4) != xid { continue }
+            let value: u8[16]
+            if dhcp_option(bootp, (length - 42) as uint, 53, &value[0]) != 1 || value[0] != wanted_type { continue }
+            config.address = be32(bootp, 16)
+            if dhcp_option(bootp, (length - 42) as uint, 1, &value[0]) == 4 { config.netmask = be32(&value[0], 0) }
+            if dhcp_option(bootp, (length - 42) as uint, 3, &value[0]) >= 4 { config.router = be32(&value[0], 0) }
+            if dhcp_option(bootp, (length - 42) as uint, 54, &value[0]) == 4 { config.dhcp_server = be32(&value[0], 0) }
+            if dhcp_option(bootp, (length - 42) as uint, 6, &value[0]) >= 4 { config.nameserver = be32(&value[0], 0) }
+            return true
+        }
+        return false
+    }
+
+    func dhcp_configure(out: NetworkConfig*) -> bool {
+        if primary_network_device == null || !primary_network_device.link_up() { return false }
+        let xid: u32 = 0x4C4C504C
+        let offer: NetworkConfig
+        if !send_dhcp(1, 0, 0, xid) || !wait_dhcp(xid, 2, &offer) { return false }
+        if !send_dhcp(3, offer.address, offer.dhcp_server, xid) || !wait_dhcp(xid, 5, out) { return false }
+        network_config = *out
+        return true
+    }
+
+    func dns_skip_name(packet: u8*, length: uint, at_ptr: uint*) -> bool {
+        let at = *at_ptr
+        while at < length {
+            let size = packet[at] as uint
+            at++
+            if size == 0 {
+                *at_ptr = at
+                return true
+            }
+            if (size & 0xC0) == 0xC0 {
+                if at >= length { return false }
+                *at_ptr = at + 1
+                return true
+            }
+            if size > 63 || at + size > length { return false }
+            at += size
+        }
+        return false
+    }
+
+    func dns_resolve(hostname: String, out: u32*) -> bool {
+        if primary_network_device == null || network_config.address == 0 ||
+                network_config.nameserver == 0 || hostname == null { return false }
+        let name_length = hostname.byte_len()
+        if name_length == 0 || name_length > 253 { return false }
+        let destination_mac: u8[6]
+        let next_hop = network_config.nameserver
+        if (next_hop & network_config.netmask) !=
+                (network_config.address & network_config.netmask) { next_hop = network_config.router }
+        if !arp_resolve(next_hop, &destination_mac[0]) { return false }
+
+        let frame: u8[2048]
+        ethernet_header(&frame[0], &destination_mac[0], ETH_IPV4)
+        let ip = &frame[14]
+        let udp = &frame[34]
+        let dns = &frame[42]
+        for let i: uint = 0; i < 512; i++ { dns[i] = 0 }
+        let transaction: u16 = (0xD000 | (ipv4_identification & 0x0FFF)) as u16
+        put16(dns, 0, transaction)
+        put16(dns, 2, 0x0100)
+        put16(dns, 4, 1)
+        let cursor: uint = 12
+        let label_position: uint = cursor
+        dns[cursor] = 0
+        cursor++
+        let label_length: uint = 0
+        for let i: uint = 0; i <= name_length; i++ {
+            let c: char = 0
+            if i < name_length { c = hostname.byte_at(i) }
+            if c == '.' || c == 0 {
+                if label_length == 0 || label_length > 63 { return false }
+                dns[label_position] = label_length as u8
+                label_length = 0
+                if c == 0 { break }
+                label_position = cursor
+                dns[cursor] = 0
+                cursor++
+            } else {
+                dns[cursor] = c as u8
+                cursor++
+                label_length++
+            }
+        }
+        dns[cursor] = 0
+        cursor++
+        put16(dns, cursor, 1)
+        put16(dns, cursor + 2, 1)
+        cursor += 4
+        put16(udp, 0, 49152)
+        put16(udp, 2, 53)
+        put16(udp, 4, (8 + cursor) as u16)
+        put16(udp, 6, 0)
+        ipv4_header(ip, 8 + cursor, IP_UDP, network_config.address,
+            network_config.nameserver, 64)
+        if !primary_network_device.send(&frame[0], 42 + cursor) { return false }
+
+        let deadline = Timer.current_tick() + NET_WAIT_TICKS
+        while Timer.current_tick() < deadline {
+            let received = poll_frame(&frame[0], deadline)
+            if received < 54 || be16(&frame[0], 12) != ETH_IPV4 ||
+                    frame[23] != IP_UDP { continue }
+            let header_size = ((frame[14] & 0x0F) as uint) * 4
+            if 14 + header_size + 8 > received as uint { continue }
+            let reply_udp = &frame[14 + header_size]
+            if be16(reply_udp, 0) != 53 || be16(reply_udp, 2) != 49152 { continue }
+            let reply = &reply_udp[8]
+            let reply_length = be16(reply_udp, 4) as uint
+            if reply_length < 20 || 14 + header_size + reply_length > received as uint { continue }
+            let dns_length = reply_length - 8
+            if be16(reply, 0) != transaction || (be16(reply, 2) & 0x800F) != 0x8000 { continue }
+            let at: uint = 12
+            for let question: uint = 0; question < be16(reply, 4) as uint; question++ {
+                if !dns_skip_name(reply, dns_length, &at) || at + 4 > dns_length { return false }
+                at += 4
+            }
+            for let answer: uint = 0; answer < be16(reply, 6) as uint; answer++ {
+                if !dns_skip_name(reply, dns_length, &at) || at + 10 > dns_length { return false }
+                let kind = be16(reply, at)
+                let record_class = be16(reply, at + 2)
+                let data_length = be16(reply, at + 8) as uint
+                at += 10
+                if at + data_length > dns_length { return false }
+                if kind == 1 && record_class == 1 && data_length == 4 {
+                    *out = be32(reply, at)
+                    return true
+                }
+                at += data_length
+            }
+            return false
+        }
+        return false
+    }
+
+    func tcp_transmit(flags: u8, payload: u8*, payload_length: uint) -> bool {
+        let frame: u8[2048]
+        ethernet_header(&frame[0], &tcp_connection.mac[0], ETH_IPV4)
+        let ip = &frame[14]
+        let tcp = &frame[34]
+        for let i: uint = 0; i < 20; i++ { tcp[i] = 0 }
+        put16(tcp, 0, tcp_connection.local_port)
+        put16(tcp, 2, tcp_connection.port)
+        put32(tcp, 4, tcp_connection.sequence)
+        put32(tcp, 8, tcp_connection.acknowledge)
+        tcp[12] = 0x50
+        tcp[13] = flags
+        put16(tcp, 14, 4096)
+        for let i: uint = 0; i < payload_length; i++ { tcp[20 + i] = payload[i] }
+        put16(tcp, 16, tcp_checksum(network_config.address, tcp_connection.target,
+            tcp, 20 + payload_length))
+        ipv4_header(ip, 20 + payload_length, IP_TCP, network_config.address,
+            tcp_connection.target, 64)
+        return primary_network_device.send(&frame[0], 54 + payload_length)
+    }
+
+    func tcp_wait(wanted_flags: u8, output: u8*, capacity: uint,
+            received_out: uint*) -> bool {
+        let frame: u8[2048]
+        let deadline = Timer.current_tick() + NET_WAIT_TICKS
+        while Timer.current_tick() < deadline {
+            let length = poll_frame(&frame[0], deadline)
+            if length < 54 || be16(&frame[0], 12) != ETH_IPV4 || frame[23] != IP_TCP ||
+                    be32(&frame[0], 26) != tcp_connection.target { continue }
+            let ip_size = ((frame[14] & 0x0F) as uint) * 4
+            let tcp = &frame[14 + ip_size]
+            if be16(tcp, 0) != tcp_connection.port ||
+                    be16(tcp, 2) != tcp_connection.local_port { continue }
+            let flags = tcp[13]
+            if (flags & 4) != 0 {
+                tcp_connection.open = false
+                return false
+            }
+            let tcp_size = ((tcp[12] >> 4) as uint) * 4
+            let total = be16(&frame[0], 16) as uint
+            if total < ip_size + tcp_size { continue }
+            let payload_length = total - ip_size - tcp_size
+            let sequence = be32(tcp, 4)
+            if (flags & 2) != 0 {
+                // Peer's SYN (bare SYN or SYN+ACK) - this establishes the
+                // expected-sequence baseline for the connection, so it must
+                // be accepted unconditionally rather than gated on matching
+                // an existing expectation: tcp_connection.acknowledge is
+                // still its pre-connect placeholder (0) at this point, and
+                // the peer's real initial sequence number is essentially
+                // never 0, so the equality check below would otherwise
+                // never fire and every subsequent segment (including the
+                // handshake-completing ACK and all real data) would carry
+                // an ack of 0 - silently rejected by any real TCP peer.
+                let advance = payload_length + 1
+                if (flags & 1) != 0 { advance++ }
+                tcp_connection.acknowledge = sequence + advance as u32
+            } else if sequence == tcp_connection.acknowledge {
+                let advance = payload_length
+                if (flags & 1) != 0 { advance++ }
+                tcp_connection.acknowledge += advance as u32
+            }
+            if payload_length > 0 {
+                let copied = payload_length
+                if copied > capacity { copied = capacity }
+                for let i: uint = 0; i < copied; i++ { output[i] = tcp[tcp_size + i] }
+                *received_out = copied
+                tcp_transmit(0x10, null, 0)
+                if (flags & 1) != 0 { tcp_connection.open = false }
+                return true
+            }
+            if wanted_flags != 0 && (flags & wanted_flags) == wanted_flags {
+                *received_out = 0
+                return true
+            }
+            if (flags & 1) != 0 {
+                tcp_transmit(0x10, null, 0)
+                tcp_connection.open = false
+                *received_out = 0
+                return true
+            }
+        }
+        return false
+    }
+
+    func tcp_connect(target: u32, port: u16) -> bool {
+        if primary_network_device == null || network_config.address == 0 { return false }
+        let next_hop = target
+        if (target & network_config.netmask) != (network_config.address & network_config.netmask) {
+            next_hop = network_config.router
+        }
+        tcp_connection.target = target
+        tcp_connection.port = port
+        tcp_connection.local_port = 49153
+        tcp_connection.sequence = Timer.current_tick() as u32 + 0x4C500000
+        tcp_connection.acknowledge = 0
+        if !arp_resolve(next_hop, &tcp_connection.mac[0]) || !tcp_transmit(0x02, null, 0) { return false }
+        let ignored: uint = 0
+        if !tcp_wait(0x12, null, 0, &ignored) { return false }
+        tcp_connection.sequence++
+        if !tcp_transmit(0x10, null, 0) { return false }
+        tcp_connection.open = true
+        return true
+    }
+
+    func tcp_send(data: u8*, length: uint) -> bool {
+        if !tcp_connection.open || length == 0 || length > 1400 { return false }
+        if !tcp_transmit(0x18, data, length) { return false }
+        tcp_connection.sequence += length as u32
+        return true
+    }
+
+    func tcp_receive(data: u8*, capacity: uint, received: uint*) -> bool {
+        if !tcp_connection.open {
+            *received = 0
+            return true
+        }
+        return tcp_wait(0, data, capacity, received)
+    }
+
+    func tcp_close() {
+        if tcp_connection.open {
+            tcp_transmit(0x11, null, 0)
+            tcp_connection.sequence++
+            tcp_connection.open = false
+        }
+    }
+
+    func icmp_probe(target: u32, ttl: u8, sequence: u16, result: ProbeResult*) -> bool {
+        result.kind = 0
+        result.responder = 0
+        result.ticks = 0
+        if primary_network_device == null || network_config.address == 0 { return false }
+        let next_hop = target
+        if (target & network_config.netmask) != (network_config.address & network_config.netmask) {
+            next_hop = network_config.router
+        }
+        let destination_mac: u8[6]
+        if !arp_resolve(next_hop, &destination_mac[0]) { return false }
+        let frame: u8[2048]
+        ethernet_header(&frame[0], &destination_mac[0], ETH_IPV4)
+        let ip = &frame[14]
+        let icmp = &frame[34]
+        for let i: uint = 0; i < 40; i++ { icmp[i] = 0 }
+        icmp[0] = 8
+        put16(icmp, 4, 0x4C50)
+        put16(icmp, 6, sequence)
+        put32(icmp, 8, Timer.current_tick() as u32)
+        put16(icmp, 2, internet_checksum(icmp, 40))
+        ipv4_header(ip, 40, IP_ICMP, network_config.address, target, ttl)
+        let started = Timer.current_tick()
+        if !primary_network_device.send(&frame[0], 74) { return false }
+        let deadline = started + NET_WAIT_TICKS
+        while Timer.current_tick() < deadline {
+            let length = poll_frame(&frame[0], deadline)
+            if length < 42 || be16(&frame[0], 12) != ETH_IPV4 || frame[23] != IP_ICMP { continue }
+            let header_size = ((frame[14] & 0x0F) as uint) * 4
+            let reply = &frame[14 + header_size]
+            let kind = reply[0]
+            if kind == 0 && be16(reply, 4) == 0x4C50 && be16(reply, 6) == sequence { result.kind = 1 }
+            else if kind == 11 { result.kind = 2 }
+            else if kind == 3 { result.kind = 3 }
+            else { continue }
+            result.responder = be32(&frame[0], 26)
+            result.ticks = (Timer.current_tick() - started) as u32
+            return true
+        }
+        return true
+    }
+}

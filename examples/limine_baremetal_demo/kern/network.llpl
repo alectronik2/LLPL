@@ -1,0 +1,18 @@
+import mm
+
+namespace Kern {
+    const ETHERNET_FRAME_MAX: uint = 1518
+
+    class NetworkDevice : Object {
+        virtual func link_up() -> bool { return false }
+        virtual func mac_byte(index: uint) -> u8 { return 0 }
+        virtual func send(frame: u8*, length: uint) -> bool { return false }
+        virtual func receive(frame: u8*, capacity: uint) -> int { return 0 }
+    }
+
+    let primary_network_device: NetworkDevice = null
+
+    func register_network_device(device: NetworkDevice) {
+        if primary_network_device == null { primary_network_device = device }
+    }
+}

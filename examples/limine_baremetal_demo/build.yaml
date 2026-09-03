@@ -29,6 +29,7 @@ common_cflags:
   - -fno-stack-protector
   - -fno-omit-frame-pointer
   - -fno-optimize-sibling-calls
+  - -Iuser/include
   - -Ibuild/include
   - -mcmodel=kernel
   - -fno-pie
@@ -82,14 +83,45 @@ static_libraries:
       - path: user/lib/args.c
         output: build/libsys_args.o
         cflags: [-mcmodel=small, -fno-pie]
+      - path: user/lib/libc.c
+        output: build/libsys_libc.o
+        cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse]
     output: build/libsys.a
+  - name: tinygl
+    c_sources:
+      - {path: user/tinygl/src/api.c, output: build/tinygl_api.o, cflags: &tinygl_flags [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DNO_DEBUG_OUTPUT]}
+      - {path: user/tinygl/src/list.c, output: build/tinygl_list.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/vertex.c, output: build/tinygl_vertex.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/init.c, output: build/tinygl_init.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/matrix.c, output: build/tinygl_matrix.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/texture.c, output: build/tinygl_texture.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/misc.c, output: build/tinygl_misc.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/clear.c, output: build/tinygl_clear.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/light.c, output: build/tinygl_light.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/clip.c, output: build/tinygl_clip.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/select.c, output: build/tinygl_select.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/get.c, output: build/tinygl_get.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/zbuffer.c, output: build/tinygl_zbuffer.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/zline.c, output: build/tinygl_zline.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/ztriangle.c, output: build/tinygl_ztriangle.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/zmath.c, output: build/tinygl_zmath.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/image_util.c, output: build/tinygl_image_util.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/msghandling.c, output: build/tinygl_msghandling.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/arrays.c, output: build/tinygl_arrays.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/specbuf.c, output: build/tinygl_specbuf.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/memory.c, output: build/tinygl_memory.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/ztext.c, output: build/tinygl_ztext.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/zraster.c, output: build/tinygl_zraster.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/accum.c, output: build/tinygl_accum.o, cflags: *tinygl_flags}
+      - {path: user/tinygl/src/zpostprocess.c, output: build/tinygl_zpostprocess.o, cflags: *tinygl_flags}
+    output: build/libTinyGL.a
 
 extra_links:
   - name: init
     c_sources:
       - path: user/init.c
         output: build/init.o
-        cflags: [-mcmodel=small, -fno-pie]
+        cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse]
     link:
       output: build/init.elf
       script: user/linker.ld
@@ -312,6 +344,146 @@ extra_links:
       script: user/linker.ld
       ldflags: [-m, elf_x86_64, -nostdlib, -static]
       objects: [build/hello.o, build/hello_runtime.o, build/libsys.a]
+  - name: dhcp
+    llpl_sources:
+      - src: user/dhcp.llpl
+        c_output: build/dhcp.c
+        output: build/dhcp.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    c_sources:
+      - path: ../../runtime/runtime.c
+        output: build/dhcp_runtime.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/dhcp.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/dhcp.o, build/dhcp_runtime.o, build/libsys.a]
+  - name: ping
+    llpl_sources:
+      - src: user/ping.llpl
+        c_output: build/ping.c
+        output: build/ping.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    c_sources:
+      - path: ../../runtime/runtime.c
+        output: build/ping_runtime.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/ping.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/ping.o, build/ping_runtime.o, build/libsys.a]
+  - name: traceroute
+    llpl_sources:
+      - src: user/traceroute.llpl
+        c_output: build/traceroute.c
+        output: build/traceroute.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    c_sources:
+      - path: ../../runtime/runtime.c
+        output: build/traceroute_runtime.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/traceroute.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/traceroute.o, build/traceroute_runtime.o, build/libsys.a]
+  - name: fetch
+    llpl_sources:
+      - src: user/fetch.llpl
+        c_output: build/fetch.c
+        output: build/fetch.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    c_sources:
+      - path: ../../runtime/runtime.c
+        output: build/fetch_runtime.o
+        include_dirs: [../../runtime]
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/fetch.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/fetch.o, build/fetch_runtime.o, build/libsys.a]
+
+  - name: lua
+    c_sources:
+      - {path: user/lua_main.c, output: build/lua_main.o, include_dirs: [user/lua-5.4.9/src], cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lapi.c, output: build/lua_lapi.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lauxlib.c, output: build/lua_lauxlib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lbaselib.c, output: build/lua_lbaselib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lcode.c, output: build/lua_lcode.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lcorolib.c, output: build/lua_lcorolib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lctype.c, output: build/lua_lctype.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/ldblib.c, output: build/lua_ldblib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/ldebug.c, output: build/lua_ldebug.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/ldo.c, output: build/lua_ldo.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/ldump.c, output: build/lua_ldump.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lfunc.c, output: build/lua_lfunc.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lgc.c, output: build/lua_lgc.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/linit.c, output: build/lua_linit.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/liolib.c, output: build/lua_liolib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/llex.c, output: build/lua_llex.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lmathlib.c, output: build/lua_lmathlib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lmem.c, output: build/lua_lmem.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/loadlib.c, output: build/lua_loadlib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lobject.c, output: build/lua_lobject.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lopcodes.c, output: build/lua_lopcodes.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/loslib.c, output: build/lua_loslib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lparser.c, output: build/lua_lparser.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lstate.c, output: build/lua_lstate.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lstring.c, output: build/lua_lstring.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lstrlib.c, output: build/lua_lstrlib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/ltable.c, output: build/lua_ltable.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/ltablib.c, output: build/lua_ltablib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/ltm.c, output: build/lua_ltm.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lundump.c, output: build/lua_lundump.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lutf8lib.c, output: build/lua_lutf8lib.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lvm.c, output: build/lua_lvm.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+      - {path: user/lua-5.4.9/src/lzio.c, output: build/lua_lzio.o, cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse, -DLUA_USE_C89]}
+    link:
+      output: build/lua.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/lua_main.o, build/lua_lapi.o, build/lua_lauxlib.o, build/lua_lbaselib.o, build/lua_lcode.o, build/lua_lcorolib.o, build/lua_lctype.o, build/lua_ldblib.o, build/lua_ldebug.o, build/lua_ldo.o, build/lua_ldump.o, build/lua_lfunc.o, build/lua_lgc.o, build/lua_linit.o, build/lua_liolib.o, build/lua_llex.o, build/lua_lmathlib.o, build/lua_lmem.o, build/lua_loadlib.o, build/lua_lobject.o, build/lua_lopcodes.o, build/lua_loslib.o, build/lua_lparser.o, build/lua_lstate.o, build/lua_lstring.o, build/lua_lstrlib.o, build/lua_ltable.o, build/lua_ltablib.o, build/lua_ltm.o, build/lua_lundump.o, build/lua_lutf8lib.o, build/lua_lvm.o, build/lua_lzio.o, build/libsys.a]
+
+  - name: editor
+    c_sources:
+      - path: user/editor.c
+        output: build/editor.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/editor.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/editor.o, build/libsys.a]
+  - name: kilo
+    c_sources:
+      - path: user/kilo.c
+        output: build/kilo.o
+        cflags: [-mcmodel=small, -fno-pie]
+    link:
+      output: build/kilo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/kilo.o, build/libsys.a]
+  - name: tinygl_demo
+    c_sources:
+      - path: user/tinygl_demo.c
+        output: build/tinygl_demo.o
+        cflags: [-mcmodel=small, -fno-pie, -msse, -msse2, -mfpmath=sse]
+    link:
+      output: build/tinygl_demo.elf
+      script: user/linker.ld
+      ldflags: [-m, elf_x86_64, -nostdlib, -static]
+      objects: [build/tinygl_demo.o, build/libTinyGL.a, build/libsys.a]
 
 package:
   output: kernel.iso
@@ -358,6 +530,18 @@ package:
     - copy: {from: build/pipe_pipeline_demo.elf, to: initrd/bin/pipe_pipeline_demo}
     - copy: {from: build/pipe_simple_demo.elf, to: initrd/bin/pipe_simple_demo}
     - copy: {from: build/hello.elf, to: initrd/bin/hello}
+    - copy: {from: build/dhcp.elf, to: initrd/bin/dhcp}
+    - copy: {from: build/ping.elf, to: initrd/bin/ping}
+    - copy: {from: build/traceroute.elf, to: initrd/bin/traceroute}
+    - copy: {from: build/fetch.elf, to: initrd/bin/fetch}
+    - copy: {from: build/lua.elf, to: initrd/bin/lua}
+    - copy: {from: build/editor.elf, to: initrd/bin/edit}
+    - copy: {from: build/kilo.elf, to: initrd/bin/kilo}
+    - copy: {from: build/tinygl_demo.elf, to: initrd/bin/tinygl}
+    - mkdir: initrd/etc
+    - copy: {from: user/lua_smoke.lua, to: initrd/etc/lua_smoke.lua}
+    - copy: {from: assets/wallpaper.raw, to: initrd/etc/wallpaper.raw}
+    - copy: {from: assets/cursor.raw, to: initrd/etc/cursor.raw}
     - run: "tar -C initrd -cf isodir/boot/initrd.tar ."
     - copy: {from: limine.conf, to: isodir/limine.conf}
     - copy: {from: limine.conf, to: isodir/boot/limine/limine.conf}
@@ -375,6 +559,7 @@ persistent_files:
 
 run:
   args: ["-cdrom", "kernel.iso", "-serial", "stdio", "-m", "256", "-accel", "kvm",
+    "-nic", "user,model=e1000",
     "-device", "ahci,id=ahci0",
     "-drive", "id=disk0,file=disk.img,format=raw,if=none",
     "-device", "ide-hd,drive=disk0,bus=ahci0.0"]

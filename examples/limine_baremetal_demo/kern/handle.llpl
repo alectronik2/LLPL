@@ -214,8 +214,10 @@ namespace Kern {
                         memcpy(copy as void*, old_data as void*, old_size)
                     }
                     memcpy((copy as uint + self.offset) as void*, buffer as void*, size)
-                    let text = new String(copy)
-                    let rc = self.file.fs.write_text(self.file.path, text)
+                    // Preserve arbitrary bytes (including embedded NULs).
+                    // The former String conversion silently truncated Lua
+                    // bytecode and other binary output at the first zero.
+                    let rc = self.file.fs.write_binary(self.file.path, copy, new_size as u64)
                     MM.free(copy)
                     if rc < 0 {
                         result = rc

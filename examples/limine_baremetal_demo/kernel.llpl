@@ -57,6 +57,13 @@ let module_request: LimineModuleRequest = LimineModuleRequest {
     internal_modules: 0
 }
 
+@section(".limine_requests") @used
+let rsdp_request: LimineRsdpRequest = LimineRsdpRequest {
+    id: limine_rsdp_request_id,
+    revision: 0,
+    response: 0
+}
+
 @section(".limine_requests_end") @used
 let limine_requests_end_marker: u64[2] = limine_end_marker_id
 
@@ -79,6 +86,10 @@ func limine_get_hhdm() -> LimineHhdmResponse* {
 
 func limine_get_modules() -> LimineModuleResponse* {
     return module_request.response
+}
+
+func limine_get_rsdp() -> LimineRsdpResponse* {
+    return rsdp_request.response
 }
 
 func memmap_type_name(t: u64) -> string {
@@ -238,6 +249,86 @@ func demo_hhdm(memmap: LimineMemmapResponse*, hhdm: LimineHhdmResponse*) {
     }
 }
 
+// Draws a background image loaded from the initrd straight onto the
+// framebuffer. The file (produced by tools/make_wallpaper.py at build
+// time, scaled/cropped to the boot framebuffer's exact resolution) is
+// just a small header (magic, width, height) followed by raw
+// 0x00RRGGBB pixels in the same packed format Terminal.put_pixel/
+// blit_rect already use, so this is a straight blit with no runtime
+// image decoding. Cosmetic only - returns false and leaves the screen
+// untouched on any mismatch (missing file, bad magic, truncated data)
+// rather than failing the boot.
+const WALLPAPER_MAGIC: u32 = 0x504C4157
+
+// Kept resident (the initrd's backing memory stays mapped for the whole
+// boot anyway) so repaint_wallpaper can keep reading from it on every
+// scroll, not just the one initial blit.
+let wallpaper_pixels: u32* = null
+let wallpaper_width: uint = 0
+let wallpaper_height: uint = 0
+
+func draw_wallpaper(path: string) -> bool {
+    let (data, size) = VFS.read_binary(new String(path))
+    if data == null || size < 12 {
+        return false
+    }
+    let header = data as u32*
+    if header[0] != WALLPAPER_MAGIC {
+        return false
+    }
+    let width = header[1]
+    let height = header[2]
+    let expected = 12 + (width as u64) * (height as u64) * 4
+    if size < expected {
+        return false
+    }
+    wallpaper_pixels = (data + 12) as u32*
+    wallpaper_width = width
+    wallpaper_height = height
+    Terminal.blit_rect(0, 0, width, height, wallpaper_pixels, width)
+    // Switches Terminal's scroll() from a raw pixel shift (which would
+    // drag this image up the screen along with the text) to a logical
+    // scroll of a character grid, repainting this same image untouched
+    // via repaint_wallpaper below and replaying visible text on top of it
+    // - see the comments on Terminal.wallpaper_repaint_hook and
+    // enable_text_buffer() (lib/terminal.llpl) for the full mechanism.
+    Terminal.enable_text_buffer()
+    Terminal.set_wallpaper_repaint_hook(repaint_wallpaper)
+    Terminal.set_row_fill_hook(fill_wallpaper_row)
+    return true
+}
+
+// Registered as Terminal's wallpaper-repaint hook: called once per scroll,
+// after the character grid has been shifted but before its cells are
+// replayed, to redraw this image at its one fixed, original position -
+// never shifted, never tiled - so the background stays visually still
+// while the text scrolls over it.
+func repaint_wallpaper(arg: void*) {
+    if wallpaper_pixels == null {
+        return
+    }
+    Terminal.blit_rect(0, 0, wallpaper_width, wallpaper_height, wallpaper_pixels, wallpaper_width)
+}
+
+// Registered as Terminal's row-fill hook: called whenever a single text
+// row is erased (e.g. the shell or kilo redrawing the current line on
+// every keystroke) to restore just that row's slice of the wallpaper
+// instead of the flat background color erase_line() used before - a full
+// repaint_wallpaper() call would work too, but re-copying the whole image
+// on every keystroke instead of one line's worth of it is wasted work
+// (and, before this existed, a two-step "flash to a blank strip, then the
+// new text appears" that read as flicker on the actively-edited line).
+func fill_wallpaper_row(y: uint) {
+    if wallpaper_pixels == null || y >= wallpaper_height {
+        return
+    }
+    let h = Terminal.LINE_HEIGHT
+    if y + h > wallpaper_height {
+        h = wallpaper_height - y
+    }
+    Terminal.blit_rect(0, y, wallpaper_width, h, wallpaper_pixels + (y * wallpaper_width), wallpaper_width)
+}
+
 func kernel_main() {
     HAL.disable_interrupts()
     hs.init()
@@ -271,6 +362,7 @@ func kernel_main() {
     }
 
     HAL.GDT.init()
+    HAL.FPU.init()
     HAL.IDT.init()
     HAL.Syscall.init()
     HAL.PIC.init()
@@ -283,18 +375,30 @@ func kernel_main() {
 
     // Additive alongside HAL.PIC - keyboard/mouse/PIT stay PIC-routed
     // exactly as before. Needs MM.p2v (hhdm_offset), hence after MM.init.
+    let rsdp = limine_get_rsdp()
+    if rsdp != null {
+        HAL.ACPI.init(rsdp.address as uint)
+    }
     HAL.LAPIC.init()
     HAL.IOAPIC.init()
+    let (ioapic_found, ioapic_paddr) = HAL.ACPI.find_ioapic()
+    if ioapic_found {
+        "ACPI: IOAPIC found at \(ioapic_paddr:hex)\n" |> HAL.Serial.write
+    } else {
+        "ACPI: IOAPIC not found via MADT, using hardcoded fallback\n" |> HAL.Serial.write
+    }
 
     Kern.proc_init()
     Kern.thread_init()
     Kern.shm_init()
+    Kern.message_queue_init()
 
     Kern.device_init()
     Kern.keyboard_init()
 
     Kern.blockdevice_init()
     Kern.ahci_init()
+    Kern.e1000_init()
 
     Terminal.init( fb )
     // mouse_init() must run after Terminal.init() - it reads
@@ -317,11 +421,23 @@ func kernel_main() {
     Kern.install_console_fds()
 
     VFS.init(limine_get_modules())
+    if draw_wallpaper("/etc/wallpaper.raw") {
+        "Wallpaper loaded <green>ok</>\n" |> Terminal.write
+    } else {
+        "Wallpaper not found, using default background\n" |> Terminal.write
+    }
+    if Kern.load_cursor_sprite("/etc/cursor.raw") {
+        "Cursor sprite loaded <green>ok</>\n" |> Terminal.write
+    } else {
+        "Cursor sprite not found, using default cursor\n" |> Terminal.write
+    }
     "Spawning init <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/init")
     "Init spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/sh")
     "User shell spawned <green>ok</>\n" |> Terminal.write
+    
+    /* 
     Kern.spawn_shm_demo()
     "shm demo spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/apc_target")
@@ -336,6 +452,8 @@ func kernel_main() {
     "iocp demo spawned <green>ok</>\n" |> Terminal.write
     Kern.spawn_elf("/bin/sync_handle_demo")
     "sync handle demo spawned <green>ok</>\n" |> Terminal.write
+    */
+    
     // pipe_pipeline_demo/pipe_simple_demo (user/*.c) are diagnostic repros
     // for the pipe write-end refcounting investigation - not auto-spawned
     // since a reader blocked on EOF still hangs in some scenarios even

@@ -1,0 +1,43 @@
+import llpl_sys
+import net_utils
+
+func llpl_panic_putc(c: char) { net_panic_putc(c) }
+func llpl_panic_halt() { net_panic_halt() }
+
+func _start(args: string[]) {
+    let target_text: string = null
+    let argument_index: uint = 0
+    for arg in args {
+        if argument_index == 1 { target_text = arg }
+        argument_index++
+    }
+    if (target_text as u64) == 0 { 
+        Sys.write_s("usage: ping HOST\n")
+        Sys.exit(1) 
+    }
+    let target: u32 = 0
+    if !resolve_host(target_text, &target) { Sys.write_s("ping: cannot resolve \(target_text)\n")
+    Sys.exit(1) }
+    Sys.write_s("PING \(target_text) (")
+    write_ipv4(target)
+    Sys.write_s(")\n")
+    let received: uint = 0
+    for let sequence: u16 = 1; sequence <= 4; sequence++ {
+        let result: Sys.ProbeResult
+        if Sys.icmp_probe(target, 64, sequence, &result) < 0 || result.kind == 0 {
+            Sys.write_s("timeout seq=\(sequence)\n")
+        } else if result.kind == 1 {
+            received++
+            Sys.write_s("reply from ")
+            write_ipv4(result.responder)
+            Sys.write_s(" seq=\(sequence) time=\(result.ticks * 10) ms\n")
+        } else {
+            Sys.write_s("ICMP error from ")
+            write_ipv4(result.responder)
+            Sys.write_s("\n")
+        }
+    }
+    Sys.write_s("--- \(received)/4 replies ---\n")
+    if received != 0 { Sys.exit(0) }
+    Sys.exit(1)
+}

@@ -185,8 +185,17 @@ func isr_handler_inner( ctx: HAL.IDT.Context* ) -> HAL.IDT.Context* {
             return Kern.schedule_from_interrupt( ctx )
         }
 
+        let interrupted_pid = Kern.take_keyboard_interrupt_pid()
         HAL.PIC.eoi( irq )
         llpl_irq_exit()
+        if interrupted_pid != 0 {
+            let target = Kern.find_process(interrupted_pid)
+            let running = Kern.current_thread()
+            if target != null && running != null && running.proc == target {
+                return Kern.kill_current_process_from_interrupt(ctx, 130)
+            }
+            if target != null { Kern.terminate_process(target, 130) }
+        }
         return ctx
     }
 

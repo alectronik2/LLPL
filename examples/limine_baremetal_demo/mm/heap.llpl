@@ -79,6 +79,17 @@ namespace MM {
 
     let buckets: Bucket[12]
 
+    // A plain-primitive-typed twin, declared immediately after `buckets`
+    // purely so mm/vmm.llpl's init() has a same-neighborhood address it
+    // can take *before* Bucket's own layout is available - see that call
+    // site's own comment. Arrays of plain (non-class) struct values, like
+    // `buckets` itself, don't get a forward `extern` declaration at all
+    // (source/codegen.d: the element type isn't complete yet at that
+    // point in the generated C, and C requires it to be for an array
+    // declaration of any size) - a primitive-typed global doesn't have
+    // that restriction. Value is never read; only its address matters.
+    let buckets_landmark: uint = 0
+
     func malloc<T>(size: int = sizeof(T)) -> T* {
         holding MM.lock {
             if size > MM.PAGE_SIZE / 2 {

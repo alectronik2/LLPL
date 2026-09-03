@@ -16,6 +16,10 @@ namespace Kern {
         virtual func is_signaled() -> bool {
             return false
         }
+
+        virtual func is_message_queue() -> bool {
+            return false
+        }
     }
 
     // NT-style Event: manual-reset stays signaled until explicitly reset;

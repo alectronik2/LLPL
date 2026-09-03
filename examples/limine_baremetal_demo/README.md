@@ -12,9 +12,11 @@ early operating-system subsystems.
 - COM1 serial diagnostics and panic output
 - a framebuffer terminal with TrueType font rendering and ANSI colors
 - physical-page allocation, virtual memory, kernel and process address spaces,
+- an Intel 82540EM/E1000 PCI network driver with DMA transmit/receive rings,
   and anonymous user mappings
 - GDT, TSS, IDT, PIC, PIT, interrupt handling, and per-CPU state
 - priority run queues, timer-driven context switching, and kernel threads
+- per-thread x87/SSE/SSE2 state for floating-point user programs
 - a bounded, allocation-free IRQ deferred-work queue serviced by a kernel
   worker thread
 - priority-aware wait queues, blocking/wakeup primitives, and a lowest-priority
@@ -119,13 +121,24 @@ map bar. Its colors are:
 - pink: framebuffer memory
 
 After boot, click the QEMU display to direct keyboard input to the guest and
-use the `$` prompt shown in the serial terminal. The shell supports
-`help`, `echo`, `cat`, `ls`, `cd`, `clear`, `pid`, `ps`, and `exit`, with ANSI-colored
-prompts and command output; any other command is resolved
+use the `$` prompt shown in the serial terminal. The Fish-inspired shell supports
+`help`, `echo`, `cat`, `ls`, `cd`, `pwd`, `mkdir`, `touch`, `cp`, `rm`, `clear`,
+`pid`, `ps`, `history`, and `exit`, with
+live syntax coloring; any other command is resolved
 under `/bin` and run as a child process. For example, `cat /etc/motd` reads a
 file from the initrd and `child` runs `/bin/child`.
 The line editor supports insertion at the cursor, Backspace/Delete,
-Left/Right, Home/End, and Up/Down command history.
+Left/Right, Home/End, and Up/Down command history. It also provides gray inline
+history autosuggestions (Right accepts one), command and path completion with
+Tab, Ctrl-R prefix history search, pipelines, and input/output redirection.
+History is stored in `/var/fish_history`, so it survives shell restarts during
+the current boot. The current root filesystem is memory-backed, so it does not
+yet survive a machine reboot.
+
+`cp SOURCE DEST` copies files using descriptor-backed binary I/O. `rm FILE`
+uses the kernel unlink operation (syscall 73), while `mkdir` and `touch` use
+syscalls 74 and 75 to reach the VFS implementations. Directory removal and
+recursive operations are intentionally not enabled yet.
 
 Serial output includes initialization diagnostics, initrd/VFS checks, kernel
 thread activity, and `/bin/init` output. The init program prints a greeting,
@@ -328,6 +341,78 @@ flagged descriptors are omitted when the new executable's descriptor table is
 built. Kernel startup exercises pipe I/O, duplication, inheritance, and
 close-on-exec from user space.
 
+## Message queues
+
+Named message queues provide message-oriented IPC in addition to byte-stream
+pipes and shared memory. `mq_create` (syscall 66) creates a bounded queue and
+returns a waitable descriptor; unrelated processes can rendezvous with
+`mq_open` (67). `mq_send` (69) and `mq_receive` (70) block when the queue is
+full or empty, preserve message boundaries, and deliver higher numeric
+priorities first while retaining FIFO order among equal priorities. Messages
+may contain up to 4096 bytes, and queue depths may range from 1 to 1024.
+
+`mq_receive` leaves the oldest eligible message queued and returns `EMSGSIZE`
+when the supplied buffer is too small. A queue descriptor works with the
+ordinary close, dup, inheritance, close-on-exec, and wait-handle operations.
+`mq_unlink` (68) removes the name immediately while existing descriptors keep
+the queue alive.
+
+## Freestanding C compatibility
+
+`user/include` and `user/lib/libc.c` provide the libc subset needed by an
+embedded Lua runtime: memory and string operations, character classification,
+decimal and integer conversion, descriptor-backed `FILE` streams, formatted
+output (including floating point), `errno`, C locale stubs, clocks, and
+`setjmp`/`longjmp`. Unsupported filesystem mutations such as `remove` and
+`rename` currently fail with `EINVAL`; Lua's OS library should expose those as
+unavailable until matching kernel operations are added.
+
+## Lua
+
+The initrd includes an official Lua 5.4.9 interpreter at `/bin/lua`, built as
+a static freestanding user ELF. It supports script files and a basic keyboard
+REPL, with the base, coroutine, table, string, UTF-8, math, debug, package,
+I/O, and restricted OS libraries registered. Native dynamic modules and host
+commands are unavailable; `package` can still load pure Lua modules from the
+initrd or writable memory filesystem.
+
+```text
+lua /etc/lua_smoke.lua
+lua
+```
+
+## Text editor
+
+`/bin/edit` is a small full-screen editor for Lua source files. It provides
+insertion and backspace editing, arrow-key navigation, vertical scrolling,
+Ctrl-S save, Ctrl-Q quit, an unsaved-change guard, and ANSI highlighting for
+Lua keywords, comments, strings, and numbers.
+
+```text
+edit /etc/lua_smoke.lua
+```
+
+## TinyGL
+
+The maintained C99 TinyGL software renderer is built as `build/libTinyGL.a`.
+The `/bin/tinygl` demonstration renders a depth-tested, smoothly rotating
+multicolored cube into a private 320x240 color buffer. Use the arrow keys to
+adjust its rotation and Q to return to the shell.
+
+```text
+tinygl
+```
+
+Syscall 71 returns the display dimensions and packed `0x00RRGGBB` surface
+format. Syscall 72 validates and presents a userspace color buffer centered on
+the display. It copies each row through kernel-owned staging memory, so an
+application never receives the physical framebuffer address. The init program
+checks framebuffer discovery and invalid-surface rejection on every boot.
+
+The shell registers each foreground child with the kernel. Ctrl-C therefore
+terminates the active program (including `/bin/tinygl`) with conventional exit
+status 130 and returns to the shell prompt.
+
 ## Process heap
 
 Each user process owns a demand-paged heap beginning at `0x40000000`, below a
@@ -371,7 +456,7 @@ made ready. Passing `false` as the second argument to
 | `kern/` | processes, threads/scheduler, timers, handles, and VFS |
 | `lib/` | terminal/font rendering, spinlocks, and kernel objects |
 | `initrd/` | files packed into the boot initrd |
-| `user/` | freestanding init program and its user-space linker script |
+| `user/` | freestanding init, LLPL shell, user programs, syscall bindings, and linker script |
 | `limine.conf` | Limine boot entry and module configuration |
 | `build.yaml` | compiler, linker, ISO packaging, and QEMU configuration |
 | `linker.ld` | higher-half kernel linker script |

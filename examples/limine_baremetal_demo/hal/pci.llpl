@@ -18,6 +18,7 @@ namespace HAL {
             class_code: u8
             subclass: u8
             prog_if: u8
+            bar0: u64
             bar5: u64
             interrupt_line: u8
         }
@@ -46,6 +47,7 @@ namespace HAL {
         func probe_function(bus: uint, device: uint, function: uint) -> PciDevice {
             let ids = read_config32(bus, device, function, 0x00)
             let class_reg = read_config32(bus, device, function, 0x08)
+            let bar0 = read_config32(bus, device, function, 0x10) & ~0xF as u32
             let bar5 = read_config32(bus, device, function, 0x24) & ~0xF as u32
             let irq = read_config32(bus, device, function, 0x3C)
 
@@ -58,9 +60,32 @@ namespace HAL {
             dev.prog_if = ((class_reg >> 8) & 0xFF) as u8
             dev.subclass = ((class_reg >> 16) & 0xFF) as u8
             dev.class_code = ((class_reg >> 24) & 0xFF) as u8
+            dev.bar0 = bar0 as u64
             dev.bar5 = bar5 as u64
             dev.interrupt_line = (irq & 0xFF) as u8
             return dev
+        }
+
+        func find_vendor_device(vendor: u16, device_id: u16) -> (bool, PciDevice) {
+            for let bus: uint = 0; bus < 256; bus++ {
+                for let device: uint = 0; device < 32; device++ {
+                    for let function: uint = 0; function < 8; function++ {
+                        if vendor_id(bus, device, function) == 0xFFFF { continue }
+                        let dev = probe_function(bus, device, function)
+                        if dev.vendor_id == vendor && dev.device_id == device_id {
+                            return (true, dev)
+                        }
+                    }
+                }
+            }
+            let empty: PciDevice
+            return (false, empty)
+        }
+
+        func enable_bus_master(dev: PciDevice) {
+            let command = read_config32(dev.bus, dev.device, dev.function, 0x04)
+            // PCI command: memory-space enable (bit 1), bus master (bit 2).
+            write_config32(dev.bus, dev.device, dev.function, 0x04, command | 0x6)
         }
 
         // Brute-force scan of every bus/device/function (256*32*8 config

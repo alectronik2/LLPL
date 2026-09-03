@@ -1,0 +1,168 @@
+import llpl_sys
+import net_utils
+import tls
+
+func llpl_panic_putc(c: char) { net_panic_putc(c) }
+func llpl_panic_halt() { net_panic_halt() }
+
+// Thin branches so the request-building/response-parsing logic below stays
+// identical for http:// and https:// - see user/tls.llpl for what the TLS
+// path deliberately does and does not protect against.
+func conn_connect(use_tls: bool, address: u32, port: u16, hostname: string) -> bool {
+    if use_tls { return Tls.connect(address, port, hostname) }
+    return Sys.tcp_connect(address, port) >= 0
+}
+
+func conn_send(use_tls: bool, data: void*, length: u64) -> i64 {
+    if use_tls { return Tls.write(data, length) }
+    return Sys.tcp_send(data, length)
+}
+
+func conn_receive(use_tls: bool, data: void*, capacity: u64) -> i64 {
+    if use_tls { return Tls.read(data, capacity) }
+    return Sys.tcp_receive(data, capacity)
+}
+
+func conn_close(use_tls: bool) {
+    if use_tls { Tls.close() } else { Sys.tcp_close() }
+}
+
+func _start(args: string[]) {
+    let url: string = null
+    let output_name: string = null
+    let index: uint = 0
+    for arg in args {
+        if index == 1 { url = arg }
+        else if index == 2 { output_name = arg }
+        index++
+    }
+    if (url as u64) == 0 {
+        Sys.write_s("usage: fetch http://HOST/PATH [OUTPUT]\n")
+        Sys.exit(1)
+    }
+    let use_tls = false
+    let source: uint = 0
+    if url.sizeof >= 7 && url[0] == 'h' && url[1] == 't' && url[2] == 't' &&
+            url[3] == 'p' && url[4] == ':' && url[5] == '/' && url[6] == '/' {
+        source = 7
+    } else if url.sizeof >= 8 && url[0] == 'h' && url[1] == 't' && url[2] == 't' &&
+            url[3] == 'p' && url[4] == 's' && url[5] == ':' && url[6] == '/' && url[7] == '/' {
+        use_tls = true
+        source = 8
+    } else {
+        Sys.write_s("fetch: only http:// and https:// URLs are supported\n")
+        Sys.exit(1)
+    }
+    let host: char[256]
+    let path: char[768]
+    let host_length: uint = 0
+    while source < url.sizeof && url[source] != '/' && url[source] != ':' {
+        if host_length >= 255 {
+            Sys.write_s("fetch: hostname too long\n")
+            Sys.exit(1)
+        }
+        host[host_length] = url[source]
+        host_length++
+        source++
+    }
+    host[host_length] = 0
+    let port: u16 = 80
+    if use_tls { port = 443 }
+    if source < url.sizeof && url[source] == ':' {
+        source++
+        let parsed_port: u32 = 0
+        let digits: uint = 0
+        while source < url.sizeof && url[source] != '/' {
+            if url[source] < '0' || url[source] > '9' {
+                Sys.write_s("fetch: invalid port\n")
+                Sys.exit(1)
+            }
+            parsed_port = parsed_port * 10 + (url[source] as u32 - '0' as u32)
+            digits++
+            source++
+        }
+        if digits == 0 || parsed_port == 0 || parsed_port > 65535 {
+            Sys.write_s("fetch: invalid port\n")
+            Sys.exit(1)
+        }
+        port = parsed_port as u16
+    }
+    let path_length: uint = 0
+    if source == url.sizeof {
+        path[0] = '/'
+        path_length = 1
+    }
+    else {
+        while source < url.sizeof {
+            if path_length >= 767 {
+                Sys.write_s("fetch: path too long\n")
+                Sys.exit(1)
+            }
+            path[path_length] = url[source]
+            path_length++
+            source++
+        }
+    }
+    path[path_length] = 0
+    let address: u32 = 0
+    if !resolve_host(&host[0] as string, &address) {
+        Sys.write_s("fetch: cannot resolve \(&host[0] as string)\n")
+        Sys.exit(1)
+    }
+    if !conn_connect(use_tls, address, port, &host[0] as string) {
+        Sys.write_s("fetch: connection failed\n")
+        Sys.exit(1)
+    }
+    let request = "GET \(&path[0] as string) HTTP/1.0\r\nHost: \(&host[0] as string)\r\nUser-Agent: LLPL-fetch/1.0\r\nConnection: close\r\n\r\n"
+    if request.sizeof > 1400 || conn_send(use_tls, request as void*, request.sizeof) < 0 {
+        Sys.write_s("fetch: request failed\n")
+        conn_close(use_tls)
+        Sys.exit(1)
+    }
+    let fd: i64 = 1
+    if (output_name as u64) != 0 {
+        fd = Sys.open(output_name, Sys.O_WRITE | Sys.O_CREATE | Sys.O_TRUNC)
+        if fd < 0 {
+            Sys.write_s("fetch: cannot open output file\n")
+            conn_close(use_tls)
+            Sys.exit(1)
+        }
+    }
+    let buffer: u8[1400]
+    let header_state: uint = 0
+    let header_done = false
+    while true {
+        let got = conn_receive(use_tls, &buffer[0] as void*, 1400)
+        if got < 0 {
+            Sys.write_s("fetch: receive failed\n")
+            break
+        }
+        if got == 0 { break }
+        let body_start: uint = 0
+        if !header_done {
+            body_start = got as uint
+            for let i: uint = 0; i < got as uint; i++ {
+                let expected: u8 = '\n' as u8
+                if header_state == 0 || header_state == 2 { expected = '\r' as u8 }
+                if buffer[i] == expected { header_state++ }
+                else if buffer[i] == '\r' as u8 { header_state = 1 }
+                else { header_state = 0 }
+                if header_state == 4 {
+                    header_done = true
+                    body_start = i + 1
+                    break
+                }
+            }
+        }
+        if header_done && body_start < got as uint {
+            Sys.write(fd as u64, &buffer[body_start] as void*, got as u64 - body_start as u64)
+        }
+    }
+    conn_close(use_tls)
+    if fd > 1 { Sys.close(fd as u64) }
+    if !header_done {
+        Sys.write_s("fetch: invalid HTTP response\n")
+        Sys.exit(1)
+    }
+    Sys.exit(0)
+}

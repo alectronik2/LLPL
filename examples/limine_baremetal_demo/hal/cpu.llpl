@@ -103,6 +103,44 @@ namespace HAL {
         (eax, ebx, ecx, edx)
     }
 
+    // CPUID leaf 1, ECX bit 30 - RDRAND support (Intel SDM Vol 2A, Table
+    // 3-11). Not every CPU model QEMU can boot exposes this (the default
+    // "qemu64" model under -accel kvm with no explicit -cpu override does
+    // not), so callers must have a fallback path - see HAL.RNG.fill.
+    func has_rdrand() -> bool {
+        let (eax, ebx, ecx, edx) = cpuid(1)
+        return (ecx & (1 << 30)) != 0
+    }
+
+    // Returns (success, value). Per Intel's guidance (SDM Vol 1 7.3.17),
+    // retry a bounded number of times - RDRAND can legitimately report "not
+    // ready" under heavy contention - rather than looping forever.
+    func rdrand64() -> (bool, u64) {
+        let attempt: uint = 0
+        while attempt < 10 {
+            let value: u64 = 0
+            let ok: u8 = 0
+            // `rdrand %rax` encoded as raw bytes (REX.W 0F C7 /6) - this
+            // toolchain's tcc-based assembler doesn't recognize the
+            // `rdrand` mnemonic, and RDRAND (Ivy Bridge-era) is new enough
+            // that older assemblers commonly lack it. "=a" pins the output
+            // to RAX to match the hardcoded destination register.
+            asm(".byte 0x48, 0x0f, 0xc7, 0xf0\n\tsetc %1" : "=a"(value), "=qm"(ok))
+            if ok != 0 {
+                return (true, value)
+            }
+            attempt++
+        }
+        return (false, 0)
+    }
+
+    func rdtsc() -> u64 {
+        let lo: u32 = 0
+        let hi: u32 = 0
+        asm("rdtsc" : "=a"(lo), "=d"(hi))
+        return ((hi as u64) << 32) | lo as u64
+    }
+
     func write_msr(msr: u32, value: uint) {
         let low = value as u32
         let high = (value >> 32) as u32

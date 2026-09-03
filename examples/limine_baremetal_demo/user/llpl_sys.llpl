@@ -58,6 +58,41 @@ namespace Sys {
     const SYS_LIST_DIRECTORY = 52
     const SYS_CHDIR = 53
     const SYS_GETCWD = 54
+    const SYS_SET_FOREGROUND = 55
+    const SYS_DHCP_CONFIGURE = 56
+    const SYS_ICMP_PROBE = 57
+    const SYS_DNS_RESOLVE = 58
+    const SYS_TCP_CONNECT = 59
+    const SYS_TCP_SEND = 60
+    const SYS_TCP_RECEIVE = 61
+    const SYS_TCP_CLOSE = 62
+    const SYS_RAND_BYTES = 63
+    const SYS_GET_TIME = 64
+    const SYS_MONOTONIC_MS = 65
+    const SYS_MQ_CREATE = 66
+    const SYS_MQ_OPEN = 67
+    const SYS_MQ_UNLINK = 68
+    const SYS_MQ_SEND = 69
+    const SYS_MQ_RECEIVE = 70
+    const SYS_FB_INFO = 71
+    const SYS_FB_PRESENT = 72
+    const SYS_UNLINK = 73
+    const SYS_MKDIR = 74
+    const SYS_TOUCH = 75
+
+    struct NetworkConfig {
+        address: u32
+        netmask: u32
+        router: u32
+        dhcp_server: u32
+        nameserver: u32
+    }
+
+    struct ProbeResult {
+        responder: u32
+        kind: u32
+        ticks: u32
+    }
 
     extern func call1(n: u64, a: u64) -> u64
     extern func call2(n: u64, a: u64, b: u64) -> u64
@@ -152,6 +187,27 @@ namespace Sys {
         return Sys.call2(Sys.SYS_CLOEXEC, fd, flag) as i64
     }
 
+    func mq_create(name: string, capacity: u64) -> i64 {
+        return Sys.call2(Sys.SYS_MQ_CREATE, name as u64, capacity) as i64
+    }
+
+    func mq_open(name: string) -> i64 {
+        return Sys.call1(Sys.SYS_MQ_OPEN, name as u64) as i64
+    }
+
+    func mq_unlink(name: string) -> i64 {
+        return Sys.call1(Sys.SYS_MQ_UNLINK, name as u64) as i64
+    }
+
+    func mq_send(fd: u64, data: void*, size: u64, priority: u64) -> i64 {
+        return Sys.call4(Sys.SYS_MQ_SEND, fd, data as u64, size, priority) as i64
+    }
+
+    func mq_receive(fd: u64, data: void*, capacity: u64, priority: u64*) -> i64 {
+        return Sys.call4(Sys.SYS_MQ_RECEIVE, fd, data as u64, capacity,
+            priority as u64) as i64
+    }
+
     // `command_line` may be null - matches SYS_SPAWN/SYS_EXEC's own
     // "0 means no args" convention (see hal/syscall.llpl).
     func spawn(path: string, command_line: string) -> i64 {
@@ -164,6 +220,54 @@ namespace Sys {
 
     func waitpid(pid: u64, status_out: u64*) -> i64 {
         return Sys.call2(Sys.SYS_WAITPID, pid, status_out as u64) as i64
+    }
+
+    func set_foreground(pid: u64) -> i64 {
+        return Sys.call2(Sys.SYS_SET_FOREGROUND, pid, 0) as i64
+    }
+
+    func dhcp_configure(config: NetworkConfig*) -> i64 {
+        return Sys.call1(Sys.SYS_DHCP_CONFIGURE, config as u64) as i64
+    }
+
+    func icmp_probe(address: u32, ttl: u8, sequence: u16, result: ProbeResult*) -> i64 {
+        return Sys.call4(Sys.SYS_ICMP_PROBE, address as u64, ttl as u64,
+            sequence as u64, result as u64) as i64
+    }
+
+    func dns_resolve(hostname: string, address: u32*) -> i64 {
+        return Sys.call2(Sys.SYS_DNS_RESOLVE, hostname as u64, address as u64) as i64
+    }
+
+    func tcp_connect(address: u32, port: u16) -> i64 {
+        return Sys.call2(Sys.SYS_TCP_CONNECT, address as u64, port as u64) as i64
+    }
+
+    func tcp_send(data: void*, length: u64) -> i64 {
+        return Sys.call2(Sys.SYS_TCP_SEND, data as u64, length) as i64
+    }
+
+    func tcp_receive(data: void*, capacity: u64) -> i64 {
+        return Sys.call2(Sys.SYS_TCP_RECEIVE, data as u64, capacity) as i64
+    }
+
+    func tcp_close() -> i64 { return Sys.call1(Sys.SYS_TCP_CLOSE, 0) as i64 }
+
+    // Fills `buf` with `len` random bytes (capped kernel-side at 4096 per
+    // call - see USER_RAND_MAX in hal/syscall.llpl). Quality depends on
+    // whether the host CPU exposes RDRAND; see hal/rng.llpl's fallback path.
+    func rand_bytes(buf: void*, len: u64) -> i64 {
+        return Sys.call2(Sys.SYS_RAND_BYTES, buf as u64, len) as i64
+    }
+
+    // Unix epoch seconds from the CMOS RTC (assumed UTC).
+    func get_time() -> u64 {
+        return Sys.call1(Sys.SYS_GET_TIME, 0)
+    }
+
+    // Milliseconds since boot (monotonic, PIT-tick resolution: 10ms).
+    func monotonic_ms() -> u64 {
+        return Sys.call1(Sys.SYS_MONOTONIC_MS, 0)
     }
 
     func thread_create(entry: void*, arg: u64, extra: u64) -> i64 {

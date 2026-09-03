@@ -1,0 +1,241 @@
+// X25519 (Curve25519 ECDH, RFC 7748) for the TLS 1.2 handshake's ECDHE key
+// exchange. The field-arithmetic layout here (16 limbs of nominally 16 bits
+// each, radix 2^16, lazily-carried i64 storage; car25519/sel25519/
+// pack25519/inv25519 exactly as below) is a direct, line-for-line port of
+// the well-known public-domain TweetNaCl crypto_scalarmult reference
+// implementation, not a re-derivation - hand-rolled modular arithmetic is
+// exactly the kind of code where a novel implementation is most likely to
+// hide a subtle, hard-to-detect bug, so this follows a implementation that
+// has already had that scrutiny.
+namespace X25519 {
+    const GF_LIMBS: uint = 16
+
+    let BASE_121665: i64[16] = [
+        0xDB41, 1, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+    ]
+
+    func gf_copy(o: i64*, a: i64*) {
+        let i: uint = 0
+        while i < GF_LIMBS {
+            o[i] = a[i]
+            i++
+        }
+    }
+
+    func car25519(o: i64*) {
+        let i: uint = 0
+        while i < 16 {
+            o[i] += (1 << 16)
+            let c: i64 = o[i] >> 16
+            let next: uint = (i + 1) % 16
+            let bump: i64 = c - 1
+            if i == 15 { bump = bump + 37 * (c - 1) }
+            o[next] += bump
+            o[i] -= c << 16
+            i++
+        }
+    }
+
+    func sel25519(p: i64*, q: i64*, b: uint) {
+        let mask: u64 = (0 as u64) - (b as u64)
+        let i: uint = 0
+        while i < GF_LIMBS {
+            let t: u64 = mask & ((p[i] as u64) ^ (q[i] as u64))
+            p[i] = ((p[i] as u64) ^ t) as i64
+            q[i] = ((q[i] as u64) ^ t) as i64
+            i++
+        }
+    }
+
+    func pack25519(o: u8*, n: i64*) {
+        let m: i64[16]
+        let t: i64[16]
+        gf_copy(&t[0], n)
+        car25519(&t[0])
+        car25519(&t[0])
+        car25519(&t[0])
+
+        let j: uint = 0
+        while j < 2 {
+            m[0] = t[0] - 0xffed
+            let i: uint = 1
+            while i < 15 {
+                m[i] = t[i] - 0xffff - ((m[i - 1] >> 16) & 1)
+                m[i - 1] = m[i - 1] & 0xffff
+                i++
+            }
+            m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1)
+            let b: i64 = (m[15] >> 16) & 1
+            m[14] = m[14] & 0xffff
+            let keep: uint = 1
+            if b != 0 { keep = 0 }
+            sel25519(&t[0], &m[0], keep)
+            j++
+        }
+
+        let i: uint = 0
+        while i < 16 {
+            o[2 * i] = (t[i] & 0xff) as u8
+            o[2 * i + 1] = ((t[i] >> 8) & 0xff) as u8
+            i++
+        }
+    }
+
+    func unpack25519(o: i64*, n: u8*) {
+        let i: uint = 0
+        while i < 16 {
+            o[i] = (n[2 * i] as i64) + ((n[2 * i + 1] as i64) << 8)
+            i++
+        }
+        o[15] = o[15] & 0x7fff
+    }
+
+    func gf_add(o: i64*, a: i64*, b: i64*) {
+        let i: uint = 0
+        while i < GF_LIMBS {
+            o[i] = a[i] + b[i]
+            i++
+        }
+    }
+
+    func gf_sub(o: i64*, a: i64*, b: i64*) {
+        let i: uint = 0
+        while i < GF_LIMBS {
+            o[i] = a[i] - b[i]
+            i++
+        }
+    }
+
+    func gf_mul(o: i64*, a: i64*, b: i64*) {
+        let t: i64[31]
+        let i: uint = 0
+        while i < 31 {
+            t[i] = 0
+            i++
+        }
+        i = 0
+        while i < GF_LIMBS {
+            let j: uint = 0
+            while j < GF_LIMBS {
+                t[i + j] += a[i] * b[j]
+                j++
+            }
+            i++
+        }
+        i = 0
+        while i < 15 {
+            t[i] += 38 * t[i + 16]
+            i++
+        }
+        i = 0
+        while i < GF_LIMBS {
+            o[i] = t[i]
+            i++
+        }
+        car25519(o)
+        car25519(o)
+    }
+
+    func gf_sqr(o: i64*, a: i64*) {
+        gf_mul(o, a, a)
+    }
+
+    func inv25519(o: i64*, input: i64*) {
+        let c: i64[16]
+        gf_copy(&c[0], input)
+        let a: int = 253
+        while a >= 0 {
+            gf_sqr(&c[0], &c[0])
+            if a != 2 && a != 4 {
+                gf_mul(&c[0], &c[0], input)
+            }
+            a--
+        }
+        gf_copy(o, &c[0])
+    }
+
+    // `n` is the 32-byte scalar (clamped internally, per RFC 7748/the
+    // TweetNaCl convention - callers pass raw random bytes for a private
+    // key), `p` the 32-byte u-coordinate of the input point. `q` receives
+    // the 32-byte result u-coordinate.
+    func scalarmult(q: u8*, n: u8*, p: u8*) {
+        let z: u8[32]
+        let i: uint = 0
+        while i < 31 {
+            z[i] = n[i]
+            i++
+        }
+        z[31] = (n[31] & 127) | 64
+        z[0] = z[0] & 248
+
+        let x: i64[16]
+        unpack25519(&x[0], p)
+
+        let a: i64[16]
+        let b: i64[16]
+        let c: i64[16]
+        let d: i64[16]
+        let e: i64[16]
+        let f: i64[16]
+
+        i = 0
+        while i < 16 {
+            b[i] = x[i]
+            d[i] = 0
+            a[i] = 0
+            c[i] = 0
+            i++
+        }
+        a[0] = 1
+        d[0] = 1
+
+        let ii: int = 254
+        while ii >= 0 {
+            let byte_index: uint = (ii >> 3) as uint
+            let bit_index: u8 = (ii & 7) as u8
+            let r: uint = ((z[byte_index] >> bit_index) & 1) as uint
+
+            sel25519(&a[0], &b[0], r)
+            sel25519(&c[0], &d[0], r)
+            gf_add(&e[0], &a[0], &c[0])
+            gf_sub(&a[0], &a[0], &c[0])
+            gf_add(&c[0], &b[0], &d[0])
+            gf_sub(&b[0], &b[0], &d[0])
+            gf_sqr(&d[0], &e[0])
+            gf_sqr(&f[0], &a[0])
+            gf_mul(&a[0], &c[0], &a[0])
+            gf_mul(&c[0], &b[0], &e[0])
+            gf_add(&e[0], &a[0], &c[0])
+            gf_sub(&a[0], &a[0], &c[0])
+            gf_sqr(&b[0], &a[0])
+            gf_sub(&c[0], &d[0], &f[0])
+            gf_mul(&a[0], &c[0], &BASE_121665[0])
+            gf_add(&a[0], &a[0], &d[0])
+            gf_mul(&c[0], &c[0], &a[0])
+            gf_mul(&a[0], &d[0], &f[0])
+            gf_mul(&d[0], &b[0], &x[0])
+            gf_sqr(&b[0], &e[0])
+
+            sel25519(&a[0], &b[0], r)
+            sel25519(&c[0], &d[0], r)
+
+            ii--
+        }
+
+        inv25519(&c[0], &c[0])
+        gf_mul(&a[0], &a[0], &c[0])
+        pack25519(q, &a[0])
+    }
+
+    func scalarmult_base(q: u8*, n: u8*) {
+        let base: u8[32]
+        let i: uint = 0
+        while i < 32 {
+            base[i] = 0
+            i++
+        }
+        base[0] = 9
+        scalarmult(q, n, &base[0])
+    }
+}

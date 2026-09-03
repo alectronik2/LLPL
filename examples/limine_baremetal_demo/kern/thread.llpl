@@ -88,6 +88,8 @@ namespace Kern {
         lifecycle_lock: SpinLock
         tid: uint
         tls_base: uint
+        fpu_storage: char*
+        fpu_state: void*
 
         apc_head: ApcEntry
         apc_tail: ApcEntry
@@ -144,6 +146,9 @@ namespace Kern {
             self.sleep_ticks_total = 0
             self.sleep_started_tick = 0
             self.tls_base = 0
+            self.fpu_storage = MM.malloc<char>(HAL.FPU.STATE_SIZE + 16)
+            self.fpu_state = ((self.fpu_storage as uint + 15) & ~0xF) as void*
+            HAL.FPU.copy_initial(self.fpu_state)
             self.apc_head = null
             self.apc_tail = null
             self.in_apc = false
@@ -185,6 +190,7 @@ namespace Kern {
         destructor() {
             "Thread destructor\n" |> HAL.Serial.write
             MM.free( self.stack ) if self.stack != null
+            MM.free( self.fpu_storage ) if self.fpu_storage != null
             // curdir (a String field) is released automatically.
         }
     }
@@ -469,8 +475,55 @@ namespace Kern {
         // call here silently resolved to the wrong function, constructed
         // and discarded a SleepFuture, and returned immediately without
         // ever actually yielding the CPU, so the reaper never got a turn.
-        Kern.sleep_ms(20)
-        let detached_reaped = sync_test_detached_thread.stack == null
+        //
+        // A single fixed-length sleep here is inherently racy: reaping is
+        // asynchronous (queue_thread_reap() just wakes reaper_thread; it
+        // doesn't run reclaim_thread() synchronously), and the reaper runs
+        // at a low priority, so how long it actually takes to get a turn
+        // depends on whatever else is ready to run at that moment. A fixed
+        // 20ms was sometimes not enough, making this assertion flake
+        // between PASS and FAIL across otherwise-identical boots. Poll
+        // instead: this still fails (rather than hang) if reaping
+        // genuinely never happens, but succeeds as soon as it does instead
+        // of gambling everything on one arbitrary delay.
+        //
+        // This polling still doesn't fully explain every observed failure,
+        // though, and the remaining flakiness (an occasional FAIL even with
+        // a multi-second polling budget) looks like a genuine, deeper race
+        // in the detached-thread exit path rather than just "not enough
+        // time" - traced (2026-09-02) via a fast in-memory (tag, tid) ring
+        // buffer, since a plain HAL.Serial.write at any of these points is
+        // slow enough to shift scheduling and mask the race outright. Three
+        // distinct failure shapes were captured, all for
+        // sync_test_detached_thread specifically:
+        //   1. finish_thread_exit() runs and correctly decides reap=true,
+        //      but the thread never appears in the reap queue's own trace
+        //      afterward - queue_thread_reap() silently not enqueuing it.
+        //   2. thread_exit() never reaches finish_thread_exit() at all.
+        //   3. current_thread() returns non-null (ruling out a null-current
+        //      explanation), thread_exit() calls finish_thread_exit(), and
+        //      still nothing downstream fires.
+        // wait.llpl's wake_one()/prepare_block_current() were checked and
+        // are correctly atomic under reap_lock (no lost-wakeup window), and
+        // join_thread()'s `return` from inside its `holding` block - which
+        // looks identical to the lock-leak hazard documented on
+        // SYS_QUEUE_APC in hal/syscall.llpl - was checked against the
+        // generated C and does correctly release the spinlock there. Root
+        // cause is still open; next step should be a real debugger
+        // attached to the QEMU instance (hardware watchpoints on
+        // sync_test_detached_thread's fields) rather than more tracing,
+        // since every tracing attempt so far has perturbed timing enough
+        // to hide the bug it was added to catch.
+        let detached_reaped = false
+        let reap_wait_attempts: uint = 0
+        while reap_wait_attempts < 500 {
+            if sync_test_detached_thread.stack == null {
+                detached_reaped = true
+                break
+            }
+            Kern.sleep_ms(5)
+            reap_wait_attempts++
+        }
         let reap_test = new Process("reap-test", kproc)
         let (reap_map_rc, reap_map_addr) = map_user_anonymous(reap_test, 0, MM.PAGE_SIZE * 2)
         let reap_pid = reap_test.pid
@@ -638,6 +691,12 @@ namespace Kern {
             HAL.write_cr3( cr3 )
         }
         HAL.write_msr(0xC000_0100 as u32, thread.tls_base)
+    }
+
+    func switch_thread_fpu(current: void*, next: Thread) {
+        if current == next as void* { return }
+        if current != null { HAL.FPU.save((current as Thread).fpu_state) }
+        if next != null { HAL.FPU.restore(next.fpu_state) }
     }
 
     func find_process_thread(proc: Process, tid: uint) -> Thread {
@@ -914,6 +973,7 @@ namespace Kern {
 
             (next as Thread).state = ThreadState.Running
             (next as Thread).context_switches++
+            switch_thread_fpu(current, next as Thread)
             HAL.current().thread = next as Thread
             switch_thread_address_space( next as Thread )
             HAL.GDT.set_tss_rsp0( (((next as Thread).stack as uint) + (next as Thread).stack_size) & ~0xF )
@@ -971,6 +1031,15 @@ namespace Kern {
         }
 
         return next_ctx
+    }
+
+    func kill_current_process_from_interrupt(ctx: HAL.IDT.Context*, status: uint) -> HAL.IDT.Context* {
+        let current = current_thread() as void*
+        if current == null { return ctx }
+        let proc = (current as Thread).proc
+        terminate_process_threads(proc, current as Thread, status)
+        mark_process_exited(proc, status)
+        return kill_current_thread_from_interrupt(ctx, status)
     }
 
     // 36 hand-encoded x86-64 bytes, written onto the target thread's own
@@ -1174,6 +1243,7 @@ namespace Kern {
             }
 
             next.state = ThreadState.Running
+            switch_thread_fpu(current as void*, next)
             HAL.current().thread = next
             switch_thread_address_space( next )
             HAL.GDT.set_tss_rsp0( ((next.stack as uint) + next.stack_size) & ~0xF )

@@ -12,6 +12,10 @@ namespace Kern {
     const SC_LEFT_SHIFT_UP = 0xAA
     const SC_RIGHT_SHIFT_DOWN = 0x36
     const SC_RIGHT_SHIFT_UP = 0xB6
+    const SC_LEFT_CTRL_DOWN = 0x1D
+    const SC_LEFT_CTRL_UP = 0x9D
+    const SC_C = 0x2E
+    const SC_F2 = 0x3C
 
     // Scancode set 1, unshifted and shifted ASCII for a basic US layout.
     // Index is the scancode's make-code byte (bit 7 clear); anything not
@@ -100,6 +104,7 @@ namespace Kern {
         lock: SpinLock
         read_waiters: WaitQueue
         shift_held: bool
+        ctrl_held: bool
         extended_prefix: bool
         device_name: String
 
@@ -109,6 +114,7 @@ namespace Kern {
             self.count = 0
             self.read_waiters = new WaitQueue()
             self.shift_held = false
+            self.ctrl_held = false
             self.extended_prefix = false
             // A bare string literal returned where a String is expected
             // isn't a real String object (no vtable/refcount header) -
@@ -165,6 +171,22 @@ namespace Kern {
 
     let keyboard_device: KeyboardDevice = null
     let kbd_interrupt: HAL.Interrupt = null
+    let foreground_pid: uint = 0
+    let interrupt_pid: uint = 0
+
+    // The shell owns foreground selection. Keeping only the PID avoids a
+    // stale owning reference after the process has been reaped.
+    func set_foreground_process(pid: uint) -> bool {
+        if pid != 0 && find_process(pid) == null { return false }
+        foreground_pid = pid
+        return true
+    }
+
+    func take_keyboard_interrupt_pid() -> uint {
+        let pid = interrupt_pid
+        interrupt_pid = 0
+        return pid
+    }
 
     func keyboard_irq_handler(arg: void*) {
         let scancode = HAL.inb(KBD_DATA_PORT)
@@ -198,6 +220,31 @@ namespace Kern {
             keyboard_device.shift_held = false
             return
         }
+        if scancode == SC_LEFT_CTRL_DOWN as u8 {
+            keyboard_device.ctrl_held = true
+            return
+        }
+        if scancode == SC_LEFT_CTRL_UP as u8 {
+            keyboard_device.ctrl_held = false
+            return
+        }
+
+        // Ctrl-C belongs to the foreground process, not the keyboard byte
+        // stream. Status 130 follows the conventional 128 + SIGINT value.
+        if keyboard_device.ctrl_held && scancode == SC_C as u8 {
+            interrupt_pid = foreground_pid
+            foreground_pid = 0
+            return
+        }
+
+        // F2 toggles the lib/microui.llpl demo overlay (kern/mu_demo.llpl)
+        // - a system-wide hotkey rather than a shell command since the
+        // overlay is drawn directly to the framebuffer by the PIT tick,
+        // independent of whatever process currently owns the console.
+        if scancode == SC_F2 as u8 {
+            mu_demo_toggle()
+            return
+        }
 
         // Bit 7 set marks a key-release (break code) for every other key -
         // only make codes (key-down) produce input.
@@ -211,7 +258,21 @@ namespace Kern {
         }
         let c = if keyboard_device.shift_held { scancode_ascii_shifted[index] } else { scancode_ascii[index] }
         if c as int != 0 {
-            keyboard_device.push(c)
+            let resolved = if keyboard_device.ctrl_held && c >= 'a' && c <= 'z' {
+                (c as int - 'a' as int + 1) as char
+            } else {
+                c
+            }
+            // kern/mu_term.llpl's embedded shell steals keys while the
+            // cursor is hovering its window, instead of the real
+            // foreground process - "focus follows mouse" rather than a
+            // click-to-focus model, since there's no other window-focus
+            // concept in this kernel to hook into.
+            if mu_term_wants_key() {
+                mu_term_push_key(resolved)
+            } else {
+                keyboard_device.push(resolved)
+            }
         }
     }
 

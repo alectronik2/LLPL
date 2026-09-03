@@ -1,0 +1,131 @@
+// CMOS real-time-clock reader, exposed to userland via SYS_GET_TIME
+// (hal/syscall.llpl). Assumes the RTC is set to UTC (true for QEMU's
+// default RTC and most real hardware unless explicitly configured
+// otherwise) and, when the CMOS century register (bank 0x32) isn't wired up
+// (common on both QEMU and real PCs), assumes the year falls in 2000-2099 -
+// true for any date this kernel will plausibly boot on.
+namespace HAL {
+    namespace RTC {
+        const CMOS_INDEX = 0x70
+        const CMOS_DATA = 0x71
+        const REG_SECONDS = 0x00
+        const REG_MINUTES = 0x02
+        const REG_HOURS = 0x04
+        const REG_DAY = 0x07
+        const REG_MONTH = 0x08
+        const REG_YEAR = 0x09
+        const REG_CENTURY = 0x32
+        const REG_STATUS_A = 0x0A
+        const REG_STATUS_B = 0x0B
+
+        func read_reg(reg: u8) -> u8 {
+            HAL.outb(CMOS_INDEX, reg)
+            return HAL.inb(CMOS_DATA)
+        }
+
+        func updating() -> bool {
+            return (read_reg(REG_STATUS_A) & 0x80) != 0
+        }
+
+        struct RawTime {
+            second: u8
+            minute: u8
+            hour: u8
+            day: u8
+            month: u8
+            year: u8
+            century: u8
+        }
+
+        func read_raw() -> RawTime {
+            let t: RawTime
+            t.second = read_reg(REG_SECONDS)
+            t.minute = read_reg(REG_MINUTES)
+            t.hour = read_reg(REG_HOURS)
+            t.day = read_reg(REG_DAY)
+            t.month = read_reg(REG_MONTH)
+            t.year = read_reg(REG_YEAR)
+            t.century = read_reg(REG_CENTURY)
+            return t
+        }
+
+        func same(a: RawTime, b: RawTime) -> bool {
+            return a.second == b.second && a.minute == b.minute && a.hour == b.hour &&
+                a.day == b.day && a.month == b.month && a.year == b.year && a.century == b.century
+        }
+
+        func bcd(v: u8) -> u8 {
+            return ((v >> 4) * 10) + (v & 0x0F)
+        }
+
+        // Days since 1970-01-01 for a civil (Gregorian) date - Howard
+        // Hinnant's constant-time algorithm:
+        // http://howardhinnant.github.io/date_algorithms.html#days_from_civil
+        func days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+            let y = year
+            if month <= 2 { y -= 1 }
+            let era: i64 = y / 400
+            if y < 0 { era = (y - 399) / 400 }
+            let yoe: i64 = y - era * 400
+            let mp: i64 = (month + 9) % 12
+            let doy: i64 = (153 * mp + 2) / 5 + day - 1
+            let doe: i64 = yoe * 365 + yoe / 4 - yoe / 100 + doy
+            return era * 146097 + doe - 719468
+        }
+
+        func epoch_seconds() -> u64 {
+            // Classic "read until two consecutive samples agree, with no
+            // update in progress" CMOS read algorithm - guards against
+            // tearing while the RTC is mid-tick-update (~244us window).
+            while updating() { }
+            let last = read_raw()
+            let attempts: uint = 0
+            while attempts < 1000 {
+                while updating() { }
+                let current = read_raw()
+                if same(last, current) {
+                    last = current
+                    break
+                }
+                last = current
+                attempts++
+            }
+
+            let status_b = read_reg(REG_STATUS_B)
+            let binary_mode = (status_b & 0x04) != 0
+            let hour_24 = (status_b & 0x02) != 0
+
+            let second = last.second
+            let minute = last.minute
+            let pm = (last.hour & 0x80) != 0
+            let hour = last.hour & 0x7F
+            let day = last.day
+            let month = last.month
+            let year = last.year
+            let century = last.century
+
+            if !binary_mode {
+                second = bcd(second)
+                minute = bcd(minute)
+                hour = bcd(hour)
+                day = bcd(day)
+                month = bcd(month)
+                year = bcd(year)
+                if century != 0 { century = bcd(century) }
+            }
+
+            if !hour_24 {
+                if pm && hour != 12 { hour += 12 }
+                if !pm && hour == 12 { hour = 0 }
+            }
+
+            let full_year: i64 = 2000 + year as i64
+            if century != 0 { full_year = (century as i64) * 100 + year as i64 }
+
+            let days = days_from_civil(full_year, month as i64, day as i64)
+            let seconds = days * 86400 + (hour as i64) * 3600 + (minute as i64) * 60 + second as i64
+            if seconds < 0 { return 0 }
+            return seconds as u64
+        }
+    }
+}

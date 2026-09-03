@@ -1,0 +1,1722 @@
+// Port of rxi/microui (https://github.com/rxi/microui, MIT license) to LLPL,
+// targeting this kernel's framebuffer directly.
+//
+// Differences from upstream, all forced by this being bare-metal kernel code
+// rather than hosted C, and all documented at the point they matter:
+//
+//   - No mu_Context: LLPL has no persistent function-local ("static") state,
+//     and this kernel only ever needs one GUI overlay - so every field that
+//     lived on `mu_Context* ctx` upstream is a namespace-level `let` here,
+//     the same "flat globals" idiom kern/mouse.llpl and kern/keyboard.llpl
+//     already use for their own singleton device/state. Every public
+//     function upstream took `ctx` as its first argument; here that
+//     argument is simply dropped.
+//   - No MU_REAL/float: build.yaml disables SSE/x87 for this kernel target
+//     ("this kernel deliberately disables all FP/SSE state") - only user
+//     threads get FPU state (hal/fpu.llpl). mu_slider_ex/mu_number_ex work
+//     in plain `int` instead of float. This is actually a wash for the
+//     classic microui demo, whose sliders are 0-255 color channels anyway.
+//   - No text_width/text_height/draw_frame callbacks: this backend targets
+//     exactly one renderer (this framebuffer, this embedded font), so those
+//     are ordinary internal functions instead of stored closures. A real
+//     callback would work fine here (LLPL has closures - see
+//     Terminal.set_scroll_hooks) but would be indirection with only one
+//     caller ever assigning it.
+//   - No raw byte command buffer / mu_Command union / MU_COMMAND_JUMP:
+//     upstream packs variable-length commands into a flat byte buffer and
+//     uses JUMP commands to splice multiple root windows into z-order
+//     without a full re-sort. Commands for a given root container are
+//     always emitted as one contiguous run (LIFO container stack), so this
+//     port records each root's [start, end) range into a fixed array of
+//     fixed-size MuCommand structs instead and walks roots in zindex order
+//     at render time - same visible behavior, no pointer-into-byte-buffer
+//     arithmetic. Every draw command also carries its own resolved clip
+//     rect (captured at push time) rather than relying on interleaved
+//     MU_COMMAND_CLIP commands the renderer must replay state across.
+//   - mu_next_command's public iterator is dropped along with it; Mu.render()
+//     is the one renderer this port has, and it owns the root-order walk
+//     directly.
+//
+// Everything else - IDs/hashing, clip stack, layout algorithm, control
+// update/focus/hover rules, window/panel/popup/treenode/scrollbar logic -
+// is a direct translation of microui.c, function for function.
+
+import terminal
+import ttf
+
+namespace Mu {
+    // ------------------------------------------------------------------
+    // Capacities (upstream: microui.h's MU_* size macros)
+    // ------------------------------------------------------------------
+    const COMMAND_CAP        = 4096
+    const ROOTLIST_CAP       = 32
+    const CONTAINERSTACK_CAP = 32
+    const CLIPSTACK_CAP      = 32
+    const IDSTACK_CAP        = 32
+    const LAYOUTSTACK_CAP    = 16
+    const CONTAINERPOOL_CAP  = 48
+    const TREENODEPOOL_CAP   = 48
+    const MAX_WIDTHS         = 16
+    const TEXT_CMD_MAX       = 127
+    const INPUT_TEXT_MAX     = 32
+    const NUMBER_EDIT_MAX    = 31
+
+    // clip results
+    const CLIP_PART = 1
+    const CLIP_ALL  = 2
+
+    // command kinds (no JUMP/CLIP - see file header)
+    const COMMAND_RECT = 1
+    const COMMAND_TEXT = 2
+    const COMMAND_ICON = 3
+
+    // colors
+    const COLOR_TEXT         = 0
+    const COLOR_BORDER       = 1
+    const COLOR_WINDOWBG     = 2
+    const COLOR_TITLEBG      = 3
+    const COLOR_TITLETEXT    = 4
+    const COLOR_PANELBG      = 5
+    const COLOR_BUTTON       = 6
+    const COLOR_BUTTONHOVER  = 7
+    const COLOR_BUTTONFOCUS  = 8
+    const COLOR_BASE         = 9
+    const COLOR_BASEHOVER    = 10
+    const COLOR_BASEFOCUS    = 11
+    const COLOR_SCROLLBASE   = 12
+    const COLOR_SCROLLTHUMB  = 13
+    const COLOR_MAX          = 14
+
+    // icons
+    const ICON_CLOSE     = 1
+    const ICON_CHECK     = 2
+    const ICON_COLLAPSED = 3
+    const ICON_EXPANDED  = 4
+
+    // result flags
+    const RES_ACTIVE = 1 << 0
+    const RES_SUBMIT = 1 << 1
+    const RES_CHANGE = 1 << 2
+
+    // option flags
+    const OPT_ALIGNCENTER = 1 << 0
+    const OPT_ALIGNRIGHT  = 1 << 1
+    const OPT_NOINTERACT  = 1 << 2
+    const OPT_NOFRAME     = 1 << 3
+    const OPT_NORESIZE    = 1 << 4
+    const OPT_NOSCROLL    = 1 << 5
+    const OPT_NOCLOSE     = 1 << 6
+    const OPT_NOTITLE     = 1 << 7
+    const OPT_HOLDFOCUS   = 1 << 8
+    const OPT_AUTOSIZE    = 1 << 9
+    const OPT_POPUP       = 1 << 10
+    const OPT_CLOSED      = 1 << 11
+    const OPT_EXPANDED    = 1 << 12
+
+    // mouse buttons
+    const MOUSE_LEFT   = 1 << 0
+    const MOUSE_RIGHT  = 1 << 1
+    const MOUSE_MIDDLE = 1 << 2
+
+    // keys
+    const KEY_SHIFT     = 1 << 0
+    const KEY_CTRL      = 1 << 1
+    const KEY_ALT       = 1 << 2
+    const KEY_BACKSPACE = 1 << 3
+    const KEY_RETURN    = 1 << 4
+
+    // layout_set_next "relative" flag values (upstream: anonymous enum RELATIVE/ABSOLUTE)
+    const NEXT_RELATIVE = 1
+    const NEXT_ABSOLUTE = 2
+
+    const UNCLIPPED_EXTENT = 0x1000000
+
+    // ------------------------------------------------------------------
+    // Value types (structs = value types in LLPL; copied on assignment,
+    // confirmed by direct test against the compiler)
+    // ------------------------------------------------------------------
+    struct Vec2 {
+        x: int
+        y: int
+    }
+
+    struct Rect {
+        x: int
+        y: int
+        w: int
+        h: int
+    }
+
+    struct Color {
+        r: u8
+        g: u8
+        b: u8
+        a: u8
+    }
+
+    struct PoolItem {
+        id: u32
+        last_update: int
+    }
+
+    struct Command {
+        kind: int
+        clip: Rect       // resolved clip rect at push time (see file header)
+        rect: Rect        // RECT fill rect / ICON rect
+        color: Color
+        pos: Vec2         // TEXT draw position
+        icon_id: int
+        text_len: int
+        text: char[TEXT_CMD_MAX + 1]
+    }
+
+    struct Layout {
+        body: Rect
+        next: Rect
+        position: Vec2
+        size: Vec2
+        max: Vec2
+        widths: int[MAX_WIDTHS]
+        items: int
+        item_index: int
+        next_row: int
+        next_type: int
+        indent: int
+    }
+
+    struct Container {
+        cmd_start: int
+        cmd_end: int
+        rect: Rect
+        body: Rect
+        content_size: Vec2
+        scroll: Vec2
+        zindex: int
+        open: bool
+        has_head: bool     // true only for root containers (upstream: head != NULL)
+    }
+
+    struct Style {
+        size: Vec2
+        padding: int
+        spacing: int
+        indent: int
+        title_height: int
+        scrollbar_size: int
+        thumb_size: int
+        colors: Color[COLOR_MAX]
+    }
+
+    // ------------------------------------------------------------------
+    // Global state (upstream: fields of mu_Context)
+    // ------------------------------------------------------------------
+    let style: Style
+
+    let hover: u32 = 0
+    let focus: u32 = 0
+    let last_id: u32 = 0
+    let last_rect: Rect
+    let last_zindex: int = 0
+    let updated_focus: bool = false
+    let frame: int = 0
+    let hover_root: int = -1
+    let next_hover_root: int = -1
+    let scroll_target: int = -1
+
+    // Plain field reads across a namespace boundary work fine (`Mu.foo`
+    // everywhere already), but this compiler doesn't yet resolve a
+    // namespace-qualified global as an assignment target - `Mu.foo = x`
+    // fails to parse as an lvalue even though `Mu.foo` alone resolves
+    // fine as an expression. A caller (kern/mu_demo.llpl, kern/
+    // mu_term.llpl) that needs to save/restore next_hover_root around
+    // its own independent Mu.begin()/end() cycle - see mu_demo_tick's
+    // own comment for why - goes through these instead.
+    func set_next_hover_root(v: int) { next_hover_root = v }
+    func get_next_hover_root() -> int { next_hover_root }
+
+    let number_edit_buf: char[NUMBER_EDIT_MAX + 1]
+    let number_edit: u32 = 0
+
+    // stacks
+    let command_list: Command[COMMAND_CAP]
+    let command_count: int = 0
+
+    let root_list: int[ROOTLIST_CAP]
+    let root_list_idx: int = 0
+
+    let container_stack: int[CONTAINERSTACK_CAP]
+    let container_stack_idx: int = 0
+
+    let clip_stack: Rect[CLIPSTACK_CAP]
+    let clip_stack_idx: int = 0
+
+    let id_stack: u32[IDSTACK_CAP]
+    let id_stack_idx: int = 0
+
+    let layout_stack: Layout[LAYOUTSTACK_CAP]
+    let layout_stack_idx: int = 0
+
+    // retained state pools
+    let container_pool: PoolItem[CONTAINERPOOL_CAP]
+    let containers: Container[CONTAINERPOOL_CAP]
+    let treenode_pool: PoolItem[TREENODEPOOL_CAP]
+
+    // input state
+    let mouse_pos: Vec2
+    let last_mouse_pos: Vec2
+    let mouse_delta: Vec2
+    let scroll_delta: Vec2
+    let mouse_down: int = 0
+    let mouse_pressed: int = 0
+    let key_down: int = 0
+    let key_pressed: int = 0
+    // Named distinctly from the input_text() function below - upstream's
+    // ctx->input_text field and mu_input_text() function don't collide in
+    // C (member access vs. a free function), but flattened into this
+    // namespace's single symbol table they'd both mangle to the same C
+    // identifier.
+    let input_text_buf: char[INPUT_TEXT_MAX]
+    let input_text_len: int = 0
+
+    // union of every root container rect drawn this frame, in framebuffer
+    // coordinates - lets the kernel-side compositor (kern/mu_demo.llpl)
+    // know exactly what pixel region needs a save/restore this tick,
+    // instead of redrawing the whole screen every frame.
+    let frame_bounds: Rect
+    let frame_has_bounds: bool = false
+
+    // ------------------------------------------------------------------
+    // small helpers
+    // ------------------------------------------------------------------
+    func imin(a: int, b: int) -> int { if a < b { a } else { b } }
+    func imax(a: int, b: int) -> int { if a > b { a } else { b } }
+    func iclamp(x: int, lo: int, hi: int) -> int { imin(hi, imax(lo, x)) }
+
+    func vec2(x: int, y: int) -> Vec2 {
+        let r: Vec2
+        r.x = x
+        r.y = y
+        return r
+    }
+
+    func rect(x: int, y: int, w: int, h: int) -> Rect {
+        let r: Rect
+        r.x = x
+        r.y = y
+        r.w = w
+        r.h = h
+        return r
+    }
+
+    func color(r: int, g: int, b: int, a: int) -> Color {
+        let c: Color
+        c.r = r as u8
+        c.g = g as u8
+        c.b = b as u8
+        c.a = a as u8
+        return c
+    }
+
+    func unclipped_rect() -> Rect {
+        rect(0, 0, UNCLIPPED_EXTENT, UNCLIPPED_EXTENT)
+    }
+
+    func expand_rect(r: Rect, n: int) -> Rect {
+        rect(r.x - n, r.y - n, r.w + n * 2, r.h + n * 2)
+    }
+
+    func intersect_rects(r1: Rect, r2: Rect) -> Rect {
+        let x1 = imax(r1.x, r2.x)
+        let y1 = imax(r1.y, r2.y)
+        let x2 = imin(r1.x + r1.w, r2.x + r2.w)
+        let y2 = imin(r1.y + r1.h, r2.y + r2.h)
+        if x2 < x1 { x2 = x1 }
+        if y2 < y1 { y2 = y1 }
+        rect(x1, y1, x2 - x1, y2 - y1)
+    }
+
+    func rect_overlaps_vec2(r: Rect, p: Vec2) -> bool {
+        p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h
+    }
+
+    func default_style() -> Style {
+        let s: Style
+        s.size = vec2(68, 18)
+        s.padding = 5
+        s.spacing = 4
+        s.indent = 24
+        s.title_height = 22
+        s.scrollbar_size = 12
+        s.thumb_size = 8
+        s.colors[COLOR_TEXT]        = color(230, 230, 230, 255)
+        s.colors[COLOR_BORDER]      = color(25,  25,  25,  255)
+        s.colors[COLOR_WINDOWBG]    = color(50,  50,  50,  255)
+        s.colors[COLOR_TITLEBG]     = color(25,  25,  25,  255)
+        s.colors[COLOR_TITLETEXT]   = color(240, 240, 240, 255)
+        s.colors[COLOR_PANELBG]     = color(0,   0,   0,   0)
+        s.colors[COLOR_BUTTON]      = color(75,  75,  75,  255)
+        s.colors[COLOR_BUTTONHOVER] = color(95,  95,  95,  255)
+        s.colors[COLOR_BUTTONFOCUS] = color(115, 115, 115, 255)
+        s.colors[COLOR_BASE]        = color(30,  30,  30,  255)
+        s.colors[COLOR_BASEHOVER]   = color(35,  35,  35,  255)
+        s.colors[COLOR_BASEFOCUS]   = color(40,  40,  40,  255)
+        s.colors[COLOR_SCROLLBASE]  = color(43,  43,  43,  255)
+        s.colors[COLOR_SCROLLTHUMB] = color(30,  30,  30,  255)
+        return s
+    }
+
+    // ------------------------------------------------------------------
+    // text metrics - hardcoded to Terminal's embedded font, rasterized at
+    // a smaller pixel size for a denser UI look than the terminal itself.
+    // ------------------------------------------------------------------
+    const FONT_SIZE: i16 = 12
+    const LINE_HEIGHT = 15
+
+    func text_width(str: char*, len: int) -> int {
+        if len < 0 { len = llpl_strlen(str) as int }
+        if len == 0 { return 0 }
+        // ttf_measure_text wants a NUL-terminated string; the strings this
+        // library measures (labels, number/slider buffers) are always
+        // NUL-terminated already, and len is only ever str's own full
+        // length or a prefix ttf_measure_text would stop at a NUL for
+        // anyway, so measuring the whole string is equivalent here.
+        return ttf_measure_text(Terminal.console_font, str, FONT_SIZE) as int
+    }
+
+    func text_height() -> int {
+        LINE_HEIGHT
+    }
+
+    // ------------------------------------------------------------------
+    // init / begin / end
+    // ------------------------------------------------------------------
+    func init() {
+        style = default_style()
+        hover = 0
+        focus = 0
+        last_id = 0
+        last_zindex = 0
+        updated_focus = false
+        frame = 0
+        hover_root = -1
+        next_hover_root = -1
+        scroll_target = -1
+        command_count = 0
+        root_list_idx = 0
+        container_stack_idx = 0
+        clip_stack_idx = 0
+        id_stack_idx = 0
+        layout_stack_idx = 0
+        mouse_down = 0
+        mouse_pressed = 0
+        key_down = 0
+        key_pressed = 0
+        input_text_len = 0
+        number_edit = 0
+        for i in 0..CONTAINERPOOL_CAP {
+            container_pool[i].id = 0
+            container_pool[i].last_update = 0
+        }
+        for i in 0..TREENODEPOOL_CAP {
+            treenode_pool[i].id = 0
+            treenode_pool[i].last_update = 0
+        }
+    }
+
+    func begin() {
+        command_count = 0
+        root_list_idx = 0
+        scroll_target = -1
+        hover_root = next_hover_root
+        next_hover_root = -1
+        mouse_delta.x = mouse_pos.x - last_mouse_pos.x
+        mouse_delta.y = mouse_pos.y - last_mouse_pos.y
+        frame_has_bounds = false
+        frame++
+    }
+
+    func bring_to_front(idx: int) {
+        last_zindex++
+        containers[idx].zindex = last_zindex
+    }
+
+    func end() {
+        // handle scroll input
+        if scroll_target >= 0 {
+            containers[scroll_target].scroll.x += scroll_delta.x
+            containers[scroll_target].scroll.y += scroll_delta.y
+        }
+
+        // unset focus if focus id was not touched this frame
+        if !updated_focus { focus = 0 }
+        updated_focus = false
+
+        // bring hover root to front if mouse was pressed
+        if mouse_pressed != 0 && next_hover_root >= 0 &&
+           containers[next_hover_root].zindex < last_zindex &&
+           containers[next_hover_root].zindex >= 0 {
+            bring_to_front(next_hover_root)
+        }
+
+        // reset input state
+        key_pressed = 0
+        input_text_len = 0
+        mouse_pressed = 0
+        scroll_delta = vec2(0, 0)
+        last_mouse_pos = mouse_pos
+
+        // sort root containers by zindex - insertion sort, root_list_idx is
+        // small (upstream used qsort; no qsort builtin here, and this is
+        // the same "hand-write the small algorithm" idiom the rest of this
+        // kernel already uses for small fixed-size collections).
+        for i in 1..root_list_idx {
+            let key = root_list[i]
+            let key_z = containers[key].zindex
+            let j = i - 1
+            while j >= 0 && containers[root_list[j]].zindex > key_z {
+                root_list[j + 1] = root_list[j]
+                j = j - 1
+            }
+            root_list[j + 1] = key
+        }
+
+        // compute the union of every root's rect this frame, so the
+        // compositor knows what to save/restore/redraw.
+        for i in 0..root_list_idx {
+            let cnt = root_list[i]
+            if !frame_has_bounds {
+                frame_bounds = containers[cnt].rect
+                frame_has_bounds = true
+            } else {
+                frame_bounds = union_rects(frame_bounds, containers[cnt].rect)
+            }
+        }
+    }
+
+    func union_rects(a: Rect, b: Rect) -> Rect {
+        let x1 = imin(a.x, b.x)
+        let y1 = imin(a.y, b.y)
+        let x2 = imax(a.x + a.w, b.x + b.w)
+        let y2 = imax(a.y + a.h, b.y + b.h)
+        rect(x1, y1, x2 - x1, y2 - y1)
+    }
+
+    func set_focus(id: u32) {
+        focus = id
+        updated_focus = true
+    }
+
+    // Same cross-namespace-assignment workaround as set_/get_next_hover_root
+    // above, for last_mouse_pos - a per-window caller (kern/mu_term.llpl)
+    // needs to save/restore this too, for the same reason: begin() computes
+    // mouse_delta from mouse_pos - last_mouse_pos, and whichever window's
+    // cycle runs second in a tick would otherwise always see a zero delta,
+    // since the first window's own end() call already advanced
+    // last_mouse_pos to match the current mouse_pos before the second
+    // window's begin() ever runs - permanently breaking drag continuation
+    // for every window except whichever one happens to tick first.
+    func set_last_mouse_pos(v: Vec2) { last_mouse_pos = v }
+    func get_last_mouse_pos() -> Vec2 { last_mouse_pos }
+
+    // ------------------------------------------------------------------
+    // id hashing - 32-bit FNV-1a, byte at a time, seeded from the top of
+    // the id stack (matches upstream exactly).
+    // ------------------------------------------------------------------
+    const HASH_INITIAL: u32 = 2166136261 as u32
+
+    func hash_bytes(seed: u32, data: u8*, size: int) -> u32 {
+        let h = seed
+        for i in 0..size {
+            h = (h ^ (data[i] as u32)) * (16777619 as u32)
+        }
+        return h
+    }
+
+    func get_id_bytes(data: u8*, size: int) -> u32 {
+        let seed = HASH_INITIAL
+        if id_stack_idx > 0 { seed = id_stack[id_stack_idx - 1] }
+        let res = hash_bytes(seed, data, size)
+        last_id = res
+        return res
+    }
+
+    func get_id_str(text: char*) -> u32 {
+        get_id_bytes(text as u8*, llpl_strlen(text) as int)
+    }
+
+    // Hashes the pointer's own numeric value (upstream: hash(&res, &ptr,
+    // sizeof(ptr))) - used for widgets keyed by data identity rather than
+    // a label (checkbox's `state`, slider/number's `value`).
+    func get_id_ptr(p: void*) -> u32 {
+        let v = p as uint
+        get_id_bytes((&v) as u8*, sizeof(uint) as int)
+    }
+
+    func push_id_str(text: char*) {
+        id_stack[id_stack_idx] = get_id_str(text)
+        id_stack_idx++
+    }
+
+    func pop_id() {
+        id_stack_idx--
+    }
+
+    // ------------------------------------------------------------------
+    // clip stack
+    // ------------------------------------------------------------------
+    func get_clip_rect() -> Rect {
+        clip_stack[clip_stack_idx - 1]
+    }
+
+    func push_clip_rect(r: Rect) {
+        let last = get_clip_rect()
+        clip_stack[clip_stack_idx] = intersect_rects(r, last)
+        clip_stack_idx++
+    }
+
+    func pop_clip_rect() {
+        clip_stack_idx--
+    }
+
+    func check_clip(r: Rect) -> int {
+        let cr = get_clip_rect()
+        if r.x > cr.x + cr.w || r.x + r.w < cr.x ||
+           r.y > cr.y + cr.h || r.y + r.h < cr.y {
+            return CLIP_ALL
+        }
+        if r.x >= cr.x && r.x + r.w <= cr.x + cr.w &&
+           r.y >= cr.y && r.y + r.h <= cr.y + cr.h {
+            return 0
+        }
+        return CLIP_PART
+    }
+
+    // ------------------------------------------------------------------
+    // layout stack
+    // ------------------------------------------------------------------
+    func get_layout() -> Layout* {
+        &layout_stack[layout_stack_idx - 1]
+    }
+
+    func push_layout(body: Rect, scroll: Vec2) {
+        let l: Layout
+        l.body = rect(body.x - scroll.x, body.y - scroll.y, body.w, body.h)
+        l.max = vec2(-UNCLIPPED_EXTENT, -UNCLIPPED_EXTENT)
+        l.position = vec2(0, 0)
+        l.size = vec2(0, 0)
+        l.next = rect(0, 0, 0, 0)
+        l.items = 0
+        l.item_index = 0
+        l.next_row = 0
+        l.next_type = 0
+        l.indent = 0
+        layout_stack[layout_stack_idx] = l
+        layout_stack_idx++
+        let zero_width = 0
+        layout_row_widths(1, &zero_width, 0)
+    }
+
+    func layout_row_widths(items: int, widths: int*, height: int) {
+        let layout = get_layout()
+        if widths != null {
+            for i in 0..items {
+                layout.widths[i] = widths[i]
+            }
+        }
+        layout.items = items
+        layout.position = vec2(layout.indent, layout.next_row)
+        layout.size.y = height
+        layout.item_index = 0
+    }
+
+    func layout_row1(width: int, height: int) {
+        layout_row_widths(1, &width, height)
+    }
+
+    func layout_width(width: int) {
+        get_layout().size.x = width
+    }
+
+    func layout_height(height: int) {
+        get_layout().size.y = height
+    }
+
+    func layout_set_next(r: Rect, relative: bool) {
+        let layout = get_layout()
+        layout.next = r
+        layout.next_type = if relative { NEXT_RELATIVE } else { NEXT_ABSOLUTE }
+    }
+
+    func layout_next() -> Rect {
+        let layout = get_layout()
+        let res: Rect
+
+        if layout.next_type != 0 {
+            let kind = layout.next_type
+            layout.next_type = 0
+            res = layout.next
+            if kind == NEXT_ABSOLUTE {
+                last_rect = res
+                return res
+            }
+        } else {
+            if layout.item_index == layout.items {
+                layout_row_widths(layout.items, null, layout.size.y)
+            }
+
+            res.x = layout.position.x
+            res.y = layout.position.y
+            res.w = if layout.items > 0 { layout.widths[layout.item_index] } else { layout.size.x }
+            res.h = layout.size.y
+            if res.w == 0 { res.w = style.size.x + style.padding * 2 }
+            if res.h == 0 { res.h = style.size.y + style.padding * 2 }
+            if res.w < 0 { res.w += layout.body.w - res.x + 1 }
+            if res.h < 0 { res.h += layout.body.h - res.y + 1 }
+
+            layout.item_index++
+        }
+
+        layout.position.x += res.w + style.spacing
+        layout.next_row = imax(layout.next_row, res.y + res.h + style.spacing)
+
+        res.x += layout.body.x
+        res.y += layout.body.y
+
+        layout.max.x = imax(layout.max.x, res.x + res.w)
+        layout.max.y = imax(layout.max.y, res.y + res.h)
+
+        last_rect = res
+        return res
+    }
+
+    func layout_begin_column() {
+        push_layout(layout_next(), vec2(0, 0))
+    }
+
+    func layout_end_column() {
+        let b = get_layout()
+        let b_body = b.body
+        let b_position = b.position
+        let b_next_row = b.next_row
+        let b_max = b.max
+        layout_stack_idx--
+        let a = get_layout()
+        a.position.x = imax(a.position.x, b_position.x + b_body.x - a.body.x)
+        a.next_row = imax(a.next_row, b_next_row + b_body.y - a.body.y)
+        a.max.x = imax(a.max.x, b_max.x)
+        a.max.y = imax(a.max.y, b_max.y)
+    }
+
+    // ------------------------------------------------------------------
+    // containers
+    // ------------------------------------------------------------------
+    func get_current_container() -> int {
+        container_stack[container_stack_idx - 1]
+    }
+
+    func pool_init(items: PoolItem*, len: int, id: u32) -> int {
+        let n = -1
+        let f = frame
+        for i in 0..len {
+            if items[i].last_update < f {
+                f = items[i].last_update
+                n = i
+            }
+        }
+        items[n].id = id
+        items[n].last_update = frame
+        return n
+    }
+
+    func pool_get(items: PoolItem*, len: int, id: u32) -> int {
+        for i in 0..len {
+            if items[i].id == id { return i }
+        }
+        return -1
+    }
+
+    func pool_update(items: PoolItem*, idx: int) {
+        items[idx].last_update = frame
+    }
+
+    func find_or_make_container(id: u32, opt: int) -> int {
+        let idx = pool_get(&container_pool[0], CONTAINERPOOL_CAP, id)
+        if idx >= 0 {
+            if containers[idx].open || (~opt & OPT_CLOSED) != 0 {
+                pool_update(&container_pool[0], idx)
+            }
+            return idx
+        }
+        if (opt & OPT_CLOSED) != 0 { return -1 }
+        idx = pool_init(&container_pool[0], CONTAINERPOOL_CAP, id)
+        containers[idx].cmd_start = 0
+        containers[idx].cmd_end = 0
+        containers[idx].rect = rect(0, 0, 0, 0)
+        containers[idx].body = rect(0, 0, 0, 0)
+        containers[idx].content_size = vec2(0, 0)
+        containers[idx].scroll = vec2(0, 0)
+        containers[idx].open = true
+        containers[idx].has_head = false
+        bring_to_front(idx)
+        return idx
+    }
+
+    func get_container(name: char*) -> int {
+        let id = get_id_str(name)
+        find_or_make_container(id, 0)
+    }
+
+    // Caps a window's persisted rect to a maximum size, in place - for a
+    // caller (kern/mu_demo.llpl) backing its window with a fixed-capacity
+    // off-screen buffer that a user dragging the built-in resize handle
+    // (begin_window_ex only enforces a *minimum* size, no maximum) could
+    // otherwise overflow. Call before begin_window_ex each frame, with
+    // id_stack empty (matching the id begin_window_ex's own get_id_str
+    // call for the same title will compute) - a no-op before the window
+    // has ever been opened once, since begin_window_ex seeds its rect
+    // itself the first time.
+    func clamp_window_size(title: char*, max_w: int, max_h: int) {
+        let id = get_id_str(title)
+        let idx = pool_get(&container_pool[0], CONTAINERPOOL_CAP, id)
+        if idx < 0 { return }
+        if containers[idx].rect.w > max_w { containers[idx].rect.w = max_w }
+        if containers[idx].rect.h > max_h { containers[idx].rect.h = max_h }
+    }
+
+    func pop_container() {
+        let cnt = get_current_container()
+        let layout = get_layout()
+        containers[cnt].content_size.x = layout.max.x - layout.body.x
+        containers[cnt].content_size.y = layout.max.y - layout.body.y
+        container_stack_idx--
+        layout_stack_idx--
+        pop_id()
+    }
+
+    // ------------------------------------------------------------------
+    // input handlers
+    // ------------------------------------------------------------------
+    func input_mousemove(x: int, y: int) {
+        mouse_pos = vec2(x, y)
+    }
+
+    func input_mousedown(x: int, y: int, btn: int) {
+        input_mousemove(x, y)
+        mouse_down |= btn
+        mouse_pressed |= btn
+    }
+
+    func input_mouseup(x: int, y: int, btn: int) {
+        input_mousemove(x, y)
+        mouse_down &= ~btn
+    }
+
+    func input_scroll(x: int, y: int) {
+        scroll_delta.x += x
+        scroll_delta.y += y
+    }
+
+    func input_keydown(key: int) {
+        key_pressed |= key
+        key_down |= key
+    }
+
+    func input_keyup(key: int) {
+        key_down &= ~key
+    }
+
+    func input_text(text: char*) {
+        let len = input_text_len
+        let add = llpl_strlen(text) as int
+        if len + add >= INPUT_TEXT_MAX { return }
+        memcpy((&input_text_buf[len]) as void*, text as void*, (add + 1) as uint)
+        input_text_len = len + add
+    }
+
+    // ------------------------------------------------------------------
+    // command list
+    // ------------------------------------------------------------------
+    func push_command(kind: int) -> Command* {
+        let cmd = &command_list[command_count]
+        command_count++
+        cmd.kind = kind
+        cmd.clip = get_clip_rect()
+        containers[get_current_container()].cmd_end = command_count
+        return cmd
+    }
+
+    func set_clip_command_free() {
+        // No MU_COMMAND_CLIP - see file header. Kept as a named no-op call
+        // site so callers reads the same as upstream's mu_set_clip calls;
+        // the clip rect is captured per-command in push_command instead.
+    }
+
+    func draw_rect(r: Rect, c: Color) {
+        let clipped = intersect_rects(r, get_clip_rect())
+        if clipped.w > 0 && clipped.h > 0 {
+            let cmd = push_command(COMMAND_RECT)
+            cmd.rect = clipped
+            cmd.color = c
+        }
+    }
+
+    func draw_box(r: Rect, c: Color) {
+        draw_rect(rect(r.x + 1, r.y, r.w - 2, 1), c)
+        draw_rect(rect(r.x + 1, r.y + r.h - 1, r.w - 2, 1), c)
+        draw_rect(rect(r.x, r.y, 1, r.h), c)
+        draw_rect(rect(r.x + r.w - 1, r.y, 1, r.h), c)
+    }
+
+    func draw_text(str: char*, len: int, pos: Vec2, c: Color) {
+        if len < 0 { len = llpl_strlen(str) as int }
+        if len > TEXT_CMD_MAX { len = TEXT_CMD_MAX }
+        let bounds = rect(pos.x, pos.y, text_width(str, len), text_height())
+        let clipped = check_clip(bounds)
+        if clipped == CLIP_ALL { return }
+        let cmd = push_command(COMMAND_TEXT)
+        memcpy((&cmd.text[0]) as void*, str as void*, len as uint)
+        cmd.text[len] = 0 as char
+        cmd.text_len = len
+        cmd.pos = pos
+        cmd.color = c
+    }
+
+    func draw_icon(id: int, r: Rect, c: Color) {
+        let clipped = check_clip(r)
+        if clipped == CLIP_ALL { return }
+        let cmd = push_command(COMMAND_ICON)
+        cmd.icon_id = id
+        cmd.rect = r
+        cmd.color = c
+    }
+
+    // ------------------------------------------------------------------
+    // controls
+    // ------------------------------------------------------------------
+    func draw_frame(r: Rect, colorid: int) {
+        draw_rect(r, style.colors[colorid])
+        if colorid == COLOR_SCROLLBASE || colorid == COLOR_SCROLLTHUMB || colorid == COLOR_TITLEBG {
+            return
+        }
+        if style.colors[COLOR_BORDER].a != 0 {
+            draw_box(expand_rect(r, 1), style.colors[COLOR_BORDER])
+        }
+    }
+
+    func in_hover_root() -> bool {
+        let i = container_stack_idx
+        while i > 0 {
+            i--
+            if container_stack[i] == hover_root { return true }
+            if containers[container_stack[i]].has_head { break }
+        }
+        return false
+    }
+
+    func mouse_over(r: Rect) -> bool {
+        rect_overlaps_vec2(r, mouse_pos) &&
+        rect_overlaps_vec2(get_clip_rect(), mouse_pos) &&
+        in_hover_root()
+    }
+
+    func update_control(id: u32, r: Rect, opt: int) {
+        let over = mouse_over(r)
+
+        if focus == id { updated_focus = true }
+        if (opt & OPT_NOINTERACT) != 0 { return }
+        if over && mouse_down == 0 { hover = id }
+
+        if focus == id {
+            if mouse_pressed != 0 && !over { set_focus(0) }
+            if mouse_down == 0 && (~opt & OPT_HOLDFOCUS) != 0 { set_focus(0) }
+        }
+
+        if hover == id {
+            if mouse_pressed != 0 {
+                set_focus(id)
+            } else if !over {
+                hover = 0
+            }
+        }
+    }
+
+    func draw_control_frame(id: u32, r: Rect, colorid: int, opt: int) {
+        if (opt & OPT_NOFRAME) != 0 { return }
+        if focus == id { colorid += 2 } else if hover == id { colorid += 1 }
+        draw_frame(r, colorid)
+    }
+
+    func draw_control_text(str: char*, r: Rect, colorid: int, opt: int) {
+        let pos: Vec2
+        let tw = text_width(str, -1)
+        push_clip_rect(r)
+        pos.y = r.y + (r.h - text_height()) / 2
+        if (opt & OPT_ALIGNCENTER) != 0 {
+            pos.x = r.x + (r.w - tw) / 2
+        } else if (opt & OPT_ALIGNRIGHT) != 0 {
+            pos.x = r.x + r.w - tw - style.padding
+        } else {
+            pos.x = r.x + style.padding
+        }
+        draw_text(str, -1, pos, style.colors[colorid])
+        pop_clip_rect()
+    }
+
+    func text(str: char*) {
+        let font_h = text_height()
+        layout_begin_column()
+        layout_row1(-1, font_h)
+
+        let p = str
+        let end_reached = false
+        while !end_reached {
+            let r = layout_next()
+            let w = 0
+            let start = p
+            let last_space = p
+            let broke_early = false
+
+            while true {
+                let word = p
+                while p[0] != 0 as char && p[0] != ' ' as char && p[0] != '\n' as char { p++ }
+                w += text_width(word, (p as uint - word as uint) as int)
+                if w > r.w && (p as uint) != (start as uint) {
+                    broke_early = true
+                    break
+                }
+                w += text_width(p, 1)
+                last_space = p
+                if p[0] == 0 as char || p[0] == '\n' as char { break }
+                p++
+            }
+
+            let seg_len = (last_space as uint - start as uint) as int
+            draw_text(start, seg_len, vec2(r.x, r.y), style.colors[COLOR_TEXT])
+
+            if last_space[0] == 0 as char {
+                end_reached = true
+            } else {
+                p = (last_space as uint + 1) as char*
+            }
+        }
+        layout_end_column()
+    }
+
+    func label(str: char*) {
+        draw_control_text(str, layout_next(), COLOR_TEXT, 0)
+    }
+
+    func button_ex(label_str: char*, icon: int, opt: int) -> int {
+        let res = 0
+        let id = if label_str != null { get_id_str(label_str) } else { get_id_ptr((&icon) as void*) }
+        let r = layout_next()
+        update_control(id, r, opt)
+        if mouse_pressed == MOUSE_LEFT && focus == id {
+            res |= RES_SUBMIT
+        }
+        draw_control_frame(id, r, COLOR_BUTTON, opt)
+        if label_str != null { draw_control_text(label_str, r, COLOR_TEXT, opt) }
+        if icon != 0 { draw_icon(icon, r, style.colors[COLOR_TEXT]) }
+        return res
+    }
+
+    func button(label_str: char*) -> int {
+        button_ex(label_str, 0, OPT_ALIGNCENTER)
+    }
+
+    func checkbox(label_str: char*, state: bool*) -> int {
+        let res = 0
+        let id = get_id_ptr(state as void*)
+        let r = layout_next()
+        let box = rect(r.x, r.y, r.h, r.h)
+        update_control(id, r, 0)
+        if mouse_pressed == MOUSE_LEFT && focus == id {
+            res |= RES_CHANGE
+            state[0] = !state[0]
+        }
+        draw_control_frame(id, box, COLOR_BASE, 0)
+        if state[0] {
+            draw_icon(ICON_CHECK, box, style.colors[COLOR_TEXT])
+        }
+        let text_r = rect(r.x + box.w, r.y, r.w - box.w, r.h)
+        draw_control_text(label_str, text_r, COLOR_TEXT, 0)
+        return res
+    }
+
+    func textbox_raw(buf: char*, bufsz: int, id: u32, r: Rect, opt: int) -> int {
+        let res = 0
+        update_control(id, r, opt | OPT_HOLDFOCUS)
+
+        if focus == id {
+            let len = llpl_strlen(buf) as int
+            let n = imin(bufsz - len - 1, input_text_len)
+            if n > 0 {
+                memcpy((&buf[len]) as void*, (&input_text_buf[0]) as void*, n as uint)
+                len += n
+                buf[len] = 0 as char
+                res |= RES_CHANGE
+            }
+            if (key_pressed & KEY_BACKSPACE) != 0 && len > 0 {
+                len--
+                while (buf[len] as u8 & 0xC0 as u8) == 0x80 as u8 && len > 0 { len-- }
+                buf[len] = 0 as char
+                res |= RES_CHANGE
+            }
+            if (key_pressed & KEY_RETURN) != 0 {
+                set_focus(0)
+                res |= RES_SUBMIT
+            }
+        }
+
+        draw_control_frame(id, r, COLOR_BASE, opt)
+        if focus == id {
+            let c = style.colors[COLOR_TEXT]
+            let textw = text_width(buf, -1)
+            let texth = text_height()
+            let ofx = r.w - style.padding - textw - 1
+            let textx = r.x + imin(ofx, style.padding)
+            let texty = r.y + (r.h - texth) / 2
+            push_clip_rect(r)
+            draw_text(buf, -1, vec2(textx, texty), c)
+            draw_rect(rect(textx + textw, texty, 1, texth), c)
+            pop_clip_rect()
+        } else {
+            draw_control_text(buf, r, COLOR_TEXT, opt)
+        }
+
+        return res
+    }
+
+    func textbox_ex(buf: char*, bufsz: int, opt: int) -> int {
+        let id = get_id_ptr(buf as void*)
+        let r = layout_next()
+        textbox_raw(buf, bufsz, id, r, opt)
+    }
+
+    func textbox(buf: char*, bufsz: int) -> int {
+        textbox_ex(buf, bufsz, 0)
+    }
+
+    func mu_int_to_str(buf: char*, bufsz: int, value: int) {
+        ksnprintf(buf, bufsz as u64, "%d", value)
+    }
+
+    func parse_int(s: char*) -> int {
+        let i = 0
+        let neg = false
+        if s[0] == '-' as char { neg = true; i++ }
+        let v = 0
+        while s[i] >= '0' as char && s[i] <= '9' as char {
+            v = v * 10 + ((s[i] as int) - ('0' as int))
+            i++
+        }
+        return if neg { -v } else { v }
+    }
+
+    func number_textbox(value: int*, r: Rect, id: u32) -> bool {
+        if mouse_pressed == MOUSE_LEFT && (key_down & KEY_SHIFT) != 0 && hover == id {
+            number_edit = id
+            mu_int_to_str(&number_edit_buf[0], NUMBER_EDIT_MAX + 1, value[0])
+        }
+        if number_edit == id {
+            let res = textbox_raw(&number_edit_buf[0], NUMBER_EDIT_MAX + 1, id, r, 0)
+            if (res & RES_SUBMIT) != 0 || focus != id {
+                value[0] = parse_int(&number_edit_buf[0])
+                number_edit = 0
+            } else {
+                return true
+            }
+        }
+        return false
+    }
+
+    func slider_ex(value: int*, low: int, high: int, step: int, opt: int) -> int {
+        let buf: char[NUMBER_EDIT_MAX + 1]
+        let res = 0
+        let last = value[0]
+        let v = last
+        let id = get_id_ptr(value as void*)
+        let base = layout_next()
+
+        if number_textbox(&v, base, id) { return res }
+
+        update_control(id, base, opt)
+
+        if focus == id && (mouse_down | mouse_pressed) == MOUSE_LEFT && base.w != 0 {
+            v = low + (mouse_pos.x - base.x) * (high - low) / base.w
+            if step != 0 { v = ((v + step / 2) / step) * step }
+        }
+        v = iclamp(v, low, high)
+        value[0] = v
+        if last != v { res |= RES_CHANGE }
+
+        draw_control_frame(id, base, COLOR_BASE, opt)
+        let w = style.thumb_size
+        let x = if high != low { (v - low) * (base.w - w) / (high - low) } else { 0 }
+        let thumb = rect(base.x + x, base.y, w, base.h)
+        draw_control_frame(id, thumb, COLOR_BUTTON, opt)
+        mu_int_to_str(&buf[0], NUMBER_EDIT_MAX + 1, v)
+        draw_control_text(&buf[0], base, COLOR_TEXT, opt)
+
+        return res
+    }
+
+    func slider(value: int*, low: int, high: int) -> int {
+        slider_ex(value, low, high, 0, OPT_ALIGNCENTER)
+    }
+
+    func number_ex(value: int*, step: int, opt: int) -> int {
+        let buf: char[NUMBER_EDIT_MAX + 1]
+        let res = 0
+        let id = get_id_ptr(value as void*)
+        let base = layout_next()
+        let last = value[0]
+
+        if number_textbox(value, base, id) { return res }
+
+        update_control(id, base, opt)
+
+        if focus == id && mouse_down == MOUSE_LEFT {
+            value[0] += mouse_delta.x * step
+        }
+        if value[0] != last { res |= RES_CHANGE }
+
+        draw_control_frame(id, base, COLOR_BASE, opt)
+        mu_int_to_str(&buf[0], NUMBER_EDIT_MAX + 1, value[0])
+        draw_control_text(&buf[0], base, COLOR_TEXT, opt)
+
+        return res
+    }
+
+    func number(value: int*, step: int) -> int {
+        number_ex(value, step, OPT_ALIGNCENTER)
+    }
+
+    func header_impl(label_str: char*, is_treenode: bool, opt: int) -> int {
+        let id = get_id_str(label_str)
+        let idx = pool_get(&treenode_pool[0], TREENODEPOOL_CAP, id)
+        let width = -1
+        layout_row_widths(1, &width, 0)
+
+        let active = idx >= 0
+        let expanded = if (opt & OPT_EXPANDED) != 0 { !active } else { active }
+        let r = layout_next()
+        update_control(id, r, 0)
+
+        active = active != (mouse_pressed == MOUSE_LEFT && focus == id)
+
+        if idx >= 0 {
+            if active {
+                pool_update(&treenode_pool[0], idx)
+            } else {
+                treenode_pool[idx].id = 0
+                treenode_pool[idx].last_update = 0
+            }
+        } else if active {
+            pool_init(&treenode_pool[0], TREENODEPOOL_CAP, id)
+        }
+
+        if is_treenode {
+            if hover == id { draw_frame(r, COLOR_BUTTONHOVER) }
+        } else {
+            draw_control_frame(id, r, COLOR_BUTTON, 0)
+        }
+        draw_icon(
+            if expanded { ICON_EXPANDED } else { ICON_COLLAPSED },
+            rect(r.x, r.y, r.h, r.h), style.colors[COLOR_TEXT])
+        let text_r = rect(r.x + r.h - style.padding, r.y, r.w - (r.h - style.padding), r.h)
+        draw_control_text(label_str, text_r, COLOR_TEXT, 0)
+
+        return if expanded { RES_ACTIVE } else { 0 }
+    }
+
+    func header_ex(label_str: char*, opt: int) -> int {
+        header_impl(label_str, false, opt)
+    }
+
+    func header(label_str: char*) -> int {
+        header_ex(label_str, 0)
+    }
+
+    func begin_treenode_ex(label_str: char*, opt: int) -> int {
+        let res = header_impl(label_str, true, opt)
+        if (res & RES_ACTIVE) != 0 {
+            get_layout().indent += style.indent
+            id_stack[id_stack_idx] = last_id
+            id_stack_idx++
+        }
+        return res
+    }
+
+    func begin_treenode(label_str: char*) -> int {
+        begin_treenode_ex(label_str, 0)
+    }
+
+    func end_treenode() {
+        get_layout().indent -= style.indent
+        pop_id()
+    }
+
+    // one axis of a scrollbar - upstream shares this via a macro
+    // (parameterized on x/y, w/h) since C has no closures; LLPL does have
+    // closures, but a tiny bool `vertical` switch reads just as clearly
+    // here and avoids two near-duplicate functions.
+    func scrollbar_axis(cnt: int, body: Rect*, cs: Vec2, vertical: bool) -> Rect* {
+        let content = if vertical { cs.y } else { cs.x }
+        let body_extent = if vertical { body.h } else { body.w }
+        let maxscroll = content - body_extent
+
+        if maxscroll > 0 && body_extent > 0 {
+            let id = if vertical { get_id_str("!scrollbary") } else { get_id_str("!scrollbarx") }
+
+            let base = body[0]
+            if vertical {
+                base.x = body.x + body.w
+                base.w = style.scrollbar_size
+            } else {
+                base.y = body.y + body.h
+                base.h = style.scrollbar_size
+            }
+
+            update_control(id, base, 0)
+            if focus == id && mouse_down == MOUSE_LEFT {
+                if vertical {
+                    containers[cnt].scroll.y += mouse_delta.y * cs.y / base.h
+                } else {
+                    containers[cnt].scroll.x += mouse_delta.x * cs.x / base.w
+                }
+            }
+            if vertical {
+                containers[cnt].scroll.y = iclamp(containers[cnt].scroll.y, 0, maxscroll)
+            } else {
+                containers[cnt].scroll.x = iclamp(containers[cnt].scroll.x, 0, maxscroll)
+            }
+
+            draw_frame(base, COLOR_SCROLLBASE)
+            let thumb = base
+            if vertical {
+                thumb.h = imax(style.thumb_size, base.h * body.h / cs.y)
+                thumb.y += containers[cnt].scroll.y * (base.h - thumb.h) / maxscroll
+            } else {
+                thumb.w = imax(style.thumb_size, base.w * body.w / cs.x)
+                thumb.x += containers[cnt].scroll.x * (base.w - thumb.w) / maxscroll
+            }
+            draw_frame(thumb, COLOR_SCROLLTHUMB)
+
+            if mouse_over(body[0]) { scroll_target = cnt }
+        } else {
+            if vertical { containers[cnt].scroll.y = 0 } else { containers[cnt].scroll.x = 0 }
+        }
+        return body
+    }
+
+    func scrollbars(cnt: int, body: Rect*) {
+        let sz = style.scrollbar_size
+        let cs = containers[cnt].content_size
+        cs.x += style.padding * 2
+        cs.y += style.padding * 2
+        push_clip_rect(body[0])
+        if cs.y > containers[cnt].body.h { body.w -= sz }
+        if cs.x > containers[cnt].body.w { body.h -= sz }
+        scrollbar_axis(cnt, body, cs, true)
+        scrollbar_axis(cnt, body, cs, false)
+        pop_clip_rect()
+    }
+
+    func push_container_body(cnt: int, body: Rect, opt: int) {
+        let b = body
+        if (~opt & OPT_NOSCROLL) != 0 { scrollbars(cnt, &b) }
+        push_layout(expand_rect(b, -style.padding), containers[cnt].scroll)
+        containers[cnt].body = b
+    }
+
+    func begin_root_container(cnt: int) {
+        container_stack[container_stack_idx] = cnt
+        container_stack_idx++
+        root_list[root_list_idx] = cnt
+        root_list_idx++
+        containers[cnt].has_head = true
+        containers[cnt].cmd_start = command_count
+        containers[cnt].cmd_end = command_count
+
+        if rect_overlaps_vec2(containers[cnt].rect, mouse_pos) &&
+           (next_hover_root < 0 || containers[cnt].zindex > containers[next_hover_root].zindex) {
+            next_hover_root = cnt
+        }
+
+        clip_stack[clip_stack_idx] = unclipped_rect()
+        clip_stack_idx++
+    }
+
+    func end_root_container() {
+        pop_clip_rect()
+        pop_container()
+    }
+
+    func begin_window_ex(title: char*, initial_rect: Rect, opt: int) -> int {
+        let id = get_id_str(title)
+        let cnt = find_or_make_container(id, opt)
+        if cnt < 0 || !containers[cnt].open { return 0 }
+        id_stack[id_stack_idx] = id
+        id_stack_idx++
+
+        if containers[cnt].rect.w == 0 { containers[cnt].rect = initial_rect }
+        begin_root_container(cnt)
+        let win_rect = containers[cnt].rect
+        let body = win_rect
+
+        if (~opt & OPT_NOFRAME) != 0 {
+            draw_frame(win_rect, COLOR_WINDOWBG)
+        }
+
+        if (~opt & OPT_NOTITLE) != 0 {
+            let tr = win_rect
+            tr.h = style.title_height
+            draw_frame(tr, COLOR_TITLEBG)
+
+            let title_id = get_id_str("!title")
+            update_control(title_id, tr, opt)
+            draw_control_text(title, tr, COLOR_TITLETEXT, opt)
+            if title_id == focus && mouse_down == MOUSE_LEFT {
+                containers[cnt].rect.x += mouse_delta.x
+                containers[cnt].rect.y += mouse_delta.y
+            }
+            body.y += tr.h
+            body.h -= tr.h
+
+            if (~opt & OPT_NOCLOSE) != 0 {
+                let close_id = get_id_str("!close")
+                let r = rect(tr.x + tr.w - tr.h, tr.y, tr.h, tr.h)
+                draw_icon(ICON_CLOSE, r, style.colors[COLOR_TITLETEXT])
+                update_control(close_id, r, opt)
+                if mouse_pressed == MOUSE_LEFT && close_id == focus {
+                    containers[cnt].open = false
+                }
+            }
+        }
+
+        push_container_body(cnt, body, opt)
+
+        if (~opt & OPT_NORESIZE) != 0 {
+            let sz = style.title_height
+            let resize_id = get_id_str("!resize")
+            let r = rect(win_rect.x + win_rect.w - sz, win_rect.y + win_rect.h - sz, sz, sz)
+            update_control(resize_id, r, opt)
+            if resize_id == focus && mouse_down == MOUSE_LEFT {
+                containers[cnt].rect.w = imax(96, containers[cnt].rect.w + mouse_delta.x)
+                containers[cnt].rect.h = imax(64, containers[cnt].rect.h + mouse_delta.y)
+            }
+        }
+
+        if (opt & OPT_AUTOSIZE) != 0 {
+            let r = get_layout().body
+            containers[cnt].rect.w = containers[cnt].content_size.x + (containers[cnt].rect.w - r.w)
+            containers[cnt].rect.h = containers[cnt].content_size.y + (containers[cnt].rect.h - r.h)
+        }
+
+        if (opt & OPT_POPUP) != 0 && mouse_pressed != 0 && hover_root != cnt {
+            containers[cnt].open = false
+        }
+
+        push_clip_rect(containers[cnt].body)
+        return RES_ACTIVE
+    }
+
+    func begin_window(title: char*, r: Rect) -> int {
+        begin_window_ex(title, r, 0)
+    }
+
+    func end_window() {
+        pop_clip_rect()
+        end_root_container()
+    }
+
+    func open_popup(name: char*) {
+        let cnt = get_container(name)
+        hover_root = cnt
+        next_hover_root = cnt
+        containers[cnt].rect = rect(mouse_pos.x, mouse_pos.y, 1, 1)
+        containers[cnt].open = true
+        bring_to_front(cnt)
+    }
+
+    func begin_popup(name: char*) -> int {
+        let opt = OPT_POPUP | OPT_AUTOSIZE | OPT_NORESIZE | OPT_NOSCROLL | OPT_NOTITLE | OPT_CLOSED
+        begin_window_ex(name, rect(0, 0, 0, 0), opt)
+    }
+
+    func end_popup() {
+        end_window()
+    }
+
+    func begin_panel_ex(name: char*, opt: int) {
+        push_id_str(name)
+        let cnt = find_or_make_container(last_id, opt)
+        containers[cnt].rect = layout_next()
+        if (~opt & OPT_NOFRAME) != 0 {
+            draw_frame(containers[cnt].rect, COLOR_PANELBG)
+        }
+        container_stack[container_stack_idx] = cnt
+        container_stack_idx++
+        containers[cnt].has_head = false
+        containers[cnt].cmd_start = command_count
+        containers[cnt].cmd_end = command_count
+        push_container_body(cnt, containers[cnt].rect, opt)
+        push_clip_rect(containers[cnt].body)
+    }
+
+    func begin_panel(name: char*) {
+        begin_panel_ex(name, 0)
+    }
+
+    func end_panel() {
+        pop_clip_rect()
+        pop_container()
+    }
+
+    // ------------------------------------------------------------------
+    // render - the one renderer this port has (see file header). Walks
+    // root_list in the zindex order end() already sorted it into, and for
+    // each root replays its [cmd_start, cmd_end) run of command_list
+    // directly against Terminal.{put,blend}_pixel. Coordinates and rects
+    // are screen pixel space throughout, so no origin translation is
+    // needed here.
+    // ------------------------------------------------------------------
+    func iabs(x: int) -> int { if x < 0 { -x } else { x } }
+
+    func point_in_rect(x: int, y: int, r: Rect) -> bool {
+        x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h
+    }
+
+    func pack_color(c: Color) -> u32 {
+        ((c.r as u32) << 16) | ((c.g as u32) << 8) | (c.b as u32)
+    }
+
+    // ------------------------------------------------------------------
+    // render target indirection - lets a caller (kern/mu_demo.llpl)
+    // redirect every pixel render() writes into an off-screen buffer
+    // instead of straight to the live framebuffer, so a whole frame can
+    // be composed invisibly and copied to the screen in one tight pass
+    // instead of racing the display's own scanout across the dozens of
+    // separate multi-pixel draw loops a frame's worth of widgets takes -
+    // visible as flicker/tearing on anything redrawn this often. null
+    // (the default) means "draw straight to Terminal", unchanged from
+    // before this existed.
+    // ------------------------------------------------------------------
+    let render_target: u32* = null
+    let render_target_width: int = 0
+    let render_target_height: int = 0
+    let render_target_origin_x: int = 0
+    let render_target_origin_y: int = 0
+
+    func set_render_target(buf: u32*, width: int, height: int, origin_x: int, origin_y: int) {
+        render_target = buf
+        render_target_width = width
+        render_target_height = height
+        render_target_origin_x = origin_x
+        render_target_origin_y = origin_y
+    }
+
+    func clear_render_target() {
+        render_target = null
+    }
+
+    // render_target is a raw pointer (unlike command_list/etc, which are
+    // fixed-size arrays this compiler bounds-checks automatically) - the
+    // explicit range check here is what keeps an off-by-one at the
+    // window's own edge from becoming an out-of-bounds kernel write.
+    func blend_target_pixel(x: int, y: int, color: u32, alpha: u8) {
+        if alpha == 0 { return }
+        if render_target == null {
+            Terminal.blend_pixel(x as uint, y as uint, color, alpha)
+            return
+        }
+        let lx = x - render_target_origin_x
+        let ly = y - render_target_origin_y
+        if lx < 0 || ly < 0 || lx >= render_target_width || ly >= render_target_height { return }
+        let idx = (ly * render_target_width) + lx
+        if alpha == 255 {
+            render_target[idx] = color
+            return
+        }
+        let under = render_target[idx]
+        let a = alpha as u32
+        let inv = 255 - a
+        let r = ((((color >> 16) & 255) * a) + (((under >> 16) & 255) * inv) + 127) / 255
+        let g = ((((color >> 8) & 255) * a) + (((under >> 8) & 255) * inv) + 127) / 255
+        let b = (((color & 255) * a) + ((under & 255) * inv) + 127) / 255
+        render_target[idx] = (r << 16) | (g << 8) | b
+    }
+
+    func plot_clipped(x: int, y: int, clip: Rect, c: Color) {
+        if point_in_rect(x, y, clip) {
+            blend_target_pixel(x, y, pack_color(c), c.a)
+        }
+    }
+
+    // Same glyph rasterization as Terminal's own Console.draw_glyph, but
+    // free-standing: draws at an arbitrary (x, y) top-left instead of the
+    // console's own advancing cursor, clips to an arbitrary rect instead
+    // of just the framebuffer edge, and folds the command's own color
+    // alpha into each glyph pixel's coverage alpha. Returns the glyph's
+    // advance width so callers can lay out the next character.
+    func draw_glyph_at(x: int, y: int, ch: char, c: Color, clip: Rect) -> int {
+        let glyph: u8[32 * LINE_HEIGHT]
+        // ttf_render_glyph only writes coverage for the pixels it
+        // actually rasterizes - the rest of this stack buffer is
+        // whatever garbage was there before, same reason Terminal's own
+        // Console.draw_glyph zeroes its buffer first.
+        let clear_pos: u16 = 0
+        while clear_pos < 32 * LINE_HEIGHT {
+            glyph[clear_pos] = 0
+            clear_pos = clear_pos + 1
+        }
+        let glyph_index = ttf_get_glyph_index(Terminal.console_font, ch as u32)
+        if ch == 32 {
+            let space_metrics = ttf_get_glyph_metrics(Terminal.console_font, glyph_index)
+            let space_advance = ((space_metrics.advance_width as u64) * (FONT_SIZE as u64)) / (Terminal.console_font.units_per_em as u64)
+            if space_advance < 3 { return 3 }
+            return space_advance as int
+        }
+        let found = ttf_render_glyph(Terminal.console_font, glyph_index, FONT_SIZE, glyph as u8*, 32, LINE_HEIGHT as i16)
+        if !found {
+            // Composite glyphs aren't supported yet (see ttf_render_glyph) -
+            // same lowercase-i fallback Terminal.draw_glyph uses, scaled
+            // down for this namespace's smaller FONT_SIZE/LINE_HEIGHT.
+            if ch == 105 {
+                let stem_y = 4
+                while stem_y < LINE_HEIGHT - 2 {
+                    plot_clipped(x + 2, y + stem_y, clip, c)
+                    stem_y = stem_y + 1
+                }
+                plot_clipped(x + 2, y + 2, clip, c)
+                return 5
+            }
+            return 6
+        }
+
+        let gy: i16 = 0
+        while gy < LINE_HEIGHT {
+            let gx: i16 = 0
+            while gx < 32 {
+                let alpha = glyph[(gy * 32) + gx]
+                if alpha != 0 {
+                    let combined = ((alpha as u32) * (c.a as u32)) / 255
+                    plot_clipped(x + (gx as int), y + (gy as int), clip, color(c.r as int, c.g as int, c.b as int, combined as int))
+                }
+                gx = gx + 1
+            }
+            gy = gy + 1
+        }
+
+        let metrics = ttf_get_glyph_metrics(Terminal.console_font, glyph_index)
+        let advance = ((metrics.advance_width as u64) * (FONT_SIZE as u64)) / (Terminal.console_font.units_per_em as u64)
+        if advance < 3 { return 3 }
+        advance as int
+    }
+
+    func render_rect_command(cmd: Command*) {
+        // draw_rect already intersected cmd.rect with the clip stack at
+        // push time (see file header), so no further clipping here.
+        if cmd.color.a == 0 { return }
+        let y = cmd.rect.y
+        while y < cmd.rect.y + cmd.rect.h {
+            let x = cmd.rect.x
+            while x < cmd.rect.x + cmd.rect.w {
+                blend_target_pixel(x, y, pack_color(cmd.color), cmd.color.a)
+                x++
+            }
+            y++
+        }
+    }
+
+    func render_text_command(cmd: Command*) {
+        let x = cmd.pos.x
+        let i = 0
+        while i < cmd.text_len {
+            x += draw_glyph_at(x, cmd.pos.y, cmd.text[i], cmd.color, cmd.clip)
+            i++
+        }
+    }
+
+    func render_icon_command(cmd: Command*) {
+        let r = cmd.rect
+        let c = cmd.color
+        let clip = cmd.clip
+        if cmd.icon_id == ICON_CLOSE {
+            let pad = imax(2, imin(r.w, r.h) / 4)
+            let n = imin(r.w, r.h) - pad * 2
+            let i = 0
+            while i < n {
+                plot_clipped(r.x + pad + i, r.y + pad + i, clip, c)
+                plot_clipped(r.x + pad + i + 1, r.y + pad + i, clip, c)
+                plot_clipped(r.x + r.w - 1 - pad - i, r.y + pad + i, clip, c)
+                plot_clipped(r.x + r.w - 2 - pad - i, r.y + pad + i, clip, c)
+                i++
+            }
+        } else if cmd.icon_id == ICON_CHECK {
+            let cx = r.x + r.w / 2 - 3
+            let cy = r.y + r.h / 2
+            let i = 0
+            while i < 3 {
+                plot_clipped(cx + i, cy + i, clip, c)
+                plot_clipped(cx + i, cy + i + 1, clip, c)
+                i++
+            }
+            i = 0
+            while i < 6 {
+                plot_clipped(cx + 2 + i, cy + 2 - i, clip, c)
+                i++
+            }
+        } else if cmd.icon_id == ICON_COLLAPSED || cmd.icon_id == ICON_EXPANDED {
+            let cx = r.x + r.w / 2
+            let cy = r.y + r.h / 2
+            let size = imin(r.w, r.h) / 4
+            if size < 2 { size = 2 }
+            if cmd.icon_id == ICON_COLLAPSED {
+                let row = -size
+                while row <= size {
+                    let width = size - iabs(row)
+                    let x = 0
+                    while x <= width {
+                        plot_clipped(cx - size / 2 + x, cy + row, clip, c)
+                        x++
+                    }
+                    row++
+                }
+            } else {
+                let col = -size
+                while col <= size {
+                    let width = size - iabs(col)
+                    let y = 0
+                    while y <= width {
+                        plot_clipped(cx + col, cy - size / 2 + y, clip, c)
+                        y++
+                    }
+                    col++
+                }
+            }
+        }
+    }
+
+    func render() {
+        let i = 0
+        while i < root_list_idx {
+            let cnt = root_list[i]
+            let j = containers[cnt].cmd_start
+            let end = containers[cnt].cmd_end
+            while j < end {
+                let cmd = &command_list[j]
+                if cmd.kind == COMMAND_RECT {
+                    render_rect_command(cmd)
+                } else if cmd.kind == COMMAND_TEXT {
+                    render_text_command(cmd)
+                } else if cmd.kind == COMMAND_ICON {
+                    render_icon_command(cmd)
+                }
+                j++
+            }
+            i++
+        }
+    }
+}

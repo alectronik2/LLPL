@@ -10,6 +10,7 @@ const USER_COPY_HIGH = 0x0000_8000_0000_0000
 const USER_PATH_MAX  = 2048
 const USER_IO_MAX    = 64 * 1024
 const USER_CMDLINE_MAX = 1024
+const USER_RAND_MAX = 4096
 
 const SYS_OPEN     = 4
 const SYS_FD_READ  = 5
@@ -60,6 +61,34 @@ const SYS_PROCESS_SNAPSHOT = 51
 const SYS_LIST_DIRECTORY = 52
 const SYS_CHDIR = 53
 const SYS_GETCWD = 54
+const SYS_SET_FOREGROUND = 55
+const SYS_DHCP_CONFIGURE = 56
+const SYS_ICMP_PROBE = 57
+const SYS_DNS_RESOLVE = 58
+const SYS_TCP_CONNECT = 59
+const SYS_TCP_SEND = 60
+const SYS_TCP_RECEIVE = 61
+const SYS_TCP_CLOSE = 62
+const SYS_RAND_BYTES = 63
+const SYS_GET_TIME = 64
+const SYS_MONOTONIC_MS = 65
+const SYS_MQ_CREATE = 66
+const SYS_MQ_OPEN = 67
+const SYS_MQ_UNLINK = 68
+const SYS_MQ_SEND = 69
+const SYS_MQ_RECEIVE = 70
+const SYS_FB_INFO = 71
+const SYS_FB_PRESENT = 72
+const SYS_UNLINK = 73
+const SYS_MKDIR = 74
+const SYS_TOUCH = 75
+
+struct FramebufferInfo {
+    width: u64
+    height: u64
+    pitch: u64
+    format: u64
+}
 
 struct AsyncIoParams {
     buf: u64
@@ -186,7 +215,7 @@ namespace HAL {
             HAL.write_msr(IA32_EFER as u32, HAL.read_msr(IA32_EFER as u32) | EFER_SCE)
 
             let star = ((HAL.GDT.SYSCALL_USER_BASE as uint) << 48) |
-                       ((HAL.GDT.KERNEL_CS as uint) << 32)
+            ((HAL.GDT.KERNEL_CS as uint) << 32)
 
             HAL.write_msr(IA32_STAR as u32, star)
             HAL.write_msr(IA32_LSTAR as u32, syscall_entry as uint)
@@ -200,8 +229,8 @@ func copy_from_user( dest: void*, src: uint, size: u64 ) -> bool {
     return false if dest == null
 
     let count = size as uint
-    return false if count as u64 != size 
-    return false if src < USER_COPY_LOW || src >= USER_COPY_HIGH || count > USER_COPY_HIGH - src 
+    return false if count as u64 != size
+    return false if src < USER_COPY_LOW || src >= USER_COPY_HIGH || count > USER_COPY_HIGH - src
 
     let pgdir = HAL.read_cr3() as uint
     let copied: uint = 0
@@ -233,8 +262,8 @@ func copy_to_user( dest: uint, src: void*, size: u64 ) -> bool {
     return false if src == null
 
     let count = size as uint
-    return false if count as u64 != size 
-    return false if dest < USER_COPY_LOW || dest >= USER_COPY_HIGH || count > USER_COPY_HIGH - dest 
+    return false if count as u64 != size
+    return false if dest < USER_COPY_LOW || dest >= USER_COPY_HIGH || count > USER_COPY_HIGH - dest
 
     let pgdir = HAL.read_cr3() as uint
     let copied: uint = 0
@@ -246,7 +275,7 @@ func copy_to_user( dest: uint, src: void*, size: u64 ) -> bool {
         if !ret {
             let proc = syscall_process()
             return false if proc == null ||
-                !Kern.resolve_user_page_fault(proc, user_addr, 7)
+            !Kern.resolve_user_page_fault(proc, user_addr, 7)
             (ret, paddr) = user_v2p(pgdir, user_addr, true)
             return false if !ret
         }
@@ -472,7 +501,7 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                 ctx.rax = EINVAL as u64
             } else {
                 let (rc, addr) = Kern.map_user_file(proc, descriptor, 0,
-                    ctx.rsi as uint, 0, (options & 1) != 0, (options & 2) != 0)
+                ctx.rsi as uint, 0, (options & 1) != 0, (options & 2) != 0)
                 ctx.rax = rc as u64 if rc < 0
                 if rc >= 0 { ctx.rax = addr }
             }
@@ -538,7 +567,7 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
         }
         SYS_THREAD_CREATE => {
             ctx.rax = Kern.create_user_thread(syscall_process(), ctx.rdi as uint,
-                ctx.rsi as uint, ctx.rdx as uint) as u64
+            ctx.rsi as uint, ctx.rdx as uint) as u64
         }
         SYS_THREAD_EXIT => {
             return Kern.exit_current_thread_from_syscall(ctx, ctx.rdi as uint)
@@ -649,6 +678,180 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
             } else {
                 ctx.rax = Kern.terminate_process(target, ctx.rsi as uint) as u64
             }
+        }
+        SYS_SET_FOREGROUND => {
+            if Kern.set_foreground_process(ctx.rdi as uint) { ctx.rax = EOK as u64 }
+            else { ctx.rax = EINVAL as u64 }
+        }
+        SYS_DHCP_CONFIGURE => {
+            let config: Kern.NetworkConfig
+            if Kern.dhcp_configure(&config) &&
+                    copy_to_user(ctx.rdi, &config as void*, sizeof(Kern.NetworkConfig)) {
+                ctx.rax = EOK as u64
+            } else {
+                ctx.rax = EINVAL as u64
+            }
+        }
+        SYS_ICMP_PROBE => {
+            let result: Kern.ProbeResult
+            if Kern.icmp_probe(ctx.rdi as u32, ctx.rsi as u8, ctx.rdx as u16, &result) &&
+                    copy_to_user(ctx.r10, &result as void*, sizeof(Kern.ProbeResult)) {
+                ctx.rax = EOK as u64
+            } else {
+                ctx.rax = EINVAL as u64
+            }
+        }
+        SYS_DNS_RESOLVE => {
+            let hostname = copy_user_string(ctx.rdi, 253)
+            let address: u32 = 0
+            if hostname != null && Kern.dns_resolve(hostname, &address) &&
+                    copy_to_user(ctx.rsi, &address as void*, sizeof(u32)) {
+                ctx.rax = EOK as u64
+            } else {
+                ctx.rax = EINVAL as u64
+            }
+        }
+        SYS_TCP_CONNECT => {
+            if Kern.tcp_connect(ctx.rdi as u32, ctx.rsi as u16) { ctx.rax = EOK as u64 }
+            else { ctx.rax = EINVAL as u64 }
+        }
+        SYS_TCP_SEND => {
+            let length = ctx.rsi as uint
+            if length == 0 || length > 1400 { ctx.rax = EINVAL as u64 }
+            else {
+                let data = MM.malloc<u8>(length)
+                if copy_from_user(data as void*, ctx.rdi, length) && Kern.tcp_send(data, length) {
+                    ctx.rax = length as u64
+                } else { ctx.rax = EINVAL as u64 }
+                MM.free(data)
+            }
+        }
+        SYS_TCP_RECEIVE => {
+            let capacity = ctx.rsi as uint
+            if capacity == 0 || capacity > 1400 { ctx.rax = EINVAL as u64 }
+            else {
+                let data = MM.malloc<u8>(capacity)
+                let received: uint = 0
+                if Kern.tcp_receive(data, capacity, &received) &&
+                        copy_to_user(ctx.rdi, data as void*, received) { ctx.rax = received as u64 }
+                else { ctx.rax = EINVAL as u64 }
+                MM.free(data)
+            }
+        }
+        SYS_TCP_CLOSE => {
+            Kern.tcp_close()
+            ctx.rax = EOK as u64
+        }
+        SYS_RAND_BYTES => {
+            let capacity = ctx.rsi as uint
+            if capacity == 0 || capacity > USER_RAND_MAX { ctx.rax = EINVAL as u64 }
+            else {
+                let data = MM.malloc<u8>(capacity)
+                HAL.RNG.fill(data, capacity)
+                if copy_to_user(ctx.rdi, data as void*, capacity as u64) { ctx.rax = capacity as u64 }
+                else { ctx.rax = EINVAL as u64 }
+                MM.free(data)
+            }
+        }
+        SYS_GET_TIME => {
+            ctx.rax = HAL.RTC.epoch_seconds()
+        }
+        SYS_MONOTONIC_MS => {
+            ctx.rax = (Timer.current_tick() as u64) * 10
+        }
+        SYS_FB_INFO => {
+            let info = FramebufferInfo {
+                width: Terminal.width() as u64,
+                height: Terminal.height() as u64,
+                pitch: (Terminal.width() * 4) as u64,
+                format: 1 // packed 0x00RRGGBB
+            }
+            if info.width != 0 && copy_to_user(ctx.rdi, &info as void*, sizeof(FramebufferInfo)) {
+                ctx.rax = EOK as u64
+            } else { ctx.rax = EINVAL as u64 }
+        }
+        SYS_FB_PRESENT => {
+            let width = ctx.rsi as uint
+            let height = ctx.rdx as uint
+            let pitch = ctx.r10 as uint
+            if width == 0 || height == 0 || width > Terminal.width() ||
+                    height > Terminal.height() || pitch < width * 4 || pitch > 16384 {
+                ctx.rax = EINVAL as u64
+            } else {
+                let row = MM.malloc<u32>(width)
+                let ok = true
+                let y: uint = 0
+                while y < height {
+                    if !copy_from_user(row as void*, ctx.rdi + y * pitch, width * 4) {
+                        ok = false
+                        break
+                    }
+                    Terminal.present_row(row, width, height, y)
+                    y++
+                }
+                MM.free(row)
+                if ok { ctx.rax = EOK as u64 }
+                else { ctx.rax = EINVAL as u64 }
+            }
+        }
+        SYS_MQ_CREATE => {
+            let proc = syscall_process()
+            let name = copy_user_string(ctx.rdi)
+            ctx.rax = Kern.message_queue_create(proc, name, ctx.rsi as uint) as u64
+        }
+        SYS_MQ_OPEN => {
+            let proc = syscall_process()
+            let name = copy_user_string(ctx.rdi)
+            ctx.rax = Kern.message_queue_open(proc, name) as u64
+        }
+        SYS_MQ_UNLINK => {
+            let name = copy_user_string(ctx.rdi)
+            ctx.rax = Kern.message_queue_unlink(name) as u64
+        }
+        SYS_MQ_SEND => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            let size = ctx.rdx as uint
+            if descriptor == null || descriptor.waitable == null ||
+                    !descriptor.waitable.is_message_queue() || size == 0 ||
+                    size > Kern.MESSAGE_MAX_SIZE {
+                ctx.rax = EINVAL as u64
+            } else {
+                let data = MM.malloc<char>(size)
+                if !copy_from_user(data as void*, ctx.rsi, size) {
+                    ctx.rax = EINVAL as u64
+                } else {
+                    ctx.rax = (descriptor.waitable as Kern.MessageQueue).send(
+                        data, size, ctx.r10 as uint) as u64
+                }
+                MM.free(data as void*)
+            }
+            delete descriptor
+        }
+        SYS_MQ_RECEIVE => {
+            let proc = syscall_process()
+            let descriptor: Kern.FileDescriptor = null
+            if proc != null { descriptor = proc.fds.get(ctx.rdi as uint) }
+            let capacity = ctx.rdx as uint
+            if descriptor == null || descriptor.waitable == null ||
+                    !descriptor.waitable.is_message_queue() || capacity == 0 ||
+                    capacity > Kern.MESSAGE_MAX_SIZE {
+                ctx.rax = EINVAL as u64
+            } else {
+                let data = MM.malloc<char>(capacity)
+                let priority: uint = 0
+                let received = (descriptor.waitable as Kern.MessageQueue).receive(
+                    data, capacity, &priority)
+                if received >= 0 && (!copy_to_user(ctx.rsi, data as void*, received as uint) ||
+                        (ctx.r10 != 0 && !copy_to_user(ctx.r10, &priority as void*, sizeof(uint)))) {
+                    ctx.rax = EINVAL as u64
+                } else {
+                    ctx.rax = received as u64
+                }
+                MM.free(data as void*)
+            }
+            delete descriptor
         }
         SYS_QUEUE_APC => {
             let target: Kern.Process = Kern.find_process(ctx.rdi as uint)
@@ -841,7 +1044,7 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                     // semantics, kern/asyncio.llpl) rather than consuming
                     // this one - see SYS_WRITE's matching comment.
                     let ok = Kern.spawn_async_io(proc, descriptor, params.buf as uint, params.size as uint,
-                        false, iocp, params.key as uint, params.context as uint)
+                    false, iocp, params.key as uint, params.context as uint)
                     ctx.rax = EOK as u64 if ok
                     if !ok { ctx.rax = EINVAL as u64 }
                 }
@@ -866,7 +1069,7 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                     let iocp = iocp_descriptor.waitable as Kern.IoCompletionPort
                     // See SYS_READ_ASYNC's matching comment.
                     let ok = Kern.spawn_async_io(proc, descriptor, params.buf as uint, params.size as uint,
-                        true, iocp, params.key as uint, params.context as uint)
+                    true, iocp, params.key as uint, params.context as uint)
                     ctx.rax = EOK as u64 if ok
                     if !ok { ctx.rax = EINVAL as u64 }
                 }
@@ -978,6 +1181,21 @@ func syscall_handler_inner(ctx: HAL.IDT.Context*) -> HAL.IDT.Context* {
                     MM.free(buffer)
                 }
             }
+        }
+        SYS_UNLINK => {
+            let path = copy_user_string(ctx.rdi)
+            if path == null { ctx.rax = EINVAL as u64 }
+            else { ctx.rax = VFS.remove(path) as u64 }
+        }
+        SYS_MKDIR => {
+            let path = copy_user_string(ctx.rdi)
+            if path == null { ctx.rax = EINVAL as u64 }
+            else { ctx.rax = VFS.mkdir(path) as u64 }
+        }
+        SYS_TOUCH => {
+            let path = copy_user_string(ctx.rdi)
+            if path == null { ctx.rax = EINVAL as u64 }
+            else { ctx.rax = VFS.touch(path) as u64 }
         }
         SYS_CHDIR => {
             let thread = Kern.current_thread()

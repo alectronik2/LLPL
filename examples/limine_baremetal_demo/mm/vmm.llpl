@@ -394,7 +394,13 @@ namespace MM {
 
         kernel_pml4 = HAL.read_cr3() & PADDR_4K_MASK
         "Kernel PML4 = \(kernel_pml4:hex)\n" |> hs.write
-        kernel_reserve_start = v2p( kernel_pml4, MM.buckets as uint ) - 0x300000
+        // MM.buckets_landmark, not MM.buckets itself - see the former's
+        // own comment (mm/heap.llpl) for why: an early reference to
+        // MM.buckets's address here doesn't compile (its array-of-struct
+        // element type isn't complete yet at this point in the generated
+        // C). Both live in the same neighborhood of the kernel's .bss, so
+        // this 3MB-margin boundary is unaffected either way.
+        kernel_reserve_start = v2p( kernel_pml4, MM.buckets_landmark as uint ) - 0x300000
 
         for let i = 0, let entries = memmap.entries as u64*; i < memmap.entry_count; i++ {
             let e = entries[i] as LimineMemmapEntry*

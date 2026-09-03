@@ -1,0 +1,200 @@
+// ACPI table discovery - RSDP -> RSDT/XSDT -> any table by 4-byte
+// signature, plus MADT (the "APIC" table)-specific helpers used by
+// hal/apic.llpl's IOAPIC discovery. Pure data-format parsing, no policy -
+// matching hal/pci.llpl's own role as a reusable, driver-agnostic
+// discovery layer.
+//
+// Every lookup here fails soft (returns "not found"/an identity default)
+// rather than erroring - callers always have a safe fallback (see
+// HAL.IOAPIC.base()) rather than this ever being a hard boot dependency.
+
+import mm
+
+namespace HAL {
+    namespace ACPI {
+        packed struct SdtHeader {
+            signature:        u8[4]
+            length:           u32
+            revision:         u8
+            checksum:         u8
+            oem_id:           u8[6]
+            oem_table_id:     u8[8]
+            oem_revision:     u32
+            creator_id:       u32
+            creator_revision: u32
+        }
+
+        packed struct Rsdp {
+            signature:          u8[8]
+            checksum:           u8
+            oem_id:             u8[6]
+            revision:           u8
+            rsdt_address:       u32
+            // ACPI 2.0+ only - only valid when revision >= 2.
+            length:             u32
+            xsdt_address:       u64
+            extended_checksum:  u8
+            reserved:           u8[3]
+        }
+
+        packed struct MadtIoApicEntry {
+            entry_type: u8
+            length:     u8
+            io_apic_id: u8
+            reserved:   u8
+            address:    u32
+            gsi_base:   u32
+        }
+
+        packed struct MadtIsoEntry {
+            entry_type:  u8
+            length:      u8
+            bus_source:  u8
+            irq_source:  u8
+            gsi:         u32
+            flags:       u16
+        }
+
+        const MADT_TYPE_IO_APIC = 1
+        const MADT_TYPE_INTERRUPT_SOURCE_OVERRIDE = 2
+
+        // Cached as a one-element array, not a bare scalar `let` - see
+        // this file's own header comment / the plan this was built from
+        // for why: a bare module-level scalar here silently miscompiled
+        // (only reproducible at this kernel's full multi-file build
+        // scale), the same failure mode already hit and worked around in
+        // hal/apic.llpl and kern/ahci.llpl this session. Arrays are the
+        // proven-safe shape.
+        //
+        // Already a *virtual* address, not physical - Limine's RSDP
+        // response hands back an already-HHDM-mapped pointer (same
+        // convention as its framebuffer response), unlike the RSDT/XSDT
+        // address fields *inside* the RSDP itself (real ACPI-spec data,
+        // untouched by Limine) or any table pointer found by walking
+        // them - all of those genuinely are physical and go through
+        // MM.p2v() below.
+        let rsdp_vaddr_cache: uint[1]
+
+        func init(rsdp_vaddr: uint) {
+            rsdp_vaddr_cache[0] = rsdp_vaddr
+        }
+
+        func rsdp_vaddr() -> uint {
+            return rsdp_vaddr_cache[0]
+        }
+
+        func checksum_ok(addr: uint, len: uint) -> bool {
+            let sum: u8 = 0
+            let bytes = addr as u8*
+            for let i: uint = 0; i < len; i++ {
+                sum = (sum + bytes[i]) as u8
+            }
+            return sum == 0
+        }
+
+        func signature_matches(table: SdtHeader*, signature: string) -> bool {
+            let sig_bytes = signature as u8*
+            for let i: uint = 0; i < 4; i++ {
+                if table.signature[i] != sig_bytes[i] {
+                    return false
+                }
+            }
+            return true
+        }
+
+        // Walks RSDT (ACPI 1.0) or XSDT (2.0+, preferred when both the
+        // RSDP says revision >= 2) looking for a table whose signature
+        // matches. Returns null on any failure: no RSDP, bad RSDP
+        // checksum, bad root-table checksum, or no matching entry.
+        func find_acpi_table(signature: string) -> void* {
+            let vaddr = rsdp_vaddr()
+            return null if vaddr == 0
+
+            let rsdp = vaddr as Rsdp*
+            return null if !checksum_ok(rsdp as uint, 20)
+
+            let use_xsdt = rsdp.revision >= 2
+            let sdt_phys: uint = rsdp.rsdt_address as uint
+            let entry_size: uint = 4
+            if use_xsdt {
+                sdt_phys = rsdp.xsdt_address as uint
+                entry_size = 8
+            }
+            return null if sdt_phys == 0
+
+            let sdt = MM.p2v(sdt_phys) as SdtHeader*
+            return null if !checksum_ok(sdt as uint, sdt.length as uint)
+
+            let entries_start = (sdt as uint) + sizeof(SdtHeader)
+            let entry_count = (sdt.length as uint - sizeof(SdtHeader)) / entry_size
+
+            for let i: uint = 0; i < entry_count; i++ {
+                let table_phys: uint
+                if use_xsdt {
+                    table_phys = (entries_start as u64*)[i] as uint
+                } else {
+                    table_phys = (entries_start as u32*)[i] as uint
+                }
+                let table = MM.p2v(table_phys) as SdtHeader*
+                if signature_matches(table, signature) {
+                    return table as void*
+                }
+            }
+            return null
+        }
+
+        // The first Type-1 (I/O APIC) MADT entry's address field. Multi-
+        // IOAPIC systems exist, but this kernel (single-core, no SMP)
+        // only ever needs the first one.
+        func find_ioapic() -> (bool, uint) {
+            let madt = find_acpi_table("APIC") as SdtHeader*
+            return (false, 0) if madt == null
+
+            // Skip SdtHeader + local_apic_address(u32) + flags(u32)
+            // before the variable-length entries begin.
+            let entries_start = (madt as uint) + sizeof(SdtHeader) + 8
+            let entries_end = (madt as uint) + (madt.length as uint)
+
+            let p = entries_start
+            while p < entries_end {
+                let entry_type = *(p as u8*)
+                let entry_len = *((p + 1) as u8*) as uint
+                return (false, 0) if entry_len == 0
+                if entry_type == MADT_TYPE_IO_APIC {
+                    let entry = p as MadtIoApicEntry*
+                    return (true, entry.address as uint)
+                }
+                p += entry_len
+            }
+            return (false, 0)
+        }
+
+        // The GSI a legacy ISA IRQ line actually maps to, honoring any
+        // Interrupt Source Override entry - defaults to `irq` unchanged
+        // (identity mapping) when no override exists, which is the
+        // common case and matches this kernel's previous hardcoded
+        // assumption.
+        func legacy_irq_to_gsi(irq: uint) -> uint {
+            let madt = find_acpi_table("APIC") as SdtHeader*
+            return irq if madt == null
+
+            let entries_start = (madt as uint) + sizeof(SdtHeader) + 8
+            let entries_end = (madt as uint) + (madt.length as uint)
+
+            let p = entries_start
+            while p < entries_end {
+                let entry_type = *(p as u8*)
+                let entry_len = *((p + 1) as u8*) as uint
+                return irq if entry_len == 0
+                if entry_type == MADT_TYPE_INTERRUPT_SOURCE_OVERRIDE {
+                    let entry = p as MadtIsoEntry*
+                    if entry.irq_source as uint == irq {
+                        return entry.gsi as uint
+                    }
+                }
+                p += entry_len
+            }
+            return irq
+        }
+    }
+}

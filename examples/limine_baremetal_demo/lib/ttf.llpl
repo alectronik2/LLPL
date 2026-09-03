@@ -256,7 +256,9 @@ func ttf_add_edge(edges: TtfEdge*, count: u16*, x0: i16, y0: i16, x1: i16, y1: i
 }
 
 func ttf_scale_coord(value: i16, size: i16, units: u16) -> i16 {
-    (((value as i64) * (size as i64)) / (units as i64)) as i16
+    // Preserve six fractional bits through outline construction. Rounding
+    // here to whole pixels made later antialiasing largely ineffective.
+    (((value as i64) * (size as i64) * 64) / (units as i64)) as i16
 }
 
 func ttf_add_quadratic(edges: TtfEdge*, count: u16*, x0: i16, y0: i16,
@@ -279,47 +281,62 @@ func ttf_add_quadratic(edges: TtfEdge*, count: u16*, x0: i16, y0: i16,
 func ttf_rasterize_edges(edges: TtfEdge*, edge_count: u16, buffer: u8*, buf_w: i16, buf_h: i16) {
     let y: i16 = 0
     while y < buf_h {
-        let intersections: i16[128]
-        let num: u16 = 0
-        let i: u16 = 0
-        while i < edge_count && num < 128 {
-            let edge = edges[i]
-            if (edge.y0 <= y && y < edge.y1) || (edge.y1 <= y && y < edge.y0) {
-                let dy = edge.y1 - edge.y0
-                let x = edge.x0 + ((y - edge.y0) * (edge.x1 - edge.x0) / dy)
-                intersections[num] = x
-                num = num + 1
+        // Four scanlines with four horizontal samples each provide 16
+        // coverage levels per pixel. Coordinates are kept in quarter-pixel
+        // fixed point so this remains usable before floating point is set up.
+        let sy: i16 = 0
+        while sy < 4 {
+            let intersections: i16[128]
+            let num: u16 = 0
+            let sample_y = y * 64 + sy * 16 + 8
+            let i: u16 = 0
+            while i < edge_count && num < 128 {
+                let edge = edges[i]
+                let ey0 = edge.y0
+                let ey1 = edge.y1
+                if (ey0 <= sample_y && sample_y < ey1) || (ey1 <= sample_y && sample_y < ey0) {
+                    let dy = ey1 - ey0
+                    intersections[num] = edge.x0 + ((sample_y - ey0) * (edge.x1 - edge.x0) / dy)
+                    num = num + 1
+                }
+                i = i + 1
             }
-            i = i + 1
-        }
 
-        let swapped = true
-        while swapped {
-            swapped = false
+            let swapped = true
+            while swapped {
+                swapped = false
+                let j: u16 = 0
+                while j + 1 < num {
+                    if intersections[j] > intersections[j + 1] {
+                        let tmp = intersections[j]
+                        intersections[j] = intersections[j + 1]
+                        intersections[j + 1] = tmp
+                        swapped = true
+                    }
+                    j = j + 1
+                }
+            }
+
             let j: u16 = 0
             while j + 1 < num {
-                if intersections[j] > intersections[j + 1] {
-                    let tmp = intersections[j]
-                    intersections[j] = intersections[j + 1]
-                    intersections[j + 1] = tmp
-                    swapped = true
+                let x: i16 = 0
+                while x < buf_w {
+                    let sx: i16 = 0
+                    while sx < 4 {
+                        let sample_x = x * 64 + sx * 16 + 8
+                        if sample_x >= intersections[j] && sample_x < intersections[j + 1] {
+                            let at = (y as u32) * (buf_w as u32) + (x as u32)
+                            let coverage = (buffer[at] as u16) + 16
+                            if coverage > 255 { buffer[at] = 255 }
+                            else { buffer[at] = coverage as u8 }
+                        }
+                        sx = sx + 1
+                    }
+                    x = x + 1
                 }
-                j = j + 1
+                j = j + 2
             }
-        }
-
-        let j: u16 = 0
-        while j + 1 < num {
-            let x0 = intersections[j]
-            let x1 = intersections[j + 1]
-            let x = x0
-            while x <= x1 {
-                if x >= 0 && x < buf_w {
-                    buffer[(y as u32) * (buf_w as u32) + (x as u32)] = 255
-                }
-                x = x + 1
-            }
-            j = j + 2
+            sy = sy + 1
         }
         y = y + 1
     }
@@ -422,7 +439,7 @@ func ttf_render_glyph(font: TtfFont, glyph_index: u16, size: i16,
 
     let edges: TtfEdge[1024]
     let edge_count: u16 = 0
-    let baseline: i16 = size
+    let baseline: i16 = size * 64
     let scale_num: i64 = size
     let scale_den: i64 = font.units_per_em
     let contour_start: u16 = 0

@@ -1,0 +1,26 @@
+import llpl_sys
+import net_utils
+
+func llpl_panic_putc(c: char) { net_panic_putc(c) }
+func llpl_panic_halt() { net_panic_halt() }
+
+func _start(args: string[]) {
+    let config: Sys.NetworkConfig
+    Sys.write_s("DHCP: requesting lease...\n")
+    if Sys.dhcp_configure(&config) < 0 {
+        Sys.write_s("DHCP: no lease received\n")
+        Sys.exit(1)
+    }
+    Sys.write_s("address ")
+    write_ipv4(config.address)
+    Sys.write_s("\nnetmask ")
+    write_ipv4(config.netmask)
+    Sys.write_s("\nrouter  ")
+    write_ipv4(config.router)
+    Sys.write_s("\nserver  ")
+    write_ipv4(config.dhcp_server)
+    Sys.write_s("\nDNS     ")
+    write_ipv4(config.nameserver)
+    Sys.write_s("\n")
+    Sys.exit(0)
+}

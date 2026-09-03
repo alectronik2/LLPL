@@ -36,13 +36,28 @@ namespace Kern {
     // had to hunt down elsewhere.
     const PS2_POLL_LIMIT = 100_000
 
-    // A small fixed 8x8 arrow, one row-bitmask per byte (bit 7 = leftmost
-    // pixel), classic 1-bit cursor sprite - good enough for a first pass;
-    // no anti-aliasing/hotspot-offset sophistication.
-    const CURSOR_W = 8
-    const CURSOR_H = 8
+    // Fallback shape, used only if load_cursor_sprite() below never
+    // succeeds (asset missing/corrupt - VFS isn't even mounted yet this
+    // early in boot, so mouse_init() always starts with this): a small
+    // fixed 8x8 arrow, one row-bitmask per byte (bit 7 = leftmost pixel),
+    // classic 1-bit cursor sprite - no anti-aliasing/hotspot sophistication.
     const CURSOR_COLOR = 0x00FFFFFF as u32
     let cursor_shape: u8[8]
+
+    // Real cursor size once a sprite is loaded - CURSOR_W/H default to the
+    // 8x8 fallback bitmap's size and change to match load_cursor_sprite's
+    // asset. Not compile-time constants (unlike the bitmap above) because
+    // the sprite's dimensions aren't known until that file is read.
+    let CURSOR_W: uint = 8
+    let CURSOR_H: uint = 8
+
+    // Loaded once load_cursor_sprite() succeeds; null means "use
+    // cursor_shape instead". Each pixel is 0xAARRGGBB - blended via
+    // Terminal.blend_pixel rather than put_pixel so the sprite's
+    // anti-aliased edges and soft drop shadow composite correctly over
+    // whatever is already on screen (text, wallpaper, or both).
+    let cursor_pixels: u32* = null
+    const CURSOR_MAGIC: u32 = 0x53525543
 
     func init_cursor_shape() {
         cursor_shape[0] = 0x80 as u8
@@ -55,6 +70,49 @@ namespace Kern {
         cursor_shape[7] = 0x18 as u8
     }
 
+    // Reallocates cursor_saved (the erase/restore snapshot buffer) to
+    // match the current CURSOR_W/H - called once at mouse_init() for the
+    // 8x8 fallback size, and again from load_cursor_sprite() if a larger
+    // sprite loads successfully.
+    func alloc_cursor_saved() {
+        if cursor_saved != null {
+            llpl_free(cursor_saved as char*)
+        }
+        cursor_saved = llpl_alloc((CURSOR_W as u64) * (CURSOR_H as u64) * sizeof(u32)) as u32*
+    }
+
+    // Called from kernel.llpl after VFS.init() (mouse_init() itself runs
+    // too early in boot for the initrd to be mounted yet - same ordering
+    // constraint draw_wallpaper works around). File format matches
+    // tools/make_cursor.py's output: a 16-byte header (magic, width,
+    // height, reserved) then width*height 0xAARRGGBB pixels. Cosmetic
+    // only - leaves the 8x8 fallback bitmap in place on any mismatch
+    // (missing file, bad magic, truncated data) rather than failing boot.
+    func load_cursor_sprite(path: string) -> bool {
+        let (data, size) = VFS.read_binary(new String(path))
+        if data == null || size < 16 {
+            return false
+        }
+        let header = data as u32*
+        if header[0] != CURSOR_MAGIC {
+            return false
+        }
+        let width = header[1]
+        let height = header[2]
+        let expected = 16 + (width as u64) * (height as u64) * 4
+        if size < expected {
+            return false
+        }
+        holding gui_lock {
+            cursor_pixels = (data + 16) as u32*
+            CURSOR_W = width
+            CURSOR_H = height
+            alloc_cursor_saved()
+            cursor_drawn = false
+        }
+        return true
+    }
+
     // Absolute on-screen position (signed - dx/dy are signed deltas, and
     // clamping needs to compare against 0 before ever casting to uint).
     let cursor_x: int = 0
@@ -65,55 +123,317 @@ namespace Kern {
     let cursor_drawn: bool = false
     let cursor_drawn_x: uint = 0
     let cursor_drawn_y: uint = 0
-    let cursor_saved: u32[CURSOR_W * CURSOR_H]
+    // Sized (and resized, via alloc_cursor_saved) to match CURSOR_W*CURSOR_H
+    // - no longer a fixed array now that the cursor's size depends on the
+    // loaded sprite rather than being a compile-time constant.
+    let cursor_saved: u32* = null
 
-    // Click/drag/raise GUI windows: a small fixed number of independently
-    // movable, closeable, filled rectangles - not a general-purpose
-    // compositor, just enough windows (WINDOW_COUNT) to prove z-order/
-    // click-to-raise, with the cursor always drawn on top of all of them.
-    const WINDOW_W = 100
-    const WINDOW_H = 60
-    const WINDOW_COUNT = 2
+    // Scratch space for moving the cursor without the erase-then-redraw
+    // flicker that direct-to-VRAM put_pixel/blend_pixel calls used to
+    // cause - see cursor_capture_new_background/cursor_flush_move below,
+    // the same "compose off-screen, blit once" fix as mu_gl_tick's window
+    // move. The cursor moves on nearly every tick during any interaction
+    // (dragging a window, hovering a button), so this ran far more often
+    // than the window-move case and was the more visible source of
+    // "windows still flicker" reports even after that fix. Fixed-size
+    // rather than sized off CURSOR_W/H (not compile-time constants once a
+    // sprite is loaded) - comfortably covers this cursor plus a generous
+    // per-tick movement margin; a jump too big to fit falls back to the
+    // old direct path for that one tick.
+    const CURSOR_MOVE_MAX_W = 96
+    const CURSOR_MOVE_MAX_H = 96
+    let cursor_move_temp: u32[CURSOR_MOVE_MAX_W * CURSOR_MOVE_MAX_H]
+    let cursor_move_compose: u32[CURSOR_MOVE_MAX_W * CURSOR_MOVE_MAX_H]
 
-    // Chrome: a title bar strip (the only draggable region - clicking the
-    // body only raises/focuses, it doesn't move the window) and a close
-    // button within it. Shared across windows; only the body fill color
-    // (window_color) varies per window, so they're visually distinguishable.
-    const TITLE_BAR_H = 14
-    const CLOSE_BUTTON_SIZE = 8
-    const CLOSE_BUTTON_MARGIN = 3
-    const TITLEBAR_COLOR = 0x00284D73 as u32
-    const CLOSE_BUTTON_COLOR = 0x00C0392B as u32
+    func cursor_move_fits(old_x: uint, old_y: uint, new_x: uint, new_y: uint) -> bool {
+        let union_x = old_x
+        if new_x < union_x { union_x = new_x }
+        let union_y = old_y
+        if new_y < union_y { union_y = new_y }
+        let union_r = old_x + CURSOR_W
+        if new_x + CURSOR_W > union_r { union_r = new_x + CURSOR_W }
+        let union_b = old_y + CURSOR_H
+        if new_y + CURSOR_H > union_b { union_b = new_y + CURSOR_H }
+        return (union_r - union_x) <= CURSOR_MOVE_MAX_W && (union_b - union_y) <= CURSOR_MOVE_MAX_H
+    }
 
-    // Struct-of-arrays, not an array of structs - matches the existing
-    // flattened-array style already used for cursor_saved/MouseDevice.buffer
-    // elsewhere in this file (no precedent in this codebase for arrays of
-    // structs, so this avoids introducing unverified syntax).
-    let window_x: int[WINDOW_COUNT]
-    let window_y: int[WINDOW_COUNT]
-    // No taskbar/window-list exists yet to reopen a closed window from -
-    // closing is a one-way demo action for this step.
-    let window_visible: bool[WINDOW_COUNT]
-    let window_drawn: bool[WINDOW_COUNT]
-    let window_drawn_x: uint[WINDOW_COUNT]
-    let window_drawn_y: uint[WINDOW_COUNT]
-    let window_color: u32[WINDOW_COUNT]
-    // Flattened per-window WINDOW_W x WINDOW_H save buffer - window i's
-    // pixel (row, col) lives at [i * WINDOW_W * WINDOW_H + row * WINDOW_W + col].
-    let window_saved: u32[WINDOW_COUNT * WINDOW_W * WINDOW_H]
+    // Mirrors mu_gl_capture_new_background: works out the cursor's new-
+    // position background without touching the real screen, reading the
+    // old rect's own saved background (cursor_saved, still valid here)
+    // for any cell that falls inside the not-yet-erased old rect instead
+    // of the real screen, which would still show the stale cursor pixels
+    // there. Leaves the result in cursor_move_temp.
+    func cursor_capture_new_background(new_x: uint, new_y: uint, old_x: uint, old_y: uint) {
+        let row: uint = 0
+        while row < CURSOR_H {
+            let col: uint = 0
+            while col < CURSOR_W {
+                let px = new_x + col
+                let py = new_y + row
+                let val: u32
+                if px >= old_x && px < old_x + CURSOR_W && py >= old_y && py < old_y + CURSOR_H {
+                    val = cursor_saved[((py - old_y) * CURSOR_W) + (px - old_x)]
+                } else {
+                    val = Terminal.get_pixel(px, py)
+                }
+                cursor_move_temp[(row * CURSOR_W) + col] = val
+                col = col + 1
+            }
+            row = row + 1
+        }
+    }
 
-    // Back-to-front draw/hit-test order, as window indices - z_order[0]
-    // is bottommost, z_order[WINDOW_COUNT - 1] is topmost ("in front").
-    let z_order: uint[WINDOW_COUNT]
+    // Alpha-blends directly into cursor_move_compose - blend_pixel
+    // (lib/terminal.llpl) blends against the real screen, but by the time
+    // this runs the correct background for every cell here (baseline or
+    // erased-old) is already sitting in cursor_move_compose itself, not
+    // the real framebuffer.
+    func cursor_blend_into_compose(idx: uint, color: u32, alpha: u32) {
+        if alpha == 0 { return }
+        if alpha >= 255 {
+            cursor_move_compose[idx] = color
+            return
+        }
+        let under = cursor_move_compose[idx]
+        let inv = 255 - alpha
+        let r = ((((color >> 16) & 255) * alpha) + (((under >> 16) & 255) * inv) + 127) / 255
+        let g = ((((color >> 8) & 255) * alpha) + (((under >> 8) & 255) * inv) + 127) / 255
+        let b = (((color & 255) * alpha) + ((under & 255) * inv) + 127) / 255
+        cursor_move_compose[idx] = (r << 16) | (g << 8) | b
+    }
 
-    // Edge-detected (not level-triggered) so a held-down button while
-    // already dragging doesn't re-run the hit-test/offset-capture logic
-    // on every single packet.
+    // Mirrors mu_gl_flush_move: composes the erased old rect and the
+    // newly drawn cursor into cursor_move_compose and flushes the whole
+    // union with one blit_rect() call. Must run after
+    // cursor_capture_new_background (still reads the old cursor_saved).
+    // Finalizes cursor_saved to cursor_move_temp's contents.
+    func cursor_flush_move(new_x: uint, new_y: uint, old_x: uint, old_y: uint) {
+        let union_x = old_x
+        if new_x < union_x { union_x = new_x }
+        let union_y = old_y
+        if new_y < union_y { union_y = new_y }
+        let union_r = old_x + CURSOR_W
+        if new_x + CURSOR_W > union_r { union_r = new_x + CURSOR_W }
+        let union_b = old_y + CURSOR_H
+        if new_y + CURSOR_H > union_b { union_b = new_y + CURSOR_H }
+        let union_w = union_r - union_x
+        let union_h = union_b - union_y
+
+        let row: uint = 0
+        while row < union_h {
+            let col: uint = 0
+            while col < union_w {
+                cursor_move_compose[(row * union_w) + col] = Terminal.get_pixel(union_x + col, union_y + row)
+                col = col + 1
+            }
+            row = row + 1
+        }
+
+        row = 0
+        while row < CURSOR_H {
+            let col: uint = 0
+            while col < CURSOR_W {
+                let dst = ((old_y - union_y + row) * union_w) + (old_x - union_x + col)
+                cursor_move_compose[dst] = cursor_saved[(row * CURSOR_W) + col]
+                col = col + 1
+            }
+            row = row + 1
+        }
+
+        memcpy(cursor_saved as void*, cursor_move_temp as void*, (CURSOR_W * CURSOR_H * 4) as uint)
+
+        if cursor_pixels != null {
+            row = 0
+            while row < CURSOR_H {
+                let col: uint = 0
+                while col < CURSOR_W {
+                    let p = cursor_pixels[(row * CURSOR_W) + col]
+                    let a = (p >> 24) & 0xFF
+                    if a != 0 {
+                        let dst = ((new_y - union_y + row) * union_w) + (new_x - union_x + col)
+                        cursor_blend_into_compose(dst, p & 0x00FF_FFFF, a)
+                    }
+                    col = col + 1
+                }
+                row = row + 1
+            }
+        } else {
+            row = 0
+            while row < CURSOR_H {
+                let bits = cursor_shape[row]
+                let col: uint = 0
+                while col < CURSOR_W {
+                    if (bits & (0x80 as u8 >> col)) != 0 {
+                        let dst = ((new_y - union_y + row) * union_w) + (new_x - union_x + col)
+                        cursor_move_compose[dst] = CURSOR_COLOR
+                    }
+                    col = col + 1
+                }
+                row = row + 1
+            }
+        }
+
+        Terminal.blit_rect(union_x, union_y, union_w, union_h, cursor_move_compose as u32*, union_w)
+    }
+
+    // Edge-detected (not level-triggered), so a held-down button while
+    // already dragging something (kern/mu_demo.llpl's microui overlay)
+    // doesn't repeat a one-shot action every single packet. mu_demo.llpl
+    // reads this directly each tick to feed Mu.input_mousedown/mouseup.
     let left_button_down: bool = false
-    let dragging: bool = false
-    let drag_window: uint = 0
-    let drag_offset_x: int = 0
-    let drag_offset_y: int = 0
+
+    // Z-order for the three independent microui overlay windows (see
+    // kern/mu_demo.llpl, kern/mu_term.llpl, kern/mu_gl.llpl) - each one
+    // ticks/draws itself with no idea the others exist, so without this
+    // there is no "which window is on top" at all: mu_demo_tick/
+    // mu_term_tick/mu_gl_tick used to always run in that fixed order,
+    // which means whichever ran last (mu_gl, the TinyGL window) always
+    // painted over the other two and could never appear to go behind
+    // them. Index 0 is back-most, index 2 is front-most/topmost -
+    // run_window_ticks() below ticks (and therefore paints) back-to-front
+    // every cycle, and a left-click inside a window's last-known bounds
+    // (checked front-to-back, so an overlapping click resolves to
+    // whichever window is actually visible there) brings it to the front
+    // for the next cycle.
+    const WINDOW_DEMO: u8 = 0
+    const WINDOW_TERM: u8 = 1
+    const WINDOW_GL: u8 = 2
+    const WINDOW_NONE: u8 = 255
+    let window_z_order: u8[3]
+
+    // Set by run_window_ticks right before each window's _tick function
+    // runs, telling it whether it's this tick's input target - see
+    // compute_input_target for why this exists.
+    let window_wants_input: bool = false
+
+    func init_window_z_order() {
+        window_z_order[0] = WINDOW_DEMO
+        window_z_order[1] = WINDOW_TERM
+        window_z_order[2] = WINDOW_GL
+    }
+
+    func bring_window_to_front(id: u8) {
+        if window_z_order[2] == id { return }
+        let at: int = -1
+        let i: uint = 0
+        while i < 3 {
+            if window_z_order[i] == id { at = i as int }
+            i = i + 1
+        }
+        if at < 0 { return }
+        let j = at as uint
+        while j < 2 {
+            window_z_order[j] = window_z_order[j + 1]
+            j = j + 1
+        }
+        window_z_order[2] = id
+    }
+
+    // Hit-test against each window's last-drawn rect (updated once per
+    // tick by that window's own _tick function) - close enough for click-
+    // to-front purposes, and avoids needing any of the three windows to
+    // expose more than what mouse_pre_scroll already reaches into them
+    // for (their _drawn/_drawn_x/_drawn_y/_drawn_w/_drawn_h fields).
+    func window_contains(id: u8, x: int, y: int) -> bool {
+        if id == WINDOW_DEMO {
+            return mu_demo_drawn && x >= (mu_demo_drawn_x as int) &&
+                x < (mu_demo_drawn_x as int) + (mu_demo_drawn_w as int) &&
+                y >= (mu_demo_drawn_y as int) && y < (mu_demo_drawn_y as int) + (mu_demo_drawn_h as int)
+        } else if id == WINDOW_TERM {
+            return mu_term_drawn && x >= (mu_term_drawn_x as int) &&
+                x < (mu_term_drawn_x as int) + (mu_term_drawn_w as int) &&
+                y >= (mu_term_drawn_y as int) && y < (mu_term_drawn_y as int) + (mu_term_drawn_h as int)
+        } else {
+            return mu_gl_drawn && x >= (mu_gl_drawn_x as int) &&
+                x < (mu_gl_drawn_x as int) + (mu_gl_drawn_w as int) &&
+                y >= (mu_gl_drawn_y as int) && y < (mu_gl_drawn_y as int) + (mu_gl_drawn_h as int)
+        }
+    }
+
+    // Front-to-back hit test - which window (if any) is actually visible
+    // at (x, y) right now, given the current z-order.
+    func topmost_window_at(x: int, y: int) -> u8 {
+        let i: int = 2
+        while i >= 0 {
+            let id = window_z_order[i as uint]
+            if window_contains(id, x, y) {
+                return id
+            }
+            i = i - 1
+        }
+        return WINDOW_NONE
+    }
+
+    // Which window should receive mouse input *this* tick, checked by
+    // each of mu_demo_tick/mu_term_tick/mu_gl_tick before feeding
+    // Mu.input_mousemove/mousedown/mouseup into their own independent
+    // microui cycle. Z-order alone (window_z_order/bring_window_to_front
+    // above) only ever decided paint order - every window still fed
+    // itself the same raw mouse position/buttons unconditionally, so
+    // whichever window's *rect* the cursor happened to be over grabbed
+    // and kept its own internal Mu.focus regardless of whether another
+    // window was now actually drawn on top of it there. That's what made
+    // TinyGL "always in focus": once it had focus, painting something
+    // else over it visually did nothing to stop it answering clicks.
+    //
+    // input_owner locks the target to whichever window was topmost at
+    // the moment of a fresh press, and keeps it there for the rest of
+    // that press (so a fast drag that slips outside the window's rect
+    // mid-move doesn't lose its target, and so the eventual release goes
+    // to the same window that got the press - a window whose last
+    // in_left_down was left stuck true because it got a down but never
+    // the matching up would misinterpret its next real click as already
+    // in progress). Released back to "recompute by hover" the instant
+    // the button comes up.
+    // 255, not WINDOW_NONE - a global's static initializer can't reference
+    // another typed const across the generated translation units (tcc
+    // rejects it: "initializer element is not constant"). Must match
+    // WINDOW_NONE's value above.
+    let input_owner: u8 = 255
+    let input_last_left_down: bool = false
+
+    func compute_input_target() -> u8 {
+        let down = left_button_down
+        if down && !input_last_left_down {
+            let target = topmost_window_at(cursor_x, cursor_y)
+            input_owner = target
+            if target != WINDOW_NONE {
+                bring_window_to_front(target)
+            }
+        } else if !down {
+            input_owner = WINDOW_NONE
+        }
+        input_last_left_down = down
+
+        if input_owner != WINDOW_NONE {
+            return input_owner
+        }
+        return topmost_window_at(cursor_x, cursor_y)
+    }
+
+    // Single entry point for ticking all three overlay windows in the
+    // current z-order - replaces calling mu_demo_tick/mu_term_tick/
+    // mu_gl_tick directly (hal/pit.llpl, mouse_post_scroll below) so
+    // there is exactly one place deciding paint order *and* input
+    // routing.
+    func run_window_ticks(arg: void*) {
+        let target = compute_input_target()
+        let i: uint = 0
+        while i < 3 {
+            let id = window_z_order[i]
+            if id == WINDOW_DEMO {
+                window_wants_input = target == WINDOW_DEMO
+                mu_demo_tick(null)
+            } else if id == WINDOW_TERM {
+                window_wants_input = target == WINDOW_TERM
+                mu_term_tick(null)
+            } else {
+                window_wants_input = target == WINDOW_GL
+                mu_gl_tick(null)
+            }
+            i = i + 1
+        }
+    }
 
     class MouseDevice : Device {
         buffer: char[MOUSE_BUFFER_SIZE]
@@ -185,17 +505,27 @@ namespace Kern {
     let mouse_packet: u8[3]
     let mouse_packet_index: uint = 0
 
-    // Guards every read/write of the cursor/window sprite state
-    // (cursor_x/y, cursor_drawn*, window_*, z_order). Two independent
-    // callers now touch it: the Deferred worker thread (periodic redraw,
-    // per-packet redraw) and, since Terminal.write() can run on whatever
-    // thread any process happens to call it from, mouse_pre_scroll/
-    // mouse_post_scroll running synchronously and directly on *that*
-    // thread. Without this, a scroll on one thread and a redraw on the
-    // worker thread could interleave mid-update, corrupting the saved-
-    // pixel bookkeeping - a SpinLock (not a blocking Mutex) is safe here
-    // since nothing under it blocks or touches I/O.
+    // Guards every read/write of the cursor sprite state (cursor_x/y,
+    // cursor_drawn*). Two independent callers now touch it: the Deferred
+    // worker thread (periodic redraw, per-packet redraw) and, since
+    // Terminal.write() can run on whatever thread any process happens to
+    // call it from, mouse_pre_scroll/mouse_post_scroll running
+    // synchronously and directly on *that* thread. Without this, a scroll
+    // on one thread and a redraw on the worker thread could interleave
+    // mid-update, corrupting the saved-pixel bookkeeping - a SpinLock (not
+    // a blocking Mutex) is safe here since nothing under it blocks or
+    // touches I/O. kern/mu_demo.llpl's microui overlay shares this same
+    // lock for its own analogous save/restore state.
     let gui_lock: SpinLock
+
+    // Set by kern/mu_demo.llpl right after it repaints its window (queued
+    // on the same PIT tick, always *before* compose_frame_work - see
+    // hal/pit.llpl) whenever the cursor sprite might have just been
+    // painted over: that overlay redraws its whole window rect every
+    // active tick regardless of whether anything in it actually changed,
+    // which the "anything_changed" check below has no way to know about
+    // on its own. Consumed (cleared) the same tick it's read.
+    let mu_overlay_dirty: bool = false
 
     func mouse_wait_output_full() -> bool {
         for i in 0..PS2_POLL_LIMIT {
@@ -227,45 +557,6 @@ namespace Kern {
         return HAL.inb(PS2_DATA_PORT) == MOUSE_ACK as u8
     }
 
-    // Paints the window's three layers (body, title bar, close button)
-    // at the given top-left screen position. Called by compose_frame_work
-    // wherever the window needs a fresh draw - the save/restore buffer
-    // (window_saved) still captures/restores the whole WINDOW_W x
-    // WINDOW_H rectangle as one block regardless of these sub-regions.
-    func draw_window_chrome(wx: uint, wy: uint, color: u32) {
-        for row in 0..WINDOW_H {
-            for col in 0..WINDOW_W {
-                Terminal.put_pixel(wx + col, wy + row, color)
-            }
-        }
-        for row in 0..TITLE_BAR_H {
-            for col in 0..WINDOW_W {
-                Terminal.put_pixel(wx + col, wy + row, TITLEBAR_COLOR)
-            }
-        }
-        let close_off_x = WINDOW_W - CLOSE_BUTTON_SIZE - CLOSE_BUTTON_MARGIN
-        let close_off_y = (TITLE_BAR_H - CLOSE_BUTTON_SIZE) / 2
-        for row in 0..CLOSE_BUTTON_SIZE {
-            for col in 0..CLOSE_BUTTON_SIZE {
-                Terminal.put_pixel(wx + close_off_x + col, wy + close_off_y + row, CLOSE_BUTTON_COLOR)
-            }
-        }
-    }
-
-    // Moves window index w to the front (end) of z_order, shifting
-    // everything that was stacked above its old slot down by one.
-    // WINDOW_COUNT is tiny, so this linear shift is plenty fast.
-    func raise_window(w: uint) {
-        let old_index = 0
-        for i in 0..WINDOW_COUNT {
-            if z_order[i] == w { old_index = i }
-        }
-        for i in old_index..(WINDOW_COUNT - 1) {
-            z_order[i] = z_order[i + 1]
-        }
-        z_order[WINDOW_COUNT - 1] = w
-    }
-
     // Runs on Kern.Deferred's own worker thread, never in IRQ context -
     // it writes into the same framebuffer memory Terminal.write's own
     // render()/scroll() write into from whatever thread called it, and
@@ -274,25 +565,14 @@ namespace Kern {
     // the first; queuing it here (kern/deferred.llpl, already running -
     // Deferred.init() is called from Kern.thread_init()) keeps it off the
     // IRQ path without needing a new lock around the framebuffer itself.
-    // Reads cursor_x/y and window_x/y fresh each time it runs, so a burst
-    // of queued redraws from fast mouse movement just collapses to
-    // drawing at whatever the latest positions are by the time each one
-    // runs.
-    //
-    // Fixed ordering to avoid the sprites' save/restore buffers
-    // cross-contaminating each other:
-    //   1. Restore the cursor's old position unconditionally (it moves
-    //      on every packet).
-    //   2. Settle every window in Z-order (see the loop below for why
-    //      that order matters for overlapping windows).
-    //   3. Capture what's under the cursor's new position (now correctly
-    //      reflects any window move/close that just happened).
-    //   4. Draw the cursor last, always on top.
+    // Reads cursor_x/y fresh each time it runs, so a burst of queued
+    // redraws from fast mouse movement just collapses to drawing at
+    // whatever the latest position is by the time each one runs.
     //
     // Scrolling (Terminal.scroll(), lib/terminal.llpl) is handled
     // separately, synchronously, via mouse_pre_scroll/mouse_post_scroll
     // below - registered as Terminal's scroll hooks - rather than by
-    // computing how far a sprite drifted after the fact: erasing right
+    // computing how far the sprite drifted after the fact: erasing right
     // before the pixel shift and redrawing right after leaves no window
     // where a scroll can happen without this module knowing about it.
     func compose_frame_work(arg: void*) {
@@ -301,89 +581,63 @@ namespace Kern {
         let cy = cursor_y as uint
 
         // Flicker fix: the ~33Hz periodic redraw (hal/pit.llpl) calls this
-        // unconditionally so the GUI survives console text scrolling, but
-        // that means most calls happen while nothing has actually moved -
-        // erasing and immediately redrawing the same pixels at the same
-        // spot, 33 times a second, is what was visible as flicker. Bail
-        // out before touching any pixels unless something genuinely needs
-        // repainting.
-        let anything_changed = !cursor_drawn || cursor_drawn_x != cx || cursor_drawn_y != cy
-        for i in 0..WINDOW_COUNT {
-            let wx = window_x[i] as uint
-            let wy = window_y[i] as uint
-            let moved = window_visible[i] && (!window_drawn[i] || window_drawn_x[i] != wx || window_drawn_y[i] != wy)
-            let hidden_but_drawn = !window_visible[i] && window_drawn[i]
-            if moved || hidden_but_drawn { anything_changed = true }
-        }
+        // unconditionally so the cursor survives console text scrolling,
+        // but that means most calls happen while nothing has actually
+        // moved - erasing and immediately redrawing the same pixels at
+        // the same spot, 33 times a second, is what was visible as
+        // flicker. Bail out before touching any pixels unless something
+        // genuinely needs repainting.
+        let anything_changed = !cursor_drawn || cursor_drawn_x != cx || cursor_drawn_y != cy || mu_overlay_dirty
+        mu_overlay_dirty = false
         return if !anything_changed
 
-        // 1. Erase the cursor from its old spot.
-        if cursor_drawn {
+        if cursor_drawn && cursor_move_fits(cursor_drawn_x, cursor_drawn_y, cx, cy) {
+            // Compose the erase-old + draw-new into cursor_move_compose
+            // off-screen and flush it as one blit_rect() below, instead
+            // of the erase/capture/draw steps below each hitting the real
+            // screen separately - see this file's cursor_move_compose
+            // field for why.
+            cursor_capture_new_background(cx, cy, cursor_drawn_x, cursor_drawn_y)
+            cursor_flush_move(cx, cy, cursor_drawn_x, cursor_drawn_y)
+        } else {
+            // First-ever draw (nothing to erase yet), or a jump too big
+            // for cursor_move_compose - fall back to the direct path.
+
+            // 1. Erase the cursor from its old spot.
+            if cursor_drawn {
+                for row in 0..CURSOR_H {
+                    for col in 0..CURSOR_W {
+                        Terminal.put_pixel(cursor_drawn_x + col, cursor_drawn_y + row, cursor_saved[row * CURSOR_W + col])
+                    }
+                }
+            }
+
+            // 2. Capture what's under the cursor's new spot.
             for row in 0..CURSOR_H {
                 for col in 0..CURSOR_W {
-                    Terminal.put_pixel(cursor_drawn_x + col, cursor_drawn_y + row, cursor_saved[row * CURSOR_W + col])
+                    cursor_saved[row * CURSOR_W + col] = Terminal.get_pixel(cx + col, cy + row)
                 }
             }
-        }
 
-        // 2. Settle every window, strictly in Z-order (bottom to top).
-        // Processing in this fixed order is what keeps overlapping,
-        // independently-movable windows correct: a lower window's
-        // "capture what's under me" always runs before whatever's
-        // stacked on top of it gets (re)drawn in this same pass, and a
-        // higher window's own capture always runs after - so it
-        // naturally picks up whatever the lower one just settled into.
-        for zi in 0..WINDOW_COUNT {
-            let i = z_order[zi]
-            let base = i * WINDOW_W * WINDOW_H
-            if !window_visible[i] {
-                if window_drawn[i] {
-                    for row in 0..WINDOW_H {
-                        for col in 0..WINDOW_W {
-                            Terminal.put_pixel(window_drawn_x[i] + col, window_drawn_y[i] + row, window_saved[base + row * WINDOW_W + col])
+            // 3. Draw the cursor on top.
+            if cursor_pixels != null {
+                for row in 0..CURSOR_H {
+                    for col in 0..CURSOR_W {
+                        let p = cursor_pixels[(row * CURSOR_W) + col]
+                        let a = (p >> 24) & 0xFF
+                        if a != 0 {
+                            Terminal.blend_pixel(cx + col, cy + row, p & 0x00FF_FFFF, a as u8)
                         }
                     }
-                    window_drawn[i] = false
                 }
             } else {
-                let wx = window_x[i] as uint
-                let wy = window_y[i] as uint
-                let window_moved = !window_drawn[i] || window_drawn_x[i] != wx || window_drawn_y[i] != wy
-                if window_moved {
-                    if window_drawn[i] {
-                        for row in 0..WINDOW_H {
-                            for col in 0..WINDOW_W {
-                                Terminal.put_pixel(window_drawn_x[i] + col, window_drawn_y[i] + row, window_saved[base + row * WINDOW_W + col])
-                            }
+                for row in 0..CURSOR_H {
+                    let bits = cursor_shape[row]
+                    for col in 0..CURSOR_W {
+                        if (bits & (0x80 as u8 >> col)) != 0 {
+                            Terminal.put_pixel(cx + col, cy + row, CURSOR_COLOR)
                         }
                     }
-                    for row in 0..WINDOW_H {
-                        for col in 0..WINDOW_W {
-                            window_saved[base + row * WINDOW_W + col] = Terminal.get_pixel(wx + col, wy + row)
-                        }
-                    }
-                    draw_window_chrome(wx, wy, window_color[i])
-                    window_drawn_x[i] = wx
-                    window_drawn_y[i] = wy
-                    window_drawn[i] = true
-                }
-            }
-        }
-
-        // 3. Capture what's under the cursor's new spot (window-or-
-        // background, never stale cursor pixels).
-        for row in 0..CURSOR_H {
-            for col in 0..CURSOR_W {
-                cursor_saved[row * CURSOR_W + col] = Terminal.get_pixel(cx + col, cy + row)
-            }
-        }
-
-        // 4. Draw the cursor on top.
-        for row in 0..CURSOR_H {
-            let bits = cursor_shape[row]
-            for col in 0..CURSOR_W {
-                if (bits & (0x80 as u8 >> col)) != 0 {
-                    Terminal.put_pixel(cx + col, cy + row, CURSOR_COLOR)
                 }
             }
         }
@@ -396,13 +650,23 @@ namespace Kern {
 
     // Registered as Terminal's pre-scroll hook (Terminal.set_scroll_hooks,
     // lib/terminal.llpl) - runs synchronously right before scroll() shifts
-    // every pixel in the framebuffer, so every sprite gets erased back to
-    // its true current background *before* that shift can drag it (and
-    // our own saved-background snapshots) out from under us. Marks
-    // everything not-drawn afterward so the ordinary compose_frame_work
-    // machinery just treats it as needing a fresh draw.
+    // every pixel in the framebuffer, so the cursor sprite gets erased
+    // back to its true current background *before* that shift can drag it
+    // (and its own saved-background snapshot) out from under it. Marks it
+    // not-drawn afterward so the ordinary compose_frame_work machinery
+    // just treats it as needing a fresh draw.
     func mouse_pre_scroll(arg: void*) {
       holding gui_lock {
+        // The microui overlays (kern/mu_demo.llpl, kern/mu_term.llpl,
+        // kern/mu_gl.llpl) are just as exposed to this shift as the
+        // cursor sprite below - they're drawn to this same framebuffer
+        // at a fixed logical (x, y) they have no way to know just moved.
+        // Erase them back to their saved backgrounds the same way, and
+        // leave them marked not-drawn so the next active tick treats
+        // each as a fresh window instead of a ghost.
+        mu_demo_restore_rect()
+        mu_term_restore_rect()
+        mu_gl_restore_rect()
         if cursor_drawn {
             for row in 0..CURSOR_H {
                 for col in 0..CURSOR_W {
@@ -411,26 +675,6 @@ namespace Kern {
             }
             cursor_drawn = false
         }
-        // Erase top to bottom (reverse Z-order) - the opposite of the
-        // draw order compose_frame_work uses. A window's own saved
-        // buffer only knows what was under *it*, not what any window
-        // stacked on top of it currently looks like - restoring a lower
-        // window first would clobber a still-visible higher window with
-        // that lower window's stale background. Erasing the topmost
-        // window first removes it cleanly, so by the time a lower
-        // window's own restore runs, nothing above it is left to damage.
-        for zi in 0..WINDOW_COUNT {
-            let i = z_order[WINDOW_COUNT - 1 - zi]
-            if window_drawn[i] {
-                let base = i * WINDOW_W * WINDOW_H
-                for row in 0..WINDOW_H {
-                    for col in 0..WINDOW_W {
-                        Terminal.put_pixel(window_drawn_x[i] + col, window_drawn_y[i] + row, window_saved[base + row * WINDOW_W + col])
-                    }
-                }
-                window_drawn[i] = false
-            }
-        }
       }
     }
 
@@ -438,6 +682,9 @@ namespace Kern {
     // the shift, while nothing is drawn (mouse_pre_scroll just erased
     // everything), so this is just an ordinary fresh-draw pass.
     func mouse_post_scroll(arg: void*) {
+        if mu_demo_active {
+            run_window_ticks(null)
+        }
         compose_frame_work(null)
     }
 
@@ -478,61 +725,7 @@ namespace Kern {
             if cursor_x > max_x { cursor_x = max_x }
             if cursor_y > max_y { cursor_y = max_y }
 
-            // Click/drag/raise: edge-detect the left button so a held-down
-            // click while already dragging doesn't repeat the hit-test.
-            // Hit-test top to bottom (front window first) so a front
-            // window's chrome wins over whatever it's stacked on; stop at
-            // the first window the click actually lands in - windows
-            // behind it are occluded and shouldn't receive the click.
-            let left_now = (flags & 0x01 as u8) != 0
-            if left_now && !left_button_down {
-                for zi in 0..WINDOW_COUNT {
-                    let i = z_order[WINDOW_COUNT - 1 - zi]
-                    if !window_visible[i] { continue }
-
-                    let close_off_x = WINDOW_W - CLOSE_BUTTON_SIZE - CLOSE_BUTTON_MARGIN
-                    let close_off_y = (TITLE_BAR_H - CLOSE_BUTTON_SIZE) / 2
-                    let close_left = window_x[i] + close_off_x
-                    let close_right = close_left + CLOSE_BUTTON_SIZE
-                    let close_top = window_y[i] + close_off_y
-                    let close_bottom = close_top + CLOSE_BUTTON_SIZE
-
-                    if cursor_x >= close_left && cursor_x < close_right &&
-                       cursor_y >= close_top && cursor_y < close_bottom {
-                        // Closing doesn't need to reorder z_order.
-                        window_visible[i] = false
-                        break
-                    } else if cursor_x >= window_x[i] && cursor_x < window_x[i] + WINDOW_W &&
-                              cursor_y >= window_y[i] && cursor_y < window_y[i] + TITLE_BAR_H {
-                        raise_window(i)
-                        dragging = true
-                        drag_window = i
-                        drag_offset_x = cursor_x - window_x[i]
-                        drag_offset_y = cursor_y - window_y[i]
-                        break
-                    } else if cursor_x >= window_x[i] && cursor_x < window_x[i] + WINDOW_W &&
-                              cursor_y >= window_y[i] && cursor_y < window_y[i] + WINDOW_H {
-                        // Body click: raise/focus only, no drag - matches
-                        // ordinary window-manager click-to-front behavior.
-                        raise_window(i)
-                        break
-                    }
-                }
-            } else if !left_now && left_button_down {
-                dragging = false
-            }
-            left_button_down = left_now
-
-            if dragging {
-                window_x[drag_window] = cursor_x - drag_offset_x
-                window_y[drag_window] = cursor_y - drag_offset_y
-                if window_x[drag_window] < 0 { window_x[drag_window] = 0 }
-                if window_y[drag_window] < 0 { window_y[drag_window] = 0 }
-                let window_max_x = (Terminal.width() as int) - WINDOW_W
-                let window_max_y = (Terminal.height() as int) - WINDOW_H
-                if window_x[drag_window] > window_max_x { window_x[drag_window] = window_max_x }
-                if window_y[drag_window] > window_max_y { window_y[drag_window] = window_max_y }
-            }
+            left_button_down = (flags & 0x01 as u8) != 0
 
             Deferred.queue(compose_frame_work)
         }
@@ -559,26 +752,12 @@ namespace Kern {
         register_device(mouse_device)
 
         init_cursor_shape()
+        alloc_cursor_saved()
+        init_window_z_order()
         // Terminal.init() already ran (kernel.llpl calls it before
         // mouse_init()), so width()/height() are valid here.
         cursor_x = (Terminal.width() as int) / 2
         cursor_y = (Terminal.height() as int) / 2
-        // Offset both windows from the cursor's starting position, and
-        // from each other, so nothing is drawn exactly on top of
-        // anything else at boot. Window 1 (index 1) ends up in front
-        // (z_order's last slot).
-        window_x[0] = cursor_x - (WINDOW_W / 2) + 40
-        window_y[0] = cursor_y - (WINDOW_H / 2) + 40
-        window_x[1] = cursor_x - (WINDOW_W / 2) + 90
-        window_y[1] = cursor_y - (WINDOW_H / 2) + 70
-        for i in 0..WINDOW_COUNT {
-            if window_x[i] < 0 { window_x[i] = 0 }
-            if window_y[i] < 0 { window_y[i] = 0 }
-            window_visible[i] = true
-            z_order[i] = i
-        }
-        window_color[0] = 0x003A6EA5 as u32 // blue
-        window_color[1] = 0x002E8B57 as u32 // sea green
         Terminal.set_scroll_hooks(mouse_pre_scroll, mouse_post_scroll)
         Deferred.queue(compose_frame_work)
 

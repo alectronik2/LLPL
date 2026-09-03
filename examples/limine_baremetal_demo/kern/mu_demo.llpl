@@ -1,0 +1,311 @@
+import lib
+import terminal
+
+namespace Kern {
+    // ------------------------------------------------------------------
+    // microui demo overlay - exercises lib/microui.llpl end-to-end
+    // (real mouse/keyboard input -> layout -> Mu.render()) against this
+    // kernel's actual framebuffer and drivers. Toggled with F2 (see the
+    // handler in kern/keyboard.llpl) and redrawn from the same ~33Hz PIT
+    // tick that already drives the cursor sprite (hal/pit.llpl), queued
+    // *before* Kern.compose_frame_work each tick so the cursor sprite
+    // (kern/mouse.llpl) always ends up drawn on top of whatever this just
+    // painted.
+    //
+    // Resizable via the built-in drag handle (begin_window_ex only
+    // enforces a *minimum* size, not a maximum) - the save/restore and
+    // compose buffers below are sized to a fixed MU_DEMO_MAX_W x
+    // MU_DEMO_MAX_H capacity and only ever indexed within whatever the
+    // window's *current* w/h actually is, capped every frame via
+    // Mu.clamp_window_size so a drag past that capacity can't overflow
+    // them. Dragging by the title bar is a free feature of
+    // Mu.begin_window itself too, so the saved-background rect has to
+    // track wherever the window currently is (position *and* size), not
+    // just where it started - tracked via Mu.frame_bounds each frame.
+    //
+    // This is now the only GUI overlay kern/mouse.llpl composites - it
+    // used to also own two small hardcoded draggable/closeable windows of
+    // its own (proving out z-order/click-to-raise before this existed),
+    // removed once this covered the same ground with real widgets.
+    // ------------------------------------------------------------------
+    let mu_demo_active: bool = false
+    let mu_demo_initialized: bool = false
+    // This window's own persistent Mu.next_hover_root/focus, saved/
+    // restored around each independent Mu.begin()/end() cycle - see
+    // mu_demo_tick. Mu.focus needs the same treatment as
+    // next_hover_root and for the same reason: it has to survive
+    // multiple ticks in a row unchanged while a drag (title bar, resize
+    // handle, a slider) is in progress - mu_term.llpl's own widget-less
+    // cycle running in between never touches it, so its own Mu.end()
+    // call unconditionally wipes it back to 0 every single tick,
+    // breaking any drag the instant it started.
+    let mu_demo_saved_next_hover_root: int = -1
+    let mu_demo_saved_focus: u32 = 0
+    // Mu.last_mouse_pos needs the exact same save/restore treatment, for
+    // drag *continuation* while the mouse is moving: begin() computes
+    // mouse_delta from mouse_pos - last_mouse_pos, and mu_term.llpl's
+    // own end() call (running right after this window's, every tick)
+    // would otherwise always advance it to match the current mouse_pos
+    // before this window's *next* tick ever sees a nonzero delta.
+    let mu_demo_saved_last_mouse_pos: Mu.Vec2
+    let mu_demo_last_left_down: bool = false
+
+    let mu_demo_drawn: bool = false
+    let mu_demo_drawn_x: uint = 0
+    let mu_demo_drawn_y: uint = 0
+    let mu_demo_drawn_w: uint = 0
+    let mu_demo_drawn_h: uint = 0
+
+    const MU_DEMO_INITIAL_W = 240
+    const MU_DEMO_INITIAL_H = 260
+    const MU_DEMO_MAX_W = 480
+    const MU_DEMO_MAX_H = 420
+
+    let mu_demo_saved: u32[MU_DEMO_MAX_W * MU_DEMO_MAX_H]
+    // Off-screen compose buffer (Mu.set_render_target) - a whole frame is
+    // drawn here first, invisibly, then copied to the live framebuffer in
+    // one tight pass. Drawing straight to the framebuffer across the many
+    // separate multi-pixel operations one frame's worth of widgets takes
+    // was visibly flickering/tearing, redrawn as often as this is.
+    let mu_demo_backbuffer: u32[MU_DEMO_MAX_W * MU_DEMO_MAX_H]
+    // What the framebuffer was last actually given, cell for cell - lets
+    // the blit below skip any pixel that would just be rewriting itself.
+    // Without this, a static window (nothing hovered/dragged/clicked)
+    // still got fully repainted onto the *live* framebuffer ~33 times a
+    // second forever, which is its own flicker source independent of the
+    // tearing double buffering above already fixed: that redraw rate
+    // isn't synced to (or an even divisor of) the display's own refresh,
+    // so the two beat against each other. mu_demo_last_blit_valid is
+    // false exactly when this cache doesn't correspond to what's
+    // currently on screen at the window's target rect (first draw, or
+    // right after a move/resize/close/scroll erased it) - the blit then
+    // ignores the diff and writes every pixel unconditionally.
+    let mu_demo_last_blit: u32[MU_DEMO_MAX_W * MU_DEMO_MAX_H]
+    let mu_demo_last_blit_valid: bool = false
+
+    let mu_demo_check: bool = false
+    let mu_demo_clicks: int = 0
+    let mu_demo_color_r: int = 90
+    let mu_demo_color_g: int = 95
+    let mu_demo_color_b: int = 200
+
+    func mu_demo_save_rect(x: uint, y: uint, w: uint, h: uint) {
+        let row: uint = 0
+        while row < h {
+            let col: uint = 0
+            while col < w {
+                mu_demo_saved[(row * w) + col] = Terminal.get_pixel(x + col, y + row)
+                col++
+            }
+            row++
+        }
+    }
+
+    func mu_demo_restore_rect() {
+        if !mu_demo_drawn { return }
+        Terminal.blit_rect(mu_demo_drawn_x, mu_demo_drawn_y, mu_demo_drawn_w, mu_demo_drawn_h,
+            mu_demo_saved as u32*, mu_demo_drawn_w)
+        mu_demo_drawn = false
+        // Whatever mu_demo_last_blit remembers no longer matches the
+        // screen - it was just overwritten with the saved background.
+        mu_demo_last_blit_valid = false
+    }
+
+    func mu_demo_toggle() {
+        mu_demo_active = !mu_demo_active
+        if !mu_demo_active {
+            holding gui_lock {
+                mu_demo_restore_rect()
+            }
+        }
+    }
+
+    func mu_demo_build() {
+        // Clamp *before* begin_window_ex, using whatever size the user
+        // may have just dragged the window to last frame - takes effect
+        // starting this same frame's layout, no one-frame lag.
+        Mu.clamp_window_size("Demo", MU_DEMO_MAX_W, MU_DEMO_MAX_H)
+
+        let r = Mu.rect(300, 80, MU_DEMO_INITIAL_W, MU_DEMO_INITIAL_H)
+        // OPT_NOCLOSE - F2 is the only open/close control; there's no
+        // separate mechanism to reopen a window closed via its own X.
+        // OPT_NOSCROLL - shrinking the window below its content's natural
+        // height just clips the overflow instead of scrolling to it.
+        if Mu.begin_window_ex("Demo", r, Mu.OPT_NOCLOSE | Mu.OPT_NOSCROLL) != 0 {
+            Mu.layout_row1(-1, 0)
+            Mu.label("lib/microui.llpl running live")
+
+            Mu.layout_row1(-1, 0)
+            if (Mu.button("Click me") & Mu.RES_SUBMIT) != 0 {
+                mu_demo_clicks++
+            }
+
+            let buf: char[32]
+            Mu.mu_int_to_str(buf as char*, 32, mu_demo_clicks)
+            Mu.layout_row1(-1, 0)
+            Mu.label(buf as char*)
+
+            Mu.layout_row1(-1, 0)
+            Mu.checkbox("Show color mixer", &mu_demo_check)
+
+            if mu_demo_check {
+                let widths: int[2]
+                widths[0] = 50
+                widths[1] = -1
+
+                Mu.layout_row_widths(2, widths as int*, 0)
+                Mu.label("R")
+                Mu.slider(&mu_demo_color_r, 0, 255)
+
+                Mu.layout_row_widths(2, widths as int*, 0)
+                Mu.label("G")
+                Mu.slider(&mu_demo_color_g, 0, 255)
+
+                Mu.layout_row_widths(2, widths as int*, 0)
+                Mu.label("B")
+                Mu.slider(&mu_demo_color_b, 0, 255)
+
+                Mu.layout_row1(-1, 40)
+                let swatch = Mu.layout_next()
+                Mu.draw_rect(swatch, Mu.color(mu_demo_color_r, mu_demo_color_g, mu_demo_color_b, 255))
+            }
+
+            Mu.end_window()
+        }
+    }
+
+    func mu_demo_tick(arg: void*) {
+      holding gui_lock {
+        if !mu_demo_initialized {
+            Mu.init()
+            mu_demo_initialized = true
+        }
+
+        // window_wants_input (kern/mouse.llpl, set by run_window_ticks
+        // right before calling this) gates all of this window's input on
+        // whether it's actually this tick's target - otherwise a click or
+        // drag meant for whatever's now drawn on top of this window would
+        // still reach and refocus it, since this cycle has no idea
+        // anything else is even on screen.
+        let left_down = left_button_down
+        if window_wants_input {
+            Mu.input_mousemove(cursor_x, cursor_y)
+            if left_down && !mu_demo_last_left_down {
+                Mu.input_mousedown(cursor_x, cursor_y, Mu.MOUSE_LEFT)
+            } else if !left_down && mu_demo_last_left_down {
+                Mu.input_mouseup(cursor_x, cursor_y, Mu.MOUSE_LEFT)
+            }
+            mu_demo_last_left_down = left_down
+        }
+
+        // Mu.next_hover_root/hover_root are single globals, not
+        // per-window state - Mu.begin() latches hover_root from whatever
+        // next_hover_root was left as by the *last* Mu.begin()/end()
+        // cycle to run, and kern/mu_term.llpl runs its own independent
+        // cycle on this same tick, right after this one. Left alone,
+        // its cycle would always leave next_hover_root at -1 (the cursor
+        // is essentially never over both windows' rects at once), which
+        // would then poison *this* window's hover_root on every
+        // following tick - every one of this window's controls would
+        // permanently read as un-hovered (mouse_over -> in_hover_root
+        // fails), and hover-gated focus (a click only takes effect on a
+        // control already hovered) would never fire, i.e. clicks on this
+        // window would silently stop registering the moment mu_term.llpl
+        // starts ticking. Restoring this window's own last-known value
+        // right before begin() (which reads it) and saving it again
+        // right after end() (which doesn't touch it further) keeps each
+        // window's hover tracking independent, the way begin()/end()
+        // already assume there's exactly one such cycle per tick.
+        Mu.set_next_hover_root(mu_demo_saved_next_hover_root)
+        Mu.set_focus(mu_demo_saved_focus)
+        Mu.set_last_mouse_pos(mu_demo_saved_last_mouse_pos)
+
+        Mu.begin()
+        mu_demo_build()
+        Mu.end()
+        mu_demo_saved_next_hover_root = Mu.get_next_hover_root()
+        mu_demo_saved_focus = Mu.focus
+        mu_demo_saved_last_mouse_pos = Mu.get_last_mouse_pos()
+
+        if !Mu.frame_has_bounds {
+            // Nothing open this frame (e.g. the title bar's close button
+            // was just clicked) - drop whatever was last drawn.
+            mu_demo_restore_rect()
+        } else {
+            let new_x = Mu.frame_bounds.x as uint
+            let new_y = Mu.frame_bounds.y as uint
+            // Mu.clamp_window_size (mu_demo_build, above) only clamps the
+            // rect Mu itself will *start* this frame's layout from -
+            // begin_window_ex's own resize-handle logic can still grow it
+            // further via mouse_delta while a drag is in progress, later
+            // in this same frame, after that clamp already ran. Re-clamp
+            // here too: this is the actual memory-safety boundary (what
+            // indexes the fixed MU_DEMO_MAX_W x MU_DEMO_MAX_H buffers
+            // below), so it can't rely on Mu's own bookkeeping alone.
+            let new_w = Mu.frame_bounds.w as uint
+            let new_h = Mu.frame_bounds.h as uint
+            if new_w > MU_DEMO_MAX_W { new_w = MU_DEMO_MAX_W }
+            if new_h > MU_DEMO_MAX_H { new_h = MU_DEMO_MAX_H }
+
+            if mu_demo_drawn && (mu_demo_drawn_x != new_x || mu_demo_drawn_y != new_y ||
+                    mu_demo_drawn_w != new_w || mu_demo_drawn_h != new_h) {
+                // Position *or* size changed - the saved buffer only
+                // knows the background for the old rect, and the diff
+                // cache below is indexed by the old width, so both are
+                // meaningless at the new one.
+                mu_demo_restore_rect()
+            }
+            if !mu_demo_drawn {
+                mu_demo_save_rect(new_x, new_y, new_w, new_h)
+            }
+
+            Mu.set_render_target(mu_demo_backbuffer as u32*, new_w as int, new_h as int, new_x as int, new_y as int)
+            Mu.render()
+            Mu.clear_render_target()
+
+            // Cheap in-memory comparison first (no framebuffer touched
+            // yet) - an idle frame (mouse not moving over anything
+            // interactive, nothing dragged) composes byte-identical
+            // output, so this is the common case. Only when it actually
+            // differs do we pay for a screen write at all, and that write
+            // is one bulk memcpy-based blit (Terminal.blit_rect) instead
+            // of new_w*new_h individually bounds-checked put_pixel calls -
+            // minimizing how long a genuine update is "in flight" for a
+            // display's own scanout to catch mid-write.
+            let changed = !mu_demo_last_blit_valid
+            if !changed {
+                let row: uint = 0
+                while row < new_h && !changed {
+                    let col: uint = 0
+                    while col < new_w {
+                        let idx = (row * new_w) + col
+                        if mu_demo_last_blit[idx] != mu_demo_backbuffer[idx] {
+                            changed = true
+                            break
+                        }
+                        col++
+                    }
+                    row++
+                }
+            }
+
+            if changed {
+                Terminal.blit_rect(new_x, new_y, new_w, new_h, mu_demo_backbuffer as u32*, new_w)
+                memcpy(mu_demo_last_blit as void*, mu_demo_backbuffer as void*, (new_w * new_h * 4) as uint)
+                mu_demo_last_blit_valid = true
+                // Tell compose_frame_work (queued right after this on the
+                // same tick, see hal/pit.llpl) to force-redraw the cursor
+                // even if *it* thinks nothing moved - this may have just
+                // painted over it.
+                mu_overlay_dirty = true
+            }
+
+            mu_demo_drawn_x = new_x
+            mu_demo_drawn_y = new_y
+            mu_demo_drawn_w = new_w
+            mu_demo_drawn_h = new_h
+            mu_demo_drawn = true
+        }
+      }
+    }
+}
