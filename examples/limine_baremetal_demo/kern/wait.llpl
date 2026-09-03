@@ -309,10 +309,12 @@ namespace Kern {
                 if (current as Thread).state != ThreadState.Running {
                     return false
                 }
-                (current as Thread).wake_tick = Timer.deadline_after_ticks(delay)
-                (current as Thread).state = ThreadState.Sleeping
-                (current as Thread).sleep_started_tick = Timer.current_tick()
-                sleep_insert_locked(current as Thread)
+                with current as Thread {
+                    .wake_tick = Timer.deadline_after_ticks(delay)
+                    .state = ThreadState.Sleeping
+                    .sleep_started_tick = Timer.current_tick()
+                    sleep_insert_locked(current as Thread)
+                }
             }
         }
 
@@ -365,10 +367,12 @@ namespace Kern {
                     }
                 } else {
                     holding Kern.lock {
-                        if (thread as Thread).state == ThreadState.Sleeping {
-                            (thread as Thread).wakeups++
-                            (thread as Thread).sleep_ticks_total += now - (thread as Thread).sleep_started_tick
-                            (thread as Thread).state = ThreadState.Ready
+                        with thread as Thread {
+                            if .state == ThreadState.Sleeping {
+                                .wakeups++
+                                .sleep_ticks_total += now - .sleep_started_tick
+                                .state = ThreadState.Ready
+                            }
                             enqueue_ready_locked(thread as Thread)
                             woken++
                         }

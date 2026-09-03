@@ -41,5 +41,8 @@ func main() -> i64 {
     print_int("p.sizeof", p.sizeof as i64)
     print_int("sizeof(Pair)", sizeof(Pair) as i64)
 
+    let text: string = "hello"
+    print_int("text.sizeof", text.sizeof as i64)
+
     return 0
 }

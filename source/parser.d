@@ -2042,8 +2042,14 @@ class Parser {
 
         ASTNode[] statements;
 
+        // `;` is accepted as an optional statement separator (and may
+        // trail the last statement before `}`) so multiple statements can
+        // share a line, e.g. `while cond { i++; total += i }` - purely a
+        // lexical convenience, not a required terminator the way C's is.
+        while (match(TokenType.Semicolon)) {}
         while (!check(TokenType.RightBrace) && !check(TokenType.EOF)) {
             statements ~= statement();
+            while (match(TokenType.Semicolon)) {}
         }
 
         expect(TokenType.RightBrace);

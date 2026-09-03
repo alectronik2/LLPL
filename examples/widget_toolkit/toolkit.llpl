@@ -1,0 +1,384 @@
+// Platform-neutral retained-mode GUI toolkit.
+// A port only needs to subclass Canvas and provide input events.
+
+namespace gui {
+
+const EVENT_NONE: i32 = 0
+const EVENT_QUIT: i32 = 1
+const EVENT_POINTER_MOVE: i32 = 2
+const EVENT_POINTER_DOWN: i32 = 3
+const EVENT_POINTER_UP: i32 = 4
+
+struct Color {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+
+    constructor(r: u8, g: u8, b: u8, a: u8 = 255) {
+        self.r = r
+        self.g = g
+        self.b = b
+        self.a = a
+    }
+}
+
+struct Rect {
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+
+    constructor(x: i32, y: i32, w: i32, h: i32) {
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+    }
+
+    func contains(px: i32, py: i32) -> bool {
+        return px >= self.x && py >= self.y &&
+            px < self.x + self.w && py < self.y + self.h
+    }
+}
+
+struct Event {
+    kind: i32
+    x: i32
+    y: i32
+    button: i32
+
+    constructor() {
+        self.kind = EVENT_NONE
+        self.x = 0
+        self.y = 0
+        self.button = 0
+    }
+}
+
+class Canvas : Object {
+    virtual func begin_frame(color: Color) {}
+    virtual func fill_rect(rect: Rect, color: Color) {}
+    virtual func stroke_rect(rect: Rect, color: Color) {}
+    virtual func draw_text(x: i32, y: i32, text: String, color: Color) {}
+    virtual func end_frame() {}
+}
+
+class Platform : Object {
+    virtual func poll(event: Event*) -> bool { return false }
+    virtual func canvas() -> Canvas { return null }
+    virtual func delay(milliseconds: u32) {}
+}
+
+class Widget : Object {
+    bounds: Rect
+    visible: bool
+    enabled: bool
+    hovered: bool
+    pressed: bool
+
+    constructor(x: i32, y: i32, w: i32, h: i32) {
+        self.bounds = new Rect(x, y, w, h)
+        self.visible = true
+        self.enabled = true
+        self.hovered = false
+        self.pressed = false
+    }
+
+    virtual func paint(canvas: Canvas) {}
+
+    virtual func move_by(dx: i32, dy: i32) {
+        self.bounds.x = self.bounds.x + dx
+        self.bounds.y = self.bounds.y + dy
+    }
+
+    virtual func pointer_move(x: i32, y: i32) -> bool {
+        self.hovered = self.visible && self.bounds.contains(x, y)
+        return self.hovered
+    }
+
+    virtual func pointer_down(x: i32, y: i32) -> bool {
+        if self.visible && self.enabled && self.bounds.contains(x, y) {
+            self.pressed = true
+            return true
+        }
+        return false
+    }
+
+    virtual func pointer_up(x: i32, y: i32) -> bool {
+        let handled = self.pressed
+        self.pressed = false
+        return handled
+    }
+}
+
+class Label : Widget {
+    text: String
+    color: Color
+
+    constructor(x: i32, y: i32, text: String) {
+        super(x, y, 0, 0)
+        self.enabled = false
+        self.text = text
+        self.color = new Color(225, 230, 240)
+    }
+
+    func paint(canvas: Canvas) {
+        if self.visible { canvas.draw_text(self.bounds.x, self.bounds.y, self.text, self.color) }
+    }
+
+}
+
+class Button : Widget {
+    text: String
+    clicked: bool
+
+    constructor(x: i32, y: i32, w: i32, h: i32, text: String) {
+        super(x, y, w, h)
+        self.text = text
+        self.clicked = false
+    }
+
+    func paint(canvas: Canvas) {
+        if !self.visible { return }
+        let background = new Color(198, 198, 190)
+        if self.hovered { background = new Color(215, 215, 206) }
+        if self.pressed { background = new Color(166, 166, 160) }
+        canvas.fill_rect(self.bounds, background)
+        canvas.stroke_rect(self.bounds, new Color(255, 255, 248))
+        canvas.stroke_rect(new Rect(self.bounds.x + 1, self.bounds.y + 1,
+            self.bounds.w - 2, self.bounds.h - 2), new Color(76, 76, 72))
+        canvas.draw_text(self.bounds.x + 12, self.bounds.y + 6,
+            self.text, new Color(20, 20, 20))
+    }
+
+    func pointer_up(x: i32, y: i32) -> bool {
+        let was_pressed = self.pressed
+        self.pressed = false
+        if was_pressed && self.bounds.contains(x, y) {
+            self.clicked = true
+        }
+        return was_pressed
+    }
+
+    func take_click() -> bool {
+        let result = self.clicked
+        self.clicked = false
+        return result
+    }
+}
+
+class Panel : Widget {
+    children: Widget[32]
+    child_count: i32
+    background: Color
+
+    constructor(x: i32, y: i32, w: i32, h: i32) {
+        super(x, y, w, h)
+        self.child_count = 0
+        self.background = new Color(31, 36, 48)
+    }
+
+    func add(child: Widget) -> bool {
+        if self.child_count >= 32 { return false }
+        self.children[self.child_count] = child
+        self.child_count++
+        return true
+    }
+
+    func paint(canvas: Canvas) {
+        if !self.visible { return }
+        canvas.fill_rect(self.bounds, self.background)
+        canvas.stroke_rect(self.bounds, new Color(72, 82, 105))
+        for let i: i32 = 0; i < self.child_count; i++ {
+            self.children[i].paint(canvas)
+        }
+    }
+
+    func move_by(dx: i32, dy: i32) {
+        self.bounds.x = self.bounds.x + dx
+        self.bounds.y = self.bounds.y + dy
+        for let i: i32 = 0; i < self.child_count; i++ {
+            self.children[i].move_by(dx, dy)
+        }
+    }
+
+    func pointer_move(x: i32, y: i32) -> bool {
+        let handled = false
+        for let i: i32 = self.child_count - 1; i >= 0; i-- {
+            if self.children[i].pointer_move(x, y) { handled = true }
+        }
+        return handled
+    }
+
+    func pointer_down(x: i32, y: i32) -> bool {
+        for let i: i32 = self.child_count - 1; i >= 0; i-- {
+            if self.children[i].pointer_down(x, y) { return true }
+        }
+        return false
+    }
+
+    func pointer_up(x: i32, y: i32) -> bool {
+        let handled = false
+        for let i: i32 = self.child_count - 1; i >= 0; i-- {
+            if self.children[i].pointer_up(x, y) { handled = true }
+        }
+        return handled
+    }
+}
+
+// Compact, movable top-level window inspired by the QNX Photon desktop.
+class Window : Panel {
+    title: String
+    dragging: bool
+    resizing: bool
+    drag_x: i32
+    drag_y: i32
+    min_width: i32
+    min_height: i32
+    closable: bool
+
+    constructor(x: i32, y: i32, w: i32, h: i32, title: String) {
+        super(x, y, w, h)
+        self.title = title
+        self.dragging = false
+        self.resizing = false
+        self.drag_x = 0
+        self.drag_y = 0
+        self.min_width = 160
+        self.min_height = 90
+        self.closable = true
+        self.background = new Color(192, 192, 184)
+    }
+
+    func title_rect() -> Rect {
+        return new Rect(self.bounds.x + 3, self.bounds.y + 3, self.bounds.w - 6, 23)
+    }
+
+    func close_rect() -> Rect {
+        return new Rect(self.bounds.x + self.bounds.w - 22, self.bounds.y + 7, 14, 14)
+    }
+
+    func resize_rect() -> Rect {
+        return new Rect(self.bounds.x + self.bounds.w - 15,
+            self.bounds.y + self.bounds.h - 15, 15, 15)
+    }
+
+    func paint(canvas: Canvas) {
+        if !self.visible { return }
+        canvas.fill_rect(self.bounds, self.background)
+        canvas.stroke_rect(self.bounds, new Color(255, 255, 248))
+        canvas.stroke_rect(new Rect(self.bounds.x + 1, self.bounds.y + 1,
+            self.bounds.w - 2, self.bounds.h - 2), new Color(70, 70, 68))
+        let bar = self.title_rect()
+        canvas.fill_rect(bar, new Color(30, 55, 108))
+        canvas.draw_text(bar.x + 6, bar.y + 3, self.title, new Color(255, 255, 255))
+        if self.closable {
+            let close = self.close_rect()
+            canvas.fill_rect(close, new Color(205, 205, 196))
+            canvas.stroke_rect(close, new Color(255, 255, 250))
+            canvas.draw_text(close.x + 3, close.y - 1, new String("x"), new Color(20, 20, 20))
+        }
+        let grip = self.resize_rect()
+        canvas.fill_rect(new Rect(grip.x + 11, grip.y + 3, 2, 10), new Color(82, 82, 78))
+        canvas.fill_rect(new Rect(grip.x + 7, grip.y + 7, 2, 6), new Color(82, 82, 78))
+        canvas.fill_rect(new Rect(grip.x + 3, grip.y + 11, 2, 2), new Color(82, 82, 78))
+        for let i: i32 = 0; i < self.child_count; i++ { self.children[i].paint(canvas) }
+    }
+
+    func pointer_down(x: i32, y: i32) -> bool {
+        if !self.visible || !self.bounds.contains(x, y) { return false }
+        let grip = self.resize_rect()
+        if grip.contains(x, y) {
+            self.resizing = true
+            self.drag_x = x
+            self.drag_y = y
+            return true
+        }
+        let close = self.close_rect()
+        if self.closable && close.contains(x, y) {
+            self.visible = false
+            return true
+        }
+        let bar = self.title_rect()
+        if bar.contains(x, y) {
+            self.dragging = true
+            self.drag_x = x
+            self.drag_y = y
+            return true
+        }
+        for let i: i32 = self.child_count - 1; i >= 0; i-- {
+            if self.children[i].pointer_down(x, y) { return true }
+        }
+        return false
+    }
+
+    func pointer_move(x: i32, y: i32) -> bool {
+        if self.resizing {
+            let new_width = self.bounds.w + (x - self.drag_x)
+            let new_height = self.bounds.h + (y - self.drag_y)
+            if new_width >= self.min_width { self.bounds.w = new_width }
+            if new_height >= self.min_height { self.bounds.h = new_height }
+            self.drag_x = x
+            self.drag_y = y
+            return true
+        }
+        if self.dragging {
+            self.move_by(x - self.drag_x, y - self.drag_y)
+            self.drag_x = x
+            self.drag_y = y
+            return true
+        }
+        let handled = false
+        for let i: i32 = self.child_count - 1; i >= 0; i-- {
+            if self.children[i].pointer_move(x, y) { handled = true }
+        }
+        return handled
+    }
+
+    func pointer_up(x: i32, y: i32) -> bool {
+        if self.resizing {
+            self.resizing = false
+            return true
+        }
+        if self.dragging {
+            self.dragging = false
+            return true
+        }
+        let handled = false
+        for let i: i32 = self.child_count - 1; i >= 0; i-- {
+            if self.children[i].pointer_up(x, y) { handled = true }
+        }
+        return handled
+    }
+}
+
+class Application : Object {
+    platform: Platform
+    root: Widget
+    running: bool
+
+    constructor(platform: Platform, root: Widget) {
+        self.platform = platform
+        self.root = root
+        self.running = true
+    }
+
+    func step() -> bool {
+        let event = new Event()
+        while self.platform.poll(&event) {
+            if event.kind == EVENT_QUIT { self.running = false }
+            if event.kind == EVENT_POINTER_MOVE { self.root.pointer_move(event.x, event.y) }
+            if event.kind == EVENT_POINTER_DOWN { self.root.pointer_down(event.x, event.y) }
+            if event.kind == EVENT_POINTER_UP { self.root.pointer_up(event.x, event.y) }
+        }
+        let target = self.platform.canvas()
+        target.begin_frame(new Color(18, 21, 29))
+        self.root.paint(target)
+        target.end_frame()
+        self.platform.delay(16)
+        return self.running
+    }
+}
+
+}

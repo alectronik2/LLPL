@@ -10,11 +10,11 @@ func main() -> int {
     let b: char* = b_buf as char*
     let c: char* = a
 
-    if a != b {
-        puts("different pointers")
+    if a == b {
+        puts("same contents with operator")
     }
-    if a == c {
-        puts("same pointer")
+    if (a as u64) == (c as u64) {
+        puts("same pointer by address")
     }
     if llpl_strcmp(a, b) == 0 {
         puts("same contents")

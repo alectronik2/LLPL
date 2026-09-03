@@ -86,6 +86,11 @@ void write_c(char c);
 void write_s(const char *s);
 void write_i64(i64 value);
 void write_u64(u64 value);
+// Coalesces every write_n/write_c/write_s call between begin/end into one
+// SYS_WRITE instead of one syscall per call - see write_buf_begin's own
+// comment in stdio.c for why a multi-write echo needs this.
+void write_buf_begin(void);
+void write_buf_end(void);
 
 void *malloc(u64 size);
 void free(void *ptr);

@@ -18,6 +18,13 @@
 #define WIDTH 320
 #define HEIGHT 240
 #define SHM_NAME "tinygl-frame"
+#define FRAME_BYTES (WIDTH * HEIGHT * sizeof(uint32_t))
+// One full page for the ready-flag rather than packing it right after
+// frame1: keeps both frames' own byte ranges page-aligned (FRAME_BYTES
+// here is already an exact multiple of it), which is what lets
+// kern/mu_gl.llpl's pump_frame walk the segment page-by-page via the HHDM
+// without needing to handle a sub-page byte offset anywhere.
+#define SHM_PAGE_SIZE 4096
 
 static void cube(void) {
     glBegin(GL_QUADS);
@@ -31,14 +38,33 @@ static void cube(void) {
 }
 
 __attribute__((noreturn)) void _start(void) {
-    i64 addr = (i64)call2(SYS_SHM_CREATE, (u64)SHM_NAME, WIDTH * HEIGHT * sizeof(uint32_t));
+    // Two full frame buffers plus a one-page ready-flag, instead of a
+    // single buffer TinyGL draws into in place: kern/mu_gl.llpl used to
+    // read whatever was in that single buffer at whatever moment its own
+    // tick happened to run, with nothing stopping it from landing mid-
+    // frame (a fresh glClear with only some of the cube's faces drawn so
+    // far) - an occasional torn/glitched cube, once acceptable as a rare
+    // cosmetic one-tick artifact but not worth the tradeoff once it was
+    // actually noticeable. Now this always renders into whichever of the
+    // two buffers *isn't* the one last published as complete, and only
+    // publishes (flips ready_index) after a frame is fully drawn - the
+    // reader always has a completed frame to read no matter when it
+    // happens to look.
+    i64 addr = (i64)call2(SYS_SHM_CREATE, (u64)SHM_NAME, 2 * FRAME_BYTES + SHM_PAGE_SIZE);
     if (addr < 0) {
         write_s("tinygl: shm_create failed\n");
         call2(SYS_EXIT, 1, 0);
     }
-    uint32_t *pixels = (uint32_t *)(u64)addr;
+    uint32_t *frame[2];
+    frame[0] = (uint32_t *)(u64)addr;
+    frame[1] = (uint32_t *)((u64)addr + FRAME_BYTES);
+    // volatile: this is the only cross-process signal here, and the
+    // compiler must never cache or reorder around it - see the publish
+    // site below for why plain store/load (no fence) is enough on x86.
+    volatile uint32_t *ready_index = (volatile uint32_t *)((u64)addr + 2 * FRAME_BYTES);
+    *ready_index = 0;
 
-    ZBuffer *zb = ZB_open(WIDTH, HEIGHT, ZB_MODE_RGBA, pixels);
+    ZBuffer *zb = ZB_open(WIDTH, HEIGHT, ZB_MODE_RGBA, frame[0]);
     if (!zb) {
         write_s("tinygl: ZB_open failed\n");
         call2(SYS_EXIT, 1, 0);
@@ -54,7 +80,13 @@ __attribute__((noreturn)) void _start(void) {
     glFrustum(-1.333, 1.333, -1.0, 1.0, 2.0, 20.0);
 
     float angle = 0.0f;
+    int draw_index = 1;
     for (;;) {
+        // Render into the buffer that ISN'T the one currently published
+        // as ready - the reader (kern/mu_gl.llpl) only ever looks at
+        // *ready_index, never draw_index, so it can never observe this
+        // buffer mid-draw.
+        zb->pbuf = frame[draw_index];
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
@@ -63,6 +95,13 @@ __attribute__((noreturn)) void _start(void) {
         glRotatef(angle * 0.73f, 0.0f, 1.0f, 0.0f);
         cube();
         angle += 1.5f;
+        // Publish only now that the frame is completely drawn - x86's own
+        // memory ordering (stores from one CPU become visible to others
+        // in the order they were issued) is all the guarantee this needs:
+        // no reader can see this store before every pixel store above it
+        // that landed in the same coherent memory.
+        *ready_index = (uint32_t)draw_index;
+        draw_index = 1 - draw_index;
         u64 until = call1(SYS_MONOTONIC_MS, 0) + 33;
         while (call1(SYS_MONOTONIC_MS, 0) < until) __asm__ volatile("pause");
     }

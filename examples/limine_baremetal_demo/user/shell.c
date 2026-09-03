@@ -332,6 +332,11 @@ static void redraw_line(const char *cwd, const char *line, u64 length,
                         u64 cursor, char history[HISTORY_SIZE][LINE_SIZE],
                         u64 history_count) {
     const char *suggestion = cursor == length ? history_suggestion(history, history_count, line, length) : 0;
+    // One flushed write instead of a dozen-plus separate ones - see
+    // write_buf_begin's comment (user/lib/stdio.c) for why this matters
+    // specifically for this function: it's what a keystroke sends to
+    // kern/mu_term.llpl's terminal window every time.
+    write_buf_begin();
     write_s("\r\x1b[2K");
     write_prompt(cwd);
     write_highlighted(line, length);
@@ -339,6 +344,7 @@ static void redraw_line(const char *cwd, const char *line, u64 length,
     write_s("\r");
     write_prompt(cwd);
     write_highlighted(line, cursor);
+    write_buf_end();
 }
 
 // Tries `command`/`args` as one of the built-ins execute() already knows

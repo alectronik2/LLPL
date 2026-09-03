@@ -91,10 +91,10 @@ namespace Kern {
     let mu_term_drawn_y: uint = 0
     let mu_term_drawn_w: uint = 0
     let mu_term_drawn_h: uint = 0
-    let mu_term_saved: u32[MU_TERM_W * MU_TERM_H]
+    // Off-screen render target only - see kern/mu_demo.llpl's own
+    // mu_demo_backbuffer comment for why this window no longer saves/
+    // restores backgrounds or diffs against a last-blit cache itself.
     let mu_term_backbuffer: u32[MU_TERM_W * MU_TERM_H]
-    let mu_term_last_blit: u32[MU_TERM_W * MU_TERM_H]
-    let mu_term_last_blit_valid: bool = false
 
     // Filled (IRQ-safe, no locks) by kern/keyboard.llpl's
     // keyboard_irq_handler whenever the cursor is hovering this window;
@@ -259,30 +259,6 @@ namespace Kern {
         }
     }
 
-    // ------------------------------------------------------------------
-    // save/restore + compose, same shape as kern/mu_demo.llpl (see its
-    // own comments for why each piece exists - not repeated here)
-    // ------------------------------------------------------------------
-    func mu_term_save_rect(x: uint, y: uint, w: uint, h: uint) {
-        let row: uint = 0
-        while row < h {
-            let col: uint = 0
-            while col < w {
-                mu_term_saved[(row * w) + col] = Terminal.get_pixel(x + col, y + row)
-                col++
-            }
-            row++
-        }
-    }
-
-    func mu_term_restore_rect() {
-        if !mu_term_drawn { return }
-        Terminal.blit_rect(mu_term_drawn_x, mu_term_drawn_y, mu_term_drawn_w, mu_term_drawn_h,
-            mu_term_saved as u32*, mu_term_drawn_w)
-        mu_term_drawn = false
-        mu_term_last_blit_valid = false
-    }
-
     func mu_term_build() -> Mu.Rect {
         let r = Mu.rect(560, 80, MU_TERM_W, MU_TERM_H)
         if Mu.begin_window_ex("Terminal", r, Mu.OPT_NORESIZE | Mu.OPT_NOCLOSE | Mu.OPT_NOSCROLL) != 0 {
@@ -427,49 +403,17 @@ namespace Kern {
         mu_term_saved_last_mouse_pos = Mu.get_last_mouse_pos()
 
         if !Mu.frame_has_bounds {
-            mu_term_restore_rect()
+            mu_term_drawn = false
         } else {
             let new_x = Mu.frame_bounds.x as uint
             let new_y = Mu.frame_bounds.y as uint
             let new_w = Mu.frame_bounds.w as uint
             let new_h = Mu.frame_bounds.h as uint
 
-            if mu_term_drawn && (mu_term_drawn_x != new_x || mu_term_drawn_y != new_y ||
-                    mu_term_drawn_w != new_w || mu_term_drawn_h != new_h) {
-                mu_term_restore_rect()
-            }
-            if !mu_term_drawn {
-                mu_term_save_rect(new_x, new_y, new_w, new_h)
-            }
-
             Mu.set_render_target(mu_term_backbuffer as u32*, new_w as int, new_h as int, new_x as int, new_y as int)
             Mu.render()
             mu_term_draw_grid(canvas)
             Mu.clear_render_target()
-
-            let changed = !mu_term_last_blit_valid
-            if !changed {
-                let row: uint = 0
-                while row < new_h && !changed {
-                    let col: uint = 0
-                    while col < new_w {
-                        let idx = (row * new_w) + col
-                        if mu_term_last_blit[idx] != mu_term_backbuffer[idx] {
-                            changed = true
-                            break
-                        }
-                        col++
-                    }
-                    row++
-                }
-            }
-
-            if changed {
-                Terminal.blit_rect(new_x, new_y, new_w, new_h, mu_term_backbuffer as u32*, new_w)
-                memcpy(mu_term_last_blit as void*, mu_term_backbuffer as void*, (new_w * new_h * 4) as uint)
-                mu_term_last_blit_valid = true
-                mu_overlay_dirty = true
-            }
 
             mu_term_drawn_x = new_x
             mu_term_drawn_y = new_y

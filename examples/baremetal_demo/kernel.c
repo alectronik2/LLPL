@@ -9616,9 +9616,8 @@ void IDT_init() {
     {
 #line 204 "/home/nix/Code/LLPL/examples/baremetal_demo/idt.llpl"
         int64_t i = 0;
-        while ((i < 256)) {
+        for (; (i < 256); i = (i + 1)) {
             IDT_set_gate(i, ((uint64_t)0), ((uint64_t)0), ((uint8_t)0));
-            i = (i + 1);
         }
     }
     IDT_set_gate(0, ((uint64_t)isr_divide_by_zero), ((uint64_t)8), ((uint8_t)142));

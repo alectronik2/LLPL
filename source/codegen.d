@@ -4906,31 +4906,73 @@ class CodeGenerator {
     // duplicating its logic here) means the implicit return gets exactly
     // the same defer/try-finally replay and nullable/tuple/struct-literal
     // return-value handling an explicit `return` already gets.
+    // A trailing call to a `void`-returning function (typically something
+    // like panic()/abort() that never actually returns) can't supply this
+    // function's return value - `return voidCall();` doesn't even compile
+    // in C unless the enclosing function is also void. Left as a bare
+    // expression statement instead: the call still runs for effect, and
+    // control simply never reaches past it in practice.
+    private bool isVoidExpression(ASTNode expr) {
+        try {
+            auto t = inferType(expr);
+            resolveType(t);
+            return t !is null && t.name == "void";
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private ASTNode[] withImplicitReturn(ASTNode[] statements, Type returnType) {
         if (returnType is null || returnType.name == "void") return statements;
         if (statements.length == 0) return statements;
         auto exprStmt = cast(ExprStmt)statements[$ - 1];
         if (exprStmt is null) {
+            auto ifStmt = cast(IfStmt)statements[$ - 1];
+            if (ifStmt is null) return statements;
+
+            if (!ifStmt.isPostfix) {
+                // A block-form `if cond { ... } else { ... }` in tail
+                // position supplies this function's return value the same
+                // way IfExpr's branches do - the parser only emits IfExpr
+                // when an if is parsed directly as an expression (e.g. the
+                // RHS of `let`); a bare tail `if { a } else { b }` is still
+                // an ordinary IfStmt and was previously left as two
+                // discarded expression statements with no `return` at all
+                // (UB: the function fell off the end). Recurse into each
+                // branch's own last statement so an else-if chain gets a
+                // return on every arm. An if with no else can't supply a
+                // value on the untaken path, so it's left alone.
+                if (ifStmt.elseBlock is null) return statements;
+                auto newThen = new Block(
+                    withImplicitReturn(ifStmt.thenBlock.statements, returnType),
+                    ifStmt.thenBlock.isHolding);
+                auto newElse = new Block(
+                    withImplicitReturn(ifStmt.elseBlock.statements, returnType),
+                    ifStmt.elseBlock.isHolding);
+                auto result = statements.dup;
+                result[$ - 1] = new IfStmt(ifStmt.condition, newThen, newElse, false);
+                return result;
+            }
+
             // `value if condition else other` is parsed as a postfix IfStmt
             // so ordinary statement modifiers keep their existing behavior.
             // At the end of a value-returning body, both branches are return
             // values rather than discarded expression statements.
-            auto postfix = cast(IfStmt)statements[$ - 1];
-            if (postfix is null || !postfix.isPostfix) return statements;
-
             Block returnBlock(Block body) {
                 if (body is null || body.statements.length != 1) return body;
                 auto branchExpr = cast(ExprStmt)body.statements[0];
                 if (branchExpr is null) return body;
+                if (isVoidExpression(branchExpr.expression)) return body;
                 return new Block([new ReturnStmt(branchExpr.expression,
                     branchExpr.line, branchExpr.column)]);
             }
 
             auto result = statements.dup;
-            result[$ - 1] = new IfStmt(postfix.condition,
-                returnBlock(postfix.thenBlock), returnBlock(postfix.elseBlock), true);
+            result[$ - 1] = new IfStmt(ifStmt.condition,
+                returnBlock(ifStmt.thenBlock), returnBlock(ifStmt.elseBlock), true);
             return result;
         }
+        if (isVoidExpression(exprStmt.expression)) return statements;
         auto result = statements.dup;
         result[$ - 1] = new ReturnStmt(exprStmt.expression, exprStmt.line, exprStmt.column);
         return result;
@@ -12445,6 +12487,27 @@ class CodeGenerator {
             if (overloadCall.length > 0) {
                 return overloadCall;
             }
+            // `string` is canonically a `char*`, but its language-level
+            // equality is content equality rather than C pointer identity.
+            // Explicit address comparison remains available through casts.
+            if (binExpr.op == "==" || binExpr.op == "!=") {
+                Type leftType = null;
+                Type rightType = null;
+                try {
+                    leftType = inferType(binExpr.left);
+                    rightType = inferType(binExpr.right);
+                    resolveType(leftType);
+                    resolveType(rightType);
+                } catch (Exception e) {
+                    leftType = null;
+                    rightType = null;
+                }
+                if (isRawStringType(leftType) && isRawStringType(rightType)) {
+                    string relation = binExpr.op == "==" ? "==" : "!=";
+                    return format("(llpl_strcmp(%s, %s) %s 0)",
+                        generateExpression(binExpr.left), generateExpression(binExpr.right), relation);
+                }
+            }
             Type binaryResult = null;
             try {
                 Type leftType = inferType(binExpr.left);
@@ -13030,6 +13093,12 @@ class CodeGenerator {
                         currentModulePath, memberExpr.line, memberExpr.column);
                 }
                 resolveType(objType);
+                // A raw `string` is a null-terminated byte sequence at the
+                // language level. Its value-size is the live byte length,
+                // not the host pointer width of its C representation.
+                if (isRawStringType(objType)) {
+                    return format("llpl_strlen(%s)", generateExpression(memberExpr.object));
+                }
                 return format("sizeof(%s)", typeToC(objType));
             }
             // A namespace-qualified global reference (e.g. Graphics.origin)

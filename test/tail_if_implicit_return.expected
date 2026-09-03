@@ -1,0 +1,6 @@
+imax(5, 6) = 6
+imax(6, 5) = 6
+imax_with_prelude(5, 6) = 6
+classify(-5) = -1
+classify(0) = 0
+classify(5) = 1

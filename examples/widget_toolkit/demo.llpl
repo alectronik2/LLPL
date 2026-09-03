@@ -1,0 +1,42 @@
+import toolkit
+import sdl_backend
+
+using namespace gui
+using namespace gui.sdl
+
+func main() -> i64 {
+    let platform = new SDLPlatform(720, 480, new String("LLPL Widget Toolkit"))
+    let desktop = new Panel(0, 0, 720, 480)
+    desktop.background = new Color(38, 102, 102)
+    let window = new Window(70, 55, 430, 280, new String("System Information"))
+    let heading = new Label(92, 100, new String("QNX-like LLPL desktop"))
+    heading.color = new Color(20, 20, 20)
+    let action = new Button(92, 145, 150, 32, new String("Run"))
+    let status = new Label(92, 205, new String("Ready"))
+    status.color = new Color(20, 20, 20)
+    window.add(heading)
+    window.add(action)
+    window.add(status)
+    desktop.add(window)
+
+    let tools = new Window(410, 255, 245, 165, new String("Photon Tools"))
+    tools.min_width = 190
+    tools.min_height = 120
+    let tools_label = new Label(430, 300, new String("Window controls"))
+    tools_label.color = new Color(20, 20, 20)
+    let tools_button = new Button(430, 335, 105, 30, new String("Apply"))
+    tools.add(tools_label)
+    tools.add(tools_button)
+    desktop.add(tools)
+
+    let app = new Application(platform, desktop)
+    while app.step() {
+        if action.take_click() {
+            status.text = new String("Button clicked")
+        }
+        if tools_button.take_click() {
+            tools_label.text = new String("Applied")
+        }
+    }
+    return 0
+}

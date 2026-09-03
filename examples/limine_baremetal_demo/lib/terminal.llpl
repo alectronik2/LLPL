@@ -132,6 +132,18 @@ namespace Terminal {
         return false
     }
 
+    // Redraws the wallpaper and every currently-known character fresh
+    // right now, without waiting for an actual scroll - a no-op unless
+    // enable_text_buffer() succeeded earlier. Used by kern/mouse.llpl's
+    // desktop compositor when toggling off, so the plain console
+    // reappears immediately instead of staying stuck showing the last
+    // composed desktop frame.
+    func force_repaint() {
+        if active_console != null && active_console.grid_chars != null {
+            active_console.repaint_from_grid()
+        }
+    }
+
     class Console {
         let width: uint
         let height: uint
@@ -394,12 +406,19 @@ namespace Terminal {
             }
             grid_row_len[grid_rows - 1] = 0
 
-            // Compose the wallpaper repaint and every replayed glyph into
-            // compose_buffer (an off-screen buffer the exact size of the
-            // framebuffer) instead of drawing straight into VRAM, then
-            // flip render_target back and copy the whole finished frame to
-            // the real framebuffer in one blit_rect() call - see this
-            // class's render_target/compose_buffer fields for why.
+            self.repaint_from_grid()
+        }
+
+        // Repaints the wallpaper and every currently-recorded cell fresh,
+        // without touching the grid itself - the part of
+        // scroll_grid_and_repaint that doesn't involve shifting rows,
+        // pulled out so anything that just needs "redraw everything you
+        // know about, now" (e.g. a desktop compositor toggling off and
+        // needing the plain console back) can call it directly. See
+        // scroll_grid_and_repaint's own comment for why this composes
+        // off-screen into compose_buffer first rather than drawing
+        // straight into VRAM.
+        func repaint_from_grid() {
             let have_compose_buffer = compose_buffer != null
             let saved_target = render_target
             let saved_stride = render_stride
@@ -801,8 +820,7 @@ namespace Terminal {
         }
     }
 
-    func init( l: LimineFramebuffer* ) {
-        let fb = l
+    func init( fb: LimineFramebuffer* ) {
         let width = fb.width
         let height = fb.height
         let pitch = fb.pitch
@@ -813,7 +831,7 @@ namespace Terminal {
         let buffer = fb.address as uint*
         let size = (pitch * height) / 4
         console_font = ttf_init(console_font_asset.data as u8*)
-        active_console = new LimineFramebufferConsole(l)
+        active_console = new LimineFramebufferConsole(fb)
 
     }
 

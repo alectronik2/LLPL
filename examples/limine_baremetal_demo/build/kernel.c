@@ -887,6 +887,7 @@ void Terminal_set_scroll_hooks(__LLPL_Closure pre, __LLPL_Closure post);
 void Terminal_set_wallpaper_repaint_hook(__LLPL_Closure fn);
 void Terminal_set_row_fill_hook(__LLPL_Closure fn);
 bool Terminal_enable_text_buffer();
+void Terminal_force_repaint();
 Terminal_Console* Terminal_Console_new();
 void Terminal_Console_init(Terminal_Console* self);
 void Terminal_Console_destroy(void* ptr);
@@ -904,6 +905,7 @@ void Terminal_LimineFramebufferConsole_end_row_paint(Terminal_LimineFramebufferC
 void Terminal_LimineFramebufferConsole_grid_append(Terminal_LimineFramebufferConsole* self, uintptr_t row, char c);
 void Terminal_LimineFramebufferConsole_grid_clear_row(Terminal_LimineFramebufferConsole* self, uintptr_t row);
 void Terminal_LimineFramebufferConsole_scroll_grid_and_repaint(Terminal_LimineFramebufferConsole* self);
+void Terminal_LimineFramebufferConsole_repaint_from_grid(Terminal_LimineFramebufferConsole* self);
 uint32_t Terminal_LimineFramebufferConsole_color_from_sgr(Terminal_LimineFramebufferConsole* self, uint16_t code, bool bright);
 void Terminal_LimineFramebufferConsole_apply_sgr(Terminal_LimineFramebufferConsole* self, uint16_t code);
 void Terminal_LimineFramebufferConsole_put_pixel(Terminal_LimineFramebufferConsole* self, uintptr_t x, uintptr_t y, uint32_t color);
@@ -918,7 +920,7 @@ void Terminal_LimineFramebufferConsole_erase_line(Terminal_LimineFramebufferCons
 void Terminal_LimineFramebufferConsole_clear_screen(Terminal_LimineFramebufferConsole* self);
 void Terminal_LimineFramebufferConsole_set_cursor_cell(Terminal_LimineFramebufferConsole* self, uintptr_t row, uintptr_t column);
 void Terminal_LimineFramebufferConsole_render(Terminal_LimineFramebufferConsole* self, char* text);
-void Terminal_init(LimineFramebuffer* l);
+void Terminal_init(LimineFramebuffer* fb);
 void Terminal_write(char* text);
 void Terminal_put_pixel(uintptr_t x, uintptr_t y, uint32_t color);
 uint32_t Terminal_get_pixel(uintptr_t x, uintptr_t y);
@@ -1095,12 +1097,24 @@ bool Kern_cursor_move_fits(uintptr_t old_x, uintptr_t old_y, uintptr_t new_x, ui
 void Kern_cursor_capture_new_background(uintptr_t new_x, uintptr_t new_y, uintptr_t old_x, uintptr_t old_y);
 void Kern_cursor_blend_into_compose(uintptr_t idx, uint32_t color, uint32_t alpha);
 void Kern_cursor_flush_move(uintptr_t new_x, uintptr_t new_y, uintptr_t old_x, uintptr_t old_y);
+bool Kern_window_is_drawn(uint8_t id);
+uintptr_t Kern_window_rect_x(uint8_t id);
+uintptr_t Kern_window_rect_y(uint8_t id);
+uintptr_t Kern_window_rect_w(uint8_t id);
+uintptr_t Kern_window_rect_h(uint8_t id);
 void Kern_init_window_z_order();
 void Kern_bring_window_to_front(uint8_t id);
 bool Kern_window_contains(uint8_t id, intptr_t x, intptr_t y);
 uint8_t Kern_topmost_window_at(intptr_t x, intptr_t y);
 uint8_t Kern_compute_input_target();
 void Kern_run_window_ticks(void* arg);
+bool Kern_ensure_desktop_compose();
+uint32_t* Kern_window_backbuffer(uint8_t id);
+void Kern_desktop_blend_pixel(uintptr_t idx, uint32_t color, uint32_t alpha);
+void Kern_draw_window_shadow(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h);
+void Kern_blit_into_desktop(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h, uint32_t* src, uintptr_t src_stride);
+void Kern_draw_cursor_into_desktop();
+void Kern_compose_desktop(void* arg);
 Kern_MouseDevice* Kern_MouseDevice_new();
 void Kern_MouseDevice_init(Kern_MouseDevice* self);
 void Kern_MouseDevice_destroy(void* ptr);
@@ -1117,17 +1131,10 @@ void Kern_mouse_pre_scroll(void* arg);
 void Kern_mouse_post_scroll(void* arg);
 void Kern_mouse_irq_handler(void* arg);
 bool Kern_mouse_init();
-void Kern_mu_demo_save_rect(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h);
-void Kern_mu_demo_restore_rect();
 void Kern_mu_demo_toggle();
 void Kern_mu_demo_build();
 void Kern_mu_demo_tick(void* arg);
 void Kern_mu_gl_spawn_thread(void* arg);
-void Kern_mu_gl_save_rect(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h);
-void Kern_mu_gl_restore_rect();
-bool Kern_mu_gl_move_fits(uintptr_t old_x, uintptr_t old_y, uintptr_t old_w, uintptr_t old_h, uintptr_t new_x, uintptr_t new_y, uintptr_t new_w, uintptr_t new_h);
-void Kern_mu_gl_capture_new_background(uintptr_t new_x, uintptr_t new_y, uintptr_t new_w, uintptr_t new_h, uintptr_t old_x, uintptr_t old_y, uintptr_t old_w, uintptr_t old_h);
-void Kern_mu_gl_flush_move(uintptr_t new_x, uintptr_t new_y, uintptr_t new_w, uintptr_t new_h, uintptr_t old_x, uintptr_t old_y, uintptr_t old_w, uintptr_t old_h);
 Mu_Rect Kern_mu_gl_build();
 void Kern_mu_gl_pump_frame();
 void Kern_mu_gl_tick(void* arg);
@@ -1139,8 +1146,6 @@ uint32_t Kern_mu_term_color_from_sgr(uint16_t code);
 void Kern_mu_term_apply_sgr(uint16_t code);
 void Kern_mu_term_put_char(char c);
 void Kern_mu_term_spawn_shell();
-void Kern_mu_term_save_rect(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h);
-void Kern_mu_term_restore_rect();
 Mu_Rect Kern_mu_term_build();
 void Kern_mu_term_draw_grid(Mu_Rect canvas);
 void Kern_mu_term_pump_io();
@@ -2265,6 +2270,13 @@ extern uint8_t Kern_window_z_order[3];
 extern bool Kern_window_wants_input;
 extern uint8_t Kern_input_owner;
 extern bool Kern_input_last_left_down;
+extern uint32_t* Kern_desktop_compose;
+extern uint32_t* Kern_desktop_last_compose;
+extern bool Kern_desktop_first_flush;
+extern uintptr_t Kern_desktop_compose_w;
+extern uintptr_t Kern_desktop_compose_h;
+extern const intptr_t Kern_SHADOW_OFFSET;
+extern const intptr_t Kern_SHADOW_ALPHA;
 extern Kern_MouseDevice* Kern_mouse_device;
 extern HAL_Interrupt* Kern_mouse_interrupt;
 extern uint8_t Kern_mouse_packet[3];
@@ -2286,10 +2298,7 @@ extern const intptr_t Kern_MU_DEMO_INITIAL_W;
 extern const intptr_t Kern_MU_DEMO_INITIAL_H;
 extern const intptr_t Kern_MU_DEMO_MAX_W;
 extern const intptr_t Kern_MU_DEMO_MAX_H;
-extern uint32_t Kern_mu_demo_saved[201600];
 extern uint32_t Kern_mu_demo_backbuffer[201600];
-extern uint32_t Kern_mu_demo_last_blit[201600];
-extern bool Kern_mu_demo_last_blit_valid;
 extern bool Kern_mu_demo_check;
 extern intptr_t Kern_mu_demo_clicks;
 extern intptr_t Kern_mu_demo_color_r;
@@ -2310,14 +2319,7 @@ extern uintptr_t Kern_mu_gl_drawn_x;
 extern uintptr_t Kern_mu_gl_drawn_y;
 extern uintptr_t Kern_mu_gl_drawn_w;
 extern uintptr_t Kern_mu_gl_drawn_h;
-extern uint32_t Kern_mu_gl_saved[94080];
 extern uint32_t Kern_mu_gl_backbuffer[94080];
-extern uint32_t Kern_mu_gl_last_blit[94080];
-extern bool Kern_mu_gl_last_blit_valid;
-extern uint32_t Kern_mu_gl_temp[94080];
-extern const intptr_t Kern_MU_GL_MOVE_MAX_W;
-extern const intptr_t Kern_MU_GL_MOVE_MAX_H;
-extern uint32_t Kern_mu_gl_move_compose[376320];
 extern intptr_t Kern_mu_gl_saved_next_hover_root;
 extern uint32_t Kern_mu_gl_saved_focus;
 extern Mu_Vec2 Kern_mu_gl_saved_last_mouse_pos;
@@ -2352,10 +2354,7 @@ extern uintptr_t Kern_mu_term_drawn_x;
 extern uintptr_t Kern_mu_term_drawn_y;
 extern uintptr_t Kern_mu_term_drawn_w;
 extern uintptr_t Kern_mu_term_drawn_h;
-extern uint32_t Kern_mu_term_saved[135160];
 extern uint32_t Kern_mu_term_backbuffer[135160];
-extern uint32_t Kern_mu_term_last_blit[135160];
-extern bool Kern_mu_term_last_blit_valid;
 extern const intptr_t Kern_MU_TERM_KEY_RING_CAP;
 extern char Kern_mu_term_key_ring[64];
 extern uintptr_t Kern_mu_term_key_head;
@@ -11003,6 +11002,13 @@ bool Terminal_enable_text_buffer() {
     return __llpl_ret418;
 }
 
+#line 141 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+void Terminal_force_repaint() {
+    if (((Terminal_active_console != ((void*)0)) && (Terminal_active_console->grid_chars != ((void*)0)))) {
+        Terminal_LimineFramebufferConsole_repaint_from_grid(Terminal_active_console);
+    }
+}
+
 Terminal_Console* Terminal_Console_new() {
     Terminal_Console* self = (Terminal_Console*)rc_alloc(sizeof(Terminal_Console));
     if (!self) return ((void*)0);
@@ -11099,7 +11105,7 @@ void Terminal_LimineFramebufferConsole__destroy_impl(void* ptr) {
 
 bool Terminal_LimineFramebufferConsole_enable_text_buffer(Terminal_LimineFramebufferConsole* self) {
     if ((self->grid_chars != ((void*)0))) {
-#line 250 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 262 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         bool __llpl_ret419 = 1;
         return __llpl_ret419;
     }
@@ -11107,11 +11113,11 @@ bool Terminal_LimineFramebufferConsole_enable_text_buffer(Terminal_LimineFramebu
     self->grid_rows = (self->fb->height / ((uint64_t)Terminal_LINE_HEIGHT));
     self->grid_row_capacity = (self->grid_cols * ((uintptr_t)2));
     if (((self->grid_rows == ((uintptr_t)0)) || (self->grid_row_capacity == ((uintptr_t)0)))) {
-#line 256 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 268 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         bool __llpl_ret420 = 0;
         return __llpl_ret420;
     }
-#line 258 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 270 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t cells = (((uint64_t)self->grid_rows) * ((uint64_t)self->grid_row_capacity));
     self->grid_chars = ((char*)llpl_alloc((cells * sizeof(char))));
     self->grid_colors = ((uint32_t*)llpl_alloc((cells * sizeof(uint32_t))));
@@ -11119,31 +11125,31 @@ bool Terminal_LimineFramebufferConsole_enable_text_buffer(Terminal_LimineFramebu
     self->grid_row_len = ((uintptr_t*)llpl_alloc((self->grid_rows * sizeof(uintptr_t))));
     self->compose_buffer = ((uint32_t*)llpl_alloc(((((uint64_t)self->fb->width) * ((uint64_t)self->fb->height)) * ((uint64_t)4))));
     if ((((((self->grid_chars == ((void*)0)) || (self->grid_colors == ((void*)0))) || (self->grid_x == ((void*)0))) || (self->grid_row_len == ((void*)0))) || (self->compose_buffer == ((void*)0)))) {
-#line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 278 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         bool __llpl_ret421 = 0;
         return __llpl_ret421;
     }
-#line 268 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 280 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t i = ((uintptr_t)0);
     while ((i < self->grid_rows)) {
         self->grid_row_len[i] = ((uintptr_t)0);
         i = (i + ((uintptr_t)1));
     }
-#line 273 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 285 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     bool __llpl_ret422 = 1;
     return __llpl_ret422;
 }
 
 void Terminal_LimineFramebufferConsole_begin_row_paint(Terminal_LimineFramebufferConsole* self, uintptr_t row) {
     if ((self->compose_buffer == ((void*)0))) {
-#line 285 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 297 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
     if ((self->row_paint_active && (self->row_paint_row != row))) {
         Terminal_LimineFramebufferConsole_end_row_paint(self);
     }
     if (self->row_paint_active) {
-#line 291 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 303 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
     self->render_target = self->compose_buffer;
@@ -11153,10 +11159,10 @@ void Terminal_LimineFramebufferConsole_begin_row_paint(Terminal_LimineFramebuffe
     if ((Terminal_row_fill_hook.fn != ((void*)0))) {
         ((void (*)(void*, uintptr_t))(Terminal_row_fill_hook).fn)((Terminal_row_fill_hook).env, (row * ((uintptr_t)Terminal_LINE_HEIGHT)));
     } else {
-#line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 312 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t y = ((uintptr_t)0);
         while (((y < ((uintptr_t)Terminal_LINE_HEIGHT)) && (((row * ((uintptr_t)Terminal_LINE_HEIGHT)) + y) < self->fb->height))) {
-#line 302 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 314 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t x = ((uintptr_t)0);
             while ((x < self->fb->width)) {
                 Terminal_LimineFramebufferConsole_put_pixel(self, x, ((row * ((uintptr_t)Terminal_LINE_HEIGHT)) + y), self->bg);
@@ -11169,14 +11175,14 @@ void Terminal_LimineFramebufferConsole_begin_row_paint(Terminal_LimineFramebuffe
 
 void Terminal_LimineFramebufferConsole_end_row_paint(Terminal_LimineFramebufferConsole* self) {
     if (!self->row_paint_active) {
-#line 317 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 329 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
-#line 319 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 331 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t* buffered = self->render_target;
     self->render_target = ((uint32_t*)self->fb->address);
     self->render_stride = (self->fb->pitch / ((uint64_t)4));
-#line 322 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 334 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t y0 = (self->row_paint_row * ((uintptr_t)Terminal_LINE_HEIGHT));
     Terminal_LimineFramebufferConsole_blit_rect(self, ((uintptr_t)0), y0, self->fb->width, ((uintptr_t)Terminal_LINE_HEIGHT), (buffered + (y0 * self->fb->width)), self->fb->width);
     self->row_paint_active = 0;
@@ -11184,16 +11190,16 @@ void Terminal_LimineFramebufferConsole_end_row_paint(Terminal_LimineFramebufferC
 
 void Terminal_LimineFramebufferConsole_grid_append(Terminal_LimineFramebufferConsole* self, uintptr_t row, char c) {
     if (((self->grid_chars == ((void*)0)) || (row >= self->grid_rows))) {
-#line 337 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 349 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
-#line 339 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t pos = self->grid_row_len[row];
     if ((pos >= self->grid_row_capacity)) {
-#line 341 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 353 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
-#line 343 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t idx = ((row * self->grid_row_capacity) + pos);
     self->grid_chars[idx] = c;
     self->grid_colors[idx] = self->fg;
@@ -11203,7 +11209,7 @@ void Terminal_LimineFramebufferConsole_grid_append(Terminal_LimineFramebufferCon
 
 void Terminal_LimineFramebufferConsole_grid_clear_row(Terminal_LimineFramebufferConsole* self, uintptr_t row) {
     if (((self->grid_chars == ((void*)0)) || (row >= self->grid_rows))) {
-#line 357 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 369 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
     self->grid_row_len[row] = ((uintptr_t)0);
@@ -11211,20 +11217,20 @@ void Terminal_LimineFramebufferConsole_grid_clear_row(Terminal_LimineFramebuffer
 
 void Terminal_LimineFramebufferConsole_scroll_grid_and_repaint(Terminal_LimineFramebufferConsole* self) {
     Terminal_LimineFramebufferConsole_end_row_paint(self);
-#line 379 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 391 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t row = ((uintptr_t)1);
     while ((row < self->grid_rows)) {
-#line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 393 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t dst_row = (row - ((uintptr_t)1));
-#line 382 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 394 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t len = self->grid_row_len[row];
         self->grid_row_len[dst_row] = len;
-#line 384 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 396 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t i = ((uintptr_t)0);
         while ((i < len)) {
-#line 386 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 398 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t dst_idx = ((dst_row * self->grid_row_capacity) + i);
-#line 387 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 399 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t src_idx = ((row * self->grid_row_capacity) + i);
             self->grid_chars[dst_idx] = self->grid_chars[src_idx];
             self->grid_colors[dst_idx] = self->grid_colors[src_idx];
@@ -11234,11 +11240,15 @@ void Terminal_LimineFramebufferConsole_scroll_grid_and_repaint(Terminal_LimineFr
         row = (row + ((uintptr_t)1));
     }
     self->grid_row_len[(self->grid_rows - ((uintptr_t)1))] = ((uintptr_t)0);
-#line 403 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+    Terminal_LimineFramebufferConsole_repaint_from_grid(self);
+}
+
+void Terminal_LimineFramebufferConsole_repaint_from_grid(Terminal_LimineFramebufferConsole* self) {
+#line 422 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     bool have_compose_buffer = (self->compose_buffer != ((void*)0));
-#line 404 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 423 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t* saved_target = self->render_target;
-#line 405 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 424 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t saved_stride = self->render_stride;
     if (have_compose_buffer) {
         self->render_target = self->compose_buffer;
@@ -11247,27 +11257,27 @@ void Terminal_LimineFramebufferConsole_scroll_grid_and_repaint(Terminal_LimineFr
     if ((Terminal_wallpaper_repaint_hook.fn != ((void*)0))) {
         ((void (*)(void*, void*))(Terminal_wallpaper_repaint_hook).fn)((Terminal_wallpaper_repaint_hook).env, ((void*)0));
     }
-#line 413 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 432 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t saved_cx = self->cursor_x;
-#line 414 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 433 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t saved_cy = self->cursor_y;
-#line 415 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 434 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t saved_fg = self->fg;
-#line 416 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 435 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t ry = ((uintptr_t)0);
     while ((ry < self->grid_rows)) {
-#line 418 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
-        uintptr_t len__shadow1 = self->grid_row_len[ry];
-#line 419 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
-        uintptr_t i__shadow2 = ((uintptr_t)0);
-        while ((i__shadow2 < len__shadow1)) {
-#line 421 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
-            uintptr_t idx = ((ry * self->grid_row_capacity) + i__shadow2);
+#line 437 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+        uintptr_t len = self->grid_row_len[ry];
+#line 438 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+        uintptr_t i = ((uintptr_t)0);
+        while ((i < len)) {
+#line 440 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+            uintptr_t idx = ((ry * self->grid_row_capacity) + i);
             self->cursor_x = self->grid_x[idx];
             self->cursor_y = (ry * ((uintptr_t)Terminal_LINE_HEIGHT));
             self->fg = self->grid_colors[idx];
             Terminal_LimineFramebufferConsole_draw_glyph(self, self->grid_chars[idx]);
-            i__shadow2 = (i__shadow2 + ((uintptr_t)1));
+            i = (i + ((uintptr_t)1));
         }
         ry = (ry + ((uintptr_t)1));
     }
@@ -11282,75 +11292,75 @@ void Terminal_LimineFramebufferConsole_scroll_grid_and_repaint(Terminal_LimineFr
 }
 
 uint32_t Terminal_LimineFramebufferConsole_color_from_sgr(Terminal_LimineFramebufferConsole* self, uint16_t code, bool bright) {
-#line 442 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 461 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     {
         uint16_t __match423 = code;
         if ((__match423 == 30)) {
-#line 443 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 462 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret424 = ((uint32_t)1054752);
             return __llpl_ret424;
         } else if ((__match423 == 31)) {
-#line 444 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 463 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret425 = ((uint32_t)16273737);
             return __llpl_ret425;
         } else if ((__match423 == 32)) {
-#line 445 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 464 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret426 = ((uint32_t)4176208);
             return __llpl_ret426;
         } else if ((__match423 == 33)) {
-#line 446 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 465 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret427 = ((uint32_t)13801762);
             return __llpl_ret427;
         } else if ((__match423 == 34)) {
-#line 447 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 466 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret428 = ((uint32_t)5809919);
             return __llpl_ret428;
         } else if ((__match423 == 35)) {
-#line 448 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 467 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret429 = ((uint32_t)12356863);
             return __llpl_ret429;
         } else if ((__match423 == 36)) {
-#line 449 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 468 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret430 = ((uint32_t)3789016);
             return __llpl_ret430;
         } else if ((__match423 == 37)) {
-#line 450 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 469 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret431 = ((uint32_t)13226457);
             return __llpl_ret431;
         } else if ((__match423 == 90)) {
-#line 451 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 470 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret432 = ((uint32_t)7239297);
             return __llpl_ret432;
         } else if ((__match423 == 91)) {
-#line 452 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 471 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret433 = ((uint32_t)16743282);
             return __llpl_ret433;
         } else if ((__match423 == 92)) {
-#line 453 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 472 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret434 = ((uint32_t)5690212);
             return __llpl_ret434;
         } else if ((__match423 == 93)) {
-#line 454 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 473 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret435 = ((uint32_t)14922561);
             return __llpl_ret435;
         } else if ((__match423 == 94)) {
-#line 455 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 474 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret436 = ((uint32_t)7979263);
             return __llpl_ret436;
         } else if ((__match423 == 95)) {
-#line 456 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 475 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret437 = ((uint32_t)13805823);
             return __llpl_ret437;
         } else if ((__match423 == 96)) {
-#line 457 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 476 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret438 = ((uint32_t)5690589);
             return __llpl_ret438;
         } else if ((__match423 == 97)) {
-#line 458 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 477 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret439 = ((uint32_t)15791868);
             return __llpl_ret439;
         } else {
-#line 459 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 478 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uint32_t __llpl_ret440 = self->fg;
             return __llpl_ret440;
         }
@@ -11396,27 +11406,27 @@ void Terminal_LimineFramebufferConsole_put_pixel(Terminal_LimineFramebufferConso
 
 uint32_t Terminal_LimineFramebufferConsole_get_pixel(Terminal_LimineFramebufferConsole* self, uintptr_t x, uintptr_t y) {
     if (((x < self->fb->width) && (y < self->fb->height))) {
-#line 490 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 509 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uint32_t __llpl_ret441 = self->render_target[((y * self->render_stride) + x)];
         return __llpl_ret441;
     }
-#line 492 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 511 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t __llpl_ret442 = ((uint32_t)0);
     return __llpl_ret442;
 }
 
 void Terminal_LimineFramebufferConsole_blit_rect(Terminal_LimineFramebufferConsole* self, uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h, uint32_t* src, uintptr_t src_stride) {
-#line 504 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 523 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t* pixels = self->render_target;
-#line 505 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 524 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t dst_stride = self->render_stride;
-#line 506 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 525 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t row = ((uintptr_t)0);
     while ((row < h)) {
-#line 508 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 527 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t dy = (y + row);
         if (((dy < self->fb->height) && (x < self->fb->width))) {
-#line 510 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 529 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t copy_w = w;
             if (((x + copy_w) > self->fb->width)) {
                 copy_w = (self->fb->width - x);
@@ -11429,59 +11439,59 @@ void Terminal_LimineFramebufferConsole_blit_rect(Terminal_LimineFramebufferConso
 
 void Terminal_LimineFramebufferConsole_blend_pixel(Terminal_LimineFramebufferConsole* self, uintptr_t x, uintptr_t y, uint32_t color, uint8_t alpha) {
     if ((alpha == ((uint8_t)0))) {
-#line 520 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 539 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
     if ((alpha == ((uint8_t)255))) {
         Terminal_LimineFramebufferConsole_put_pixel(self, x, y, color);
-#line 523 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 542 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
-#line 525 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 544 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t under = Terminal_LimineFramebufferConsole_get_pixel(self, x, y);
-#line 526 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 545 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t a = ((uint32_t)alpha);
-#line 527 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 546 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t inv = (((uint32_t)255) - a);
-#line 528 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 547 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t r = ((((((color >> ((uint32_t)16)) & ((uint32_t)255)) * a) + (((under >> ((uint32_t)16)) & ((uint32_t)255)) * inv)) + ((uint32_t)127)) / ((uint32_t)255));
-#line 529 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 548 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t g = ((((((color >> ((uint32_t)8)) & ((uint32_t)255)) * a) + (((under >> ((uint32_t)8)) & ((uint32_t)255)) * inv)) + ((uint32_t)127)) / ((uint32_t)255));
-#line 530 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 549 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t b = (((((color & ((uint32_t)255)) * a) + ((under & ((uint32_t)255)) * inv)) + ((uint32_t)127)) / ((uint32_t)255));
     Terminal_LimineFramebufferConsole_put_pixel(self, x, y, (((r << ((uint32_t)16)) | (g << ((uint32_t)8))) | b));
 }
 
 uintptr_t Terminal_LimineFramebufferConsole_draw_glyph(Terminal_LimineFramebufferConsole* self, char c) {
-#line 535 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 554 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint8_t glyph[640];
-#line 536 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 555 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint16_t clear_pos = ((uint16_t)0);
     while ((clear_pos < ((uint16_t)640))) {
-        (*(uint8_t*)__llpl_check_index(glyph, clear_pos, 640, sizeof(uint8_t), "terminal.llpl", 538)) = ((uint8_t)0);
+        (*(uint8_t*)__llpl_check_index(glyph, clear_pos, 640, sizeof(uint8_t), "terminal.llpl", 557)) = ((uint8_t)0);
         clear_pos = (clear_pos + ((uint16_t)1));
     }
-#line 541 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 560 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint16_t glyph_index = ttf_get_glyph_index(Terminal_console_font, ((uint32_t)c));
     if ((c == ((char)32))) {
-#line 543 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 562 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         GlyphMetrics space_metrics = ttf_get_glyph_metrics(Terminal_console_font, glyph_index);
-#line 544 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 563 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uint64_t space_advance = ((((uint64_t)space_metrics.advance_width) * ((uint64_t)Terminal_FONT_SIZE)) / ((uint64_t)Terminal_console_font.units_per_em));
         if ((space_advance < ((uint64_t)4))) {
-#line 545 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 564 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t __llpl_ret443 = ((uintptr_t)4);
             return __llpl_ret443;
         }
-#line 546 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 565 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t __llpl_ret444 = ((uintptr_t)space_advance);
         return __llpl_ret444;
     }
-#line 548 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 567 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     bool found = ttf_render_glyph(Terminal_console_font, glyph_index, ((int16_t)Terminal_FONT_SIZE), ((uint8_t*)glyph), 32, ((int16_t)Terminal_LINE_HEIGHT));
     if (!found) {
         if ((c == ((char)105))) {
-#line 554 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 573 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t y = ((uintptr_t)5);
             while ((y < ((uintptr_t)Terminal_FONT_SIZE))) {
                 Terminal_LimineFramebufferConsole_put_pixel(self, (self->cursor_x + ((uintptr_t)2)), (self->cursor_y + y), self->fg);
@@ -11490,26 +11500,26 @@ uintptr_t Terminal_LimineFramebufferConsole_draw_glyph(Terminal_LimineFramebuffe
             }
             Terminal_LimineFramebufferConsole_put_pixel(self, (self->cursor_x + ((uintptr_t)2)), (self->cursor_y + ((uintptr_t)2)), self->fg);
             Terminal_LimineFramebufferConsole_put_pixel(self, (self->cursor_x + ((uintptr_t)3)), (self->cursor_y + ((uintptr_t)2)), self->fg);
-#line 562 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 581 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t __llpl_ret445 = ((uintptr_t)6);
             return __llpl_ret445;
         }
-#line 564 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 583 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t __llpl_ret446 = ((uintptr_t)Terminal_CELL_WIDTH);
         return __llpl_ret446;
     }
-#line 567 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 586 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t base_x = self->cursor_x;
-#line 568 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 587 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t base_y = self->cursor_y;
-#line 569 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 588 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint16_t y__shadow1 = ((uint16_t)0);
     while ((y__shadow1 < ((uint16_t)Terminal_LINE_HEIGHT))) {
-#line 571 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 590 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uint16_t x = ((uint16_t)0);
         while ((x < ((uint16_t)32))) {
-#line 573 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
-            uint8_t alpha = (*(uint8_t*)__llpl_check_index(glyph, ((y__shadow1 * ((uint16_t)32)) + x), 640, sizeof(uint8_t), "terminal.llpl", 573));
+#line 592 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+            uint8_t alpha = (*(uint8_t*)__llpl_check_index(glyph, ((y__shadow1 * ((uint16_t)32)) + x), 640, sizeof(uint8_t), "terminal.llpl", 592));
             if ((alpha != ((uint8_t)0))) {
                 Terminal_LimineFramebufferConsole_blend_pixel(self, (base_x + x), (base_y + y__shadow1), self->fg, alpha);
             }
@@ -11517,12 +11527,12 @@ uintptr_t Terminal_LimineFramebufferConsole_draw_glyph(Terminal_LimineFramebuffe
         }
         y__shadow1 = (y__shadow1 + ((uint16_t)1));
     }
-#line 582 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 601 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     GlyphMetrics metrics = ttf_get_glyph_metrics(Terminal_console_font, glyph_index);
-#line 583 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 602 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t advance = ((((uint64_t)metrics.advance_width) * ((uint64_t)Terminal_FONT_SIZE)) / ((uint64_t)Terminal_console_font.units_per_em));
     if ((advance < ((uint64_t)4))) {
-#line 584 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 603 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t __llpl_ret447 = ((uintptr_t)4);
         return __llpl_ret447;
     }
@@ -11533,7 +11543,7 @@ uintptr_t Terminal_LimineFramebufferConsole_draw_glyph(Terminal_LimineFramebuffe
 void Terminal_LimineFramebufferConsole_scroll(Terminal_LimineFramebufferConsole* self) {
     if ((self->fb->height <= ((uint64_t)Terminal_LINE_HEIGHT))) {
         self->cursor_y = ((uintptr_t)0);
-#line 591 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 610 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
     if ((Terminal_pre_scroll_hook.fn != ((void*)0))) {
@@ -11542,14 +11552,14 @@ void Terminal_LimineFramebufferConsole_scroll(Terminal_LimineFramebufferConsole*
     if ((self->grid_chars != ((void*)0))) {
         Terminal_LimineFramebufferConsole_scroll_grid_and_repaint(self);
     } else {
-#line 599 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 618 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uint32_t* pixels = ((uint32_t*)self->fb->address);
-#line 600 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 619 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uint64_t stride = (self->fb->pitch / ((uint64_t)4));
-#line 601 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 620 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t y = ((uintptr_t)Terminal_LINE_HEIGHT);
         while ((y < self->fb->height)) {
-#line 603 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 622 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t x = ((uintptr_t)0);
             while ((x < self->fb->width)) {
                 pixels[(((y - ((uintptr_t)Terminal_LINE_HEIGHT)) * stride) + x)] = pixels[((y * stride) + x)];
@@ -11557,10 +11567,10 @@ void Terminal_LimineFramebufferConsole_scroll(Terminal_LimineFramebufferConsole*
             }
             y = (y + ((uintptr_t)1));
         }
-#line 611 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 630 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t clear_y = (self->fb->height - ((uint64_t)Terminal_LINE_HEIGHT));
         while ((clear_y < self->fb->height)) {
-#line 613 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 632 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t x__shadow1 = ((uintptr_t)0);
             while ((x__shadow1 < self->fb->width)) {
                 pixels[((clear_y * stride) + x__shadow1)] = self->bg;
@@ -11587,18 +11597,18 @@ void Terminal_LimineFramebufferConsole_newline(Terminal_LimineFramebufferConsole
 
 void Terminal_LimineFramebufferConsole_backspace(Terminal_LimineFramebufferConsole* self) {
     if ((self->cursor_history_count == ((uintptr_t)0))) {
-#line 637 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 656 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
     (self->cursor_history_count = (self->cursor_history_count - ((uintptr_t)1)));
-#line 639 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 658 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t previous_x = self->cursor_history[self->cursor_history_count];
-#line 640 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 659 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t end_x = self->cursor_x;
-#line 641 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 660 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t y = ((uintptr_t)0);
     while (((y < ((uintptr_t)Terminal_LINE_HEIGHT)) && ((self->cursor_y + y) < self->fb->height))) {
-#line 643 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 662 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t x = previous_x;
         while (((x < end_x) && (x < self->fb->width))) {
             Terminal_LimineFramebufferConsole_put_pixel(self, x, (self->cursor_y + y), self->bg);
@@ -11613,10 +11623,10 @@ void Terminal_LimineFramebufferConsole_erase_line(Terminal_LimineFramebufferCons
     if ((self->grid_chars != ((void*)0))) {
         Terminal_LimineFramebufferConsole_begin_row_paint(self, (self->cursor_y / ((uintptr_t)Terminal_LINE_HEIGHT)));
     } else {
-#line 657 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 676 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t y = ((uintptr_t)0);
         while (((y < ((uintptr_t)Terminal_LINE_HEIGHT)) && ((self->cursor_y + y) < self->fb->height))) {
-#line 659 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 678 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t x = ((uintptr_t)0);
             while ((x < self->fb->width)) {
                 Terminal_LimineFramebufferConsole_put_pixel(self, x, (self->cursor_y + y), self->bg);
@@ -11630,14 +11640,14 @@ void Terminal_LimineFramebufferConsole_erase_line(Terminal_LimineFramebufferCons
 }
 
 void Terminal_LimineFramebufferConsole_clear_screen(Terminal_LimineFramebufferConsole* self) {
-#line 672 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 691 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t* pixels = ((uint32_t*)self->fb->address);
-#line 673 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 692 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t stride = (self->fb->pitch / ((uint64_t)4));
-#line 674 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 693 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t y = ((uintptr_t)0);
     while ((y < self->fb->height)) {
-#line 676 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 695 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t x = ((uintptr_t)0);
         while ((x < self->fb->width)) {
             pixels[((y * stride) + x)] = self->bg;
@@ -11649,7 +11659,7 @@ void Terminal_LimineFramebufferConsole_clear_screen(Terminal_LimineFramebufferCo
     self->cursor_y = ((uintptr_t)0);
     self->cursor_history_count = ((uintptr_t)0);
     if ((self->grid_chars != ((void*)0))) {
-#line 687 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 706 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t row = ((uintptr_t)0);
         while ((row < self->grid_rows)) {
             Terminal_LimineFramebufferConsole_grid_clear_row(self, row);
@@ -11665,7 +11675,7 @@ void Terminal_LimineFramebufferConsole_set_cursor_cell(Terminal_LimineFramebuffe
     if ((column == ((uintptr_t)0))) {
         column = ((uintptr_t)1);
     }
-#line 698 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 717 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t new_cursor_y = ((row - ((uintptr_t)1)) * ((uintptr_t)Terminal_LINE_HEIGHT));
     if ((self->row_paint_active && ((new_cursor_y / ((uintptr_t)Terminal_LINE_HEIGHT)) != self->row_paint_row))) {
         Terminal_LimineFramebufferConsole_end_row_paint(self);
@@ -11682,30 +11692,30 @@ void Terminal_LimineFramebufferConsole_set_cursor_cell(Terminal_LimineFramebuffe
 }
 
 void Terminal_LimineFramebufferConsole_render(Terminal_LimineFramebufferConsole* self, char* text) {
-#line 710 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 729 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t width = self->fb->width;
-#line 711 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 730 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t height = self->fb->height;
-#line 712 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 731 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t pitch = self->fb->pitch;
-#line 713 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 732 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint16_t bpp = self->fb->bpp;
-#line 715 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 734 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t* buffer = ((uintptr_t*)self->fb->address);
-#line 716 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 735 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t size = ((pitch * height) / ((uint64_t)4));
-#line 718 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 737 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     intptr_t i = 0;
     while ((text[i] != ((char)0))) {
-#line 720 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 739 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         char c = text[i];
         if ((c == ((char)60))) {
-#line 722 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 741 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
             uintptr_t tag_length = console_tag_length(text, ((uintptr_t)i));
             if ((tag_length != ((uintptr_t)0))) {
                 Terminal_LimineFramebufferConsole_apply_sgr(self, console_tag_code(text, ((uintptr_t)i)));
                 i = (((uintptr_t)i) + tag_length);
-#line 726 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 745 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
                 continue;
             }
         }
@@ -11782,9 +11792,9 @@ void Terminal_LimineFramebufferConsole_render(Terminal_LimineFramebufferConsole*
                                     self->ansi_state = ((uint8_t)0);
                                 } else {
                                     if (((c == ((char)72)) || (c == ((char)102)))) {
-#line 779 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 798 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
                                         uintptr_t row = ((uintptr_t)1);
-#line 780 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 799 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
                                         uintptr_t column = ((uintptr_t)1);
                                         if (self->ansi_have_first) {
                                             row = ((uintptr_t)self->ansi_first_value);
@@ -11814,103 +11824,101 @@ void Terminal_LimineFramebufferConsole_render(Terminal_LimineFramebufferConsole*
 }
 
 
-#line 804 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
-void Terminal_init(LimineFramebuffer* l) {
-#line 805 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
-    LimineFramebuffer* fb = l;
-#line 806 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 823 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+void Terminal_init(LimineFramebuffer* fb) {
+#line 824 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t width = fb->width;
-#line 807 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 825 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t height = fb->height;
-#line 808 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 826 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t pitch = fb->pitch;
-#line 809 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 827 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint16_t bpp = fb->bpp;
-#line 811 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 829 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     if (!((bpp == ((uint16_t)32)))) llpl_panic("Unsupported framebuffer format");
-#line 813 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 831 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t* buffer = ((uintptr_t*)fb->address);
-#line 814 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 832 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t size = ((pitch * height) / ((uint64_t)4));
     Terminal_console_font = ttf_init(((uint8_t*)Terminal_console_font_asset.data));
-    Terminal_active_console = Terminal_LimineFramebufferConsole_new(l);
+    Terminal_active_console = Terminal_LimineFramebufferConsole_new(fb);
 }
 
-#line 820 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 838 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 void Terminal_write(char* text) {
     if ((Terminal_active_console != ((void*)0))) {
         Terminal_LimineFramebufferConsole_render(Terminal_active_console, text);
     }
 }
 
-#line 832 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 850 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 void Terminal_put_pixel(uintptr_t x, uintptr_t y, uint32_t color) {
     if ((Terminal_active_console != ((void*)0))) {
         Terminal_LimineFramebufferConsole_put_pixel(Terminal_active_console, x, y, color);
     }
 }
 
-#line 838 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 856 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 uint32_t Terminal_get_pixel(uintptr_t x, uintptr_t y) {
     if ((Terminal_active_console != ((void*)0))) {
-#line 840 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 858 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uint32_t __llpl_ret449 = Terminal_LimineFramebufferConsole_get_pixel(Terminal_active_console, x, y);
         return __llpl_ret449;
     }
-#line 842 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 860 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint32_t __llpl_ret450 = ((uint32_t)0);
     return __llpl_ret450;
 }
 
-#line 850 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 868 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 void Terminal_blend_pixel(uintptr_t x, uintptr_t y, uint32_t color, uint8_t alpha) {
     if ((Terminal_active_console != ((void*)0))) {
         Terminal_LimineFramebufferConsole_blend_pixel(Terminal_active_console, x, y, color, alpha);
     }
 }
 
-#line 856 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 874 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 void Terminal_blit_rect(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h, uint32_t* src, uintptr_t src_stride) {
     if ((Terminal_active_console != ((void*)0))) {
         Terminal_LimineFramebufferConsole_blit_rect(Terminal_active_console, x, y, w, h, src, src_stride);
     }
 }
 
-#line 862 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 880 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 uintptr_t Terminal_width() {
     if ((Terminal_active_console != ((void*)0))) {
-#line 864 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 882 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t __llpl_ret451 = Terminal_active_console->fb->width;
         return __llpl_ret451;
     }
-#line 866 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 884 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t __llpl_ret452 = ((uintptr_t)0);
     return __llpl_ret452;
 }
 
-#line 869 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 887 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 uintptr_t Terminal_height() {
     if ((Terminal_active_console != ((void*)0))) {
-#line 871 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 889 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         uintptr_t __llpl_ret453 = Terminal_active_console->fb->height;
         return __llpl_ret453;
     }
-#line 873 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 891 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t __llpl_ret454 = ((uintptr_t)0);
     return __llpl_ret454;
 }
 
-#line 876 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 894 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
 void Terminal_present_row(uint32_t* pixels, uintptr_t image_width, uintptr_t image_height, uintptr_t row) {
     if ((((Terminal_active_console == ((void*)0)) || (pixels == ((void*)0))) || (row >= image_height))) {
-#line 877 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 895 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
         return;
     }
-#line 878 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 896 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t offset_x = ((Terminal_active_console->fb->width - image_width) / ((uint64_t)2));
-#line 879 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 897 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uint64_t offset_y = ((Terminal_active_console->fb->height - image_height) / ((uint64_t)2));
-#line 880 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
+#line 898 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/lib/terminal.llpl"
     uintptr_t x = ((uintptr_t)0);
     while ((x < image_width)) {
         Terminal_LimineFramebufferConsole_put_pixel(Terminal_active_console, (offset_x + x), (offset_y + row), (pixels[x] & ((uint32_t)16777215)));
@@ -16169,91 +16177,186 @@ uint8_t Kern_window_z_order[3];
 bool Kern_window_wants_input = 0;
 
 #line 309 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-void Kern_init_window_z_order() {
-    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 0, 3, sizeof(uint8_t), "mouse.llpl", 310)) = Kern_WINDOW_DEMO;
-    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 1, 3, sizeof(uint8_t), "mouse.llpl", 311)) = Kern_WINDOW_TERM;
-    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 2, 3, sizeof(uint8_t), "mouse.llpl", 312)) = Kern_WINDOW_GL;
-}
-
-#line 315 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-void Kern_bring_window_to_front(uint8_t id) {
-    if (((*(uint8_t*)__llpl_check_index(Kern_window_z_order, 2, 3, sizeof(uint8_t), "mouse.llpl", 316)) == id)) {
-#line 316 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        return;
-    }
-#line 317 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    intptr_t at = -1;
-#line 318 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    uintptr_t i = ((uintptr_t)0);
-    while ((i < ((uintptr_t)3))) {
-        if (((*(uint8_t*)__llpl_check_index(Kern_window_z_order, i, 3, sizeof(uint8_t), "mouse.llpl", 320)) == id)) {
-            at = ((intptr_t)i);
-        }
-        i = (i + ((uintptr_t)1));
-    }
-    if ((at < 0)) {
-#line 323 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        return;
-    }
-#line 324 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    uintptr_t j = ((uintptr_t)at);
-    while ((j < ((uintptr_t)2))) {
-        (*(uint8_t*)__llpl_check_index(Kern_window_z_order, j, 3, sizeof(uint8_t), "mouse.llpl", 326)) = (*(uint8_t*)__llpl_check_index(Kern_window_z_order, (j + ((uintptr_t)1)), 3, sizeof(uint8_t), "mouse.llpl", 326));
-        j = (j + ((uintptr_t)1));
-    }
-    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 2, 3, sizeof(uint8_t), "mouse.llpl", 329)) = id;
-}
-
-#line 337 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-bool Kern_window_contains(uint8_t id, intptr_t x, intptr_t y) {
+bool Kern_window_is_drawn(uint8_t id) {
     if ((id == Kern_WINDOW_DEMO)) {
-#line 339 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret640 = ((((Kern_mu_demo_drawn && (x >= ((intptr_t)Kern_mu_demo_drawn_x))) && (x < (((intptr_t)Kern_mu_demo_drawn_x) + ((intptr_t)Kern_mu_demo_drawn_w)))) && (y >= ((intptr_t)Kern_mu_demo_drawn_y))) && (y < (((intptr_t)Kern_mu_demo_drawn_y) + ((intptr_t)Kern_mu_demo_drawn_h))));
+#line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret640 = Kern_mu_demo_drawn;
         return __llpl_ret640;
     } else {
         if ((id == Kern_WINDOW_TERM)) {
-#line 343 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-            bool __llpl_ret641 = ((((Kern_mu_term_drawn && (x >= ((intptr_t)Kern_mu_term_drawn_x))) && (x < (((intptr_t)Kern_mu_term_drawn_x) + ((intptr_t)Kern_mu_term_drawn_w)))) && (y >= ((intptr_t)Kern_mu_term_drawn_y))) && (y < (((intptr_t)Kern_mu_term_drawn_y) + ((intptr_t)Kern_mu_term_drawn_h))));
+#line 311 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            bool __llpl_ret641 = Kern_mu_term_drawn;
             return __llpl_ret641;
         } else {
-#line 347 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-            bool __llpl_ret642 = ((((Kern_mu_gl_drawn && (x >= ((intptr_t)Kern_mu_gl_drawn_x))) && (x < (((intptr_t)Kern_mu_gl_drawn_x) + ((intptr_t)Kern_mu_gl_drawn_w)))) && (y >= ((intptr_t)Kern_mu_gl_drawn_y))) && (y < (((intptr_t)Kern_mu_gl_drawn_y) + ((intptr_t)Kern_mu_gl_drawn_h))));
+#line 312 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            bool __llpl_ret642 = Kern_mu_gl_drawn;
             return __llpl_ret642;
         }
     }
 }
 
-#line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 314 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uintptr_t Kern_window_rect_x(uint8_t id) {
+    if ((id == Kern_WINDOW_DEMO)) {
+#line 315 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t __llpl_ret643 = Kern_mu_demo_drawn_x;
+        return __llpl_ret643;
+    } else {
+        if ((id == Kern_WINDOW_TERM)) {
+#line 316 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret644 = Kern_mu_term_drawn_x;
+            return __llpl_ret644;
+        } else {
+#line 317 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret645 = Kern_mu_gl_drawn_x;
+            return __llpl_ret645;
+        }
+    }
+}
+
+#line 319 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uintptr_t Kern_window_rect_y(uint8_t id) {
+    if ((id == Kern_WINDOW_DEMO)) {
+#line 320 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t __llpl_ret646 = Kern_mu_demo_drawn_y;
+        return __llpl_ret646;
+    } else {
+        if ((id == Kern_WINDOW_TERM)) {
+#line 321 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret647 = Kern_mu_term_drawn_y;
+            return __llpl_ret647;
+        } else {
+#line 322 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret648 = Kern_mu_gl_drawn_y;
+            return __llpl_ret648;
+        }
+    }
+}
+
+#line 324 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uintptr_t Kern_window_rect_w(uint8_t id) {
+    if ((id == Kern_WINDOW_DEMO)) {
+#line 325 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t __llpl_ret649 = Kern_mu_demo_drawn_w;
+        return __llpl_ret649;
+    } else {
+        if ((id == Kern_WINDOW_TERM)) {
+#line 326 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret650 = Kern_mu_term_drawn_w;
+            return __llpl_ret650;
+        } else {
+#line 327 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret651 = Kern_mu_gl_drawn_w;
+            return __llpl_ret651;
+        }
+    }
+}
+
+#line 329 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uintptr_t Kern_window_rect_h(uint8_t id) {
+    if ((id == Kern_WINDOW_DEMO)) {
+#line 330 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t __llpl_ret652 = Kern_mu_demo_drawn_h;
+        return __llpl_ret652;
+    } else {
+        if ((id == Kern_WINDOW_TERM)) {
+#line 331 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret653 = Kern_mu_term_drawn_h;
+            return __llpl_ret653;
+        } else {
+#line 332 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t __llpl_ret654 = Kern_mu_gl_drawn_h;
+            return __llpl_ret654;
+        }
+    }
+}
+
+#line 334 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_init_window_z_order() {
+    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 0, 3, sizeof(uint8_t), "mouse.llpl", 335)) = Kern_WINDOW_DEMO;
+    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 1, 3, sizeof(uint8_t), "mouse.llpl", 336)) = Kern_WINDOW_TERM;
+    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 2, 3, sizeof(uint8_t), "mouse.llpl", 337)) = Kern_WINDOW_GL;
+}
+
+#line 340 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_bring_window_to_front(uint8_t id) {
+    if (((*(uint8_t*)__llpl_check_index(Kern_window_z_order, 2, 3, sizeof(uint8_t), "mouse.llpl", 341)) == id)) {
+#line 341 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        return;
+    }
+#line 342 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    intptr_t at = -1;
+#line 343 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t i = ((uintptr_t)0);
+    while ((i < ((uintptr_t)3))) {
+        if (((*(uint8_t*)__llpl_check_index(Kern_window_z_order, i, 3, sizeof(uint8_t), "mouse.llpl", 345)) == id)) {
+            at = ((intptr_t)i);
+        }
+        i = (i + ((uintptr_t)1));
+    }
+    if ((at < 0)) {
+#line 348 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        return;
+    }
+#line 349 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t j = ((uintptr_t)at);
+    while ((j < ((uintptr_t)2))) {
+        (*(uint8_t*)__llpl_check_index(Kern_window_z_order, j, 3, sizeof(uint8_t), "mouse.llpl", 351)) = (*(uint8_t*)__llpl_check_index(Kern_window_z_order, (j + ((uintptr_t)1)), 3, sizeof(uint8_t), "mouse.llpl", 351));
+        j = (j + ((uintptr_t)1));
+    }
+    (*(uint8_t*)__llpl_check_index(Kern_window_z_order, 2, 3, sizeof(uint8_t), "mouse.llpl", 354)) = id;
+}
+
+#line 362 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_window_contains(uint8_t id, intptr_t x, intptr_t y) {
+    if ((id == Kern_WINDOW_DEMO)) {
+#line 364 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret655 = ((((Kern_mu_demo_drawn && (x >= ((intptr_t)Kern_mu_demo_drawn_x))) && (x < (((intptr_t)Kern_mu_demo_drawn_x) + ((intptr_t)Kern_mu_demo_drawn_w)))) && (y >= ((intptr_t)Kern_mu_demo_drawn_y))) && (y < (((intptr_t)Kern_mu_demo_drawn_y) + ((intptr_t)Kern_mu_demo_drawn_h))));
+        return __llpl_ret655;
+    } else {
+        if ((id == Kern_WINDOW_TERM)) {
+#line 368 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            bool __llpl_ret656 = ((((Kern_mu_term_drawn && (x >= ((intptr_t)Kern_mu_term_drawn_x))) && (x < (((intptr_t)Kern_mu_term_drawn_x) + ((intptr_t)Kern_mu_term_drawn_w)))) && (y >= ((intptr_t)Kern_mu_term_drawn_y))) && (y < (((intptr_t)Kern_mu_term_drawn_y) + ((intptr_t)Kern_mu_term_drawn_h))));
+            return __llpl_ret656;
+        } else {
+#line 372 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            bool __llpl_ret657 = ((((Kern_mu_gl_drawn && (x >= ((intptr_t)Kern_mu_gl_drawn_x))) && (x < (((intptr_t)Kern_mu_gl_drawn_x) + ((intptr_t)Kern_mu_gl_drawn_w)))) && (y >= ((intptr_t)Kern_mu_gl_drawn_y))) && (y < (((intptr_t)Kern_mu_gl_drawn_y) + ((intptr_t)Kern_mu_gl_drawn_h))));
+            return __llpl_ret657;
+        }
+    }
+}
+
+#line 380 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
 uint8_t Kern_topmost_window_at(intptr_t x, intptr_t y) {
-#line 356 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
     intptr_t i = 2;
     while ((i >= 0)) {
-#line 358 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        uint8_t id = (*(uint8_t*)__llpl_check_index(Kern_window_z_order, ((uintptr_t)i), 3, sizeof(uint8_t), "mouse.llpl", 358));
+#line 383 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uint8_t id = (*(uint8_t*)__llpl_check_index(Kern_window_z_order, ((uintptr_t)i), 3, sizeof(uint8_t), "mouse.llpl", 383));
         if (Kern_window_contains(id, x, y)) {
-#line 360 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-            uint8_t __llpl_ret643 = id;
-            return __llpl_ret643;
+#line 385 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uint8_t __llpl_ret658 = id;
+            return __llpl_ret658;
         }
         i = (i - 1);
     }
-#line 364 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    uint8_t __llpl_ret644 = Kern_WINDOW_NONE;
-    return __llpl_ret644;
+#line 389 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint8_t __llpl_ret659 = Kern_WINDOW_NONE;
+    return __llpl_ret659;
 }
 
-#line 392 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 417 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
 uint8_t Kern_input_owner = 255;
 
-#line 393 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 418 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
 bool Kern_input_last_left_down = 0;
 
-#line 395 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 420 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
 uint8_t Kern_compute_input_target() {
-#line 396 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 421 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
     bool down = Kern_left_button_down;
     if ((down && !Kern_input_last_left_down)) {
-#line 398 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 423 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
         uint8_t target = Kern_topmost_window_at(Kern_cursor_x, Kern_cursor_y);
         Kern_input_owner = target;
         if ((target != Kern_WINDOW_NONE)) {
@@ -16266,37 +16369,368 @@ uint8_t Kern_compute_input_target() {
     }
     Kern_input_last_left_down = down;
     if ((Kern_input_owner != Kern_WINDOW_NONE)) {
-#line 409 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        uint8_t __llpl_ret645 = Kern_input_owner;
-        return __llpl_ret645;
+#line 434 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uint8_t __llpl_ret660 = Kern_input_owner;
+        return __llpl_ret660;
     }
-#line 411 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    uint8_t __llpl_ret646 = Kern_topmost_window_at(Kern_cursor_x, Kern_cursor_y);
-    return __llpl_ret646;
+#line 436 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint8_t __llpl_ret661 = Kern_topmost_window_at(Kern_cursor_x, Kern_cursor_y);
+    return __llpl_ret661;
 }
 
-#line 419 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 448 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
 void Kern_run_window_ticks(void* arg) {
-#line 420 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 449 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
     uint8_t target = Kern_compute_input_target();
-#line 421 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 450 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
     uintptr_t i = ((uintptr_t)0);
     while ((i < ((uintptr_t)3))) {
-#line 423 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        uint8_t id = (*(uint8_t*)__llpl_check_index(Kern_window_z_order, i, 3, sizeof(uint8_t), "mouse.llpl", 423));
+#line 452 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uint8_t id = (*(uint8_t*)__llpl_check_index(Kern_window_z_order, i, 3, sizeof(uint8_t), "mouse.llpl", 452));
+        Kern_window_wants_input = (target == id);
         if ((id == Kern_WINDOW_DEMO)) {
-            Kern_window_wants_input = (target == Kern_WINDOW_DEMO);
             Kern_mu_demo_tick(((void*)0));
         } else {
             if ((id == Kern_WINDOW_TERM)) {
-                Kern_window_wants_input = (target == Kern_WINDOW_TERM);
                 Kern_mu_term_tick(((void*)0));
             } else {
-                Kern_window_wants_input = (target == Kern_WINDOW_GL);
                 Kern_mu_gl_tick(((void*)0));
             }
         }
         i = (i + ((uintptr_t)1));
+    }
+}
+
+#line 486 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uint32_t* Kern_desktop_compose = ((void*)0);
+
+#line 503 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uint32_t* Kern_desktop_last_compose = ((void*)0);
+
+#line 504 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_desktop_first_flush = 1;
+
+#line 505 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uintptr_t Kern_desktop_compose_w = 0;
+
+#line 506 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uintptr_t Kern_desktop_compose_h = 0;
+
+#line 507 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+const intptr_t Kern_SHADOW_OFFSET = 8;
+
+#line 508 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+const intptr_t Kern_SHADOW_ALPHA = 100;
+
+#line 510 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_ensure_desktop_compose() {
+    if ((Kern_desktop_compose != ((void*)0))) {
+#line 511 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret662 = 1;
+        return __llpl_ret662;
+    }
+    Kern_desktop_compose_w = Terminal_width();
+    Kern_desktop_compose_h = Terminal_height();
+    if (((Kern_desktop_compose_w == ((uintptr_t)0)) || (Kern_desktop_compose_h == ((uintptr_t)0)))) {
+#line 514 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret663 = 0;
+        return __llpl_ret663;
+    }
+#line 515 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint64_t bytes = ((((uint64_t)Kern_desktop_compose_w) * ((uint64_t)Kern_desktop_compose_h)) * ((uint64_t)4));
+    Kern_desktop_compose = ((uint32_t*)llpl_alloc(bytes));
+    Kern_desktop_last_compose = ((uint32_t*)llpl_alloc(bytes));
+#line 518 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    bool __llpl_ret664 = ((Kern_desktop_compose != ((void*)0)) && (Kern_desktop_last_compose != ((void*)0)));
+    return __llpl_ret664;
+}
+
+#line 521 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uint32_t* Kern_window_backbuffer(uint8_t id) {
+    if ((id == Kern_WINDOW_DEMO)) {
+#line 522 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uint32_t* __llpl_ret665 = ((uint32_t*)Kern_mu_demo_backbuffer);
+        return __llpl_ret665;
+    } else {
+        if ((id == Kern_WINDOW_TERM)) {
+#line 523 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uint32_t* __llpl_ret666 = ((uint32_t*)Kern_mu_term_backbuffer);
+            return __llpl_ret666;
+        } else {
+#line 524 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uint32_t* __llpl_ret667 = ((uint32_t*)Kern_mu_gl_backbuffer);
+            return __llpl_ret667;
+        }
+    }
+}
+
+#line 527 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_desktop_blend_pixel(uintptr_t idx, uint32_t color, uint32_t alpha) {
+    if ((alpha == ((uint32_t)0))) {
+#line 528 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        return;
+    }
+    if ((alpha >= ((uint32_t)255))) {
+        Kern_desktop_compose[idx] = color;
+#line 531 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        return;
+    }
+#line 533 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint32_t under = Kern_desktop_compose[idx];
+#line 534 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint32_t inv = (((uint32_t)255) - alpha);
+#line 535 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint32_t r = ((((((color >> ((uint32_t)16)) & ((uint32_t)255)) * alpha) + (((under >> ((uint32_t)16)) & ((uint32_t)255)) * inv)) + ((uint32_t)127)) / ((uint32_t)255));
+#line 536 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint32_t g = ((((((color >> ((uint32_t)8)) & ((uint32_t)255)) * alpha) + (((under >> ((uint32_t)8)) & ((uint32_t)255)) * inv)) + ((uint32_t)127)) / ((uint32_t)255));
+#line 537 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uint32_t b = (((((color & ((uint32_t)255)) * alpha) + ((under & ((uint32_t)255)) * inv)) + ((uint32_t)127)) / ((uint32_t)255));
+    Kern_desktop_compose[idx] = (((r << ((uint32_t)16)) | (g << ((uint32_t)8))) | b);
+}
+
+#line 546 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_draw_window_shadow(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h) {
+#line 547 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t sx = (x + ((uintptr_t)Kern_SHADOW_OFFSET));
+#line 548 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t sy = (y + ((uintptr_t)Kern_SHADOW_OFFSET));
+#line 549 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t row = ((uintptr_t)0);
+    while ((row < h)) {
+#line 551 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t py = (sy + row);
+        if ((py < Kern_desktop_compose_h)) {
+#line 553 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t col = ((uintptr_t)0);
+            while ((col < w)) {
+#line 555 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t px = (sx + col);
+                if ((px < Kern_desktop_compose_w)) {
+                    Kern_desktop_blend_pixel(((py * Kern_desktop_compose_w) + px), ((uint32_t)0), ((uint32_t)Kern_SHADOW_ALPHA));
+                }
+                col = (col + ((uintptr_t)1));
+            }
+        }
+        row = (row + ((uintptr_t)1));
+    }
+}
+
+#line 566 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_blit_into_desktop(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h, uint32_t* src, uintptr_t src_stride) {
+#line 567 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t row = ((uintptr_t)0);
+    while ((row < h)) {
+#line 569 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t py = (y + row);
+        if (((py < Kern_desktop_compose_h) && (x < Kern_desktop_compose_w))) {
+#line 571 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t copy_w = w;
+            if (((x + copy_w) > Kern_desktop_compose_w)) {
+                copy_w = (Kern_desktop_compose_w - x);
+            }
+            memcpy(((void*)((Kern_desktop_compose + (py * Kern_desktop_compose_w)) + x)), ((void*)(src + (row * src_stride))), ((uintptr_t)(copy_w * ((uintptr_t)4))));
+        }
+        row = (row + ((uintptr_t)1));
+    }
+}
+
+#line 580 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_draw_cursor_into_desktop() {
+#line 581 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t cx = ((uintptr_t)Kern_cursor_x);
+#line 582 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    uintptr_t cy = ((uintptr_t)Kern_cursor_y);
+    if ((Kern_cursor_pixels != ((void*)0))) {
+#line 584 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t row = ((uintptr_t)0);
+        while ((row < Kern_CURSOR_H)) {
+#line 586 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t py = (cy + row);
+            if ((py < Kern_desktop_compose_h)) {
+#line 588 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t col = ((uintptr_t)0);
+                while ((col < Kern_CURSOR_W)) {
+#line 590 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                    uintptr_t px = (cx + col);
+                    if ((px < Kern_desktop_compose_w)) {
+#line 592 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                        uint32_t p = Kern_cursor_pixels[((row * Kern_CURSOR_W) + col)];
+#line 593 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                        uint32_t a = ((p >> ((uint32_t)24)) & ((uint32_t)255));
+                        if ((a != ((uint32_t)0))) {
+                            Kern_desktop_blend_pixel(((py * Kern_desktop_compose_w) + px), (p & ((uint32_t)16777215)), a);
+                        }
+                    }
+                    col = (col + ((uintptr_t)1));
+                }
+            }
+            row = (row + ((uintptr_t)1));
+        }
+    } else {
+#line 604 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t row__shadow1 = ((uintptr_t)0);
+        while ((row__shadow1 < Kern_CURSOR_H)) {
+#line 606 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t py__shadow2 = (cy + row__shadow1);
+            if ((py__shadow2 < Kern_desktop_compose_h)) {
+#line 608 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uint8_t bits = (*(uint8_t*)__llpl_check_index(Kern_cursor_shape, row__shadow1, 8, sizeof(uint8_t), "mouse.llpl", 608));
+#line 609 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t col__shadow3 = ((uintptr_t)0);
+                while ((col__shadow3 < Kern_CURSOR_W)) {
+#line 611 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                    uintptr_t px__shadow4 = (cx + col__shadow3);
+                    if (((px__shadow4 < Kern_desktop_compose_w) && ((bits & (((uint8_t)128) >> col__shadow3)) != ((uint8_t)0)))) {
+                        Kern_desktop_compose[((py__shadow2 * Kern_desktop_compose_w) + px__shadow4)] = Kern_CURSOR_COLOR;
+                    }
+                    col__shadow3 = (col__shadow3 + ((uintptr_t)1));
+                }
+            }
+            row__shadow1 = (row__shadow1 + ((uintptr_t)1));
+        }
+    }
+}
+
+#line 626 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_compose_desktop(void* arg) {
+    __LLPL_EH_Frame __llpl_defer_frame26;
+    int __llpl_defer_active27 = 0;
+    {
+        SpinLock_acquire(&(Kern_gui_lock));
+        __llpl_defer_frame26.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame26.type_id = ((void*)0);
+        __llpl_defer_frame26.error_slot = ((void*)0);
+        __llpl_defer_frame26.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame26);
+        __llpl_defer_active27 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame26.env) != 0) {
+            __llpl_defer_active27 = 0;
+        SpinLock_release(&(Kern_gui_lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        if (!Kern_ensure_desktop_compose()) {
+#line 628 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            if (__llpl_defer_active27) {
+                __llpl_defer_active27 = 0;
+                llpl_eh_pop(&__llpl_defer_frame26);
+        SpinLock_release(&(Kern_gui_lock));
+            }
+            return;
+        }
+        Kern_run_window_ticks(((void*)0));
+        if ((wallpaper_pixels != ((void*)0))) {
+#line 642 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t h = wallpaper_height;
+            if ((h > Kern_desktop_compose_h)) {
+                h = Kern_desktop_compose_h;
+            }
+#line 644 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t w = wallpaper_width;
+            if ((w > Kern_desktop_compose_w)) {
+                w = Kern_desktop_compose_w;
+            }
+#line 646 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t row = ((uintptr_t)0);
+            while ((row < h)) {
+                memcpy(((void*)(Kern_desktop_compose + (row * Kern_desktop_compose_w))), ((void*)(wallpaper_pixels + (row * wallpaper_width))), ((uintptr_t)(w * ((uintptr_t)4))));
+                row = (row + ((uintptr_t)1));
+            }
+        } else {
+#line 653 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t i = ((uintptr_t)0);
+#line 654 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t total = (Kern_desktop_compose_w * Kern_desktop_compose_h);
+            while ((i < total)) {
+                Kern_desktop_compose[i] = ((uint32_t)724756);
+                i = (i + ((uintptr_t)1));
+            }
+        }
+#line 662 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t i__shadow1 = ((uintptr_t)0);
+        while ((i__shadow1 < ((uintptr_t)3))) {
+#line 664 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uint8_t id = (*(uint8_t*)__llpl_check_index(Kern_window_z_order, i__shadow1, 3, sizeof(uint8_t), "mouse.llpl", 664));
+            if (Kern_window_is_drawn(id)) {
+#line 666 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t x = Kern_window_rect_x(id);
+#line 667 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t y = Kern_window_rect_y(id);
+#line 668 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t w__shadow2 = Kern_window_rect_w(id);
+#line 669 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t h__shadow3 = Kern_window_rect_h(id);
+                Kern_draw_window_shadow(x, y, w__shadow2, h__shadow3);
+                Kern_blit_into_desktop(x, y, w__shadow2, h__shadow3, Kern_window_backbuffer(id), w__shadow2);
+            }
+            i__shadow1 = (i__shadow1 + ((uintptr_t)1));
+        }
+        Kern_draw_cursor_into_desktop();
+        if (Kern_desktop_first_flush) {
+            Terminal_blit_rect(((uintptr_t)0), ((uintptr_t)0), Kern_desktop_compose_w, Kern_desktop_compose_h, Kern_desktop_compose, Kern_desktop_compose_w);
+            Kern_desktop_first_flush = 0;
+        } else {
+#line 687 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t dirty_x0 = Kern_desktop_compose_w;
+#line 688 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t dirty_y0 = Kern_desktop_compose_h;
+#line 689 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t dirty_x1 = ((uintptr_t)0);
+#line 690 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t dirty_y1 = ((uintptr_t)0);
+#line 691 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            uintptr_t row__shadow4 = ((uintptr_t)0);
+            while ((row__shadow4 < Kern_desktop_compose_h)) {
+#line 693 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t row_off = (row__shadow4 * Kern_desktop_compose_w);
+#line 694 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                bool row_dirty = 0;
+#line 695 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t col = ((uintptr_t)0);
+                while ((col < Kern_desktop_compose_w)) {
+                    if ((Kern_desktop_compose[(row_off + col)] != Kern_desktop_last_compose[(row_off + col)])) {
+                        row_dirty = 1;
+                        if ((col < dirty_x0)) {
+                            dirty_x0 = col;
+                        }
+                        if (((col + ((uintptr_t)1)) > dirty_x1)) {
+                            dirty_x1 = (col + ((uintptr_t)1));
+                        }
+                    }
+                    col = (col + ((uintptr_t)1));
+                }
+                if (row_dirty) {
+                    if ((row__shadow4 < dirty_y0)) {
+                        dirty_y0 = row__shadow4;
+                    }
+                    if (((row__shadow4 + ((uintptr_t)1)) > dirty_y1)) {
+                        dirty_y1 = (row__shadow4 + ((uintptr_t)1));
+                    }
+                }
+                row__shadow4 = (row__shadow4 + ((uintptr_t)1));
+            }
+            if (((dirty_x1 > dirty_x0) && (dirty_y1 > dirty_y0))) {
+#line 712 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t dirty_w = (dirty_x1 - dirty_x0);
+#line 713 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                uintptr_t dirty_h = (dirty_y1 - dirty_y0);
+                Terminal_blit_rect(dirty_x0, dirty_y0, dirty_w, dirty_h, ((Kern_desktop_compose + (dirty_y0 * Kern_desktop_compose_w)) + dirty_x0), Kern_desktop_compose_w);
+            }
+        }
+        memcpy(((void*)Kern_desktop_last_compose), ((void*)Kern_desktop_compose), ((uintptr_t)((((uint64_t)Kern_desktop_compose_w) * ((uint64_t)Kern_desktop_compose_h)) * ((uint64_t)4))));
+        Kern_cursor_drawn = 1;
+        Kern_cursor_drawn_x = ((uintptr_t)Kern_cursor_x);
+        Kern_cursor_drawn_y = ((uintptr_t)Kern_cursor_y);
+        if (__llpl_defer_active27) {
+            __llpl_defer_active27 = 0;
+            llpl_eh_pop(&__llpl_defer_frame26);
+        SpinLock_release(&(Kern_gui_lock));
+        }
+    }
+    if (__llpl_defer_active27) {
+        __llpl_defer_active27 = 0;
+        llpl_eh_pop(&__llpl_defer_frame26);
+        SpinLock_release(&(Kern_gui_lock));
     }
 }
 
@@ -16331,350 +16765,220 @@ void Kern_MouseDevice__destroy_impl(void* ptr) {
 }
 
 String* Kern_MouseDevice_name(Kern_MouseDevice* self) {
-#line 460 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    String* __llpl_ret647 = self->device_name;
-    return __llpl_ret647;
+#line 749 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    String* __llpl_ret668 = self->device_name;
+    return __llpl_ret668;
 }
 
 void Kern_MouseDevice_push3(Kern_MouseDevice* self, char b0, char b1, char b2) {
-    __LLPL_EH_Frame __llpl_defer_frame26;
-    int __llpl_defer_active27 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame28;
+    int __llpl_defer_active29 = 0;
     {
         SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame26.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame26.type_id = ((void*)0);
-        __llpl_defer_frame26.error_slot = ((void*)0);
-        __llpl_defer_frame26.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame26);
-        __llpl_defer_active27 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame26.env) != 0) {
-            __llpl_defer_active27 = 0;
+        __llpl_defer_frame28.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame28.type_id = ((void*)0);
+        __llpl_defer_frame28.error_slot = ((void*)0);
+        __llpl_defer_frame28.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame28);
+        __llpl_defer_active29 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame28.env) != 0) {
+            __llpl_defer_active29 = 0;
         SpinLock_release(&(self->lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         if (((self->count + ((uintptr_t)3)) <= ((uintptr_t)Kern_MOUSE_BUFFER_SIZE))) {
-            (*(char*)__llpl_check_index(self->buffer, self->write_at, 768, sizeof(char), "mouse.llpl", 468)) = b0;
+            (*(char*)__llpl_check_index(self->buffer, self->write_at, 768, sizeof(char), "mouse.llpl", 757)) = b0;
             self->write_at = ((self->write_at + ((uintptr_t)1)) % ((uintptr_t)Kern_MOUSE_BUFFER_SIZE));
-            (*(char*)__llpl_check_index(self->buffer, self->write_at, 768, sizeof(char), "mouse.llpl", 470)) = b1;
+            (*(char*)__llpl_check_index(self->buffer, self->write_at, 768, sizeof(char), "mouse.llpl", 759)) = b1;
             self->write_at = ((self->write_at + ((uintptr_t)1)) % ((uintptr_t)Kern_MOUSE_BUFFER_SIZE));
-            (*(char*)__llpl_check_index(self->buffer, self->write_at, 768, sizeof(char), "mouse.llpl", 472)) = b2;
+            (*(char*)__llpl_check_index(self->buffer, self->write_at, 768, sizeof(char), "mouse.llpl", 761)) = b2;
             self->write_at = ((self->write_at + ((uintptr_t)1)) % ((uintptr_t)Kern_MOUSE_BUFFER_SIZE));
             self->count = (self->count + ((uintptr_t)3));
         }
-        if (__llpl_defer_active27) {
-            __llpl_defer_active27 = 0;
-            llpl_eh_pop(&__llpl_defer_frame26);
+        if (__llpl_defer_active29) {
+            __llpl_defer_active29 = 0;
+            llpl_eh_pop(&__llpl_defer_frame28);
         SpinLock_release(&(self->lock));
         }
     }
     Kern_wake_all(self->read_waiters);
-    if (__llpl_defer_active27) {
-        __llpl_defer_active27 = 0;
-        llpl_eh_pop(&__llpl_defer_frame26);
+    if (__llpl_defer_active29) {
+        __llpl_defer_active29 = 0;
+        llpl_eh_pop(&__llpl_defer_frame28);
         SpinLock_release(&(self->lock));
     }
 }
 
 intptr_t Kern_MouseDevice_read(Kern_MouseDevice* self, char* buf, uintptr_t size) {
-    __LLPL_EH_Frame __llpl_defer_frame28;
-    int __llpl_defer_active29 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame30;
+    int __llpl_defer_active31 = 0;
     while (1) {
-#line 482 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 771 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->lock));
-            __llpl_defer_frame28.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame28.type_id = ((void*)0);
-            __llpl_defer_frame28.error_slot = ((void*)0);
-            __llpl_defer_frame28.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame28);
-            __llpl_defer_active29 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame28.env) != 0) {
-                __llpl_defer_active29 = 0;
+            __llpl_defer_frame30.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame30.type_id = ((void*)0);
+            __llpl_defer_frame30.error_slot = ((void*)0);
+            __llpl_defer_frame30.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame30);
+            __llpl_defer_active31 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame30.env) != 0) {
+                __llpl_defer_active31 = 0;
             SpinLock_release(&(self->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             if ((self->count != ((uintptr_t)0))) {
-#line 485 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 774 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
                 uintptr_t amount = size;
                 if ((amount > self->count)) {
                     amount = self->count;
                 }
-#line 487 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 776 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
                 {
-                    intptr_t __range_end648 = amount;
+                    intptr_t __range_end669 = amount;
                     intptr_t i = 0;
-                    for (; i < __range_end648; i = i + 1) {
-                        buf[i] = (*(char*)__llpl_check_index(self->buffer, self->read_at, 768, sizeof(char), "mouse.llpl", 488));
+                    for (; i < __range_end669; i = i + 1) {
+                        buf[i] = (*(char*)__llpl_check_index(self->buffer, self->read_at, 768, sizeof(char), "mouse.llpl", 777));
                         self->read_at = ((self->read_at + ((uintptr_t)1)) % ((uintptr_t)Kern_MOUSE_BUFFER_SIZE));
                     }
                 }
                 self->count = (self->count - amount);
-#line 492 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                intptr_t __llpl_ret649 = ((intptr_t)amount);
-                if (__llpl_defer_active29) {
-                    __llpl_defer_active29 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame28);
+#line 781 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                intptr_t __llpl_ret670 = ((intptr_t)amount);
+                if (__llpl_defer_active31) {
+                    __llpl_defer_active31 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame30);
             SpinLock_release(&(self->lock));
                 }
-                return __llpl_ret649;
+                return __llpl_ret670;
             }
             prepared = Kern_prepare_block_current(self->read_waiters);
-            if (__llpl_defer_active29) {
-                __llpl_defer_active29 = 0;
-                llpl_eh_pop(&__llpl_defer_frame28);
+            if (__llpl_defer_active31) {
+                __llpl_defer_active31 = 0;
+                llpl_eh_pop(&__llpl_defer_frame30);
             SpinLock_release(&(self->lock));
             }
         }
         if (!prepared) {
-#line 496 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-            intptr_t __llpl_ret650 = EINVAL;
-            if (__llpl_defer_active29) {
-                __llpl_defer_active29 = 0;
-                llpl_eh_pop(&__llpl_defer_frame28);
-            SpinLock_release(&(self->lock));
-            }
-            return __llpl_ret650;
-        }
-        Kern_scheduler_yield();
-    }
-#line 499 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    intptr_t __llpl_ret651 = EINVAL;
-    if (__llpl_defer_active29) {
-        __llpl_defer_active29 = 0;
-        llpl_eh_pop(&__llpl_defer_frame28);
-            SpinLock_release(&(self->lock));
-    }
-    return __llpl_ret651;
-    if (__llpl_defer_active29) {
-        __llpl_defer_active29 = 0;
-        llpl_eh_pop(&__llpl_defer_frame28);
-            SpinLock_release(&(self->lock));
-    }
-}
-
-
-#line 503 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-Kern_MouseDevice* Kern_mouse_device = ((void*)0);
-
-#line 504 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-HAL_Interrupt* Kern_mouse_interrupt = ((void*)0);
-
-#line 505 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-uint8_t Kern_mouse_packet[3];
-
-#line 506 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-uintptr_t Kern_mouse_packet_index = 0;
-
-#line 519 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-SpinLock Kern_gui_lock;
-
-#line 528 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-bool Kern_mu_overlay_dirty = 0;
-
-#line 530 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-bool Kern_mouse_wait_output_full() {
-#line 531 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    {
-        intptr_t __range_end652 = Kern_PS2_POLL_LIMIT;
-        intptr_t i = 0;
-        for (; i < __range_end652; i = i + 1) {
-            if (((HAL_inb(((uint64_t)Kern_PS2_STATUS_PORT)) & ((uint8_t)Kern_PS2_OUTPUT_FULL)) != ((uint8_t)0))) {
-#line 532 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                bool __llpl_ret653 = 1;
-                return __llpl_ret653;
-            }
-        }
-    }
-#line 534 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    bool __llpl_ret654 = 0;
-    return __llpl_ret654;
-}
-
-#line 537 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-bool Kern_mouse_wait_input_clear() {
-#line 538 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    {
-        intptr_t __range_end655 = Kern_PS2_POLL_LIMIT;
-        intptr_t i = 0;
-        for (; i < __range_end655; i = i + 1) {
-            if (((HAL_inb(((uint64_t)Kern_PS2_STATUS_PORT)) & ((uint8_t)Kern_PS2_INPUT_FULL)) == ((uint8_t)0))) {
-#line 539 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                bool __llpl_ret656 = 1;
-                return __llpl_ret656;
-            }
-        }
-    }
-#line 541 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    bool __llpl_ret657 = 0;
-    return __llpl_ret657;
-}
-
-#line 547 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-bool Kern_mouse_write(uint8_t value) {
-    if (!Kern_mouse_wait_input_clear()) {
-#line 548 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret658 = 0;
-        return __llpl_ret658;
-    }
-    HAL_outb(((uint64_t)Kern_PS2_CMD_PORT), ((uint8_t)Kern_PS2_CMD_WRITE_AUX));
-    if (!Kern_mouse_wait_input_clear()) {
-#line 550 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret659 = 0;
-        return __llpl_ret659;
-    }
-    HAL_outb(((uint64_t)Kern_PS2_DATA_PORT), value);
-#line 552 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    bool __llpl_ret660 = 1;
-    return __llpl_ret660;
-}
-
-#line 555 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-bool Kern_mouse_read_ack() {
-    if (!Kern_mouse_wait_output_full()) {
-#line 556 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret661 = 0;
-        return __llpl_ret661;
-    }
-#line 557 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    bool __llpl_ret662 = (HAL_inb(((uint64_t)Kern_PS2_DATA_PORT)) == ((uint8_t)Kern_MOUSE_ACK));
-    return __llpl_ret662;
-}
-
-#line 578 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-void Kern_compose_frame_work(void* arg) {
-    __LLPL_EH_Frame __llpl_defer_frame30;
-    int __llpl_defer_active31 = 0;
-    {
-        SpinLock_acquire(&(Kern_gui_lock));
-        __llpl_defer_frame30.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame30.type_id = ((void*)0);
-        __llpl_defer_frame30.error_slot = ((void*)0);
-        __llpl_defer_frame30.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame30);
-        __llpl_defer_active31 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame30.env) != 0) {
-            __llpl_defer_active31 = 0;
-        SpinLock_release(&(Kern_gui_lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-#line 580 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        uintptr_t cx = ((uintptr_t)Kern_cursor_x);
-#line 581 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        uintptr_t cy = ((uintptr_t)Kern_cursor_y);
-#line 590 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool anything_changed = (((!Kern_cursor_drawn || (Kern_cursor_drawn_x != cx)) || (Kern_cursor_drawn_y != cy)) || Kern_mu_overlay_dirty);
-        Kern_mu_overlay_dirty = 0;
-        if (!anything_changed) {
-#line 592 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 785 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            intptr_t __llpl_ret671 = EINVAL;
             if (__llpl_defer_active31) {
                 __llpl_defer_active31 = 0;
                 llpl_eh_pop(&__llpl_defer_frame30);
-        SpinLock_release(&(Kern_gui_lock));
+            SpinLock_release(&(self->lock));
             }
-            return;
+            return __llpl_ret671;
         }
-        if ((Kern_cursor_drawn && Kern_cursor_move_fits(Kern_cursor_drawn_x, Kern_cursor_drawn_y, cx, cy))) {
-            Kern_cursor_capture_new_background(cx, cy, Kern_cursor_drawn_x, Kern_cursor_drawn_y);
-            Kern_cursor_flush_move(cx, cy, Kern_cursor_drawn_x, Kern_cursor_drawn_y);
-        } else {
-            if (Kern_cursor_drawn) {
-#line 608 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                {
-                    intptr_t __range_end663 = Kern_CURSOR_H;
-                    intptr_t row = 0;
-                    for (; row < __range_end663; row = row + 1) {
-#line 609 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                        {
-                            intptr_t __range_end664 = Kern_CURSOR_W;
-                            intptr_t col = 0;
-                            for (; col < __range_end664; col = col + 1) {
-                                Terminal_put_pixel((Kern_cursor_drawn_x + ((uintptr_t)col)), (Kern_cursor_drawn_y + ((uintptr_t)row)), Kern_cursor_saved[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))]);
-                            }
-                        }
-                    }
-                }
-            }
-#line 616 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-            {
-                intptr_t __range_end665 = Kern_CURSOR_H;
-                intptr_t row = 0;
-                for (; row < __range_end665; row = row + 1) {
-#line 617 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                    {
-                        intptr_t __range_end666 = Kern_CURSOR_W;
-                        intptr_t col = 0;
-                        for (; col < __range_end666; col = col + 1) {
-                            Kern_cursor_saved[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))] = Terminal_get_pixel((cx + ((uintptr_t)col)), (cy + ((uintptr_t)row)));
-                        }
-                    }
-                }
-            }
-            if ((Kern_cursor_pixels != ((void*)0))) {
-#line 624 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                {
-                    intptr_t __range_end667 = Kern_CURSOR_H;
-                    intptr_t row = 0;
-                    for (; row < __range_end667; row = row + 1) {
-#line 625 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                        {
-                            intptr_t __range_end668 = Kern_CURSOR_W;
-                            intptr_t col = 0;
-                            for (; col < __range_end668; col = col + 1) {
-#line 626 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                                uint32_t p = Kern_cursor_pixels[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))];
-#line 627 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                                uint32_t a = ((p >> ((uint32_t)24)) & ((uint32_t)255));
-                                if ((a != ((uint32_t)0))) {
-                                    Terminal_blend_pixel((cx + ((uintptr_t)col)), (cy + ((uintptr_t)row)), (p & ((uint32_t)16777215)), ((uint8_t)a));
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-#line 634 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                {
-                    intptr_t __range_end669 = Kern_CURSOR_H;
-                    intptr_t row = 0;
-                    for (; row < __range_end669; row = row + 1) {
-#line 635 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                        uint8_t bits = (*(uint8_t*)__llpl_check_index(Kern_cursor_shape, row, 8, sizeof(uint8_t), "mouse.llpl", 635));
-#line 636 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                        {
-                            intptr_t __range_end670 = Kern_CURSOR_W;
-                            intptr_t col = 0;
-                            for (; col < __range_end670; col = col + 1) {
-                                if (((bits & (((uint8_t)128) >> ((uint8_t)col))) != ((uint8_t)0))) {
-                                    Terminal_put_pixel((cx + ((uintptr_t)col)), (cy + ((uintptr_t)row)), Kern_CURSOR_COLOR);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Kern_cursor_drawn_x = cx;
-        Kern_cursor_drawn_y = cy;
-        Kern_cursor_drawn = 1;
-        if (__llpl_defer_active31) {
-            __llpl_defer_active31 = 0;
-            llpl_eh_pop(&__llpl_defer_frame30);
-        SpinLock_release(&(Kern_gui_lock));
-        }
+        Kern_scheduler_yield();
     }
+#line 788 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    intptr_t __llpl_ret672 = EINVAL;
     if (__llpl_defer_active31) {
         __llpl_defer_active31 = 0;
         llpl_eh_pop(&__llpl_defer_frame30);
-        SpinLock_release(&(Kern_gui_lock));
+            SpinLock_release(&(self->lock));
+    }
+    return __llpl_ret672;
+    if (__llpl_defer_active31) {
+        __llpl_defer_active31 = 0;
+        llpl_eh_pop(&__llpl_defer_frame30);
+            SpinLock_release(&(self->lock));
     }
 }
 
-#line 658 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-void Kern_mouse_pre_scroll(void* arg) {
+
+#line 792 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+Kern_MouseDevice* Kern_mouse_device = ((void*)0);
+
+#line 793 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+HAL_Interrupt* Kern_mouse_interrupt = ((void*)0);
+
+#line 794 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uint8_t Kern_mouse_packet[3];
+
+#line 795 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+uintptr_t Kern_mouse_packet_index = 0;
+
+#line 808 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+SpinLock Kern_gui_lock;
+
+#line 817 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_mu_overlay_dirty = 0;
+
+#line 819 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_mouse_wait_output_full() {
+#line 820 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    {
+        intptr_t __range_end673 = Kern_PS2_POLL_LIMIT;
+        intptr_t i = 0;
+        for (; i < __range_end673; i = i + 1) {
+            if (((HAL_inb(((uint64_t)Kern_PS2_STATUS_PORT)) & ((uint8_t)Kern_PS2_OUTPUT_FULL)) != ((uint8_t)0))) {
+#line 821 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                bool __llpl_ret674 = 1;
+                return __llpl_ret674;
+            }
+        }
+    }
+#line 823 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    bool __llpl_ret675 = 0;
+    return __llpl_ret675;
+}
+
+#line 826 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_mouse_wait_input_clear() {
+#line 827 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    {
+        intptr_t __range_end676 = Kern_PS2_POLL_LIMIT;
+        intptr_t i = 0;
+        for (; i < __range_end676; i = i + 1) {
+            if (((HAL_inb(((uint64_t)Kern_PS2_STATUS_PORT)) & ((uint8_t)Kern_PS2_INPUT_FULL)) == ((uint8_t)0))) {
+#line 828 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                bool __llpl_ret677 = 1;
+                return __llpl_ret677;
+            }
+        }
+    }
+#line 830 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    bool __llpl_ret678 = 0;
+    return __llpl_ret678;
+}
+
+#line 836 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_mouse_write(uint8_t value) {
+    if (!Kern_mouse_wait_input_clear()) {
+#line 837 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret679 = 0;
+        return __llpl_ret679;
+    }
+    HAL_outb(((uint64_t)Kern_PS2_CMD_PORT), ((uint8_t)Kern_PS2_CMD_WRITE_AUX));
+    if (!Kern_mouse_wait_input_clear()) {
+#line 839 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret680 = 0;
+        return __llpl_ret680;
+    }
+    HAL_outb(((uint64_t)Kern_PS2_DATA_PORT), value);
+#line 841 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    bool __llpl_ret681 = 1;
+    return __llpl_ret681;
+}
+
+#line 844 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+bool Kern_mouse_read_ack() {
+    if (!Kern_mouse_wait_output_full()) {
+#line 845 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret682 = 0;
+        return __llpl_ret682;
+    }
+#line 846 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    bool __llpl_ret683 = (HAL_inb(((uint64_t)Kern_PS2_DATA_PORT)) == ((uint8_t)Kern_MOUSE_ACK));
+    return __llpl_ret683;
+}
+
+#line 867 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_compose_frame_work(void* arg) {
     __LLPL_EH_Frame __llpl_defer_frame32;
     int __llpl_defer_active33 = 0;
     {
@@ -16691,27 +16995,105 @@ void Kern_mouse_pre_scroll(void* arg) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        Kern_mu_demo_restore_rect();
-        Kern_mu_term_restore_rect();
-        Kern_mu_gl_restore_rect();
-        if (Kern_cursor_drawn) {
-#line 671 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-            {
-                intptr_t __range_end671 = Kern_CURSOR_H;
-                intptr_t row = 0;
-                for (; row < __range_end671; row = row + 1) {
-#line 672 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-                    {
-                        intptr_t __range_end672 = Kern_CURSOR_W;
-                        intptr_t col = 0;
-                        for (; col < __range_end672; col = col + 1) {
-                            Terminal_put_pixel((Kern_cursor_drawn_x + ((uintptr_t)col)), (Kern_cursor_drawn_y + ((uintptr_t)row)), Kern_cursor_saved[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))]);
+#line 869 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t cx = ((uintptr_t)Kern_cursor_x);
+#line 870 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uintptr_t cy = ((uintptr_t)Kern_cursor_y);
+#line 879 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool anything_changed = (((!Kern_cursor_drawn || (Kern_cursor_drawn_x != cx)) || (Kern_cursor_drawn_y != cy)) || Kern_mu_overlay_dirty);
+        Kern_mu_overlay_dirty = 0;
+        if (!anything_changed) {
+#line 881 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            if (__llpl_defer_active33) {
+                __llpl_defer_active33 = 0;
+                llpl_eh_pop(&__llpl_defer_frame32);
+        SpinLock_release(&(Kern_gui_lock));
+            }
+            return;
+        }
+        if ((Kern_cursor_drawn && Kern_cursor_move_fits(Kern_cursor_drawn_x, Kern_cursor_drawn_y, cx, cy))) {
+            Kern_cursor_capture_new_background(cx, cy, Kern_cursor_drawn_x, Kern_cursor_drawn_y);
+            Kern_cursor_flush_move(cx, cy, Kern_cursor_drawn_x, Kern_cursor_drawn_y);
+        } else {
+            if (Kern_cursor_drawn) {
+#line 897 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                {
+                    intptr_t __range_end684 = Kern_CURSOR_H;
+                    intptr_t row = 0;
+                    for (; row < __range_end684; row = row + 1) {
+#line 898 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                        {
+                            intptr_t __range_end685 = Kern_CURSOR_W;
+                            intptr_t col = 0;
+                            for (; col < __range_end685; col = col + 1) {
+                                Terminal_put_pixel((Kern_cursor_drawn_x + ((uintptr_t)col)), (Kern_cursor_drawn_y + ((uintptr_t)row)), Kern_cursor_saved[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))]);
+                            }
                         }
                     }
                 }
             }
-            Kern_cursor_drawn = 0;
+#line 905 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            {
+                intptr_t __range_end686 = Kern_CURSOR_H;
+                intptr_t row = 0;
+                for (; row < __range_end686; row = row + 1) {
+#line 906 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                    {
+                        intptr_t __range_end687 = Kern_CURSOR_W;
+                        intptr_t col = 0;
+                        for (; col < __range_end687; col = col + 1) {
+                            Kern_cursor_saved[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))] = Terminal_get_pixel((cx + ((uintptr_t)col)), (cy + ((uintptr_t)row)));
+                        }
+                    }
+                }
+            }
+            if ((Kern_cursor_pixels != ((void*)0))) {
+#line 913 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                {
+                    intptr_t __range_end688 = Kern_CURSOR_H;
+                    intptr_t row = 0;
+                    for (; row < __range_end688; row = row + 1) {
+#line 914 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                        {
+                            intptr_t __range_end689 = Kern_CURSOR_W;
+                            intptr_t col = 0;
+                            for (; col < __range_end689; col = col + 1) {
+#line 915 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                                uint32_t p = Kern_cursor_pixels[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))];
+#line 916 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                                uint32_t a = ((p >> ((uint32_t)24)) & ((uint32_t)255));
+                                if ((a != ((uint32_t)0))) {
+                                    Terminal_blend_pixel((cx + ((uintptr_t)col)), (cy + ((uintptr_t)row)), (p & ((uint32_t)16777215)), ((uint8_t)a));
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+#line 923 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                {
+                    intptr_t __range_end690 = Kern_CURSOR_H;
+                    intptr_t row = 0;
+                    for (; row < __range_end690; row = row + 1) {
+#line 924 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                        uint8_t bits = (*(uint8_t*)__llpl_check_index(Kern_cursor_shape, row, 8, sizeof(uint8_t), "mouse.llpl", 924));
+#line 925 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                        {
+                            intptr_t __range_end691 = Kern_CURSOR_W;
+                            intptr_t col = 0;
+                            for (; col < __range_end691; col = col + 1) {
+                                if (((bits & (((uint8_t)128) >> ((uint8_t)col))) != ((uint8_t)0))) {
+                                    Terminal_put_pixel((cx + ((uintptr_t)col)), (cy + ((uintptr_t)row)), Kern_CURSOR_COLOR);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+        Kern_cursor_drawn_x = cx;
+        Kern_cursor_drawn_y = cy;
+        Kern_cursor_drawn = 1;
         if (__llpl_defer_active33) {
             __llpl_defer_active33 = 0;
             llpl_eh_pop(&__llpl_defer_frame32);
@@ -16725,36 +17107,86 @@ void Kern_mouse_pre_scroll(void* arg) {
     }
 }
 
-#line 684 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-void Kern_mouse_post_scroll(void* arg) {
-    if (Kern_mu_demo_active) {
-        Kern_run_window_ticks(((void*)0));
+#line 947 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_mouse_pre_scroll(void* arg) {
+    __LLPL_EH_Frame __llpl_defer_frame34;
+    int __llpl_defer_active35 = 0;
+    {
+        SpinLock_acquire(&(Kern_gui_lock));
+        __llpl_defer_frame34.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame34.type_id = ((void*)0);
+        __llpl_defer_frame34.error_slot = ((void*)0);
+        __llpl_defer_frame34.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame34);
+        __llpl_defer_active35 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame34.env) != 0) {
+            __llpl_defer_active35 = 0;
+        SpinLock_release(&(Kern_gui_lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        if ((!Kern_mu_demo_active && Kern_cursor_drawn)) {
+#line 957 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+            {
+                intptr_t __range_end692 = Kern_CURSOR_H;
+                intptr_t row = 0;
+                for (; row < __range_end692; row = row + 1) {
+#line 958 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+                    {
+                        intptr_t __range_end693 = Kern_CURSOR_W;
+                        intptr_t col = 0;
+                        for (; col < __range_end693; col = col + 1) {
+                            Terminal_put_pixel((Kern_cursor_drawn_x + ((uintptr_t)col)), (Kern_cursor_drawn_y + ((uintptr_t)row)), Kern_cursor_saved[((((uintptr_t)row) * Kern_CURSOR_W) + ((uintptr_t)col))]);
+                        }
+                    }
+                }
+            }
+            Kern_cursor_drawn = 0;
+        }
+        if (__llpl_defer_active35) {
+            __llpl_defer_active35 = 0;
+            llpl_eh_pop(&__llpl_defer_frame34);
+        SpinLock_release(&(Kern_gui_lock));
+        }
     }
-    Kern_compose_frame_work(((void*)0));
+    if (__llpl_defer_active35) {
+        __llpl_defer_active35 = 0;
+        llpl_eh_pop(&__llpl_defer_frame34);
+        SpinLock_release(&(Kern_gui_lock));
+    }
 }
 
-#line 691 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 970 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+void Kern_mouse_post_scroll(void* arg) {
+    if (Kern_mu_demo_active) {
+        Kern_compose_desktop(((void*)0));
+    } else {
+        Kern_compose_frame_work(((void*)0));
+    }
+}
+
+#line 978 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
 void Kern_mouse_irq_handler(void* arg) {
-#line 692 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 979 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
     uint8_t value = HAL_inb(((uint64_t)Kern_PS2_DATA_PORT));
     if (((Kern_mouse_packet_index == ((uintptr_t)0)) && ((value & ((uint8_t)Kern_MOUSE_PACKET_ALWAYS_ONE)) == ((uint8_t)0)))) {
-#line 697 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 984 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
         return;
     }
-    (*(uint8_t*)__llpl_check_index(Kern_mouse_packet, Kern_mouse_packet_index, 3, sizeof(uint8_t), "mouse.llpl", 700)) = value;
+    (*(uint8_t*)__llpl_check_index(Kern_mouse_packet, Kern_mouse_packet_index, 3, sizeof(uint8_t), "mouse.llpl", 987)) = value;
     (Kern_mouse_packet_index = (Kern_mouse_packet_index + ((uintptr_t)1)));
     if ((Kern_mouse_packet_index == ((uintptr_t)3))) {
         Kern_mouse_packet_index = ((uintptr_t)0);
-        Kern_MouseDevice_push3(Kern_mouse_device, ((char)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 0, 3, sizeof(uint8_t), "mouse.llpl", 705))), ((char)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 1, 3, sizeof(uint8_t), "mouse.llpl", 705))), ((char)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 2, 3, sizeof(uint8_t), "mouse.llpl", 705))));
-#line 710 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        uint8_t flags = (*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 0, 3, sizeof(uint8_t), "mouse.llpl", 710));
-#line 711 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        intptr_t dx = ((intptr_t)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 1, 3, sizeof(uint8_t), "mouse.llpl", 711)));
+        Kern_MouseDevice_push3(Kern_mouse_device, ((char)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 0, 3, sizeof(uint8_t), "mouse.llpl", 992))), ((char)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 1, 3, sizeof(uint8_t), "mouse.llpl", 992))), ((char)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 2, 3, sizeof(uint8_t), "mouse.llpl", 992))));
+#line 997 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        uint8_t flags = (*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 0, 3, sizeof(uint8_t), "mouse.llpl", 997));
+#line 998 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        intptr_t dx = ((intptr_t)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 1, 3, sizeof(uint8_t), "mouse.llpl", 998)));
         if (((flags & ((uint8_t)16)) != ((uint8_t)0))) {
             dx = (dx - 256);
         }
-#line 713 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        intptr_t dy = ((intptr_t)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 2, 3, sizeof(uint8_t), "mouse.llpl", 713)));
+#line 1000 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        intptr_t dy = ((intptr_t)(*(uint8_t*)__llpl_check_index(Kern_mouse_packet, 2, 3, sizeof(uint8_t), "mouse.llpl", 1000)));
         if (((flags & ((uint8_t)32)) != ((uint8_t)0))) {
             dy = (dy - 256);
         }
@@ -16766,9 +17198,9 @@ void Kern_mouse_irq_handler(void* arg) {
         if ((Kern_cursor_y < 0)) {
             Kern_cursor_y = 0;
         }
-#line 723 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 1010 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
         uintptr_t max_x = (((uintptr_t)((intptr_t)Terminal_width())) - Kern_CURSOR_W);
-#line 724 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 1011 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
         uintptr_t max_y = (((uintptr_t)((intptr_t)Terminal_height())) - Kern_CURSOR_H);
         if ((((uintptr_t)Kern_cursor_x) > max_x)) {
             Kern_cursor_x = max_x;
@@ -16777,44 +17209,48 @@ void Kern_mouse_irq_handler(void* arg) {
             Kern_cursor_y = max_y;
         }
         Kern_left_button_down = ((flags & ((uint8_t)1)) != ((uint8_t)0));
-        Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure5, .env = ((void*)0) }), ((void*)0));
+        if (Kern_mu_demo_active) {
+            Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure5, .env = ((void*)0) }), ((void*)0));
+        } else {
+            Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure6, .env = ((void*)0) }), ((void*)0));
+        }
     }
 }
 
-#line 734 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 1025 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
 bool Kern_mouse_init() {
     HAL_outb(((uint64_t)Kern_PS2_CMD_PORT), ((uint8_t)Kern_PS2_CMD_ENABLE_AUX));
     HAL_outb(((uint64_t)Kern_PS2_CMD_PORT), ((uint8_t)Kern_PS2_CMD_READ_CONFIG));
     if (!Kern_mouse_wait_output_full()) {
-#line 738 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret673 = 0;
-        return __llpl_ret673;
+#line 1029 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret694 = 0;
+        return __llpl_ret694;
     }
-#line 739 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 1030 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
     uint8_t config = HAL_inb(((uint64_t)Kern_PS2_DATA_PORT));
-#line 740 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+#line 1031 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
     uint8_t new_config = ((config | ((uint8_t)Kern_PS2_CONFIG_ENABLE_AUX_IRQ)) & ~((uint8_t)Kern_PS2_CONFIG_DISABLE_AUX_CLOCK));
     if (!Kern_mouse_wait_input_clear()) {
-#line 742 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret674 = 0;
-        return __llpl_ret674;
+#line 1033 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret695 = 0;
+        return __llpl_ret695;
     }
     HAL_outb(((uint64_t)Kern_PS2_CMD_PORT), ((uint8_t)Kern_PS2_CMD_WRITE_CONFIG));
     if (!Kern_mouse_wait_input_clear()) {
-#line 744 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret675 = 0;
-        return __llpl_ret675;
+#line 1035 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret696 = 0;
+        return __llpl_ret696;
     }
     HAL_outb(((uint64_t)Kern_PS2_DATA_PORT), new_config);
     if ((!Kern_mouse_write(((uint8_t)Kern_MOUSE_CMD_SET_DEFAULTS)) || !Kern_mouse_read_ack())) {
-#line 747 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret676 = 0;
-        return __llpl_ret676;
+#line 1038 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret697 = 0;
+        return __llpl_ret697;
     }
     if ((!Kern_mouse_write(((uint8_t)Kern_MOUSE_CMD_ENABLE_REPORTING)) || !Kern_mouse_read_ack())) {
-#line 748 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-        bool __llpl_ret677 = 0;
-        return __llpl_ret677;
+#line 1039 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+        bool __llpl_ret698 = 0;
+        return __llpl_ret698;
     }
     Kern_mouse_packet_index = ((uintptr_t)0);
     ({ Kern_MouseDevice* __llpl_assign_tmp60 = Kern_MouseDevice_new(); if (Kern_mouse_device) rc_release(Kern_mouse_device, Kern_MouseDevice_destroy); Kern_mouse_device = __llpl_assign_tmp60; Kern_mouse_device; });
@@ -16824,17 +17260,17 @@ bool Kern_mouse_init() {
     Kern_init_window_z_order();
     Kern_cursor_x = (((intptr_t)Terminal_width()) / 2);
     Kern_cursor_y = (((intptr_t)Terminal_height()) / 2);
-    Terminal_set_scroll_hooks(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure6, .env = ((void*)0) }), ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure7, .env = ((void*)0) }));
-    Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure5, .env = ((void*)0) }), ((void*)0));
+    Terminal_set_scroll_hooks(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure7, .env = ((void*)0) }), ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure8, .env = ((void*)0) }));
+    Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure6, .env = ((void*)0) }), ((void*)0));
     ({ HAL_Interrupt* __llpl_assign_tmp61 = HAL_Interrupt_new(); if (Kern_mouse_interrupt) rc_release(Kern_mouse_interrupt, ((void*)0)); Kern_mouse_interrupt = __llpl_assign_tmp61; Kern_mouse_interrupt; });
-#line 773 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    __LLPL_Closure handler = ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure8, .env = ((void*)0) });
+#line 1064 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    __LLPL_Closure handler = ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure9, .env = ((void*)0) });
     HAL_Interrupt_register(Kern_mouse_interrupt, 44, handler, ((void*)0));
     HAL_PIC_enable_irq(((uintptr_t)12));
     HAL_Serial_write("Kern.mouse_init()\n");
-#line 778 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
-    bool __llpl_ret678 = 1;
-    return __llpl_ret678;
+#line 1069 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mouse.llpl"
+    bool __llpl_ret699 = 1;
+    return __llpl_ret699;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl
@@ -16883,98 +17319,66 @@ const intptr_t Kern_MU_DEMO_MAX_W = 480;
 #line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 const intptr_t Kern_MU_DEMO_MAX_H = 420;
 
-#line 64 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-uint32_t Kern_mu_demo_saved[201600];
-
-#line 70 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 75 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 uint32_t Kern_mu_demo_backbuffer[201600];
 
-#line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-uint32_t Kern_mu_demo_last_blit[201600];
-
-#line 84 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-bool Kern_mu_demo_last_blit_valid = 0;
-
-#line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 77 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 bool Kern_mu_demo_check = 0;
 
-#line 87 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 intptr_t Kern_mu_demo_clicks = 0;
 
-#line 88 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 intptr_t Kern_mu_demo_color_r = 90;
 
-#line 89 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 80 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 intptr_t Kern_mu_demo_color_g = 95;
 
-#line 90 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 81 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 intptr_t Kern_mu_demo_color_b = 200;
 
-#line 92 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-void Kern_mu_demo_save_rect(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h) {
-#line 93 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-    uintptr_t row = ((uintptr_t)0);
-    while ((row < h)) {
-#line 95 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-        uintptr_t col = ((uintptr_t)0);
-        while ((col < w)) {
-            (*(uint32_t*)__llpl_check_index(Kern_mu_demo_saved, ((row * w) + col), 201600, sizeof(uint32_t), "mu_demo.llpl", 97)) = Terminal_get_pixel((x + col), (y + row));
-            (col = (col + ((uintptr_t)1)));
-        }
-        (row = (row + ((uintptr_t)1)));
-    }
-}
-
-#line 104 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-void Kern_mu_demo_restore_rect() {
-    if (!Kern_mu_demo_drawn) {
-#line 105 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-        return;
-    }
-    Terminal_blit_rect(Kern_mu_demo_drawn_x, Kern_mu_demo_drawn_y, Kern_mu_demo_drawn_w, Kern_mu_demo_drawn_h, ((uint32_t*)Kern_mu_demo_saved), Kern_mu_demo_drawn_w);
-    Kern_mu_demo_drawn = 0;
-    Kern_mu_demo_last_blit_valid = 0;
-}
-
-#line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 void Kern_mu_demo_toggle() {
-    __LLPL_EH_Frame __llpl_defer_frame34;
-    int __llpl_defer_active35 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame36;
+    int __llpl_defer_active37 = 0;
     Kern_mu_demo_active = !Kern_mu_demo_active;
     if (!Kern_mu_demo_active) {
         {
             SpinLock_acquire(&(Kern_gui_lock));
-            __llpl_defer_frame34.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame34.type_id = ((void*)0);
-            __llpl_defer_frame34.error_slot = ((void*)0);
-            __llpl_defer_frame34.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame34);
-            __llpl_defer_active35 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame34.env) != 0) {
-                __llpl_defer_active35 = 0;
+            __llpl_defer_frame36.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame36.type_id = ((void*)0);
+            __llpl_defer_frame36.error_slot = ((void*)0);
+            __llpl_defer_frame36.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame36);
+            __llpl_defer_active37 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame36.env) != 0) {
+                __llpl_defer_active37 = 0;
             SpinLock_release(&(Kern_gui_lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
-            Kern_mu_demo_restore_rect();
-            if (__llpl_defer_active35) {
-                __llpl_defer_active35 = 0;
-                llpl_eh_pop(&__llpl_defer_frame34);
+            Kern_mu_demo_drawn = 0;
+            Kern_mu_term_drawn = 0;
+            Kern_mu_gl_drawn = 0;
+            Terminal_force_repaint();
+            if (__llpl_defer_active37) {
+                __llpl_defer_active37 = 0;
+                llpl_eh_pop(&__llpl_defer_frame36);
             SpinLock_release(&(Kern_gui_lock));
             }
         }
     }
-    if (__llpl_defer_active35) {
-        __llpl_defer_active35 = 0;
-        llpl_eh_pop(&__llpl_defer_frame34);
+    if (__llpl_defer_active37) {
+        __llpl_defer_active37 = 0;
+        llpl_eh_pop(&__llpl_defer_frame36);
             SpinLock_release(&(Kern_gui_lock));
     }
 }
 
-#line 123 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 void Kern_mu_demo_build() {
     Mu_clamp_window_size("Demo", Kern_MU_DEMO_MAX_W, Kern_MU_DEMO_MAX_H);
-#line 129 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 105 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
     Mu_Rect r = Mu_rect(300, 80, Kern_MU_DEMO_INITIAL_W, Kern_MU_DEMO_INITIAL_H);
     if ((Mu_begin_window_ex("Demo", r, (Mu_OPT_NOCLOSE | Mu_OPT_NOSCROLL)) != 0)) {
         Mu_layout_row1(-1, 0);
@@ -16983,7 +17387,7 @@ void Kern_mu_demo_build() {
         if (((Mu_button("Click me") & Mu_RES_SUBMIT) != 0)) {
             (Kern_mu_demo_clicks = (Kern_mu_demo_clicks + 1));
         }
-#line 143 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 119 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
         char buf[32];
         Mu_mu_int_to_str(((char*)buf), 32, Kern_mu_demo_clicks);
         Mu_layout_row1(-1, 0);
@@ -16991,10 +17395,10 @@ void Kern_mu_demo_build() {
         Mu_layout_row1(-1, 0);
         Mu_checkbox("Show color mixer", &Kern_mu_demo_check);
         if (Kern_mu_demo_check) {
-#line 152 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
             intptr_t widths[2];
-            (*(intptr_t*)__llpl_check_index(widths, 0, 2, sizeof(intptr_t), "mu_demo.llpl", 153)) = 50;
-            (*(intptr_t*)__llpl_check_index(widths, 1, 2, sizeof(intptr_t), "mu_demo.llpl", 154)) = -1;
+            (*(intptr_t*)__llpl_check_index(widths, 0, 2, sizeof(intptr_t), "mu_demo.llpl", 129)) = 50;
+            (*(intptr_t*)__llpl_check_index(widths, 1, 2, sizeof(intptr_t), "mu_demo.llpl", 130)) = -1;
             Mu_layout_row_widths(2, ((intptr_t*)widths), 0);
             Mu_label("R");
             Mu_slider(&Kern_mu_demo_color_r, 0, 255);
@@ -17005,7 +17409,7 @@ void Kern_mu_demo_build() {
             Mu_label("B");
             Mu_slider(&Kern_mu_demo_color_b, 0, 255);
             Mu_layout_row1(-1, 40);
-#line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 145 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
             Mu_Rect swatch = Mu_layout_next();
             Mu_draw_rect(swatch, Mu_color(Kern_mu_demo_color_r, Kern_mu_demo_color_g, Kern_mu_demo_color_b, 255));
         }
@@ -17013,20 +17417,20 @@ void Kern_mu_demo_build() {
     }
 }
 
-#line 177 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 153 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
 void Kern_mu_demo_tick(void* arg) {
-    __LLPL_EH_Frame __llpl_defer_frame36;
-    int __llpl_defer_active37 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame38;
+    int __llpl_defer_active39 = 0;
     {
         SpinLock_acquire(&(Kern_gui_lock));
-        __llpl_defer_frame36.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame36.type_id = ((void*)0);
-        __llpl_defer_frame36.error_slot = ((void*)0);
-        __llpl_defer_frame36.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame36);
-        __llpl_defer_active37 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame36.env) != 0) {
-            __llpl_defer_active37 = 0;
+        __llpl_defer_frame38.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame38.type_id = ((void*)0);
+        __llpl_defer_frame38.error_slot = ((void*)0);
+        __llpl_defer_frame38.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame38);
+        __llpl_defer_active39 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame38.env) != 0) {
+            __llpl_defer_active39 = 0;
         SpinLock_release(&(Kern_gui_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -17035,7 +17439,7 @@ void Kern_mu_demo_tick(void* arg) {
             Mu_init();
             Kern_mu_demo_initialized = 1;
         }
-#line 190 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 166 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
         bool left_down = Kern_left_button_down;
         if (Kern_window_wants_input) {
             Mu_input_mousemove(Kern_cursor_x, Kern_cursor_y);
@@ -17058,15 +17462,15 @@ void Kern_mu_demo_tick(void* arg) {
         Kern_mu_demo_saved_focus = Mu_focus;
         Kern_mu_demo_saved_last_mouse_pos = Mu_get_last_mouse_pos();
         if (!Mu_frame_has_bounds) {
-            Kern_mu_demo_restore_rect();
+            Kern_mu_demo_drawn = 0;
         } else {
-#line 235 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 212 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
             uintptr_t new_x = ((uintptr_t)Mu_frame_bounds.x);
-#line 236 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 213 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
             uintptr_t new_y = ((uintptr_t)Mu_frame_bounds.y);
-#line 245 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 222 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
             uintptr_t new_w = ((uintptr_t)Mu_frame_bounds.w);
-#line 246 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
+#line 223 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
             uintptr_t new_h = ((uintptr_t)Mu_frame_bounds.h);
             if ((new_w > ((uintptr_t)Kern_MU_DEMO_MAX_W))) {
                 new_w = ((uintptr_t)Kern_MU_DEMO_MAX_W);
@@ -17074,382 +17478,194 @@ void Kern_mu_demo_tick(void* arg) {
             if ((new_h > ((uintptr_t)Kern_MU_DEMO_MAX_H))) {
                 new_h = ((uintptr_t)Kern_MU_DEMO_MAX_H);
             }
-            if ((Kern_mu_demo_drawn && ((((Kern_mu_demo_drawn_x != new_x) || (Kern_mu_demo_drawn_y != new_y)) || (Kern_mu_demo_drawn_w != new_w)) || (Kern_mu_demo_drawn_h != new_h)))) {
-                Kern_mu_demo_restore_rect();
-            }
-            if (!Kern_mu_demo_drawn) {
-                Kern_mu_demo_save_rect(new_x, new_y, new_w, new_h);
-            }
             Mu_set_render_target(((uint32_t*)Kern_mu_demo_backbuffer), ((intptr_t)new_w), ((intptr_t)new_h), ((intptr_t)new_x), ((intptr_t)new_y));
             Mu_render();
             Mu_clear_render_target();
-#line 275 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-            bool changed = !Kern_mu_demo_last_blit_valid;
-            if (!changed) {
-#line 277 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-                uintptr_t row = ((uintptr_t)0);
-                while (((row < new_h) && !changed)) {
-#line 279 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-                    uintptr_t col = ((uintptr_t)0);
-                    while ((col < new_w)) {
-#line 281 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-                        uintptr_t idx = ((row * new_w) + col);
-                        if (((*(uint32_t*)__llpl_check_index(Kern_mu_demo_last_blit, idx, 201600, sizeof(uint32_t), "mu_demo.llpl", 282)) != (*(uint32_t*)__llpl_check_index(Kern_mu_demo_backbuffer, idx, 201600, sizeof(uint32_t), "mu_demo.llpl", 282)))) {
-                            changed = 1;
-#line 284 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_demo.llpl"
-                            break;
-                        }
-                        (col = (col + ((uintptr_t)1)));
-                    }
-                    (row = (row + ((uintptr_t)1)));
-                }
-            }
-            if (changed) {
-                Terminal_blit_rect(new_x, new_y, new_w, new_h, ((uint32_t*)Kern_mu_demo_backbuffer), new_w);
-                memcpy(((void*)Kern_mu_demo_last_blit), ((void*)Kern_mu_demo_backbuffer), ((uintptr_t)((new_w * new_h) * ((uintptr_t)4))));
-                Kern_mu_demo_last_blit_valid = 1;
-                Kern_mu_overlay_dirty = 1;
-            }
             Kern_mu_demo_drawn_x = new_x;
             Kern_mu_demo_drawn_y = new_y;
             Kern_mu_demo_drawn_w = new_w;
             Kern_mu_demo_drawn_h = new_h;
             Kern_mu_demo_drawn = 1;
         }
-        if (__llpl_defer_active37) {
-            __llpl_defer_active37 = 0;
-            llpl_eh_pop(&__llpl_defer_frame36);
+        if (__llpl_defer_active39) {
+            __llpl_defer_active39 = 0;
+            llpl_eh_pop(&__llpl_defer_frame38);
         SpinLock_release(&(Kern_gui_lock));
         }
     }
-    if (__llpl_defer_active37) {
-        __llpl_defer_active37 = 0;
-        llpl_eh_pop(&__llpl_defer_frame36);
+    if (__llpl_defer_active39) {
+        __llpl_defer_active39 = 0;
+        llpl_eh_pop(&__llpl_defer_frame38);
         SpinLock_release(&(Kern_gui_lock));
     }
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl
-#line 34 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 36 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 const intptr_t Kern_GL_WIDTH = 320;
 
-#line 35 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 37 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 const intptr_t Kern_GL_HEIGHT = 240;
 
-#line 36 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 38 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 const char* Kern_GL_SHM_NAME = "tinygl-frame";
 
-#line 38 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 40 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 const intptr_t Kern_MU_GL_CANVAS_W = 320;
 
-#line 39 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 41 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 const intptr_t Kern_MU_GL_CANVAS_H = 240;
 
-#line 40 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 42 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 const intptr_t Kern_MU_GL_W = 336;
 
-#line 41 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 43 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 const intptr_t Kern_MU_GL_H = 280;
 
-#line 43 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 45 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 bool Kern_mu_gl_initialized = 0;
 
-#line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 46 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 Kern_SharedMemorySegment* Kern_mu_gl_segment = ((void*)0);
 
-#line 49 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 51 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 uint32_t Kern_mu_gl_frame[76800];
 
-#line 51 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 53 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 bool Kern_mu_gl_drawn = 0;
 
-#line 52 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 54 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 uintptr_t Kern_mu_gl_drawn_x = 0;
 
-#line 53 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 55 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 uintptr_t Kern_mu_gl_drawn_y = 0;
 
-#line 54 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 56 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 uintptr_t Kern_mu_gl_drawn_w = 0;
 
-#line 55 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 57 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 uintptr_t Kern_mu_gl_drawn_h = 0;
 
-#line 56 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-uint32_t Kern_mu_gl_saved[94080];
-
-#line 57 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 63 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 uint32_t Kern_mu_gl_backbuffer[94080];
 
-#line 58 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-uint32_t Kern_mu_gl_last_blit[94080];
-
-#line 59 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-bool Kern_mu_gl_last_blit_valid = 0;
-
-#line 69 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-uint32_t Kern_mu_gl_temp[94080];
-
-#line 70 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-const intptr_t Kern_MU_GL_MOVE_MAX_W = 672;
-
-#line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-const intptr_t Kern_MU_GL_MOVE_MAX_H = 560;
-
-#line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-uint32_t Kern_mu_gl_move_compose[376320];
-
-#line 77 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 68 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 intptr_t Kern_mu_gl_saved_next_hover_root = -1;
 
-#line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 69 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 uint32_t Kern_mu_gl_saved_focus = 0;
 
-#line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 70 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 Mu_Vec2 Kern_mu_gl_saved_last_mouse_pos;
 
-#line 80 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 bool Kern_mu_gl_last_left_down = 0;
 
-#line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 73 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 void Kern_mu_gl_spawn_thread(void* arg) {
-#line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 74 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
     intptr_t pid = Kern_spawn_user_process(String_new("/bin/tinygl"), Kern_kproc, ((void*)0));
     if ((pid < 0)) {
         HAL_Serial_write("mu_gl: failed to spawn /bin/tinygl\n");
     }
 }
 
-#line 89 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-void Kern_mu_gl_save_rect(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h) {
-#line 90 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t row = ((uintptr_t)0);
-    while ((row < h)) {
-#line 92 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-        uintptr_t col = ((uintptr_t)0);
-        while ((col < w)) {
-            (*(uint32_t*)__llpl_check_index(Kern_mu_gl_saved, ((row * w) + col), 94080, sizeof(uint32_t), "mu_gl.llpl", 94)) = Terminal_get_pixel((x + col), (y + row));
-            (col = (col + ((uintptr_t)1)));
-        }
-        (row = (row + ((uintptr_t)1)));
-    }
-}
-
-#line 101 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-void Kern_mu_gl_restore_rect() {
-    if (!Kern_mu_gl_drawn) {
-#line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-        return;
-    }
-    Terminal_blit_rect(Kern_mu_gl_drawn_x, Kern_mu_gl_drawn_y, Kern_mu_gl_drawn_w, Kern_mu_gl_drawn_h, ((uint32_t*)Kern_mu_gl_saved), Kern_mu_gl_drawn_w);
-    Kern_mu_gl_drawn = 0;
-    Kern_mu_gl_last_blit_valid = 0;
-}
-
-#line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-bool Kern_mu_gl_move_fits(uintptr_t old_x, uintptr_t old_y, uintptr_t old_w, uintptr_t old_h, uintptr_t new_x, uintptr_t new_y, uintptr_t new_w, uintptr_t new_h) {
-#line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_x = old_x;
-    if ((new_x < union_x)) {
-        union_x = new_x;
-    }
-#line 115 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_y = old_y;
-    if ((new_y < union_y)) {
-        union_y = new_y;
-    }
-#line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_r = (old_x + old_w);
-    if (((new_x + new_w) > union_r)) {
-        union_r = (new_x + new_w);
-    }
-#line 119 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_b = (old_y + old_h);
-    if (((new_y + new_h) > union_b)) {
-        union_b = (new_y + new_h);
-    }
-#line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    bool __llpl_ret679 = (((union_r - union_x) <= ((uintptr_t)Kern_MU_GL_MOVE_MAX_W)) && ((union_b - union_y) <= ((uintptr_t)Kern_MU_GL_MOVE_MAX_H)));
-    return __llpl_ret679;
-}
-
-#line 134 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-void Kern_mu_gl_capture_new_background(uintptr_t new_x, uintptr_t new_y, uintptr_t new_w, uintptr_t new_h, uintptr_t old_x, uintptr_t old_y, uintptr_t old_w, uintptr_t old_h) {
-#line 136 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t row = ((uintptr_t)0);
-    while ((row < new_h)) {
-#line 138 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-        uintptr_t col = ((uintptr_t)0);
-        while ((col < new_w)) {
-#line 140 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t px = (new_x + col);
-#line 141 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t py = (new_y + row);
-#line 142 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uint32_t val;
-            if (((((px >= old_x) && (px < (old_x + old_w))) && (py >= old_y)) && (py < (old_y + old_h)))) {
-                val = (*(uint32_t*)__llpl_check_index(Kern_mu_gl_saved, (((py - old_y) * old_w) + (px - old_x)), 94080, sizeof(uint32_t), "mu_gl.llpl", 144));
-            } else {
-                val = Terminal_get_pixel(px, py);
-            }
-            (*(uint32_t*)__llpl_check_index(Kern_mu_gl_temp, ((row * new_w) + col), 94080, sizeof(uint32_t), "mu_gl.llpl", 148)) = val;
-            (col = (col + ((uintptr_t)1)));
-        }
-        (row = (row + ((uintptr_t)1)));
-    }
-}
-
-#line 163 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-void Kern_mu_gl_flush_move(uintptr_t new_x, uintptr_t new_y, uintptr_t new_w, uintptr_t new_h, uintptr_t old_x, uintptr_t old_y, uintptr_t old_w, uintptr_t old_h) {
-#line 165 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_x = old_x;
-    if ((new_x < union_x)) {
-        union_x = new_x;
-    }
-#line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_y = old_y;
-    if ((new_y < union_y)) {
-        union_y = new_y;
-    }
-#line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_r = (old_x + old_w);
-    if (((new_x + new_w) > union_r)) {
-        union_r = (new_x + new_w);
-    }
-#line 171 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_b = (old_y + old_h);
-    if (((new_y + new_h) > union_b)) {
-        union_b = (new_y + new_h);
-    }
-#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_w = (union_r - union_x);
-#line 174 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t union_h = (union_b - union_y);
-#line 179 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    uintptr_t row = ((uintptr_t)0);
-    while ((row < union_h)) {
-#line 181 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-        uintptr_t col = ((uintptr_t)0);
-        while ((col < union_w)) {
-            (*(uint32_t*)__llpl_check_index(Kern_mu_gl_move_compose, ((row * union_w) + col), 376320, sizeof(uint32_t), "mu_gl.llpl", 183)) = Terminal_get_pixel((union_x + col), (union_y + row));
-            (col = (col + ((uintptr_t)1)));
-        }
-        (row = (row + ((uintptr_t)1)));
-    }
-    row = ((uintptr_t)0);
-    while ((row < old_h)) {
-#line 192 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-        uintptr_t col__shadow1 = ((uintptr_t)0);
-        while ((col__shadow1 < old_w)) {
-#line 194 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t dst = ((((old_y - union_y) + row) * union_w) + ((old_x - union_x) + col__shadow1));
-            (*(uint32_t*)__llpl_check_index(Kern_mu_gl_move_compose, dst, 376320, sizeof(uint32_t), "mu_gl.llpl", 195)) = (*(uint32_t*)__llpl_check_index(Kern_mu_gl_saved, ((row * old_w) + col__shadow1), 94080, sizeof(uint32_t), "mu_gl.llpl", 195));
-            (col__shadow1 = (col__shadow1 + ((uintptr_t)1)));
-        }
-        (row = (row + ((uintptr_t)1)));
-    }
-    memcpy(((void*)Kern_mu_gl_saved), ((void*)Kern_mu_gl_temp), ((uintptr_t)((new_w * new_h) * ((uintptr_t)4))));
-    row = ((uintptr_t)0);
-    while ((row < new_h)) {
-#line 208 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-        uintptr_t col__shadow2 = ((uintptr_t)0);
-        while ((col__shadow2 < new_w)) {
-#line 210 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t dst__shadow3 = ((((new_y - union_y) + row) * union_w) + ((new_x - union_x) + col__shadow2));
-            (*(uint32_t*)__llpl_check_index(Kern_mu_gl_move_compose, dst__shadow3, 376320, sizeof(uint32_t), "mu_gl.llpl", 211)) = (*(uint32_t*)__llpl_check_index(Kern_mu_gl_backbuffer, ((row * new_w) + col__shadow2), 94080, sizeof(uint32_t), "mu_gl.llpl", 211));
-            (col__shadow2 = (col__shadow2 + ((uintptr_t)1)));
-        }
-        (row = (row + ((uintptr_t)1)));
-    }
-    Terminal_blit_rect(union_x, union_y, union_w, union_h, ((uint32_t*)Kern_mu_gl_move_compose), union_w);
-}
-
-#line 220 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 80 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 Mu_Rect Kern_mu_gl_build() {
-#line 221 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 81 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
     Mu_Rect r = Mu_rect(300, 420, Kern_MU_GL_W, Kern_MU_GL_H);
     if ((Mu_begin_window_ex("TinyGL", r, ((Mu_OPT_NORESIZE | Mu_OPT_NOCLOSE) | Mu_OPT_NOSCROLL)) != 0)) {
         Mu_layout_row1(-1, Kern_MU_GL_CANVAS_H);
-#line 224 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 84 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
         Mu_Rect canvas = Mu_layout_next();
         Mu_draw_rect(canvas, Mu_color(0, 0, 0, 255));
         Mu_end_window();
-#line 227 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-        Mu_Rect __llpl_ret680 = canvas;
-        return __llpl_ret680;
+#line 87 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+        Mu_Rect __llpl_ret700 = canvas;
+        return __llpl_ret700;
     }
-#line 229 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 89 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
     Mu_Rect empty;
-#line 230 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    Mu_Rect __llpl_ret681 = empty;
-    return __llpl_ret681;
+#line 90 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+    Mu_Rect __llpl_ret701 = empty;
+    return __llpl_ret701;
 }
 
-#line 242 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 void Kern_mu_gl_pump_frame() {
     if ((Kern_mu_gl_segment == ((void*)0))) {
-#line 244 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 104 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
         Optional_Kern_SharedMemorySegment* found = HashMap_String_Kern_SharedMemorySegment_get(Kern_shm_segments, String_new(Kern_GL_SHM_NAME));
         if (Optional_Kern_SharedMemorySegment_is_none(found)) {
-#line 245 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 105 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
             return;
         }
         ({ Kern_SharedMemorySegment* __llpl_assign_tmp62 = Optional_Kern_SharedMemorySegment_get(found); if (Kern_mu_gl_segment) rc_release(Kern_mu_gl_segment, Kern_SharedMemorySegment_destroy); Kern_mu_gl_segment = __llpl_assign_tmp62; Kern_mu_gl_segment; });
     }
-#line 249 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 109 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
     uintptr_t total_bytes = ((uintptr_t)((Kern_GL_WIDTH * Kern_GL_HEIGHT) * 4));
-#line 250 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+    uintptr_t frame_pages = (total_bytes / ((uintptr_t)MM_PAGE_SIZE));
+#line 119 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+    uintptr_t ready_page = (frame_pages * ((uintptr_t)2));
+    if ((ready_page >= Kern_mu_gl_segment->page_count)) {
+#line 120 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+        return;
+    }
+#line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+    uint32_t ready = *((uint32_t*)MM_p2v(Kern_mu_gl_segment->frame_paddrs[ready_page]));
+#line 122 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+    uintptr_t start_page = (((uintptr_t)ready) * frame_pages);
+#line 124 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
     char* dst = ((char*)Kern_mu_gl_frame);
-#line 251 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
     uintptr_t copied = ((uintptr_t)0);
-#line 252 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-    {
-        intptr_t __range_end682 = Kern_mu_gl_segment->page_count;
-        intptr_t i = 0;
-        for (; i < __range_end682; i = i + 1) {
-            if ((copied >= total_bytes)) {
-#line 253 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                break;
-            }
-#line 254 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t remaining = (total_bytes - copied);
-#line 255 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            intptr_t chunk = MM_PAGE_SIZE;
-            if ((remaining < ((uintptr_t)chunk))) {
-                chunk = remaining;
-            }
-            memcpy(((void*)(dst + copied)), ((void*)MM_p2v(Kern_mu_gl_segment->frame_paddrs[i])), chunk);
-            copied = (copied + ((uintptr_t)chunk));
+#line 126 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+    uintptr_t i = ((uintptr_t)0);
+    while ((i < frame_pages)) {
+        if ((copied >= total_bytes)) {
+#line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+            break;
         }
+#line 129 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+        uintptr_t remaining = (total_bytes - copied);
+#line 130 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+        intptr_t chunk = MM_PAGE_SIZE;
+        if ((remaining < ((uintptr_t)chunk))) {
+            chunk = remaining;
+        }
+        memcpy(((void*)(dst + copied)), ((void*)MM_p2v(Kern_mu_gl_segment->frame_paddrs[(start_page + i)])), chunk);
+        copied = (copied + ((uintptr_t)chunk));
+        i = (i + ((uintptr_t)1));
     }
 }
 
-#line 262 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 138 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
 void Kern_mu_gl_tick(void* arg) {
-    __LLPL_EH_Frame __llpl_defer_frame38;
-    int __llpl_defer_active39 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame40;
+    int __llpl_defer_active41 = 0;
     {
         SpinLock_acquire(&(Kern_gui_lock));
-        __llpl_defer_frame38.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame38.type_id = ((void*)0);
-        __llpl_defer_frame38.error_slot = ((void*)0);
-        __llpl_defer_frame38.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame38);
-        __llpl_defer_active39 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame38.env) != 0) {
-            __llpl_defer_active39 = 0;
+        __llpl_defer_frame40.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame40.type_id = ((void*)0);
+        __llpl_defer_frame40.error_slot = ((void*)0);
+        __llpl_defer_frame40.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame40);
+        __llpl_defer_active41 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame40.env) != 0) {
+            __llpl_defer_active41 = 0;
         SpinLock_release(&(Kern_gui_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         if (!Kern_mu_gl_initialized) {
             Kern_mu_gl_initialized = 1;
-#line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            Kern_Thread* t = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure9, .env = ((void*)0) }), ((void*)0), String_new("mu-gl-spawn"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4)));
+#line 142 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+            Kern_Thread* t = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure10, .env = ((void*)0) }), ((void*)0), String_new("mu-gl-spawn"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4)));
             Kern_mark_thread_ready(t);
         }
         Kern_mu_gl_pump_frame();
-#line 285 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
         bool left_down = Kern_left_button_down;
         if (Kern_window_wants_input) {
             Mu_input_mousemove(Kern_cursor_x, Kern_cursor_y);
@@ -17466,113 +17682,63 @@ void Kern_mu_gl_tick(void* arg) {
         Mu_set_focus(Kern_mu_gl_saved_focus);
         Mu_set_last_mouse_pos(Kern_mu_gl_saved_last_mouse_pos);
         Mu_begin();
-#line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 176 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
         Mu_Rect canvas = Kern_mu_gl_build();
         Mu_end();
         Kern_mu_gl_saved_next_hover_root = Mu_get_next_hover_root();
         Kern_mu_gl_saved_focus = Mu_focus;
         Kern_mu_gl_saved_last_mouse_pos = Mu_get_last_mouse_pos();
         if (!Mu_frame_has_bounds) {
-            Kern_mu_gl_restore_rect();
+            Kern_mu_gl_drawn = 0;
         } else {
-#line 309 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 185 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
             uintptr_t new_x = ((uintptr_t)Mu_frame_bounds.x);
-#line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 186 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
             uintptr_t new_y = ((uintptr_t)Mu_frame_bounds.y);
-#line 311 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 187 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
             uintptr_t new_w = ((uintptr_t)Mu_frame_bounds.w);
-#line 312 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+#line 188 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
             uintptr_t new_h = ((uintptr_t)Mu_frame_bounds.h);
-#line 314 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t old_x = Kern_mu_gl_drawn_x;
-#line 315 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t old_y = Kern_mu_gl_drawn_y;
-#line 316 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t old_w = Kern_mu_gl_drawn_w;
-#line 317 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t old_h = Kern_mu_gl_drawn_h;
-#line 318 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            bool moved = (Kern_mu_gl_drawn && ((((old_x != new_x) || (old_y != new_y)) || (old_w != new_w)) || (old_h != new_h)));
-#line 319 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            bool compose_move = (moved && Kern_mu_gl_move_fits(old_x, old_y, old_w, old_h, new_x, new_y, new_w, new_h));
-            if (compose_move) {
-                Kern_mu_gl_capture_new_background(new_x, new_y, new_w, new_h, old_x, old_y, old_w, old_h);
-            } else {
-                if (moved) {
-                    Kern_mu_gl_restore_rect();
-                    Kern_mu_gl_save_rect(new_x, new_y, new_w, new_h);
-                } else {
-                    if (!Kern_mu_gl_drawn) {
-                        Kern_mu_gl_save_rect(new_x, new_y, new_w, new_h);
-                    }
-                }
-            }
             Mu_set_render_target(((uint32_t*)Kern_mu_gl_backbuffer), ((intptr_t)new_w), ((intptr_t)new_h), ((intptr_t)new_x), ((intptr_t)new_y));
             Mu_render();
-#line 343 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t local_x = ((uintptr_t)(canvas.x - ((intptr_t)new_x)));
-#line 344 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t local_y = ((uintptr_t)(canvas.y - ((intptr_t)new_y)));
-#line 345 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-            uintptr_t row = ((uintptr_t)0);
-            while ((row < ((uintptr_t)Kern_GL_HEIGHT))) {
-#line 347 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                uintptr_t dst_off = ((uintptr_t)(((local_y + row) * new_w) + local_x));
-#line 348 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                uintptr_t src_off = ((uintptr_t)(row * ((uintptr_t)Kern_GL_WIDTH)));
-                memcpy(((void*)(Kern_mu_gl_backbuffer + dst_off)), ((void*)(Kern_mu_gl_frame + src_off)), ((uintptr_t)(Kern_GL_WIDTH * 4)));
-                (row = (row + ((uintptr_t)1)));
-            }
-            Mu_clear_render_target();
-            if (compose_move) {
-                Kern_mu_gl_flush_move(new_x, new_y, new_w, new_h, old_x, old_y, old_w, old_h);
-                memcpy(((void*)Kern_mu_gl_last_blit), ((void*)Kern_mu_gl_backbuffer), ((uintptr_t)((new_w * new_h) * ((uintptr_t)4))));
-                Kern_mu_gl_last_blit_valid = 1;
-                Kern_mu_overlay_dirty = 1;
-            } else {
-#line 364 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                bool changed = !Kern_mu_gl_last_blit_valid;
-                if (!changed) {
-#line 366 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                    uintptr_t row2 = ((uintptr_t)0);
-                    while (((row2 < new_h) && !changed)) {
-#line 368 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                        uintptr_t col = ((uintptr_t)0);
-                        while ((col < new_w)) {
-#line 370 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                            uintptr_t idx = ((row2 * new_w) + col);
-                            if (((*(uint32_t*)__llpl_check_index(Kern_mu_gl_last_blit, idx, 94080, sizeof(uint32_t), "mu_gl.llpl", 371)) != (*(uint32_t*)__llpl_check_index(Kern_mu_gl_backbuffer, idx, 94080, sizeof(uint32_t), "mu_gl.llpl", 371)))) {
-                                changed = 1;
-#line 373 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
-                                break;
-                            }
-                            (col = (col + ((uintptr_t)1)));
-                        }
-                        (row2 = (row2 + ((uintptr_t)1)));
+#line 216 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+            intptr_t local_x_i = (canvas.x - ((intptr_t)new_x));
+#line 217 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+            intptr_t local_y_i = (canvas.y - ((intptr_t)new_y));
+            if (((local_x_i >= 0) && (local_y_i >= 0))) {
+#line 219 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+                uintptr_t local_x = ((uintptr_t)local_x_i);
+#line 220 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+                uintptr_t local_y = ((uintptr_t)local_y_i);
+                if ((((local_x + ((uintptr_t)Kern_GL_WIDTH)) <= new_w) && ((local_y + ((uintptr_t)Kern_GL_HEIGHT)) <= new_h))) {
+#line 222 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+                    uintptr_t row = ((uintptr_t)0);
+                    while ((row < ((uintptr_t)Kern_GL_HEIGHT))) {
+#line 224 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+                        uintptr_t dst_off = ((uintptr_t)(((local_y + row) * new_w) + local_x));
+#line 225 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_gl.llpl"
+                        uintptr_t src_off = ((uintptr_t)(row * ((uintptr_t)Kern_GL_WIDTH)));
+                        memcpy(((void*)(Kern_mu_gl_backbuffer + dst_off)), ((void*)(Kern_mu_gl_frame + src_off)), ((uintptr_t)(Kern_GL_WIDTH * 4)));
+                        (row = (row + ((uintptr_t)1)));
                     }
                 }
-                if (changed) {
-                    Terminal_blit_rect(new_x, new_y, new_w, new_h, ((uint32_t*)Kern_mu_gl_backbuffer), new_w);
-                    memcpy(((void*)Kern_mu_gl_last_blit), ((void*)Kern_mu_gl_backbuffer), ((uintptr_t)((new_w * new_h) * ((uintptr_t)4))));
-                    Kern_mu_gl_last_blit_valid = 1;
-                    Kern_mu_overlay_dirty = 1;
-                }
             }
+            Mu_clear_render_target();
             Kern_mu_gl_drawn_x = new_x;
             Kern_mu_gl_drawn_y = new_y;
             Kern_mu_gl_drawn_w = new_w;
             Kern_mu_gl_drawn_h = new_h;
             Kern_mu_gl_drawn = 1;
         }
-        if (__llpl_defer_active39) {
-            __llpl_defer_active39 = 0;
-            llpl_eh_pop(&__llpl_defer_frame38);
+        if (__llpl_defer_active41) {
+            __llpl_defer_active41 = 0;
+            llpl_eh_pop(&__llpl_defer_frame40);
         SpinLock_release(&(Kern_gui_lock));
         }
     }
-    if (__llpl_defer_active39) {
-        __llpl_defer_active39 = 0;
-        llpl_eh_pop(&__llpl_defer_frame38);
+    if (__llpl_defer_active41) {
+        __llpl_defer_active41 = 0;
+        llpl_eh_pop(&__llpl_defer_frame40);
         SpinLock_release(&(Kern_gui_lock));
     }
 }
@@ -17671,17 +17837,8 @@ uintptr_t Kern_mu_term_drawn_w = 0;
 #line 93 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
 uintptr_t Kern_mu_term_drawn_h = 0;
 
-#line 94 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-uint32_t Kern_mu_term_saved[135160];
-
-#line 95 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-uint32_t Kern_mu_term_backbuffer[135160];
-
-#line 96 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-uint32_t Kern_mu_term_last_blit[135160];
-
 #line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-bool Kern_mu_term_last_blit_valid = 0;
+uint32_t Kern_mu_term_backbuffer[135160];
 
 #line 103 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
 const intptr_t Kern_MU_TERM_KEY_RING_CAP = 64;
@@ -17699,9 +17856,9 @@ uintptr_t Kern_mu_term_key_tail = 0;
 void Kern_mu_term_clear() {
 #line 109 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     {
-        intptr_t __range_end683 = (Kern_TERM_ROWS * Kern_TERM_COLS);
+        intptr_t __range_end702 = (Kern_TERM_ROWS * Kern_TERM_COLS);
         intptr_t i = 0;
-        for (; i < __range_end683; i = i + 1) {
+        for (; i < __range_end702; i = i + 1) {
             (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, i, 1080, sizeof(Kern_TermCell), "mu_term.llpl", 110)).ch = ((char)32);
             (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, i, 1080, sizeof(Kern_TermCell), "mu_term.llpl", 111)).fg = Kern_TERM_DEFAULT_FG;
         }
@@ -17714,14 +17871,14 @@ void Kern_mu_term_clear() {
 void Kern_mu_term_scroll_up() {
 #line 118 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     {
-        intptr_t __range_end684 = (Kern_TERM_ROWS - 1);
+        intptr_t __range_end703 = (Kern_TERM_ROWS - 1);
         intptr_t row = 0;
-        for (; row < __range_end684; row = row + 1) {
+        for (; row < __range_end703; row = row + 1) {
 #line 119 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
             {
-                intptr_t __range_end685 = Kern_TERM_COLS;
+                intptr_t __range_end704 = Kern_TERM_COLS;
                 intptr_t col = 0;
-                for (; col < __range_end685; col = col + 1) {
+                for (; col < __range_end704; col = col + 1) {
                     (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, ((row * Kern_TERM_COLS) + col), 1080, sizeof(Kern_TermCell), "mu_term.llpl", 120)) = (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, (((row + 1) * Kern_TERM_COLS) + col), 1080, sizeof(Kern_TermCell), "mu_term.llpl", 120));
                 }
             }
@@ -17731,9 +17888,9 @@ void Kern_mu_term_scroll_up() {
     intptr_t last = (Kern_TERM_ROWS - 1);
 #line 124 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     {
-        intptr_t __range_end686 = Kern_TERM_COLS;
+        intptr_t __range_end705 = Kern_TERM_COLS;
         intptr_t col = 0;
-        for (; col < __range_end686; col = col + 1) {
+        for (; col < __range_end705; col = col + 1) {
             (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, ((last * Kern_TERM_COLS) + col), 1080, sizeof(Kern_TermCell), "mu_term.llpl", 125)).ch = ((char)32);
             (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, ((last * Kern_TERM_COLS) + col), 1080, sizeof(Kern_TermCell), "mu_term.llpl", 126)).fg = Kern_TERM_DEFAULT_FG;
         }
@@ -17764,75 +17921,75 @@ void Kern_mu_term_erase_row() {
 uint32_t Kern_mu_term_color_from_sgr(uint16_t code) {
 #line 150 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     {
-        uint16_t __match687 = code;
-        if ((__match687 == 30)) {
+        uint16_t __match706 = code;
+        if ((__match706 == 30)) {
 #line 151 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret688 = ((uint32_t)1054752);
-            return __llpl_ret688;
-        } else if ((__match687 == 31)) {
+            uint32_t __llpl_ret707 = ((uint32_t)1054752);
+            return __llpl_ret707;
+        } else if ((__match706 == 31)) {
 #line 152 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret689 = ((uint32_t)16273737);
-            return __llpl_ret689;
-        } else if ((__match687 == 32)) {
+            uint32_t __llpl_ret708 = ((uint32_t)16273737);
+            return __llpl_ret708;
+        } else if ((__match706 == 32)) {
 #line 153 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret690 = ((uint32_t)4176208);
-            return __llpl_ret690;
-        } else if ((__match687 == 33)) {
+            uint32_t __llpl_ret709 = ((uint32_t)4176208);
+            return __llpl_ret709;
+        } else if ((__match706 == 33)) {
 #line 154 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret691 = ((uint32_t)13801762);
-            return __llpl_ret691;
-        } else if ((__match687 == 34)) {
+            uint32_t __llpl_ret710 = ((uint32_t)13801762);
+            return __llpl_ret710;
+        } else if ((__match706 == 34)) {
 #line 155 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret692 = ((uint32_t)5809919);
-            return __llpl_ret692;
-        } else if ((__match687 == 35)) {
+            uint32_t __llpl_ret711 = ((uint32_t)5809919);
+            return __llpl_ret711;
+        } else if ((__match706 == 35)) {
 #line 156 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret693 = ((uint32_t)12356863);
-            return __llpl_ret693;
-        } else if ((__match687 == 36)) {
+            uint32_t __llpl_ret712 = ((uint32_t)12356863);
+            return __llpl_ret712;
+        } else if ((__match706 == 36)) {
 #line 157 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret694 = ((uint32_t)3789016);
-            return __llpl_ret694;
-        } else if ((__match687 == 37)) {
+            uint32_t __llpl_ret713 = ((uint32_t)3789016);
+            return __llpl_ret713;
+        } else if ((__match706 == 37)) {
 #line 158 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret695 = ((uint32_t)13226457);
-            return __llpl_ret695;
-        } else if ((__match687 == 90)) {
+            uint32_t __llpl_ret714 = ((uint32_t)13226457);
+            return __llpl_ret714;
+        } else if ((__match706 == 90)) {
 #line 159 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret696 = ((uint32_t)7239297);
-            return __llpl_ret696;
-        } else if ((__match687 == 91)) {
+            uint32_t __llpl_ret715 = ((uint32_t)7239297);
+            return __llpl_ret715;
+        } else if ((__match706 == 91)) {
 #line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret697 = ((uint32_t)16743282);
-            return __llpl_ret697;
-        } else if ((__match687 == 92)) {
+            uint32_t __llpl_ret716 = ((uint32_t)16743282);
+            return __llpl_ret716;
+        } else if ((__match706 == 92)) {
 #line 161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret698 = ((uint32_t)5690212);
-            return __llpl_ret698;
-        } else if ((__match687 == 93)) {
+            uint32_t __llpl_ret717 = ((uint32_t)5690212);
+            return __llpl_ret717;
+        } else if ((__match706 == 93)) {
 #line 162 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret699 = ((uint32_t)14922561);
-            return __llpl_ret699;
-        } else if ((__match687 == 94)) {
+            uint32_t __llpl_ret718 = ((uint32_t)14922561);
+            return __llpl_ret718;
+        } else if ((__match706 == 94)) {
 #line 163 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret700 = ((uint32_t)7979263);
-            return __llpl_ret700;
-        } else if ((__match687 == 95)) {
+            uint32_t __llpl_ret719 = ((uint32_t)7979263);
+            return __llpl_ret719;
+        } else if ((__match706 == 95)) {
 #line 164 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret701 = ((uint32_t)13805823);
-            return __llpl_ret701;
-        } else if ((__match687 == 96)) {
+            uint32_t __llpl_ret720 = ((uint32_t)13805823);
+            return __llpl_ret720;
+        } else if ((__match706 == 96)) {
 #line 165 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret702 = ((uint32_t)5690589);
-            return __llpl_ret702;
-        } else if ((__match687 == 97)) {
+            uint32_t __llpl_ret721 = ((uint32_t)5690589);
+            return __llpl_ret721;
+        } else if ((__match706 == 97)) {
 #line 166 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret703 = ((uint32_t)15791868);
-            return __llpl_ret703;
+            uint32_t __llpl_ret722 = ((uint32_t)15791868);
+            return __llpl_ret722;
         } else {
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            uint32_t __llpl_ret704 = Kern_mu_term_fg;
-            return __llpl_ret704;
+            uint32_t __llpl_ret723 = Kern_mu_term_fg;
+            return __llpl_ret723;
         }
     }
 }
@@ -17955,75 +18112,49 @@ void Kern_mu_term_spawn_shell() {
     if (holder) rc_release(holder, Kern_Process_destroy);
 }
 
-#line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-void Kern_mu_term_save_rect(uintptr_t x, uintptr_t y, uintptr_t w, uintptr_t h) {
-#line 267 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-    uintptr_t row = ((uintptr_t)0);
-    while ((row < h)) {
-#line 269 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        uintptr_t col = ((uintptr_t)0);
-        while ((col < w)) {
-            (*(uint32_t*)__llpl_check_index(Kern_mu_term_saved, ((row * w) + col), 135160, sizeof(uint32_t), "mu_term.llpl", 271)) = Terminal_get_pixel((x + col), (y + row));
-            (col = (col + ((uintptr_t)1)));
-        }
-        (row = (row + ((uintptr_t)1)));
-    }
-}
-
-#line 278 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-void Kern_mu_term_restore_rect() {
-    if (!Kern_mu_term_drawn) {
-#line 279 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        return;
-    }
-    Terminal_blit_rect(Kern_mu_term_drawn_x, Kern_mu_term_drawn_y, Kern_mu_term_drawn_w, Kern_mu_term_drawn_h, ((uint32_t*)Kern_mu_term_saved), Kern_mu_term_drawn_w);
-    Kern_mu_term_drawn = 0;
-    Kern_mu_term_last_blit_valid = 0;
-}
-
-#line 286 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 262 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
 Mu_Rect Kern_mu_term_build() {
-#line 287 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 263 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     Mu_Rect r = Mu_rect(560, 80, Kern_MU_TERM_W, Kern_MU_TERM_H);
     if ((Mu_begin_window_ex("Terminal", r, ((Mu_OPT_NORESIZE | Mu_OPT_NOCLOSE) | Mu_OPT_NOSCROLL)) != 0)) {
         Mu_layout_row1(-1, Kern_MU_TERM_CANVAS_H);
-#line 290 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
         Mu_Rect canvas = Mu_layout_next();
         Mu_draw_rect(canvas, Mu_color(11, 15, 20, 255));
         Mu_end_window();
-#line 293 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        Mu_Rect __llpl_ret705 = canvas;
-        return __llpl_ret705;
+#line 269 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+        Mu_Rect __llpl_ret724 = canvas;
+        return __llpl_ret724;
     }
-#line 295 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 271 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     Mu_Rect empty;
-#line 296 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-    Mu_Rect __llpl_ret706 = empty;
-    return __llpl_ret706;
+#line 272 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+    Mu_Rect __llpl_ret725 = empty;
+    return __llpl_ret725;
 }
 
-#line 299 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 275 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
 void Kern_mu_term_draw_grid(Mu_Rect canvas) {
-#line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 276 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     Mu_Rect clip = canvas;
-#line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 277 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     intptr_t row = 0;
     while ((row < Kern_TERM_ROWS)) {
-#line 303 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 279 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
         intptr_t col = 0;
         while ((col < Kern_TERM_COLS)) {
-#line 305 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            Kern_TermCell cell = (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, ((row * Kern_TERM_COLS) + col), 1080, sizeof(Kern_TermCell), "mu_term.llpl", 305));
+#line 281 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+            Kern_TermCell cell = (*(Kern_TermCell*)__llpl_check_index(Kern_mu_term_grid, ((row * Kern_TERM_COLS) + col), 1080, sizeof(Kern_TermCell), "mu_term.llpl", 281));
             if (((cell.ch != ((char)32)) && (cell.ch != ((char)0)))) {
-#line 307 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 283 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
                 intptr_t px = (canvas.x + (col * Kern_TERM_CELL_W));
-#line 308 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 284 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
                 intptr_t py = (canvas.y + (row * Kern_TERM_LINE_H));
-#line 309 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 285 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
                 uint32_t r = ((cell.fg >> ((uint32_t)16)) & ((uint32_t)255));
-#line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 286 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
                 uint32_t g = ((cell.fg >> ((uint32_t)8)) & ((uint32_t)255));
-#line 311 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 287 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
                 uint32_t b = (cell.fg & ((uint32_t)255));
                 Mu_draw_glyph_at(px, py, cell.ch, Mu_color(((intptr_t)r), ((intptr_t)g), ((intptr_t)b), 255), clip);
             }
@@ -18033,130 +18164,49 @@ void Kern_mu_term_draw_grid(Mu_Rect canvas) {
     }
 }
 
-#line 320 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 296 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
 void Kern_mu_term_pump_io() {
-    __LLPL_EH_Frame __llpl_defer_frame40;
-    int __llpl_defer_active41 = 0;
     __LLPL_EH_Frame __llpl_defer_frame42;
     int __llpl_defer_active43 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame44;
+    int __llpl_defer_active45 = 0;
     while ((Kern_mu_term_key_head != Kern_mu_term_key_tail)) {
-#line 324 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
         uintptr_t room = ((uintptr_t)0);
         {
             SpinLock_acquire(&(Kern_mu_term_shell_stdin->lock));
-            __llpl_defer_frame40.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame40.type_id = ((void*)0);
-            __llpl_defer_frame40.error_slot = ((void*)0);
-            __llpl_defer_frame40.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame40);
-            __llpl_defer_active41 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame40.env) != 0) {
-                __llpl_defer_active41 = 0;
+            __llpl_defer_frame42.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame42.type_id = ((void*)0);
+            __llpl_defer_frame42.error_slot = ((void*)0);
+            __llpl_defer_frame42.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame42);
+            __llpl_defer_active43 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame42.env) != 0) {
+                __llpl_defer_active43 = 0;
             SpinLock_release(&(Kern_mu_term_shell_stdin->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             room = (((uintptr_t)Kern_PIPE_CAPACITY) - Kern_mu_term_shell_stdin->count);
-            if (__llpl_defer_active41) {
-                __llpl_defer_active41 = 0;
-                llpl_eh_pop(&__llpl_defer_frame40);
+            if (__llpl_defer_active43) {
+                __llpl_defer_active43 = 0;
+                llpl_eh_pop(&__llpl_defer_frame42);
             SpinLock_release(&(Kern_mu_term_shell_stdin->lock));
             }
         }
         if ((room == ((uintptr_t)0))) {
-#line 326 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 302 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
             break;
         }
-#line 327 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        char c = (*(char*)__llpl_check_index(Kern_mu_term_key_ring, Kern_mu_term_key_head, 64, sizeof(char), "mu_term.llpl", 327));
+#line 303 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+        char c = (*(char*)__llpl_check_index(Kern_mu_term_key_ring, Kern_mu_term_key_head, 64, sizeof(char), "mu_term.llpl", 303));
         Kern_mu_term_key_head = ((Kern_mu_term_key_head + ((uintptr_t)1)) % ((uintptr_t)Kern_MU_TERM_KEY_RING_CAP));
         Kern_Pipe_write(Kern_mu_term_shell_stdin, &c, ((uintptr_t)1));
     }
-#line 334 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
     uintptr_t available = ((uintptr_t)0);
     {
         SpinLock_acquire(&(Kern_mu_term_shell_stdout->lock));
-        __llpl_defer_frame42.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame42.type_id = ((void*)0);
-        __llpl_defer_frame42.error_slot = ((void*)0);
-        __llpl_defer_frame42.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame42);
-        __llpl_defer_active43 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame42.env) != 0) {
-            __llpl_defer_active43 = 0;
-        SpinLock_release(&(Kern_mu_term_shell_stdout->lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        available = Kern_mu_term_shell_stdout->count;
-        if (__llpl_defer_active43) {
-            __llpl_defer_active43 = 0;
-            llpl_eh_pop(&__llpl_defer_frame42);
-        SpinLock_release(&(Kern_mu_term_shell_stdout->lock));
-        }
-    }
-    if ((available != ((uintptr_t)0))) {
-#line 337 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        char chunk[256];
-#line 338 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        uintptr_t to_read = available;
-        if ((to_read > ((uintptr_t)256))) {
-            to_read = ((uintptr_t)256);
-        }
-#line 340 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        intptr_t got = Kern_Pipe_read(Kern_mu_term_shell_stdout, ((char*)chunk), to_read);
-#line 341 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        intptr_t i = 0;
-        while ((i < got)) {
-            Kern_mu_term_put_char((*(char*)__llpl_check_index(chunk, i, 256, sizeof(char), "mu_term.llpl", 343)));
-            (i = (i + 1));
-        }
-    }
-    if (__llpl_defer_active43) {
-        __llpl_defer_active43 = 0;
-        llpl_eh_pop(&__llpl_defer_frame42);
-        SpinLock_release(&(Kern_mu_term_shell_stdout->lock));
-    }
-    if (__llpl_defer_active41) {
-        __llpl_defer_active41 = 0;
-        llpl_eh_pop(&__llpl_defer_frame40);
-            SpinLock_release(&(Kern_mu_term_shell_stdin->lock));
-    }
-}
-
-#line 349 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-bool Kern_mu_term_wants_key() {
-    if ((!Kern_mu_demo_active || !Kern_mu_term_drawn)) {
-#line 350 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-        bool __llpl_ret707 = 0;
-        return __llpl_ret707;
-    }
-#line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-    bool __llpl_ret708 = ((((Kern_cursor_x >= ((intptr_t)Kern_mu_term_drawn_x)) && (Kern_cursor_x < (((intptr_t)Kern_mu_term_drawn_x) + ((intptr_t)Kern_mu_term_drawn_w)))) && (Kern_cursor_y >= ((intptr_t)Kern_mu_term_drawn_y))) && (Kern_cursor_y < (((intptr_t)Kern_mu_term_drawn_y) + ((intptr_t)Kern_mu_term_drawn_h))));
-    return __llpl_ret708;
-}
-
-#line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-void Kern_mu_term_push_key(char c) {
-#line 356 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-    uintptr_t next = ((Kern_mu_term_key_tail + ((uintptr_t)1)) % ((uintptr_t)Kern_MU_TERM_KEY_RING_CAP));
-    if ((next != Kern_mu_term_key_head)) {
-        (*(char*)__llpl_check_index(Kern_mu_term_key_ring, Kern_mu_term_key_tail, 64, sizeof(char), "mu_term.llpl", 358)) = c;
-        Kern_mu_term_key_tail = next;
-    }
-}
-
-#line 370 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-void Kern_mu_term_spawn_shell_thread(void* arg) {
-    Kern_mu_term_spawn_shell();
-}
-
-#line 374 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-void Kern_mu_term_tick(void* arg) {
-    __LLPL_EH_Frame __llpl_defer_frame44;
-    int __llpl_defer_active45 = 0;
-    {
-        SpinLock_acquire(&(Kern_gui_lock));
         __llpl_defer_frame44.kind = LLPL_EH_FRAME_CLEANUP;
         __llpl_defer_frame44.type_id = ((void*)0);
         __llpl_defer_frame44.error_slot = ((void*)0);
@@ -18165,6 +18215,87 @@ void Kern_mu_term_tick(void* arg) {
         __llpl_defer_active45 = 1;
         if (llpl_eh_setjmp(&__llpl_defer_frame44.env) != 0) {
             __llpl_defer_active45 = 0;
+        SpinLock_release(&(Kern_mu_term_shell_stdout->lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        available = Kern_mu_term_shell_stdout->count;
+        if (__llpl_defer_active45) {
+            __llpl_defer_active45 = 0;
+            llpl_eh_pop(&__llpl_defer_frame44);
+        SpinLock_release(&(Kern_mu_term_shell_stdout->lock));
+        }
+    }
+    if ((available != ((uintptr_t)0))) {
+#line 313 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+        char chunk[256];
+#line 314 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+        uintptr_t to_read = available;
+        if ((to_read > ((uintptr_t)256))) {
+            to_read = ((uintptr_t)256);
+        }
+#line 316 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+        intptr_t got = Kern_Pipe_read(Kern_mu_term_shell_stdout, ((char*)chunk), to_read);
+#line 317 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+        intptr_t i = 0;
+        while ((i < got)) {
+            Kern_mu_term_put_char((*(char*)__llpl_check_index(chunk, i, 256, sizeof(char), "mu_term.llpl", 319)));
+            (i = (i + 1));
+        }
+    }
+    if (__llpl_defer_active45) {
+        __llpl_defer_active45 = 0;
+        llpl_eh_pop(&__llpl_defer_frame44);
+        SpinLock_release(&(Kern_mu_term_shell_stdout->lock));
+    }
+    if (__llpl_defer_active43) {
+        __llpl_defer_active43 = 0;
+        llpl_eh_pop(&__llpl_defer_frame42);
+            SpinLock_release(&(Kern_mu_term_shell_stdin->lock));
+    }
+}
+
+#line 325 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+bool Kern_mu_term_wants_key() {
+    if ((!Kern_mu_demo_active || !Kern_mu_term_drawn)) {
+#line 326 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+        bool __llpl_ret726 = 0;
+        return __llpl_ret726;
+    }
+#line 327 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+    bool __llpl_ret727 = ((((Kern_cursor_x >= ((intptr_t)Kern_mu_term_drawn_x)) && (Kern_cursor_x < (((intptr_t)Kern_mu_term_drawn_x) + ((intptr_t)Kern_mu_term_drawn_w)))) && (Kern_cursor_y >= ((intptr_t)Kern_mu_term_drawn_y))) && (Kern_cursor_y < (((intptr_t)Kern_mu_term_drawn_y) + ((intptr_t)Kern_mu_term_drawn_h))));
+    return __llpl_ret727;
+}
+
+#line 331 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+void Kern_mu_term_push_key(char c) {
+#line 332 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+    uintptr_t next = ((Kern_mu_term_key_tail + ((uintptr_t)1)) % ((uintptr_t)Kern_MU_TERM_KEY_RING_CAP));
+    if ((next != Kern_mu_term_key_head)) {
+        (*(char*)__llpl_check_index(Kern_mu_term_key_ring, Kern_mu_term_key_tail, 64, sizeof(char), "mu_term.llpl", 334)) = c;
+        Kern_mu_term_key_tail = next;
+    }
+}
+
+#line 346 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+void Kern_mu_term_spawn_shell_thread(void* arg) {
+    Kern_mu_term_spawn_shell();
+}
+
+#line 350 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+void Kern_mu_term_tick(void* arg) {
+    __LLPL_EH_Frame __llpl_defer_frame46;
+    int __llpl_defer_active47 = 0;
+    {
+        SpinLock_acquire(&(Kern_gui_lock));
+        __llpl_defer_frame46.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame46.type_id = ((void*)0);
+        __llpl_defer_frame46.error_slot = ((void*)0);
+        __llpl_defer_frame46.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame46);
+        __llpl_defer_active47 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame46.env) != 0) {
+            __llpl_defer_active47 = 0;
         SpinLock_release(&(Kern_gui_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -18172,14 +18303,14 @@ void Kern_mu_term_tick(void* arg) {
         if (!Kern_mu_term_initialized) {
             Kern_mu_term_clear();
             Kern_mu_term_initialized = 1;
-#line 379 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            Kern_Thread* t = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure10, .env = ((void*)0) }), ((void*)0), String_new("mu-term-spawn"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4)));
+#line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+            Kern_Thread* t = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure11, .env = ((void*)0) }), ((void*)0), String_new("mu-term-spawn"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4)));
             Kern_mark_thread_ready(t);
         }
         if (((Kern_mu_term_shell_stdin != ((void*)0)) && (Kern_mu_term_shell_stdout != ((void*)0)))) {
             Kern_mu_term_pump_io();
         }
-#line 408 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 384 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
         bool left_down = Kern_left_button_down;
         if (Kern_window_wants_input) {
             Mu_input_mousemove(Kern_cursor_x, Kern_cursor_y);
@@ -18196,75 +18327,42 @@ void Kern_mu_term_tick(void* arg) {
         Mu_set_focus(Kern_mu_term_saved_focus);
         Mu_set_last_mouse_pos(Kern_mu_term_saved_last_mouse_pos);
         Mu_begin();
-#line 423 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 399 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
         Mu_Rect canvas = Kern_mu_term_build();
         Mu_end();
         Kern_mu_term_saved_next_hover_root = Mu_get_next_hover_root();
         Kern_mu_term_saved_focus = Mu_focus;
         Kern_mu_term_saved_last_mouse_pos = Mu_get_last_mouse_pos();
         if (!Mu_frame_has_bounds) {
-            Kern_mu_term_restore_rect();
+            Kern_mu_term_drawn = 0;
         } else {
-#line 432 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 408 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
             uintptr_t new_x = ((uintptr_t)Mu_frame_bounds.x);
-#line 433 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 409 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
             uintptr_t new_y = ((uintptr_t)Mu_frame_bounds.y);
-#line 434 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 410 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
             uintptr_t new_w = ((uintptr_t)Mu_frame_bounds.w);
-#line 435 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
+#line 411 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
             uintptr_t new_h = ((uintptr_t)Mu_frame_bounds.h);
-            if ((Kern_mu_term_drawn && ((((Kern_mu_term_drawn_x != new_x) || (Kern_mu_term_drawn_y != new_y)) || (Kern_mu_term_drawn_w != new_w)) || (Kern_mu_term_drawn_h != new_h)))) {
-                Kern_mu_term_restore_rect();
-            }
-            if (!Kern_mu_term_drawn) {
-                Kern_mu_term_save_rect(new_x, new_y, new_w, new_h);
-            }
             Mu_set_render_target(((uint32_t*)Kern_mu_term_backbuffer), ((intptr_t)new_w), ((intptr_t)new_h), ((intptr_t)new_x), ((intptr_t)new_y));
             Mu_render();
             Kern_mu_term_draw_grid(canvas);
             Mu_clear_render_target();
-#line 450 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-            bool changed = !Kern_mu_term_last_blit_valid;
-            if (!changed) {
-#line 452 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-                uintptr_t row = ((uintptr_t)0);
-                while (((row < new_h) && !changed)) {
-#line 454 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-                    uintptr_t col = ((uintptr_t)0);
-                    while ((col < new_w)) {
-#line 456 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-                        uintptr_t idx = ((row * new_w) + col);
-                        if (((*(uint32_t*)__llpl_check_index(Kern_mu_term_last_blit, idx, 135160, sizeof(uint32_t), "mu_term.llpl", 457)) != (*(uint32_t*)__llpl_check_index(Kern_mu_term_backbuffer, idx, 135160, sizeof(uint32_t), "mu_term.llpl", 457)))) {
-                            changed = 1;
-#line 459 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/mu_term.llpl"
-                            break;
-                        }
-                        (col = (col + ((uintptr_t)1)));
-                    }
-                    (row = (row + ((uintptr_t)1)));
-                }
-            }
-            if (changed) {
-                Terminal_blit_rect(new_x, new_y, new_w, new_h, ((uint32_t*)Kern_mu_term_backbuffer), new_w);
-                memcpy(((void*)Kern_mu_term_last_blit), ((void*)Kern_mu_term_backbuffer), ((uintptr_t)((new_w * new_h) * ((uintptr_t)4))));
-                Kern_mu_term_last_blit_valid = 1;
-                Kern_mu_overlay_dirty = 1;
-            }
             Kern_mu_term_drawn_x = new_x;
             Kern_mu_term_drawn_y = new_y;
             Kern_mu_term_drawn_w = new_w;
             Kern_mu_term_drawn_h = new_h;
             Kern_mu_term_drawn = 1;
         }
-        if (__llpl_defer_active45) {
-            __llpl_defer_active45 = 0;
-            llpl_eh_pop(&__llpl_defer_frame44);
+        if (__llpl_defer_active47) {
+            __llpl_defer_active47 = 0;
+            llpl_eh_pop(&__llpl_defer_frame46);
         SpinLock_release(&(Kern_gui_lock));
         }
     }
-    if (__llpl_defer_active45) {
-        __llpl_defer_active45 = 0;
-        llpl_eh_pop(&__llpl_defer_frame44);
+    if (__llpl_defer_active47) {
+        __llpl_defer_active47 = 0;
+        llpl_eh_pop(&__llpl_defer_frame46);
         SpinLock_release(&(Kern_gui_lock));
     }
 }
@@ -18298,26 +18396,26 @@ void Kern_NetworkDevice__destroy_impl(void* ptr) {
 
 bool Kern_NetworkDevice_link_up(Kern_NetworkDevice* self) {
 #line 7 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/network.llpl"
-    bool __llpl_ret709 = 0;
-    return __llpl_ret709;
+    bool __llpl_ret728 = 0;
+    return __llpl_ret728;
 }
 
 uint8_t Kern_NetworkDevice_mac_byte(Kern_NetworkDevice* self, uintptr_t index) {
 #line 8 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/network.llpl"
-    uint8_t __llpl_ret710 = ((uint8_t)0);
-    return __llpl_ret710;
+    uint8_t __llpl_ret729 = ((uint8_t)0);
+    return __llpl_ret729;
 }
 
 bool Kern_NetworkDevice_send(Kern_NetworkDevice* self, uint8_t* frame, uintptr_t length) {
 #line 9 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/network.llpl"
-    bool __llpl_ret711 = 0;
-    return __llpl_ret711;
+    bool __llpl_ret730 = 0;
+    return __llpl_ret730;
 }
 
 intptr_t Kern_NetworkDevice_receive(Kern_NetworkDevice* self, uint8_t* frame, uintptr_t capacity) {
 #line 10 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/network.llpl"
-    intptr_t __llpl_ret712 = 0;
-    return __llpl_ret712;
+    intptr_t __llpl_ret731 = 0;
+    return __llpl_ret731;
 }
 
 
@@ -18366,8 +18464,8 @@ Kern_Process* Kern_Process_new(String* name, Kern_Process* parent, String* comma
 }
 
 void Kern_Process_init(Kern_Process* self, String* name, Kern_Process* parent, String* command_line) {
-    __LLPL_EH_Frame __llpl_defer_frame46;
-    int __llpl_defer_active47 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame48;
+    int __llpl_defer_active49 = 0;
     Object_init((Object*)self);
     ({ std_collections_DoublyLinkedList_Kern_Thread* __llpl_assign_tmp66 = std_collections_DoublyLinkedList_Kern_Thread_new(); self->threads = __llpl_assign_tmp66; self->threads; });
 #line 67 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
@@ -18393,14 +18491,14 @@ void Kern_Process_init(Kern_Process* self, String* name, Kern_Process* parent, S
     ({ Kern_WaitQueue* __llpl_assign_tmp72 = Kern_WaitQueue_new(); self->death_waiters = __llpl_assign_tmp72; self->death_waiters; });
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame46.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame46.type_id = ((void*)0);
-        __llpl_defer_frame46.error_slot = ((void*)0);
-        __llpl_defer_frame46.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame46);
-        __llpl_defer_active47 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame46.env) != 0) {
-            __llpl_defer_active47 = 0;
+        __llpl_defer_frame48.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame48.type_id = ((void*)0);
+        __llpl_defer_frame48.error_slot = ((void*)0);
+        __llpl_defer_frame48.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame48);
+        __llpl_defer_active49 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame48.env) != 0) {
+            __llpl_defer_active49 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -18412,15 +18510,15 @@ void Kern_Process_init(Kern_Process* self, String* name, Kern_Process* parent, S
             self->child_next = parent->child_head;
             parent->child_head = ((void*)self);
         }
-        if (__llpl_defer_active47) {
-            __llpl_defer_active47 = 0;
-            llpl_eh_pop(&__llpl_defer_frame46);
+        if (__llpl_defer_active49) {
+            __llpl_defer_active49 = 0;
+            llpl_eh_pop(&__llpl_defer_frame48);
         SpinLock_release(&(Kern_lock));
         }
     }
-    if (__llpl_defer_active47) {
-        __llpl_defer_active47 = 0;
-        llpl_eh_pop(&__llpl_defer_frame46);
+    if (__llpl_defer_active49) {
+        __llpl_defer_active49 = 0;
+        llpl_eh_pop(&__llpl_defer_frame48);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -18481,12 +18579,12 @@ void Kern_install_console_fds() {
 uintptr_t Kern_process_id(Kern_Process* proc) {
     if ((proc == ((void*)0))) {
 #line 154 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        uintptr_t __llpl_ret713 = ((uintptr_t)0);
-        return __llpl_ret713;
+        uintptr_t __llpl_ret732 = ((uintptr_t)0);
+        return __llpl_ret732;
     }
 #line 155 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    uintptr_t __llpl_ret714 = proc->pid;
-    return __llpl_ret714;
+    uintptr_t __llpl_ret733 = proc->pid;
+    return __llpl_ret733;
 }
 
 #line 158 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
@@ -18495,48 +18593,48 @@ Kern_Process* Kern_find_process(uintptr_t pid) {
     Optional_Kern_Process* found = HashMap_u64_Kern_Process_get(Kern_process_table, ((uint64_t)pid));
     if (Optional_Kern_Process_is_none(found)) {
 #line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        Kern_Process* __llpl_ret715 = ((void*)0);
+        Kern_Process* __llpl_ret734 = ((void*)0);
         if (found) rc_release(found, Optional_Kern_Process_destroy);
-        return __llpl_ret715;
+        return __llpl_ret734;
     }
 #line 161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    Kern_Process* __llpl_ret716 = Optional_Kern_Process_get(found);
+    Kern_Process* __llpl_ret735 = Optional_Kern_Process_get(found);
     if (found) rc_release(found, Optional_Kern_Process_destroy);
-    return __llpl_ret716;
+    return __llpl_ret735;
     if (found) rc_release(found, Optional_Kern_Process_destroy);
 }
 
 #line 166 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 uintptr_t Kern_snapshot_processes(Kern_ProcessInfo* out, uintptr_t capacity) {
-    __LLPL_EH_Frame __llpl_defer_frame48;
-    int __llpl_defer_active49 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame50;
+    int __llpl_defer_active51 = 0;
     if (((out == ((void*)0)) || (capacity == ((uintptr_t)0)))) {
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        uintptr_t __llpl_ret717 = ((uintptr_t)0);
-        return __llpl_ret717;
+        uintptr_t __llpl_ret736 = ((uintptr_t)0);
+        return __llpl_ret736;
     }
 #line 168 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t count = ((uintptr_t)0);
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame48.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame48.type_id = ((void*)0);
-        __llpl_defer_frame48.error_slot = ((void*)0);
-        __llpl_defer_frame48.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame48);
-        __llpl_defer_active49 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame48.env) != 0) {
-            __llpl_defer_active49 = 0;
+        __llpl_defer_frame50.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame50.type_id = ((void*)0);
+        __llpl_defer_frame50.error_slot = ((void*)0);
+        __llpl_defer_frame50.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame50);
+        __llpl_defer_active51 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame50.env) != 0) {
+            __llpl_defer_active51 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
 #line 170 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
         {
-            HashMap_u64_Kern_Process* __foreach_obj718 = Kern_process_table;
-            HashMap_u64_Kern_Process_iter_reset(__foreach_obj718);
-            while (HashMap_u64_Kern_Process_iter_has_next(__foreach_obj718)) {
-                HashMapEntry_u64_Kern_Process entry = HashMap_u64_Kern_Process_iter_next(__foreach_obj718);
+            HashMap_u64_Kern_Process* __foreach_obj737 = Kern_process_table;
+            HashMap_u64_Kern_Process_iter_reset(__foreach_obj737);
+            while (HashMap_u64_Kern_Process_iter_has_next(__foreach_obj737)) {
+                HashMapEntry_u64_Kern_Process entry = HashMap_u64_Kern_Process_iter_next(__foreach_obj737);
                 if ((count >= capacity)) {
 #line 171 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
                     break;
@@ -18570,9 +18668,9 @@ uintptr_t Kern_snapshot_processes(Kern_ProcessInfo* out, uintptr_t capacity) {
                 }
 #line 193 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
                 {
-                    intptr_t __range_end719 = name_len;
+                    intptr_t __range_end738 = name_len;
                     intptr_t i = 0;
-                    for (; i < __range_end719; i = i + 1) {
+                    for (; i < __range_end738; i = i + 1) {
                         (*(char*)__llpl_check_index(out[count].name, i, 64, sizeof(char), "process.llpl", 194)) = name_str[i];
                     }
                 }
@@ -18580,54 +18678,54 @@ uintptr_t Kern_snapshot_processes(Kern_ProcessInfo* out, uintptr_t capacity) {
                 (count = (count + ((uintptr_t)1)));
             }
         }
-        if (__llpl_defer_active49) {
-            __llpl_defer_active49 = 0;
-            llpl_eh_pop(&__llpl_defer_frame48);
+        if (__llpl_defer_active51) {
+            __llpl_defer_active51 = 0;
+            llpl_eh_pop(&__llpl_defer_frame50);
         SpinLock_release(&(Kern_lock));
         }
     }
 #line 201 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    uintptr_t __llpl_ret720 = count;
-    if (__llpl_defer_active49) {
-        __llpl_defer_active49 = 0;
-        llpl_eh_pop(&__llpl_defer_frame48);
+    uintptr_t __llpl_ret739 = count;
+    if (__llpl_defer_active51) {
+        __llpl_defer_active51 = 0;
+        llpl_eh_pop(&__llpl_defer_frame50);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret720;
-    if (__llpl_defer_active49) {
-        __llpl_defer_active49 = 0;
-        llpl_eh_pop(&__llpl_defer_frame48);
+    return __llpl_ret739;
+    if (__llpl_defer_active51) {
+        __llpl_defer_active51 = 0;
+        llpl_eh_pop(&__llpl_defer_frame50);
         SpinLock_release(&(Kern_lock));
     }
 }
 
 #line 204 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 void Kern_mark_process_exited(Kern_Process* proc, uintptr_t status) {
-    __LLPL_EH_Frame __llpl_defer_frame50;
-    int __llpl_defer_active51 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame52;
+    int __llpl_defer_active53 = 0;
     if (((proc == ((void*)0)) || (proc == Kern_kproc))) {
 #line 205 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
         return;
     }
     {
         SpinLock_acquire(&(proc->lock));
-        __llpl_defer_frame50.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame50.type_id = ((void*)0);
-        __llpl_defer_frame50.error_slot = ((void*)0);
-        __llpl_defer_frame50.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame50);
-        __llpl_defer_active51 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame50.env) != 0) {
-            __llpl_defer_active51 = 0;
+        __llpl_defer_frame52.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame52.type_id = ((void*)0);
+        __llpl_defer_frame52.error_slot = ((void*)0);
+        __llpl_defer_frame52.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame52);
+        __llpl_defer_active53 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame52.env) != 0) {
+            __llpl_defer_active53 = 0;
         SpinLock_release(&(proc->lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         if (proc->exited) {
 #line 207 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            if (__llpl_defer_active51) {
-                __llpl_defer_active51 = 0;
-                llpl_eh_pop(&__llpl_defer_frame50);
+            if (__llpl_defer_active53) {
+                __llpl_defer_active53 = 0;
+                llpl_eh_pop(&__llpl_defer_frame52);
         SpinLock_release(&(proc->lock));
             }
             return;
@@ -18645,9 +18743,9 @@ void Kern_mark_process_exited(Kern_Process* proc, uintptr_t status) {
             child = following;
         }
         proc->child_head = ((void*)0);
-        if (__llpl_defer_active51) {
-            __llpl_defer_active51 = 0;
-            llpl_eh_pop(&__llpl_defer_frame50);
+        if (__llpl_defer_active53) {
+            __llpl_defer_active53 = 0;
+            llpl_eh_pop(&__llpl_defer_frame52);
         SpinLock_release(&(proc->lock));
         }
     }
@@ -18655,23 +18753,23 @@ void Kern_mark_process_exited(Kern_Process* proc, uintptr_t status) {
         Kern_wake_all((((Kern_Process*)proc->parent))->child_waiters);
     }
     Kern_wake_all(proc->death_waiters);
-    if (__llpl_defer_active51) {
-        __llpl_defer_active51 = 0;
-        llpl_eh_pop(&__llpl_defer_frame50);
+    if (__llpl_defer_active53) {
+        __llpl_defer_active53 = 0;
+        llpl_eh_pop(&__llpl_defer_frame52);
         SpinLock_release(&(proc->lock));
     }
 }
 
 #line 227 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 intptr_t Kern_wait_process(Kern_Process* parent, uintptr_t pid, uintptr_t* status_out) {
-    __LLPL_EH_Frame __llpl_defer_frame52;
-    int __llpl_defer_active53 = 0;
     __LLPL_EH_Frame __llpl_defer_frame54;
     int __llpl_defer_active55 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame56;
+    int __llpl_defer_active57 = 0;
     if ((parent == ((void*)0))) {
 #line 228 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t __llpl_ret721 = EINVAL;
-        return __llpl_ret721;
+        intptr_t __llpl_ret740 = EINVAL;
+        return __llpl_ret740;
     }
     while (1) {
 #line 230 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
@@ -18682,14 +18780,14 @@ intptr_t Kern_wait_process(Kern_Process* parent, uintptr_t pid, uintptr_t* statu
         void* cursor = parent->child_head;
         {
             SpinLock_acquire(&(parent->lock));
-            __llpl_defer_frame52.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame52.type_id = ((void*)0);
-            __llpl_defer_frame52.error_slot = ((void*)0);
-            __llpl_defer_frame52.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame52);
-            __llpl_defer_active53 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame52.env) != 0) {
-                __llpl_defer_active53 = 0;
+            __llpl_defer_frame54.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame54.type_id = ((void*)0);
+            __llpl_defer_frame54.error_slot = ((void*)0);
+            __llpl_defer_frame54.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame54);
+            __llpl_defer_active55 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame54.env) != 0) {
+                __llpl_defer_active55 = 0;
             SpinLock_release(&(parent->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
@@ -18711,17 +18809,17 @@ intptr_t Kern_wait_process(Kern_Process* parent, uintptr_t pid, uintptr_t* statu
             }
             if (((found == ((void*)0)) && !Kern_prepare_block_current(parent->child_waiters))) {
 #line 249 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                intptr_t __llpl_ret722 = EINVAL;
-                if (__llpl_defer_active53) {
-                    __llpl_defer_active53 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame52);
+                intptr_t __llpl_ret741 = EINVAL;
+                if (__llpl_defer_active55) {
+                    __llpl_defer_active55 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame54);
             SpinLock_release(&(parent->lock));
                 }
-                return __llpl_ret722;
+                return __llpl_ret741;
             }
-            if (__llpl_defer_active53) {
-                __llpl_defer_active53 = 0;
-                llpl_eh_pop(&__llpl_defer_frame52);
+            if (__llpl_defer_active55) {
+                __llpl_defer_active55 = 0;
+                llpl_eh_pop(&__llpl_defer_frame54);
             SpinLock_release(&(parent->lock));
             }
         }
@@ -18733,50 +18831,50 @@ intptr_t Kern_wait_process(Kern_Process* parent, uintptr_t pid, uintptr_t* statu
             }
             {
                 SpinLock_acquire(&(Kern_lock));
-                __llpl_defer_frame54.kind = LLPL_EH_FRAME_CLEANUP;
-                __llpl_defer_frame54.type_id = ((void*)0);
-                __llpl_defer_frame54.error_slot = ((void*)0);
-                __llpl_defer_frame54.error_size = 0;
-                llpl_eh_push(&__llpl_defer_frame54);
-                __llpl_defer_active55 = 1;
-                if (llpl_eh_setjmp(&__llpl_defer_frame54.env) != 0) {
-                    __llpl_defer_active55 = 0;
+                __llpl_defer_frame56.kind = LLPL_EH_FRAME_CLEANUP;
+                __llpl_defer_frame56.type_id = ((void*)0);
+                __llpl_defer_frame56.error_slot = ((void*)0);
+                __llpl_defer_frame56.error_size = 0;
+                llpl_eh_push(&__llpl_defer_frame56);
+                __llpl_defer_active57 = 1;
+                if (llpl_eh_setjmp(&__llpl_defer_frame56.env) != 0) {
+                    __llpl_defer_active57 = 0;
                 SpinLock_release(&(Kern_lock));
                     llpl_eh_resume();
                     __builtin_unreachable();
                 }
                 HashMap_u64_Kern_Process_remove(Kern_process_table, ((uint64_t)(((Kern_Process*)found))->pid));
-                if (__llpl_defer_active55) {
-                    __llpl_defer_active55 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame54);
+                if (__llpl_defer_active57) {
+                    __llpl_defer_active57 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame56);
                 SpinLock_release(&(Kern_lock));
                 }
             }
             Kern_reap_process_resources(((Kern_Process*)found));
 #line 259 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            intptr_t __llpl_ret723 = ((intptr_t)found_pid);
+            intptr_t __llpl_ret742 = ((intptr_t)found_pid);
+            if (__llpl_defer_active57) {
+                __llpl_defer_active57 = 0;
+                llpl_eh_pop(&__llpl_defer_frame56);
+                SpinLock_release(&(Kern_lock));
+            }
             if (__llpl_defer_active55) {
                 __llpl_defer_active55 = 0;
                 llpl_eh_pop(&__llpl_defer_frame54);
-                SpinLock_release(&(Kern_lock));
-            }
-            if (__llpl_defer_active53) {
-                __llpl_defer_active53 = 0;
-                llpl_eh_pop(&__llpl_defer_frame52);
             SpinLock_release(&(parent->lock));
             }
-            return __llpl_ret723;
+            return __llpl_ret742;
         }
         Kern_scheduler_yield();
+    }
+    if (__llpl_defer_active57) {
+        __llpl_defer_active57 = 0;
+        llpl_eh_pop(&__llpl_defer_frame56);
+                SpinLock_release(&(Kern_lock));
     }
     if (__llpl_defer_active55) {
         __llpl_defer_active55 = 0;
         llpl_eh_pop(&__llpl_defer_frame54);
-                SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active53) {
-        __llpl_defer_active53 = 0;
-        llpl_eh_pop(&__llpl_defer_frame52);
             SpinLock_release(&(parent->lock));
     }
 }
@@ -18785,8 +18883,8 @@ intptr_t Kern_wait_process(Kern_Process* parent, uintptr_t pid, uintptr_t* statu
 bool Kern_reap_process_resources(Kern_Process* proc) {
     if (((((proc == ((void*)0)) || (proc == Kern_kproc)) || !proc->exited) || proc->resources_reaped)) {
 #line 267 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        bool __llpl_ret724 = 0;
-        return __llpl_ret724;
+        bool __llpl_ret743 = 0;
+        return __llpl_ret743;
     }
 #line 269 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     if (!(((HAL_read_cr3() & ((uint64_t)MM_PADDR_4K_MASK)) != proc->pml4))) llpl_panic("cannot reap the active process");
@@ -18807,38 +18905,38 @@ bool Kern_reap_process_resources(Kern_Process* proc) {
     }
     proc->resources_reaped = 1;
 #line 286 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    bool __llpl_ret725 = 1;
-    return __llpl_ret725;
+    bool __llpl_ret744 = 1;
+    return __llpl_ret744;
 }
 
 #line 289 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 __LLPL_Tuple2_int_uint Kern_map_user_anonymous(Kern_Process* proc, uintptr_t hint, uintptr_t length) {
-    __LLPL_EH_Frame __llpl_defer_frame56;
-    int __llpl_defer_active57 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame58;
+    int __llpl_defer_active59 = 0;
     if ((((proc == ((void*)0)) || (proc == Kern_kproc)) || (length == ((uintptr_t)0)))) {
 #line 291 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret726 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret726;
+        __LLPL_Tuple2_int_uint __llpl_ret745 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret745;
     }
 #line 294 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t len = (((length + ((uintptr_t)MM_PAGE_SIZE)) - ((uintptr_t)1)) & ((uintptr_t)~(MM_PAGE_SIZE - 1)));
     if ((len < length)) {
 #line 296 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret727 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret727;
+        __LLPL_Tuple2_int_uint __llpl_ret746 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret746;
     }
 #line 299 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t addr;
     {
         SpinLock_acquire(&(proc->aspace->lock));
-        __llpl_defer_frame56.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame56.type_id = ((void*)0);
-        __llpl_defer_frame56.error_slot = ((void*)0);
-        __llpl_defer_frame56.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame56);
-        __llpl_defer_active57 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame56.env) != 0) {
-            __llpl_defer_active57 = 0;
+        __llpl_defer_frame58.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame58.type_id = ((void*)0);
+        __llpl_defer_frame58.error_slot = ((void*)0);
+        __llpl_defer_frame58.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame58);
+        __llpl_defer_active59 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame58.env) != 0) {
+            __llpl_defer_active59 = 0;
         SpinLock_release(&(proc->aspace->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -18846,23 +18944,23 @@ __LLPL_Tuple2_int_uint Kern_map_user_anonymous(Kern_Process* proc, uintptr_t hin
         if ((hint != ((uintptr_t)0))) {
             if (((((hint & ((uintptr_t)(MM_PAGE_SIZE - 1))) != ((uintptr_t)0)) || (hint < ((uintptr_t)Kern_USER_MMAP_BASE))) || ((hint + len) > ((uintptr_t)Kern_USER_MMAP_END)))) {
 #line 303 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                __LLPL_Tuple2_int_uint __llpl_ret728 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-                if (__llpl_defer_active57) {
-                    __llpl_defer_active57 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame56);
+                __LLPL_Tuple2_int_uint __llpl_ret747 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+                if (__llpl_defer_active59) {
+                    __llpl_defer_active59 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame58);
         SpinLock_release(&(proc->aspace->lock));
                 }
-                return __llpl_ret728;
+                return __llpl_ret747;
             }
             if (MM_AddressSpace_overlaps(proc->aspace, hint, (hint + len))) {
 #line 306 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                __LLPL_Tuple2_int_uint __llpl_ret729 = (__LLPL_Tuple2_int_uint){ ._0 = EEXIST, ._1 = 0 };
-                if (__llpl_defer_active57) {
-                    __llpl_defer_active57 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame56);
+                __LLPL_Tuple2_int_uint __llpl_ret748 = (__LLPL_Tuple2_int_uint){ ._0 = EEXIST, ._1 = 0 };
+                if (__llpl_defer_active59) {
+                    __llpl_defer_active59 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame58);
         SpinLock_release(&(proc->aspace->lock));
                 }
-                return __llpl_ret729;
+                return __llpl_ret748;
             }
             addr = hint;
         } else {
@@ -18876,26 +18974,26 @@ __LLPL_Tuple2_int_uint Kern_map_user_anonymous(Kern_Process* proc, uintptr_t hin
             }
             if (((addr + len) > ((uintptr_t)Kern_USER_MMAP_END))) {
 #line 321 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                __LLPL_Tuple2_int_uint __llpl_ret730 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
-                if (__llpl_defer_active57) {
-                    __llpl_defer_active57 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame56);
+                __LLPL_Tuple2_int_uint __llpl_ret749 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
+                if (__llpl_defer_active59) {
+                    __llpl_defer_active59 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame58);
         SpinLock_release(&(proc->aspace->lock));
                 }
-                return __llpl_ret730;
+                return __llpl_ret749;
             }
         }
 #line 325 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
         MM_VmArea* vma = MM_VmArea_new(addr, (addr + len));
         if ((vma == ((void*)0))) {
 #line 327 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret731 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
-            if (__llpl_defer_active57) {
-                __llpl_defer_active57 = 0;
-                llpl_eh_pop(&__llpl_defer_frame56);
+            __LLPL_Tuple2_int_uint __llpl_ret750 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
+            if (__llpl_defer_active59) {
+                __llpl_defer_active59 = 0;
+                llpl_eh_pop(&__llpl_defer_frame58);
         SpinLock_release(&(proc->aspace->lock));
             }
-            return __llpl_ret731;
+            return __llpl_ret750;
         }
         vma->flags = ((uintptr_t)MM_MAP_USER);
         ({ String* __llpl_assign_tmp77 = ((void*)0); vma->name = __llpl_assign_tmp77; vma->name; });
@@ -18903,23 +19001,23 @@ __LLPL_Tuple2_int_uint Kern_map_user_anonymous(Kern_Process* proc, uintptr_t hin
         if ((hint == ((uintptr_t)0))) {
             proc->next_mmap = (addr + len);
         }
-        if (__llpl_defer_active57) {
-            __llpl_defer_active57 = 0;
-            llpl_eh_pop(&__llpl_defer_frame56);
+        if (__llpl_defer_active59) {
+            __llpl_defer_active59 = 0;
+            llpl_eh_pop(&__llpl_defer_frame58);
         SpinLock_release(&(proc->aspace->lock));
         }
     }
 #line 340 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    __LLPL_Tuple2_int_uint __llpl_ret732 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
-    if (__llpl_defer_active57) {
-        __llpl_defer_active57 = 0;
-        llpl_eh_pop(&__llpl_defer_frame56);
+    __LLPL_Tuple2_int_uint __llpl_ret751 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
+    if (__llpl_defer_active59) {
+        __llpl_defer_active59 = 0;
+        llpl_eh_pop(&__llpl_defer_frame58);
         SpinLock_release(&(proc->aspace->lock));
     }
-    return __llpl_ret732;
-    if (__llpl_defer_active57) {
-        __llpl_defer_active57 = 0;
-        llpl_eh_pop(&__llpl_defer_frame56);
+    return __llpl_ret751;
+    if (__llpl_defer_active59) {
+        __llpl_defer_active59 = 0;
+        llpl_eh_pop(&__llpl_defer_frame58);
         SpinLock_release(&(proc->aspace->lock));
     }
 }
@@ -18928,8 +19026,8 @@ __LLPL_Tuple2_int_uint Kern_map_user_anonymous(Kern_Process* proc, uintptr_t hin
 bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uintptr_t error) {
     if (((((((proc == ((void*)0)) || (proc == Kern_kproc)) || proc->exited) || (proc->pml4 == ((uintptr_t)0))) || ((error & ((uintptr_t)4)) == ((uintptr_t)0))) || (fault_addr >= ((uintptr_t)Kern_USER_MMAP_END)))) {
 #line 348 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        bool __llpl_ret733 = 0;
-        return __llpl_ret733;
+        bool __llpl_ret752 = 0;
+        return __llpl_ret752;
     }
 #line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t page = (fault_addr & ((uintptr_t)~(MM_PAGE_SIZE - 1)));
@@ -18941,8 +19039,8 @@ bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uint
             if ((((area->flags & ((uintptr_t)MM_MAP_USER)) == ((uintptr_t)0)) || (MM_free_list == ((void*)0)))) {
                 SpinLock_release(&(proc->aspace->lock));
 #line 360 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                bool __llpl_ret734 = 0;
-                return __llpl_ret734;
+                bool __llpl_ret753 = 0;
+                return __llpl_ret753;
             }
             if (((error & ((uintptr_t)1)) != ((uintptr_t)0))) {
 #line 366 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
@@ -18950,8 +19048,8 @@ bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uint
                 if ((((error & ((uintptr_t)2)) == ((uintptr_t)0)) || (old_pte == ((void*)0)))) {
                     SpinLock_release(&(proc->aspace->lock));
 #line 369 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                    bool __llpl_ret735 = 0;
-                    return __llpl_ret735;
+                    bool __llpl_ret754 = 0;
+                    return __llpl_ret754;
                 }
                 if ((((old_pte->raw & ((uintptr_t)MM_PG_FILE_TRACK)) != ((uintptr_t)0)) && ((area->flags & ((uintptr_t)MM_MAP_WRITE)) != ((uintptr_t)0)))) {
                     old_pte->raw = ((old_pte->raw | ((uintptr_t)MM_PG_WRITABLE)) | ((uintptr_t)MM_PG_FILE_DIRTY));
@@ -18964,14 +19062,14 @@ bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uint
                     );
                     SpinLock_release(&(proc->aspace->lock));
 #line 376 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                    bool __llpl_ret736 = 1;
-                    return __llpl_ret736;
+                    bool __llpl_ret755 = 1;
+                    return __llpl_ret755;
                 }
                 if (((old_pte->raw & ((uintptr_t)MM_PG_COW)) == ((uintptr_t)0))) {
                     SpinLock_release(&(proc->aspace->lock));
 #line 380 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                    bool __llpl_ret737 = 0;
-                    return __llpl_ret737;
+                    bool __llpl_ret756 = 0;
+                    return __llpl_ret756;
                 }
 #line 382 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
                 uintptr_t old_paddr = MM_Pte_paddr(old_pte);
@@ -18993,8 +19091,8 @@ bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uint
                 MM_release_paddr_frame(old_paddr);
                 SpinLock_release(&(proc->aspace->lock));
 #line 392 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                bool __llpl_ret738 = 1;
-                return __llpl_ret738;
+                bool __llpl_ret757 = 1;
+                return __llpl_ret757;
             }
 #line 395 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
             MM_PageFrame* frame__shadow1 = MM_alloc_pageframe(MM_FrameType_Other);
@@ -19010,16 +19108,16 @@ bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uint
                     MM_PageFrame_release(frame__shadow1);
                     SpinLock_release(&(proc->aspace->lock));
 #line 404 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                    bool __llpl_ret739 = 0;
-                    return __llpl_ret739;
+                    bool __llpl_ret758 = 0;
+                    return __llpl_ret758;
                 }
 #line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 #line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_739 = ((VFS_Filesystem_VTable*)((((Kern_FileDescriptor*)raw_file))->file->fs)->__vtable)->read_binary((VFS_Filesystem*)((((Kern_FileDescriptor*)raw_file))->file->fs), (((Kern_FileDescriptor*)raw_file))->file->path);
+                __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_758 = ((VFS_Filesystem_VTable*)((((Kern_FileDescriptor*)raw_file))->file->fs)->__vtable)->read_binary((VFS_Filesystem*)((((Kern_FileDescriptor*)raw_file))->file->fs), (((Kern_FileDescriptor*)raw_file))->file->path);
 #line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                char* data = __llpl_destruct_739._0;
+                char* data = __llpl_destruct_758._0;
 #line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                uint64_t size = __llpl_destruct_739._1;
+                uint64_t size = __llpl_destruct_758._1;
 #line 408 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
                 uintptr_t file_page = (area->file_offset + (page - area->start));
                 if (((data != ((void*)0)) && (file_page < ((uintptr_t)size)))) {
@@ -19053,8 +19151,8 @@ bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uint
             }
             SpinLock_release(&(proc->aspace->lock));
 #line 429 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            bool __llpl_ret741 = mapped;
-            return __llpl_ret741;
+            bool __llpl_ret760 = mapped;
+            return __llpl_ret760;
         }
         if ((fault_addr < area->start)) {
             area = area->left;
@@ -19064,23 +19162,23 @@ bool Kern_resolve_user_page_fault(Kern_Process* proc, uintptr_t fault_addr, uint
     }
     SpinLock_release(&(proc->aspace->lock));
 #line 438 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    bool __llpl_ret742 = 0;
-    return __llpl_ret742;
+    bool __llpl_ret761 = 0;
+    return __llpl_ret761;
 }
 
 #line 441 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 __LLPL_Tuple2_int_uint Kern_map_user_file(Kern_Process* proc, Kern_FileDescriptor* descriptor, uintptr_t hint, uintptr_t length, uintptr_t offset, bool writable, bool write_back) {
-    __LLPL_EH_Frame __llpl_defer_frame58;
-    int __llpl_defer_active59 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame60;
+    int __llpl_defer_active61 = 0;
     if (((((((proc == ((void*)0)) || (descriptor == ((void*)0))) || (descriptor->file == ((void*)0))) || (length == ((uintptr_t)0))) || ((offset & ((uintptr_t)(MM_PAGE_SIZE - 1))) != ((uintptr_t)0))) || ((descriptor->file->mode & VFS_O_READ) == 0))) {
 #line 446 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret743 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret743;
+        __LLPL_Tuple2_int_uint __llpl_ret762 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret762;
     }
     if ((writable && ((descriptor->file->mode & VFS_O_WRITE) == 0))) {
 #line 448 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret744 = (__LLPL_Tuple2_int_uint){ ._0 = VFS_EACCES, ._1 = 0 };
-        return __llpl_ret744;
+        __LLPL_Tuple2_int_uint __llpl_ret763 = (__LLPL_Tuple2_int_uint){ ._0 = VFS_EACCES, ._1 = 0 };
+        return __llpl_ret763;
     }
 #line 449 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t len = (((length + ((uintptr_t)MM_PAGE_SIZE)) - ((uintptr_t)1)) & ((uintptr_t)~(MM_PAGE_SIZE - 1)));
@@ -19088,14 +19186,14 @@ __LLPL_Tuple2_int_uint Kern_map_user_file(Kern_Process* proc, Kern_FileDescripto
     uintptr_t addr = hint;
     {
         SpinLock_acquire(&(proc->aspace->lock));
-        __llpl_defer_frame58.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame58.type_id = ((void*)0);
-        __llpl_defer_frame58.error_slot = ((void*)0);
-        __llpl_defer_frame58.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame58);
-        __llpl_defer_active59 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame58.env) != 0) {
-            __llpl_defer_active59 = 0;
+        __llpl_defer_frame60.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame60.type_id = ((void*)0);
+        __llpl_defer_frame60.error_slot = ((void*)0);
+        __llpl_defer_frame60.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame60);
+        __llpl_defer_active61 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame60.env) != 0) {
+            __llpl_defer_active61 = 0;
         SpinLock_release(&(proc->aspace->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -19108,13 +19206,13 @@ __LLPL_Tuple2_int_uint Kern_map_user_file(Kern_Process* proc, Kern_FileDescripto
         }
         if (((((addr < ((uintptr_t)Kern_USER_MMAP_BASE)) || ((addr + len) < addr)) || ((addr + len) > ((uintptr_t)Kern_USER_MMAP_END))) || MM_AddressSpace_overlaps(proc->aspace, addr, (addr + len)))) {
 #line 460 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret745 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-            if (__llpl_defer_active59) {
-                __llpl_defer_active59 = 0;
-                llpl_eh_pop(&__llpl_defer_frame58);
+            __LLPL_Tuple2_int_uint __llpl_ret764 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+            if (__llpl_defer_active61) {
+                __llpl_defer_active61 = 0;
+                llpl_eh_pop(&__llpl_defer_frame60);
         SpinLock_release(&(proc->aspace->lock));
             }
-            return __llpl_ret745;
+            return __llpl_ret764;
         }
 #line 462 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
         MM_VmArea* area = MM_VmArea_new(addr, (addr + len));
@@ -19133,23 +19231,23 @@ __LLPL_Tuple2_int_uint Kern_map_user_file(Kern_Process* proc, Kern_FileDescripto
         if ((hint == ((uintptr_t)0))) {
             proc->next_mmap = (addr + len);
         }
-        if (__llpl_defer_active59) {
-            __llpl_defer_active59 = 0;
-            llpl_eh_pop(&__llpl_defer_frame58);
+        if (__llpl_defer_active61) {
+            __llpl_defer_active61 = 0;
+            llpl_eh_pop(&__llpl_defer_frame60);
         SpinLock_release(&(proc->aspace->lock));
         }
     }
 #line 480 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    __LLPL_Tuple2_int_uint __llpl_ret746 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
-    if (__llpl_defer_active59) {
-        __llpl_defer_active59 = 0;
-        llpl_eh_pop(&__llpl_defer_frame58);
+    __LLPL_Tuple2_int_uint __llpl_ret765 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
+    if (__llpl_defer_active61) {
+        __llpl_defer_active61 = 0;
+        llpl_eh_pop(&__llpl_defer_frame60);
         SpinLock_release(&(proc->aspace->lock));
     }
-    return __llpl_ret746;
-    if (__llpl_defer_active59) {
-        __llpl_defer_active59 = 0;
-        llpl_eh_pop(&__llpl_defer_frame58);
+    return __llpl_ret765;
+    if (__llpl_defer_active61) {
+        __llpl_defer_active61 = 0;
+        llpl_eh_pop(&__llpl_defer_frame60);
         SpinLock_release(&(proc->aspace->lock));
     }
 }
@@ -19158,15 +19256,15 @@ __LLPL_Tuple2_int_uint Kern_map_user_file(Kern_Process* proc, Kern_FileDescripto
 intptr_t Kern_flush_file_area(Kern_Process* proc, MM_VmArea* area, uintptr_t start, uintptr_t end) {
     if (((area == ((void*)0)) || ((area->flags & ((uintptr_t)(MM_MAP_FILE | MM_MAP_SHARED))) != ((uintptr_t)(MM_MAP_FILE | MM_MAP_SHARED))))) {
 #line 484 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t __llpl_ret747 = EOK;
-        return __llpl_ret747;
+        intptr_t __llpl_ret766 = EOK;
+        return __llpl_ret766;
     }
 #line 486 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     void* raw_file = area->backing;
     if ((raw_file == ((void*)0))) {
 #line 487 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t __llpl_ret748 = EINVAL;
-        return __llpl_ret748;
+        intptr_t __llpl_ret767 = EINVAL;
+        return __llpl_ret767;
     }
 #line 488 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t first = area->start;
@@ -19194,11 +19292,11 @@ intptr_t Kern_flush_file_area(Kern_Process* proc, MM_VmArea* area, uintptr_t sta
                 }
 #line 498 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 #line 498 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_748 = ((VFS_Filesystem_VTable*)((((Kern_FileDescriptor*)raw_file))->file->fs)->__vtable)->read_binary((VFS_Filesystem*)((((Kern_FileDescriptor*)raw_file))->file->fs), (((Kern_FileDescriptor*)raw_file))->file->path);
+                __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_767 = ((VFS_Filesystem_VTable*)((((Kern_FileDescriptor*)raw_file))->file->fs)->__vtable)->read_binary((VFS_Filesystem*)((((Kern_FileDescriptor*)raw_file))->file->fs), (((Kern_FileDescriptor*)raw_file))->file->path);
 #line 498 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                char* old = __llpl_destruct_748._0;
+                char* old = __llpl_destruct_767._0;
 #line 498 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                uint64_t old_len_u64 = __llpl_destruct_748._1;
+                uint64_t old_len_u64 = __llpl_destruct_767._1;
 #line 500 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
                 uintptr_t old_len = ((uintptr_t)old_len_u64);
 #line 501 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
@@ -19218,8 +19316,8 @@ intptr_t Kern_flush_file_area(Kern_Process* proc, MM_VmArea* area, uintptr_t sta
                 MM_free(copy);
                 if ((rc < 0)) {
 #line 510 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                    intptr_t __llpl_ret750 = rc;
-                    return __llpl_ret750;
+                    intptr_t __llpl_ret769 = rc;
+                    return __llpl_ret769;
                 }
                 pte->raw = ((pte->raw & ((uintptr_t)~(MM_PG_WRITABLE | MM_PG_FILE_DIRTY))) | ((uintptr_t)MM_PG_FILE_TRACK));
                 if (((HAL_read_cr3() & ((uint64_t)MM_PADDR_4K_MASK)) == proc->pml4)) {
@@ -19235,16 +19333,16 @@ intptr_t Kern_flush_file_area(Kern_Process* proc, MM_VmArea* area, uintptr_t sta
         }
     }
 #line 517 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    intptr_t __llpl_ret751 = EOK;
-    return __llpl_ret751;
+    intptr_t __llpl_ret770 = EOK;
+    return __llpl_ret770;
 }
 
 #line 520 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 intptr_t Kern_sync_user_file_mappings(Kern_Process* proc, uintptr_t start, uintptr_t end) {
     if ((proc == ((void*)0))) {
 #line 521 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t __llpl_ret752 = EINVAL;
-        return __llpl_ret752;
+        intptr_t __llpl_ret771 = EINVAL;
+        return __llpl_ret771;
     }
 #line 522 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     MM_VmArea** stack = MM_malloc_MM_VmArea_ptr((((uint64_t)64) * sizeof(MM_VmArea*)));
@@ -19266,24 +19364,24 @@ intptr_t Kern_sync_user_file_mappings(Kern_Process* proc, uintptr_t start, uintp
             if ((rc < 0)) {
                 MM_free(((void*)stack));
 #line 537 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                intptr_t __llpl_ret756 = rc;
-                return __llpl_ret756;
+                intptr_t __llpl_ret775 = rc;
+                return __llpl_ret775;
             }
         }
         current = current->right;
     }
     MM_free(((void*)stack));
 #line 543 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    intptr_t __llpl_ret757 = EOK;
-    return __llpl_ret757;
+    intptr_t __llpl_ret776 = EOK;
+    return __llpl_ret776;
 }
 
 #line 546 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 Kern_Process* Kern_clone_process_address_space(Kern_Process* parent, String* name) {
     if (((((parent == ((void*)0)) || (parent == Kern_kproc)) || parent->exited) || (parent->pml4 == ((uintptr_t)0)))) {
 #line 547 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        Kern_Process* __llpl_ret758 = ((void*)0);
-        return __llpl_ret758;
+        Kern_Process* __llpl_ret777 = ((void*)0);
+        return __llpl_ret777;
     }
 #line 549 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     MM_AddressSpace* asp = parent->aspace;
@@ -19300,9 +19398,9 @@ Kern_Process* Kern_clone_process_address_space(Kern_Process* parent, String* nam
     MM_Pte* child_root = ((MM_Pte*)MM_p2v(child->pml4));
 #line 561 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     {
-        intptr_t __range_end759 = 512;
+        intptr_t __range_end778 = 512;
         intptr_t i = 256;
-        for (; i < __range_end759; i = i + 1) {
+        for (; i < __range_end778; i = i + 1) {
             child_root[i].raw = parent_root[i].raw;
         }
     }
@@ -19311,9 +19409,9 @@ Kern_Process* Kern_clone_process_address_space(Kern_Process* parent, String* nam
     child->next_mmap = parent->next_mmap;
     SpinLock_release(&(parent->aspace->lock));
 #line 567 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    Kern_Process* __llpl_ret760 = child;
+    Kern_Process* __llpl_ret779 = child;
     if (asp) rc_release(asp, MM_AddressSpace_destroy);
-    return __llpl_ret760;
+    return __llpl_ret779;
     if (child) rc_release(child, Kern_Process_destroy);
     if (asp) rc_release(asp, MM_AddressSpace_destroy);
 }
@@ -19322,42 +19420,42 @@ Kern_Process* Kern_clone_process_address_space(Kern_Process* parent, String* nam
 intptr_t Kern_unmap_user(Kern_Process* proc, uintptr_t addr, uintptr_t length) {
     if (((((proc == ((void*)0)) || (proc == Kern_kproc)) || (length == ((uintptr_t)0))) || (addr < ((uintptr_t)Kern_USER_MMAP_BASE)))) {
 #line 572 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t __llpl_ret761 = EINVAL;
-        return __llpl_ret761;
+        intptr_t __llpl_ret780 = EINVAL;
+        return __llpl_ret780;
     }
     if ((((addr + length) < addr) || ((addr + length) > ((uintptr_t)Kern_USER_MMAP_END)))) {
 #line 575 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t __llpl_ret762 = EINVAL;
-        return __llpl_ret762;
+        intptr_t __llpl_ret781 = EINVAL;
+        return __llpl_ret781;
     }
 #line 577 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     intptr_t sync_rc = Kern_sync_user_file_mappings(proc, addr, (addr + length));
     if ((sync_rc < 0)) {
 #line 578 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t __llpl_ret763 = sync_rc;
-        return __llpl_ret763;
+        intptr_t __llpl_ret782 = sync_rc;
+        return __llpl_ret782;
     }
 #line 579 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    intptr_t __llpl_ret764 = MM_AddressSpace_unmap(proc->aspace, addr, length);
-    return __llpl_ret764;
+    intptr_t __llpl_ret783 = MM_AddressSpace_unmap(proc->aspace, addr, length);
+    return __llpl_ret783;
 }
 
 #line 582 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 __LLPL_Tuple2_int_uint Kern_process_brk(Kern_Process* proc, uintptr_t requested) {
     if ((((proc == ((void*)0)) || (proc == Kern_kproc)) || proc->exited)) {
 #line 583 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret765 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret765;
+        __LLPL_Tuple2_int_uint __llpl_ret784 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret784;
     }
     if ((requested == ((uintptr_t)0))) {
 #line 584 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret766 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = proc->brk_current };
-        return __llpl_ret766;
+        __LLPL_Tuple2_int_uint __llpl_ret785 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = proc->brk_current };
+        return __llpl_ret785;
     }
     if (((requested < proc->brk_base) || (requested > ((uintptr_t)Kern_USER_BRK_LIMIT)))) {
 #line 585 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret767 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = proc->brk_current };
-        return __llpl_ret767;
+        __LLPL_Tuple2_int_uint __llpl_ret786 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = proc->brk_current };
+        return __llpl_ret786;
     }
 #line 588 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t old = proc->brk_current;
@@ -19368,13 +19466,13 @@ __LLPL_Tuple2_int_uint Kern_process_brk(Kern_Process* proc, uintptr_t requested)
     if ((new_page_end > old_page_end)) {
 #line 592 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 #line 592 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_destruct_767 = Kern_map_user_anonymous(proc, old_page_end, (new_page_end - old_page_end));
+        __LLPL_Tuple2_int_uint __llpl_destruct_786 = Kern_map_user_anonymous(proc, old_page_end, (new_page_end - old_page_end));
 #line 592 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        intptr_t rc = __llpl_destruct_767._0;
+        intptr_t rc = __llpl_destruct_786._0;
         if ((rc < 0)) {
 #line 594 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret769 = (__LLPL_Tuple2_int_uint){ ._0 = rc, ._1 = old };
-            return __llpl_ret769;
+            __LLPL_Tuple2_int_uint __llpl_ret788 = (__LLPL_Tuple2_int_uint){ ._0 = rc, ._1 = old };
+            return __llpl_ret788;
         }
     } else {
         if ((new_page_end < old_page_end)) {
@@ -19382,23 +19480,23 @@ __LLPL_Tuple2_int_uint Kern_process_brk(Kern_Process* proc, uintptr_t requested)
             intptr_t rc__shadow1 = Kern_unmap_user(proc, new_page_end, (old_page_end - new_page_end));
             if ((rc__shadow1 < 0)) {
 #line 597 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-                __LLPL_Tuple2_int_uint __llpl_ret770 = (__LLPL_Tuple2_int_uint){ ._0 = rc__shadow1, ._1 = old };
-                return __llpl_ret770;
+                __LLPL_Tuple2_int_uint __llpl_ret789 = (__LLPL_Tuple2_int_uint){ ._0 = rc__shadow1, ._1 = old };
+                return __llpl_ret789;
             }
         }
     }
     proc->brk_current = requested;
 #line 600 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    __LLPL_Tuple2_int_uint __llpl_ret771 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = requested };
-    return __llpl_ret771;
+    __LLPL_Tuple2_int_uint __llpl_ret790 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = requested };
+    return __llpl_ret790;
 }
 
 #line 603 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 __LLPL_Tuple2_int_uint Kern_process_sbrk(Kern_Process* proc, intptr_t increment) {
     if ((proc == ((void*)0))) {
 #line 604 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret772 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret772;
+        __LLPL_Tuple2_int_uint __llpl_ret791 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret791;
     }
 #line 605 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
     uintptr_t old = proc->brk_current;
@@ -19409,8 +19507,8 @@ __LLPL_Tuple2_int_uint Kern_process_sbrk(Kern_Process* proc, intptr_t increment)
         uintptr_t decrease = ((uintptr_t)-increment);
         if ((decrease > (old - proc->brk_base))) {
 #line 609 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret773 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = old };
-            return __llpl_ret773;
+            __LLPL_Tuple2_int_uint __llpl_ret792 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = old };
+            return __llpl_ret792;
         }
         requested = (old - decrease);
     } else {
@@ -19418,19 +19516,19 @@ __LLPL_Tuple2_int_uint Kern_process_sbrk(Kern_Process* proc, intptr_t increment)
         uintptr_t increase = ((uintptr_t)increment);
         if ((increase > (((uintptr_t)Kern_USER_BRK_LIMIT) - old))) {
 #line 613 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret774 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = old };
-            return __llpl_ret774;
+            __LLPL_Tuple2_int_uint __llpl_ret793 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = old };
+            return __llpl_ret793;
         }
         requested = (old + increase);
     }
 #line 616 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
 #line 616 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    __LLPL_Tuple2_int_uint __llpl_destruct_774 = Kern_process_brk(proc, requested);
+    __LLPL_Tuple2_int_uint __llpl_destruct_793 = Kern_process_brk(proc, requested);
 #line 616 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    intptr_t rc = __llpl_destruct_774._0;
+    intptr_t rc = __llpl_destruct_793._0;
 #line 617 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/process.llpl"
-    __LLPL_Tuple2_int_uint __llpl_ret776 = (__LLPL_Tuple2_int_uint){ ._0 = rc, ._1 = old };
-    return __llpl_ret776;
+    __LLPL_Tuple2_int_uint __llpl_ret795 = (__LLPL_Tuple2_int_uint){ ._0 = rc, ._1 = old };
+    return __llpl_ret795;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl
@@ -19451,9 +19549,9 @@ void Kern_SharedMemorySegment_init(Kern_SharedMemorySegment* self, String* name,
     self->frame_paddrs = MM_malloc_uint((self->page_count * sizeof(uintptr_t)));
 #line 33 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     {
-        intptr_t __range_end780 = self->page_count;
+        intptr_t __range_end799 = self->page_count;
         intptr_t i = 0;
-        for (; i < __range_end780; i = i + 1) {
+        for (; i < __range_end799; i = i + 1) {
 #line 34 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
             MM_PageFrame* frame = MM_alloc_pageframe(MM_FrameType_Other);
 #line 35 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
@@ -19473,9 +19571,9 @@ void Kern_SharedMemorySegment__destroy_impl(void* ptr) {
     Kern_SharedMemorySegment* self = (Kern_SharedMemorySegment*)ptr;
 #line 42 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     {
-        intptr_t __range_end781 = self->page_count;
+        intptr_t __range_end800 = self->page_count;
         intptr_t i = 0;
-        for (; i < __range_end781; i = i + 1) {
+        for (; i < __range_end800; i = i + 1) {
             MM_release_paddr_frame(self->frame_paddrs[i]);
         }
     }
@@ -19506,21 +19604,21 @@ __LLPL_Tuple2_int_uint Kern_find_free_shm_va(Kern_Process* proc, uintptr_t len) 
     }
     if (((addr + len) > ((uintptr_t)Kern_USER_MMAP_END))) {
 #line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret782 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
-        return __llpl_ret782;
+        __LLPL_Tuple2_int_uint __llpl_ret801 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
+        return __llpl_ret801;
     }
 #line 74 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-    __LLPL_Tuple2_int_uint __llpl_ret783 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
-    return __llpl_ret783;
+    __LLPL_Tuple2_int_uint __llpl_ret802 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
+    return __llpl_ret802;
 }
 
 #line 77 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
 bool Kern_map_shm_pages(Kern_Process* proc, uintptr_t addr, Kern_SharedMemorySegment* segment) {
 #line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     {
-        intptr_t __range_end784 = segment->page_count;
+        intptr_t __range_end803 = segment->page_count;
         intptr_t i = 0;
-        for (; i < __range_end784; i = i + 1) {
+        for (; i < __range_end803; i = i + 1) {
 #line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
             MM_PageFrame* frame = ((MM_PageFrame*)(((uintptr_t)MM_pfdb) + ((segment->frame_paddrs[i] >> ((uintptr_t)MM_PAGE_SHIFT)) * sizeof(MM_PageFrame))));
             MM_PageFrame_acquire(frame);
@@ -19531,68 +19629,68 @@ bool Kern_map_shm_pages(Kern_Process* proc, uintptr_t addr, Kern_SharedMemorySeg
             if (!mapped) {
                 MM_PageFrame_release(frame);
 #line 85 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-                bool __llpl_ret785 = 0;
-                return __llpl_ret785;
+                bool __llpl_ret804 = 0;
+                return __llpl_ret804;
             }
         }
     }
 #line 88 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-    bool __llpl_ret786 = 1;
-    return __llpl_ret786;
+    bool __llpl_ret805 = 1;
+    return __llpl_ret805;
 }
 
 #line 91 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
 __LLPL_Tuple2_int_uint Kern_shm_create(Kern_Process* proc, String* name, uintptr_t size) {
-    __LLPL_EH_Frame __llpl_defer_frame64;
-    int __llpl_defer_active65 = 0;
     __LLPL_EH_Frame __llpl_defer_frame66;
     int __llpl_defer_active67 = 0;
     __LLPL_EH_Frame __llpl_defer_frame68;
     int __llpl_defer_active69 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame70;
+    int __llpl_defer_active71 = 0;
     if (((((proc == ((void*)0)) || (proc == Kern_kproc)) || (name == ((void*)0))) || (size == ((uintptr_t)0)))) {
 #line 93 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret787 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret787;
+        __LLPL_Tuple2_int_uint __llpl_ret806 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret806;
     }
 #line 96 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     uintptr_t len = (((size + ((uintptr_t)MM_PAGE_SIZE)) - ((uintptr_t)1)) & ((uintptr_t)~(MM_PAGE_SIZE - 1)));
     if ((len < size)) {
 #line 98 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret788 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret788;
+        __LLPL_Tuple2_int_uint __llpl_ret807 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret807;
     }
 #line 101 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     Kern_SharedMemorySegment* segment = ((void*)0);
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame64.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame64.type_id = ((void*)0);
-        __llpl_defer_frame64.error_slot = ((void*)0);
-        __llpl_defer_frame64.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame64);
-        __llpl_defer_active65 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame64.env) != 0) {
-            __llpl_defer_active65 = 0;
+        __llpl_defer_frame66.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame66.type_id = ((void*)0);
+        __llpl_defer_frame66.error_slot = ((void*)0);
+        __llpl_defer_frame66.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame66);
+        __llpl_defer_active67 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame66.env) != 0) {
+            __llpl_defer_active67 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         if (HashMap_String_Kern_SharedMemorySegment_contains(Kern_shm_segments, name)) {
 #line 104 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret789 = (__LLPL_Tuple2_int_uint){ ._0 = EEXIST, ._1 = 0 };
-            if (__llpl_defer_active65) {
-                __llpl_defer_active65 = 0;
-                llpl_eh_pop(&__llpl_defer_frame64);
+            __LLPL_Tuple2_int_uint __llpl_ret808 = (__LLPL_Tuple2_int_uint){ ._0 = EEXIST, ._1 = 0 };
+            if (__llpl_defer_active67) {
+                __llpl_defer_active67 = 0;
+                llpl_eh_pop(&__llpl_defer_frame66);
         SpinLock_release(&(Kern_lock));
             }
             if (segment) rc_release(segment, Kern_SharedMemorySegment_destroy);
-            return __llpl_ret789;
+            return __llpl_ret808;
         }
         ({ Kern_SharedMemorySegment* __llpl_assign_tmp80 = Kern_SharedMemorySegment_new(name, len); if (segment) rc_release(segment, Kern_SharedMemorySegment_destroy); segment = __llpl_assign_tmp80; segment; });
         HashMap_String_Kern_SharedMemorySegment_insert(Kern_shm_segments, name, segment);
-        if (__llpl_defer_active65) {
-            __llpl_defer_active65 = 0;
-            llpl_eh_pop(&__llpl_defer_frame64);
+        if (__llpl_defer_active67) {
+            __llpl_defer_active67 = 0;
+            llpl_eh_pop(&__llpl_defer_frame66);
         SpinLock_release(&(Kern_lock));
         }
     }
@@ -19602,25 +19700,25 @@ __LLPL_Tuple2_int_uint Kern_shm_create(Kern_Process* proc, String* name, uintptr
     intptr_t failure = EOK;
     {
         SpinLock_acquire(&(proc->aspace->lock));
-        __llpl_defer_frame66.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame66.type_id = ((void*)0);
-        __llpl_defer_frame66.error_slot = ((void*)0);
-        __llpl_defer_frame66.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame66);
-        __llpl_defer_active67 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame66.env) != 0) {
-            __llpl_defer_active67 = 0;
+        __llpl_defer_frame68.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame68.type_id = ((void*)0);
+        __llpl_defer_frame68.error_slot = ((void*)0);
+        __llpl_defer_frame68.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame68);
+        __llpl_defer_active69 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame68.env) != 0) {
+            __llpl_defer_active69 = 0;
         SpinLock_release(&(proc->aspace->lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        __LLPL_Tuple2_int_uint __llpl_destruct_789 = Kern_find_free_shm_va(proc, len);
+        __LLPL_Tuple2_int_uint __llpl_destruct_808 = Kern_find_free_shm_va(proc, len);
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        intptr_t rc = __llpl_destruct_789._0;
+        intptr_t rc = __llpl_destruct_808._0;
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        uintptr_t found_addr = __llpl_destruct_789._1;
+        uintptr_t found_addr = __llpl_destruct_808._1;
         if ((rc < 0)) {
             failure = rc;
         } else {
@@ -19638,113 +19736,113 @@ __LLPL_Tuple2_int_uint Kern_shm_create(Kern_Process* proc, String* name, uintptr
                 proc->next_mmap = (addr + len);
             }
         }
-        if (__llpl_defer_active67) {
-            __llpl_defer_active67 = 0;
-            llpl_eh_pop(&__llpl_defer_frame66);
+        if (__llpl_defer_active69) {
+            __llpl_defer_active69 = 0;
+            llpl_eh_pop(&__llpl_defer_frame68);
         SpinLock_release(&(proc->aspace->lock));
         }
     }
     if ((failure < 0)) {
         {
             SpinLock_acquire(&(Kern_lock));
-            __llpl_defer_frame68.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame68.type_id = ((void*)0);
-            __llpl_defer_frame68.error_slot = ((void*)0);
-            __llpl_defer_frame68.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame68);
-            __llpl_defer_active69 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame68.env) != 0) {
-                __llpl_defer_active69 = 0;
+            __llpl_defer_frame70.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame70.type_id = ((void*)0);
+            __llpl_defer_frame70.error_slot = ((void*)0);
+            __llpl_defer_frame70.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame70);
+            __llpl_defer_active71 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame70.env) != 0) {
+                __llpl_defer_active71 = 0;
             SpinLock_release(&(Kern_lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             HashMap_String_Kern_SharedMemorySegment_remove(Kern_shm_segments, name);
-            if (__llpl_defer_active69) {
-                __llpl_defer_active69 = 0;
-                llpl_eh_pop(&__llpl_defer_frame68);
+            if (__llpl_defer_active71) {
+                __llpl_defer_active71 = 0;
+                llpl_eh_pop(&__llpl_defer_frame70);
             SpinLock_release(&(Kern_lock));
             }
         }
 #line 136 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
         rc_release(segment, Kern_SharedMemorySegment_destroy);
 #line 137 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret791 = (__LLPL_Tuple2_int_uint){ ._0 = failure, ._1 = 0 };
+        __LLPL_Tuple2_int_uint __llpl_ret810 = (__LLPL_Tuple2_int_uint){ ._0 = failure, ._1 = 0 };
+        if (__llpl_defer_active71) {
+            __llpl_defer_active71 = 0;
+            llpl_eh_pop(&__llpl_defer_frame70);
+            SpinLock_release(&(Kern_lock));
+        }
         if (__llpl_defer_active69) {
             __llpl_defer_active69 = 0;
             llpl_eh_pop(&__llpl_defer_frame68);
-            SpinLock_release(&(Kern_lock));
+        SpinLock_release(&(proc->aspace->lock));
         }
         if (__llpl_defer_active67) {
             __llpl_defer_active67 = 0;
             llpl_eh_pop(&__llpl_defer_frame66);
-        SpinLock_release(&(proc->aspace->lock));
-        }
-        if (__llpl_defer_active65) {
-            __llpl_defer_active65 = 0;
-            llpl_eh_pop(&__llpl_defer_frame64);
         SpinLock_release(&(Kern_lock));
         }
-        return __llpl_ret791;
+        return __llpl_ret810;
     }
 #line 139 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-    __LLPL_Tuple2_int_uint __llpl_ret792 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
+    __LLPL_Tuple2_int_uint __llpl_ret811 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
+    if (__llpl_defer_active71) {
+        __llpl_defer_active71 = 0;
+        llpl_eh_pop(&__llpl_defer_frame70);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active69) {
         __llpl_defer_active69 = 0;
         llpl_eh_pop(&__llpl_defer_frame68);
-            SpinLock_release(&(Kern_lock));
+        SpinLock_release(&(proc->aspace->lock));
     }
     if (__llpl_defer_active67) {
         __llpl_defer_active67 = 0;
         llpl_eh_pop(&__llpl_defer_frame66);
-        SpinLock_release(&(proc->aspace->lock));
-    }
-    if (__llpl_defer_active65) {
-        __llpl_defer_active65 = 0;
-        llpl_eh_pop(&__llpl_defer_frame64);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret792;
+    return __llpl_ret811;
+    if (__llpl_defer_active71) {
+        __llpl_defer_active71 = 0;
+        llpl_eh_pop(&__llpl_defer_frame70);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active69) {
         __llpl_defer_active69 = 0;
         llpl_eh_pop(&__llpl_defer_frame68);
-            SpinLock_release(&(Kern_lock));
+        SpinLock_release(&(proc->aspace->lock));
     }
     if (__llpl_defer_active67) {
         __llpl_defer_active67 = 0;
         llpl_eh_pop(&__llpl_defer_frame66);
-        SpinLock_release(&(proc->aspace->lock));
-    }
-    if (__llpl_defer_active65) {
-        __llpl_defer_active65 = 0;
-        llpl_eh_pop(&__llpl_defer_frame64);
         SpinLock_release(&(Kern_lock));
     }
 }
 
 #line 142 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
 __LLPL_Tuple2_int_uint Kern_shm_open(Kern_Process* proc, String* name) {
-    __LLPL_EH_Frame __llpl_defer_frame70;
-    int __llpl_defer_active71 = 0;
     __LLPL_EH_Frame __llpl_defer_frame72;
     int __llpl_defer_active73 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame74;
+    int __llpl_defer_active75 = 0;
     if ((((proc == ((void*)0)) || (proc == Kern_kproc)) || (name == ((void*)0)))) {
 #line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        __LLPL_Tuple2_int_uint __llpl_ret793 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
-        return __llpl_ret793;
+        __LLPL_Tuple2_int_uint __llpl_ret812 = (__LLPL_Tuple2_int_uint){ ._0 = EINVAL, ._1 = 0 };
+        return __llpl_ret812;
     }
 #line 156 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     Kern_SharedMemorySegment* segment = ((void*)0);
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame70.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame70.type_id = ((void*)0);
-        __llpl_defer_frame70.error_slot = ((void*)0);
-        __llpl_defer_frame70.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame70);
-        __llpl_defer_active71 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame70.env) != 0) {
-            __llpl_defer_active71 = 0;
+        __llpl_defer_frame72.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame72.type_id = ((void*)0);
+        __llpl_defer_frame72.error_slot = ((void*)0);
+        __llpl_defer_frame72.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame72);
+        __llpl_defer_active73 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame72.env) != 0) {
+            __llpl_defer_active73 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -19753,20 +19851,20 @@ __LLPL_Tuple2_int_uint Kern_shm_open(Kern_Process* proc, String* name) {
         Optional_Kern_SharedMemorySegment* found = HashMap_String_Kern_SharedMemorySegment_get(Kern_shm_segments, name);
         if (Optional_Kern_SharedMemorySegment_is_none(found)) {
 #line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret794 = (__LLPL_Tuple2_int_uint){ ._0 = ENOENT, ._1 = 0 };
-            if (__llpl_defer_active71) {
-                __llpl_defer_active71 = 0;
-                llpl_eh_pop(&__llpl_defer_frame70);
+            __LLPL_Tuple2_int_uint __llpl_ret813 = (__LLPL_Tuple2_int_uint){ ._0 = ENOENT, ._1 = 0 };
+            if (__llpl_defer_active73) {
+                __llpl_defer_active73 = 0;
+                llpl_eh_pop(&__llpl_defer_frame72);
         SpinLock_release(&(Kern_lock));
             }
             if (segment) rc_release(segment, Kern_SharedMemorySegment_destroy);
-            return __llpl_ret794;
+            return __llpl_ret813;
         }
         ({ Kern_SharedMemorySegment* __llpl_assign_tmp82 = Optional_Kern_SharedMemorySegment_get(found); if (segment) rc_release(segment, Kern_SharedMemorySegment_destroy); segment = __llpl_assign_tmp82; segment; });
         rc_retain(((char*)segment));
-        if (__llpl_defer_active71) {
-            __llpl_defer_active71 = 0;
-            llpl_eh_pop(&__llpl_defer_frame70);
+        if (__llpl_defer_active73) {
+            __llpl_defer_active73 = 0;
+            llpl_eh_pop(&__llpl_defer_frame72);
         SpinLock_release(&(Kern_lock));
         }
     }
@@ -19776,59 +19874,59 @@ __LLPL_Tuple2_int_uint Kern_shm_open(Kern_Process* proc, String* name) {
     uintptr_t addr;
     {
         SpinLock_acquire(&(proc->aspace->lock));
-        __llpl_defer_frame72.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame72.type_id = ((void*)0);
-        __llpl_defer_frame72.error_slot = ((void*)0);
-        __llpl_defer_frame72.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame72);
-        __llpl_defer_active73 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame72.env) != 0) {
-            __llpl_defer_active73 = 0;
+        __llpl_defer_frame74.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame74.type_id = ((void*)0);
+        __llpl_defer_frame74.error_slot = ((void*)0);
+        __llpl_defer_frame74.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame74);
+        __llpl_defer_active75 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame74.env) != 0) {
+            __llpl_defer_active75 = 0;
         SpinLock_release(&(proc->aspace->lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        __LLPL_Tuple2_int_uint __llpl_destruct_794 = Kern_find_free_shm_va(proc, len);
+        __LLPL_Tuple2_int_uint __llpl_destruct_813 = Kern_find_free_shm_va(proc, len);
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        intptr_t rc = __llpl_destruct_794._0;
+        intptr_t rc = __llpl_destruct_813._0;
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        uintptr_t found_addr = __llpl_destruct_794._1;
+        uintptr_t found_addr = __llpl_destruct_813._1;
         if ((rc < 0)) {
 #line 171 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
             rc_release(segment, Kern_SharedMemorySegment_destroy);
 #line 172 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret796 = (__LLPL_Tuple2_int_uint){ ._0 = rc, ._1 = 0 };
+            __LLPL_Tuple2_int_uint __llpl_ret815 = (__LLPL_Tuple2_int_uint){ ._0 = rc, ._1 = 0 };
+            if (__llpl_defer_active75) {
+                __llpl_defer_active75 = 0;
+                llpl_eh_pop(&__llpl_defer_frame74);
+        SpinLock_release(&(proc->aspace->lock));
+            }
             if (__llpl_defer_active73) {
                 __llpl_defer_active73 = 0;
                 llpl_eh_pop(&__llpl_defer_frame72);
-        SpinLock_release(&(proc->aspace->lock));
-            }
-            if (__llpl_defer_active71) {
-                __llpl_defer_active71 = 0;
-                llpl_eh_pop(&__llpl_defer_frame70);
         SpinLock_release(&(Kern_lock));
             }
-            return __llpl_ret796;
+            return __llpl_ret815;
         }
         addr = found_addr;
         if (!Kern_map_shm_pages(proc, addr, segment)) {
 #line 177 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
             rc_release(segment, Kern_SharedMemorySegment_destroy);
 #line 178 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-            __LLPL_Tuple2_int_uint __llpl_ret797 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
+            __LLPL_Tuple2_int_uint __llpl_ret816 = (__LLPL_Tuple2_int_uint){ ._0 = ENOMEM, ._1 = 0 };
+            if (__llpl_defer_active75) {
+                __llpl_defer_active75 = 0;
+                llpl_eh_pop(&__llpl_defer_frame74);
+        SpinLock_release(&(proc->aspace->lock));
+            }
             if (__llpl_defer_active73) {
                 __llpl_defer_active73 = 0;
                 llpl_eh_pop(&__llpl_defer_frame72);
-        SpinLock_release(&(proc->aspace->lock));
-            }
-            if (__llpl_defer_active71) {
-                __llpl_defer_active71 = 0;
-                llpl_eh_pop(&__llpl_defer_frame70);
         SpinLock_release(&(Kern_lock));
             }
-            return __llpl_ret797;
+            return __llpl_ret816;
         }
 #line 181 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
         MM_VmArea* vma = MM_VmArea_new(addr, (addr + len));
@@ -19838,35 +19936,35 @@ __LLPL_Tuple2_int_uint Kern_shm_open(Kern_Process* proc, String* name) {
         rc_retain(((char*)vma->backing));
         MM_rb_insert(proc->aspace, vma);
         proc->next_mmap = (addr + len);
-        if (__llpl_defer_active73) {
-            __llpl_defer_active73 = 0;
-            llpl_eh_pop(&__llpl_defer_frame72);
+        if (__llpl_defer_active75) {
+            __llpl_defer_active75 = 0;
+            llpl_eh_pop(&__llpl_defer_frame74);
         SpinLock_release(&(proc->aspace->lock));
         }
     }
 #line 192 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     rc_release(segment, Kern_SharedMemorySegment_destroy);
 #line 193 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-    __LLPL_Tuple2_int_uint __llpl_ret798 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
+    __LLPL_Tuple2_int_uint __llpl_ret817 = (__LLPL_Tuple2_int_uint){ ._0 = EOK, ._1 = addr };
+    if (__llpl_defer_active75) {
+        __llpl_defer_active75 = 0;
+        llpl_eh_pop(&__llpl_defer_frame74);
+        SpinLock_release(&(proc->aspace->lock));
+    }
     if (__llpl_defer_active73) {
         __llpl_defer_active73 = 0;
         llpl_eh_pop(&__llpl_defer_frame72);
-        SpinLock_release(&(proc->aspace->lock));
-    }
-    if (__llpl_defer_active71) {
-        __llpl_defer_active71 = 0;
-        llpl_eh_pop(&__llpl_defer_frame70);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret798;
+    return __llpl_ret817;
+    if (__llpl_defer_active75) {
+        __llpl_defer_active75 = 0;
+        llpl_eh_pop(&__llpl_defer_frame74);
+        SpinLock_release(&(proc->aspace->lock));
+    }
     if (__llpl_defer_active73) {
         __llpl_defer_active73 = 0;
         llpl_eh_pop(&__llpl_defer_frame72);
-        SpinLock_release(&(proc->aspace->lock));
-    }
-    if (__llpl_defer_active71) {
-        __llpl_defer_active71 = 0;
-        llpl_eh_pop(&__llpl_defer_frame70);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -19875,25 +19973,25 @@ __LLPL_Tuple2_int_uint Kern_shm_open(Kern_Process* proc, String* name) {
 
 #line 225 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
 intptr_t Kern_shm_unlink(String* name) {
-    __LLPL_EH_Frame __llpl_defer_frame74;
-    int __llpl_defer_active75 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame76;
+    int __llpl_defer_active77 = 0;
     if ((name == ((void*)0))) {
 #line 227 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-        intptr_t __llpl_ret799 = EINVAL;
-        return __llpl_ret799;
+        intptr_t __llpl_ret818 = EINVAL;
+        return __llpl_ret818;
     }
 #line 229 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     Kern_SharedMemorySegment* segment = ((void*)0);
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame74.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame74.type_id = ((void*)0);
-        __llpl_defer_frame74.error_slot = ((void*)0);
-        __llpl_defer_frame74.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame74);
-        __llpl_defer_active75 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame74.env) != 0) {
-            __llpl_defer_active75 = 0;
+        __llpl_defer_frame76.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame76.type_id = ((void*)0);
+        __llpl_defer_frame76.error_slot = ((void*)0);
+        __llpl_defer_frame76.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame76);
+        __llpl_defer_active77 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame76.env) != 0) {
+            __llpl_defer_active77 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -19902,36 +20000,36 @@ intptr_t Kern_shm_unlink(String* name) {
         Optional_Kern_SharedMemorySegment* found = HashMap_String_Kern_SharedMemorySegment_get(Kern_shm_segments, name);
         if (Optional_Kern_SharedMemorySegment_is_none(found)) {
 #line 233 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-            intptr_t __llpl_ret800 = ENOENT;
-            if (__llpl_defer_active75) {
-                __llpl_defer_active75 = 0;
-                llpl_eh_pop(&__llpl_defer_frame74);
+            intptr_t __llpl_ret819 = ENOENT;
+            if (__llpl_defer_active77) {
+                __llpl_defer_active77 = 0;
+                llpl_eh_pop(&__llpl_defer_frame76);
         SpinLock_release(&(Kern_lock));
             }
             if (segment) rc_release(segment, Kern_SharedMemorySegment_destroy);
-            return __llpl_ret800;
+            return __llpl_ret819;
         }
         ({ Kern_SharedMemorySegment* __llpl_assign_tmp84 = Optional_Kern_SharedMemorySegment_get(found); if (segment) rc_release(segment, Kern_SharedMemorySegment_destroy); segment = __llpl_assign_tmp84; segment; });
         HashMap_String_Kern_SharedMemorySegment_remove(Kern_shm_segments, name);
-        if (__llpl_defer_active75) {
-            __llpl_defer_active75 = 0;
-            llpl_eh_pop(&__llpl_defer_frame74);
+        if (__llpl_defer_active77) {
+            __llpl_defer_active77 = 0;
+            llpl_eh_pop(&__llpl_defer_frame76);
         SpinLock_release(&(Kern_lock));
         }
     }
 #line 243 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
     rc_release(segment, Kern_SharedMemorySegment_destroy);
 #line 244 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/shm.llpl"
-    intptr_t __llpl_ret801 = EOK;
-    if (__llpl_defer_active75) {
-        __llpl_defer_active75 = 0;
-        llpl_eh_pop(&__llpl_defer_frame74);
+    intptr_t __llpl_ret820 = EOK;
+    if (__llpl_defer_active77) {
+        __llpl_defer_active77 = 0;
+        llpl_eh_pop(&__llpl_defer_frame76);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret801;
-    if (__llpl_defer_active75) {
-        __llpl_defer_active75 = 0;
-        llpl_eh_pop(&__llpl_defer_frame74);
+    return __llpl_ret820;
+    if (__llpl_defer_active77) {
+        __llpl_defer_active77 = 0;
+        llpl_eh_pop(&__llpl_defer_frame76);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -19972,22 +20070,22 @@ uintptr_t Timer_on_pit_tick() {
     Timer_ticks = (Timer_ticks + ((uintptr_t)1));
     Timer_clocks = (Timer_clocks + ((uintptr_t)HAL_PIT_CLOCKS_PER_TICK));
 #line 40 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/timer.llpl"
-    uintptr_t __llpl_ret802 = Timer_ticks;
-    return __llpl_ret802;
+    uintptr_t __llpl_ret821 = Timer_ticks;
+    return __llpl_ret821;
 }
 
 #line 43 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/timer.llpl"
 uintptr_t Timer_current_tick() {
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/timer.llpl"
-    uintptr_t __llpl_ret803 = Timer_ticks;
-    return __llpl_ret803;
+    uintptr_t __llpl_ret822 = Timer_ticks;
+    return __llpl_ret822;
 }
 
 #line 47 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/timer.llpl"
 uintptr_t Timer_deadline_after_ticks(uintptr_t delay) {
 #line 48 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/timer.llpl"
-    uintptr_t __llpl_ret804 = (Timer_ticks + delay);
-    return __llpl_ret804;
+    uintptr_t __llpl_ret823 = (Timer_ticks + delay);
+    return __llpl_ret823;
 }
 
 
@@ -20044,8 +20142,8 @@ const intptr_t MAX_PRIORITY = 32;
 #line 30 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 Kern_Thread* current_thread() {
 #line 31 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    Kern_Thread* __llpl_ret805 = HAL_current()->thread;
-    return __llpl_ret805;
+    Kern_Thread* __llpl_ret824 = HAL_current()->thread;
+    return __llpl_ret824;
 }
 
 #line 37 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -20107,10 +20205,10 @@ Kern_Thread* Kern_Thread_new(Kern_Process* proc, __LLPL_Closure ptr_, void* arg,
 }
 
 void Kern_Thread_init(Kern_Thread* self, Kern_Process* proc, __LLPL_Closure ptr_, void* arg, String* name, uintptr_t flags, uintptr_t priority, uint64_t stack_size) {
-    __LLPL_EH_Frame __llpl_defer_frame76;
-    int __llpl_defer_active77 = 0;
     __LLPL_EH_Frame __llpl_defer_frame78;
     int __llpl_defer_active79 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame80;
+    int __llpl_defer_active81 = 0;
     Object_init((Object*)self);
 #line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     if (!((priority < ((uintptr_t)MAX_PRIORITY)))) llpl_panic("Thread priority is out of range");
@@ -20154,14 +20252,14 @@ void Kern_Thread_init(Kern_Thread* self, Kern_Process* proc, __LLPL_Closure ptr_
     self->in_exception = 0;
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame76.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame76.type_id = ((void*)0);
-        __llpl_defer_frame76.error_slot = ((void*)0);
-        __llpl_defer_frame76.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame76);
-        __llpl_defer_active77 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame76.env) != 0) {
-            __llpl_defer_active77 = 0;
+        __llpl_defer_frame78.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame78.type_id = ((void*)0);
+        __llpl_defer_frame78.error_slot = ((void*)0);
+        __llpl_defer_frame78.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame78);
+        __llpl_defer_active79 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame78.env) != 0) {
+            __llpl_defer_active79 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -20171,9 +20269,9 @@ void Kern_Thread_init(Kern_Thread* self, Kern_Process* proc, __LLPL_Closure ptr_
         if ((self->tid < ((uintptr_t)Kern_MAX_THREADS))) {
             (*(void**)__llpl_check_index(Kern_thread_table, self->tid, 128, sizeof(void*), "thread.llpl", 159)) = ((void*)self);
         }
-        if (__llpl_defer_active77) {
-            __llpl_defer_active77 = 0;
-            llpl_eh_pop(&__llpl_defer_frame76);
+        if (__llpl_defer_active79) {
+            __llpl_defer_active79 = 0;
+            llpl_eh_pop(&__llpl_defer_frame78);
         SpinLock_release(&(Kern_lock));
         }
     }
@@ -20201,34 +20299,34 @@ void Kern_Thread_init(Kern_Thread* self, Kern_Process* proc, __LLPL_Closure ptr_
     if ((proc != ((void*)0))) {
         {
             SpinLock_acquire(&(proc->lock));
-            __llpl_defer_frame78.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame78.type_id = ((void*)0);
-            __llpl_defer_frame78.error_slot = ((void*)0);
-            __llpl_defer_frame78.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame78);
-            __llpl_defer_active79 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame78.env) != 0) {
-                __llpl_defer_active79 = 0;
+            __llpl_defer_frame80.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame80.type_id = ((void*)0);
+            __llpl_defer_frame80.error_slot = ((void*)0);
+            __llpl_defer_frame80.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame80);
+            __llpl_defer_active81 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame80.env) != 0) {
+                __llpl_defer_active81 = 0;
             SpinLock_release(&(proc->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             std_collections_DoublyLinkedList_Kern_Thread_push_back(proc->threads, self);
-            if (__llpl_defer_active79) {
-                __llpl_defer_active79 = 0;
-                llpl_eh_pop(&__llpl_defer_frame78);
+            if (__llpl_defer_active81) {
+                __llpl_defer_active81 = 0;
+                llpl_eh_pop(&__llpl_defer_frame80);
             SpinLock_release(&(proc->lock));
             }
         }
     }
+    if (__llpl_defer_active81) {
+        __llpl_defer_active81 = 0;
+        llpl_eh_pop(&__llpl_defer_frame80);
+            SpinLock_release(&(proc->lock));
+    }
     if (__llpl_defer_active79) {
         __llpl_defer_active79 = 0;
         llpl_eh_pop(&__llpl_defer_frame78);
-            SpinLock_release(&(proc->lock));
-    }
-    if (__llpl_defer_active77) {
-        __llpl_defer_active77 = 0;
-        llpl_eh_pop(&__llpl_defer_frame76);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -20369,25 +20467,25 @@ void Kern_idle_main(void* arg) {
 
 #line 240 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 bool Kern_queue_thread_reap(Kern_Thread* thread) {
-    __LLPL_EH_Frame __llpl_defer_frame80;
-    int __llpl_defer_active81 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame82;
+    int __llpl_defer_active83 = 0;
     if ((thread == ((void*)0))) {
 #line 242 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        bool __llpl_ret806 = 0;
-        return __llpl_ret806;
+        bool __llpl_ret825 = 0;
+        return __llpl_ret825;
     }
 #line 244 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     bool queued = 0;
     {
         SpinLock_acquire(&(Kern_reap_lock));
-        __llpl_defer_frame80.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame80.type_id = ((void*)0);
-        __llpl_defer_frame80.error_slot = ((void*)0);
-        __llpl_defer_frame80.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame80);
-        __llpl_defer_active81 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame80.env) != 0) {
-            __llpl_defer_active81 = 0;
+        __llpl_defer_frame82.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame82.type_id = ((void*)0);
+        __llpl_defer_frame82.error_slot = ((void*)0);
+        __llpl_defer_frame82.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame82);
+        __llpl_defer_active83 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame82.env) != 0) {
+            __llpl_defer_active83 = 0;
         SpinLock_release(&(Kern_reap_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -20404,9 +20502,9 @@ bool Kern_queue_thread_reap(Kern_Thread* thread) {
             }
             queued = 1;
         }
-        if (__llpl_defer_active81) {
-            __llpl_defer_active81 = 0;
-            llpl_eh_pop(&__llpl_defer_frame80);
+        if (__llpl_defer_active83) {
+            __llpl_defer_active83 = 0;
+            llpl_eh_pop(&__llpl_defer_frame82);
         SpinLock_release(&(Kern_reap_lock));
         }
     }
@@ -20414,36 +20512,36 @@ bool Kern_queue_thread_reap(Kern_Thread* thread) {
         Kern_wake_one(Kern_reap_waiters);
     }
 #line 262 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    bool __llpl_ret807 = queued;
-    if (__llpl_defer_active81) {
-        __llpl_defer_active81 = 0;
-        llpl_eh_pop(&__llpl_defer_frame80);
+    bool __llpl_ret826 = queued;
+    if (__llpl_defer_active83) {
+        __llpl_defer_active83 = 0;
+        llpl_eh_pop(&__llpl_defer_frame82);
         SpinLock_release(&(Kern_reap_lock));
     }
-    return __llpl_ret807;
-    if (__llpl_defer_active81) {
-        __llpl_defer_active81 = 0;
-        llpl_eh_pop(&__llpl_defer_frame80);
+    return __llpl_ret826;
+    if (__llpl_defer_active83) {
+        __llpl_defer_active83 = 0;
+        llpl_eh_pop(&__llpl_defer_frame82);
         SpinLock_release(&(Kern_reap_lock));
     }
 }
 
 #line 265 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 void* Kern_take_reap_thread() {
-    __LLPL_EH_Frame __llpl_defer_frame82;
-    int __llpl_defer_active83 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame84;
+    int __llpl_defer_active85 = 0;
 #line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     void* thread = ((void*)0);
     {
         SpinLock_acquire(&(Kern_reap_lock));
-        __llpl_defer_frame82.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame82.type_id = ((void*)0);
-        __llpl_defer_frame82.error_slot = ((void*)0);
-        __llpl_defer_frame82.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame82);
-        __llpl_defer_active83 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame82.env) != 0) {
-            __llpl_defer_active83 = 0;
+        __llpl_defer_frame84.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame84.type_id = ((void*)0);
+        __llpl_defer_frame84.error_slot = ((void*)0);
+        __llpl_defer_frame84.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame84);
+        __llpl_defer_active85 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame84.env) != 0) {
+            __llpl_defer_active85 = 0;
         SpinLock_release(&(Kern_reap_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -20456,33 +20554,33 @@ void* Kern_take_reap_thread() {
                 Kern_reap_tail = ((void*)0);
             }
         }
-        if (__llpl_defer_active83) {
-            __llpl_defer_active83 = 0;
-            llpl_eh_pop(&__llpl_defer_frame82);
+        if (__llpl_defer_active85) {
+            __llpl_defer_active85 = 0;
+            llpl_eh_pop(&__llpl_defer_frame84);
         SpinLock_release(&(Kern_reap_lock));
         }
     }
 #line 277 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    void* __llpl_ret808 = thread;
-    if (__llpl_defer_active83) {
-        __llpl_defer_active83 = 0;
-        llpl_eh_pop(&__llpl_defer_frame82);
+    void* __llpl_ret827 = thread;
+    if (__llpl_defer_active85) {
+        __llpl_defer_active85 = 0;
+        llpl_eh_pop(&__llpl_defer_frame84);
         SpinLock_release(&(Kern_reap_lock));
     }
-    return __llpl_ret808;
-    if (__llpl_defer_active83) {
-        __llpl_defer_active83 = 0;
-        llpl_eh_pop(&__llpl_defer_frame82);
+    return __llpl_ret827;
+    if (__llpl_defer_active85) {
+        __llpl_defer_active85 = 0;
+        llpl_eh_pop(&__llpl_defer_frame84);
         SpinLock_release(&(Kern_reap_lock));
     }
 }
 
 #line 282 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 void Kern_reclaim_thread(void* raw_thread) {
-    __LLPL_EH_Frame __llpl_defer_frame84;
-    int __llpl_defer_active85 = 0;
     __LLPL_EH_Frame __llpl_defer_frame86;
     int __llpl_defer_active87 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame88;
+    int __llpl_defer_active89 = 0;
     if ((raw_thread == ((void*)0))) {
 #line 283 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
         return;
@@ -20496,36 +20594,36 @@ void Kern_reclaim_thread(void* raw_thread) {
     if ((process != ((void*)0))) {
         {
             SpinLock_acquire(&((((Kern_Process*)process))->lock));
-            __llpl_defer_frame84.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame84.type_id = ((void*)0);
-            __llpl_defer_frame84.error_slot = ((void*)0);
-            __llpl_defer_frame84.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame84);
-            __llpl_defer_active85 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame84.env) != 0) {
-                __llpl_defer_active85 = 0;
+            __llpl_defer_frame86.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame86.type_id = ((void*)0);
+            __llpl_defer_frame86.error_slot = ((void*)0);
+            __llpl_defer_frame86.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame86);
+            __llpl_defer_active87 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame86.env) != 0) {
+                __llpl_defer_active87 = 0;
             SpinLock_release(&((((Kern_Process*)process))->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             std_collections_DoublyLinkedList_Kern_Thread_remove((((Kern_Process*)process))->threads, ((Kern_Thread*)raw_thread));
-            if (__llpl_defer_active85) {
-                __llpl_defer_active85 = 0;
-                llpl_eh_pop(&__llpl_defer_frame84);
+            if (__llpl_defer_active87) {
+                __llpl_defer_active87 = 0;
+                llpl_eh_pop(&__llpl_defer_frame86);
             SpinLock_release(&((((Kern_Process*)process))->lock));
             }
         }
     }
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame86.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame86.type_id = ((void*)0);
-        __llpl_defer_frame86.error_slot = ((void*)0);
-        __llpl_defer_frame86.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame86);
-        __llpl_defer_active87 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame86.env) != 0) {
-            __llpl_defer_active87 = 0;
+        __llpl_defer_frame88.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame88.type_id = ((void*)0);
+        __llpl_defer_frame88.error_slot = ((void*)0);
+        __llpl_defer_frame88.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame88);
+        __llpl_defer_active89 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame88.env) != 0) {
+            __llpl_defer_active89 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -20533,28 +20631,28 @@ void Kern_reclaim_thread(void* raw_thread) {
         if (((((Kern_Thread*)raw_thread))->tid < ((uintptr_t)Kern_MAX_THREADS))) {
             (*(void**)__llpl_check_index(Kern_thread_table, (((Kern_Thread*)raw_thread))->tid, 128, sizeof(void*), "thread.llpl", 296)) = ((void*)0);
         }
-        if (__llpl_defer_active87) {
-            __llpl_defer_active87 = 0;
-            llpl_eh_pop(&__llpl_defer_frame86);
+        if (__llpl_defer_active89) {
+            __llpl_defer_active89 = 0;
+            llpl_eh_pop(&__llpl_defer_frame88);
         SpinLock_release(&(Kern_lock));
         }
+    }
+    if (__llpl_defer_active89) {
+        __llpl_defer_active89 = 0;
+        llpl_eh_pop(&__llpl_defer_frame88);
+        SpinLock_release(&(Kern_lock));
     }
     if (__llpl_defer_active87) {
         __llpl_defer_active87 = 0;
         llpl_eh_pop(&__llpl_defer_frame86);
-        SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active85) {
-        __llpl_defer_active85 = 0;
-        llpl_eh_pop(&__llpl_defer_frame84);
             SpinLock_release(&((((Kern_Process*)process))->lock));
     }
 }
 
 #line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 void Kern_reaper_main(void* arg) {
-    __LLPL_EH_Frame __llpl_defer_frame88;
-    int __llpl_defer_active89 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame90;
+    int __llpl_defer_active91 = 0;
     while (1) {
 #line 303 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
         void* raw_thread = Kern_take_reap_thread();
@@ -20565,14 +20663,14 @@ void Kern_reaper_main(void* arg) {
             bool prepared = 0;
             {
                 SpinLock_acquire(&(Kern_reap_lock));
-                __llpl_defer_frame88.kind = LLPL_EH_FRAME_CLEANUP;
-                __llpl_defer_frame88.type_id = ((void*)0);
-                __llpl_defer_frame88.error_slot = ((void*)0);
-                __llpl_defer_frame88.error_size = 0;
-                llpl_eh_push(&__llpl_defer_frame88);
-                __llpl_defer_active89 = 1;
-                if (llpl_eh_setjmp(&__llpl_defer_frame88.env) != 0) {
-                    __llpl_defer_active89 = 0;
+                __llpl_defer_frame90.kind = LLPL_EH_FRAME_CLEANUP;
+                __llpl_defer_frame90.type_id = ((void*)0);
+                __llpl_defer_frame90.error_slot = ((void*)0);
+                __llpl_defer_frame90.error_size = 0;
+                llpl_eh_push(&__llpl_defer_frame90);
+                __llpl_defer_active91 = 1;
+                if (llpl_eh_setjmp(&__llpl_defer_frame90.env) != 0) {
+                    __llpl_defer_active91 = 0;
                 SpinLock_release(&(Kern_reap_lock));
                     llpl_eh_resume();
                     __builtin_unreachable();
@@ -20580,9 +20678,9 @@ void Kern_reaper_main(void* arg) {
                 if ((Kern_reap_head == ((void*)0))) {
                     prepared = Kern_prepare_block_current(Kern_reap_waiters);
                 }
-                if (__llpl_defer_active89) {
-                    __llpl_defer_active89 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame88);
+                if (__llpl_defer_active91) {
+                    __llpl_defer_active91 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame90);
                 SpinLock_release(&(Kern_reap_lock));
                 }
             }
@@ -20591,17 +20689,17 @@ void Kern_reaper_main(void* arg) {
             }
         }
     }
-    if (__llpl_defer_active89) {
-        __llpl_defer_active89 = 0;
-        llpl_eh_pop(&__llpl_defer_frame88);
+    if (__llpl_defer_active91) {
+        __llpl_defer_active91 = 0;
+        llpl_eh_pop(&__llpl_defer_frame90);
                 SpinLock_release(&(Kern_reap_lock));
     }
 }
 
 #line 320 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 void Kern_finish_thread_exit(Kern_Thread* thread, uintptr_t value) {
-    __LLPL_EH_Frame __llpl_defer_frame90;
-    int __llpl_defer_active91 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame92;
+    int __llpl_defer_active93 = 0;
     if ((thread == ((void*)0))) {
 #line 321 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
         return;
@@ -20610,14 +20708,14 @@ void Kern_finish_thread_exit(Kern_Thread* thread, uintptr_t value) {
     bool reap = 0;
     {
         SpinLock_acquire(&(thread->lifecycle_lock));
-        __llpl_defer_frame90.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame90.type_id = ((void*)0);
-        __llpl_defer_frame90.error_slot = ((void*)0);
-        __llpl_defer_frame90.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame90);
-        __llpl_defer_active91 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame90.env) != 0) {
-            __llpl_defer_active91 = 0;
+        __llpl_defer_frame92.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame92.type_id = ((void*)0);
+        __llpl_defer_frame92.error_slot = ((void*)0);
+        __llpl_defer_frame92.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame92);
+        __llpl_defer_active93 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame92.env) != 0) {
+            __llpl_defer_active93 = 0;
         SpinLock_release(&(thread->lifecycle_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -20625,9 +20723,9 @@ void Kern_finish_thread_exit(Kern_Thread* thread, uintptr_t value) {
         thread->exit_value = value;
         thread->state = ((uintptr_t)ThreadState_Zombie);
         reap = thread->detached;
-        if (__llpl_defer_active91) {
-            __llpl_defer_active91 = 0;
-            llpl_eh_pop(&__llpl_defer_frame90);
+        if (__llpl_defer_active93) {
+            __llpl_defer_active93 = 0;
+            llpl_eh_pop(&__llpl_defer_frame92);
         SpinLock_release(&(thread->lifecycle_lock));
         }
     }
@@ -20635,9 +20733,9 @@ void Kern_finish_thread_exit(Kern_Thread* thread, uintptr_t value) {
     if (reap) {
         Kern_queue_thread_reap(thread);
     }
-    if (__llpl_defer_active91) {
-        __llpl_defer_active91 = 0;
-        llpl_eh_pop(&__llpl_defer_frame90);
+    if (__llpl_defer_active93) {
+        __llpl_defer_active93 = 0;
+        llpl_eh_pop(&__llpl_defer_frame92);
         SpinLock_release(&(thread->lifecycle_lock));
     }
 }
@@ -20657,14 +20755,14 @@ void Kern_thread_exit(uintptr_t value) {
 
 #line 345 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 bool Kern_join_thread(Kern_Thread* thread, uintptr_t* value_out) {
-    __LLPL_EH_Frame __llpl_defer_frame92;
-    int __llpl_defer_active93 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame94;
+    int __llpl_defer_active95 = 0;
 #line 346 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     void* current = ((void*)current_thread());
     if ((((thread == ((void*)0)) || (current == ((void*)0))) || (((void*)thread) == current))) {
 #line 348 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        bool __llpl_ret809 = 0;
-        return __llpl_ret809;
+        bool __llpl_ret828 = 0;
+        return __llpl_ret828;
     }
     while (1) {
 #line 352 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -20673,27 +20771,27 @@ bool Kern_join_thread(Kern_Thread* thread, uintptr_t* value_out) {
         bool prepared = 0;
         {
             SpinLock_acquire(&(thread->lifecycle_lock));
-            __llpl_defer_frame92.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame92.type_id = ((void*)0);
-            __llpl_defer_frame92.error_slot = ((void*)0);
-            __llpl_defer_frame92.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame92);
-            __llpl_defer_active93 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame92.env) != 0) {
-                __llpl_defer_active93 = 0;
+            __llpl_defer_frame94.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame94.type_id = ((void*)0);
+            __llpl_defer_frame94.error_slot = ((void*)0);
+            __llpl_defer_frame94.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame94);
+            __llpl_defer_active95 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame94.env) != 0) {
+                __llpl_defer_active95 = 0;
             SpinLock_release(&(thread->lifecycle_lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             if ((thread->detached || thread->joined)) {
 #line 356 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-                bool __llpl_ret810 = 0;
-                if (__llpl_defer_active93) {
-                    __llpl_defer_active93 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame92);
+                bool __llpl_ret829 = 0;
+                if (__llpl_defer_active95) {
+                    __llpl_defer_active95 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame94);
             SpinLock_release(&(thread->lifecycle_lock));
                 }
-                return __llpl_ret810;
+                return __llpl_ret829;
             }
             if ((thread->state == ((uintptr_t)ThreadState_Zombie))) {
                 thread->joined = 1;
@@ -20701,9 +20799,9 @@ bool Kern_join_thread(Kern_Thread* thread, uintptr_t* value_out) {
             } else {
                 prepared = Kern_prepare_block_current(thread->join_waiters);
             }
-            if (__llpl_defer_active93) {
-                __llpl_defer_active93 = 0;
-                llpl_eh_pop(&__llpl_defer_frame92);
+            if (__llpl_defer_active95) {
+                __llpl_defer_active95 = 0;
+                llpl_eh_pop(&__llpl_defer_frame94);
             SpinLock_release(&(thread->lifecycle_lock));
             }
         }
@@ -20713,41 +20811,41 @@ bool Kern_join_thread(Kern_Thread* thread, uintptr_t* value_out) {
             }
             Kern_reclaim_thread(((void*)thread));
 #line 370 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-            bool __llpl_ret811 = 1;
-            if (__llpl_defer_active93) {
-                __llpl_defer_active93 = 0;
-                llpl_eh_pop(&__llpl_defer_frame92);
+            bool __llpl_ret830 = 1;
+            if (__llpl_defer_active95) {
+                __llpl_defer_active95 = 0;
+                llpl_eh_pop(&__llpl_defer_frame94);
             SpinLock_release(&(thread->lifecycle_lock));
             }
-            return __llpl_ret811;
+            return __llpl_ret830;
         }
         if (!prepared) {
 #line 373 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-            bool __llpl_ret812 = 0;
-            if (__llpl_defer_active93) {
-                __llpl_defer_active93 = 0;
-                llpl_eh_pop(&__llpl_defer_frame92);
+            bool __llpl_ret831 = 0;
+            if (__llpl_defer_active95) {
+                __llpl_defer_active95 = 0;
+                llpl_eh_pop(&__llpl_defer_frame94);
             SpinLock_release(&(thread->lifecycle_lock));
             }
-            return __llpl_ret812;
+            return __llpl_ret831;
         }
         Kern_scheduler_yield();
     }
-    if (__llpl_defer_active93) {
-        __llpl_defer_active93 = 0;
-        llpl_eh_pop(&__llpl_defer_frame92);
+    if (__llpl_defer_active95) {
+        __llpl_defer_active95 = 0;
+        llpl_eh_pop(&__llpl_defer_frame94);
             SpinLock_release(&(thread->lifecycle_lock));
     }
 }
 
 #line 379 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 bool Kern_detach_thread(Kern_Thread* thread) {
-    __LLPL_EH_Frame __llpl_defer_frame94;
-    int __llpl_defer_active95 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame96;
+    int __llpl_defer_active97 = 0;
     if ((thread == ((void*)0))) {
 #line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        bool __llpl_ret813 = 0;
-        return __llpl_ret813;
+        bool __llpl_ret832 = 0;
+        return __llpl_ret832;
     }
 #line 383 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     bool detached = 0;
@@ -20755,14 +20853,14 @@ bool Kern_detach_thread(Kern_Thread* thread) {
     bool reap = 0;
     {
         SpinLock_acquire(&(thread->lifecycle_lock));
-        __llpl_defer_frame94.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame94.type_id = ((void*)0);
-        __llpl_defer_frame94.error_slot = ((void*)0);
-        __llpl_defer_frame94.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame94);
-        __llpl_defer_active95 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame94.env) != 0) {
-            __llpl_defer_active95 = 0;
+        __llpl_defer_frame96.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame96.type_id = ((void*)0);
+        __llpl_defer_frame96.error_slot = ((void*)0);
+        __llpl_defer_frame96.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame96);
+        __llpl_defer_active97 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame96.env) != 0) {
+            __llpl_defer_active97 = 0;
         SpinLock_release(&(thread->lifecycle_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -20772,9 +20870,9 @@ bool Kern_detach_thread(Kern_Thread* thread) {
             detached = 1;
             reap = (thread->state == ((uintptr_t)ThreadState_Zombie));
         }
-        if (__llpl_defer_active95) {
-            __llpl_defer_active95 = 0;
-            llpl_eh_pop(&__llpl_defer_frame94);
+        if (__llpl_defer_active97) {
+            __llpl_defer_active97 = 0;
+            llpl_eh_pop(&__llpl_defer_frame96);
         SpinLock_release(&(thread->lifecycle_lock));
         }
     }
@@ -20782,16 +20880,16 @@ bool Kern_detach_thread(Kern_Thread* thread) {
         Kern_queue_thread_reap(thread);
     }
 #line 395 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    bool __llpl_ret814 = detached;
-    if (__llpl_defer_active95) {
-        __llpl_defer_active95 = 0;
-        llpl_eh_pop(&__llpl_defer_frame94);
+    bool __llpl_ret833 = detached;
+    if (__llpl_defer_active97) {
+        __llpl_defer_active97 = 0;
+        llpl_eh_pop(&__llpl_defer_frame96);
         SpinLock_release(&(thread->lifecycle_lock));
     }
-    return __llpl_ret814;
-    if (__llpl_defer_active95) {
-        __llpl_defer_active95 = 0;
-        llpl_eh_pop(&__llpl_defer_frame94);
+    return __llpl_ret833;
+    if (__llpl_defer_active97) {
+        __llpl_defer_active97 = 0;
+        llpl_eh_pop(&__llpl_defer_frame96);
         SpinLock_release(&(thread->lifecycle_lock));
     }
 }
@@ -20890,11 +20988,11 @@ void Kern_sync_test_report(void* arg) {
     Kern_Process* reap_test = Kern_Process_new(String_new("reap-test"), Kern_kproc, ((void*)0));
 #line 528 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 #line 528 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    __LLPL_Tuple2_int_uint __llpl_destruct_814 = Kern_map_user_anonymous(reap_test, ((uintptr_t)0), ((uintptr_t)(MM_PAGE_SIZE * 2)));
+    __LLPL_Tuple2_int_uint __llpl_destruct_833 = Kern_map_user_anonymous(reap_test, ((uintptr_t)0), ((uintptr_t)(MM_PAGE_SIZE * 2)));
 #line 528 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    intptr_t reap_map_rc = __llpl_destruct_814._0;
+    intptr_t reap_map_rc = __llpl_destruct_833._0;
 #line 528 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    uintptr_t reap_map_addr = __llpl_destruct_814._1;
+    uintptr_t reap_map_addr = __llpl_destruct_833._1;
 #line 529 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     uintptr_t reap_pid = reap_test->pid;
     Kern_mark_process_exited(reap_test, ((uintptr_t)68));
@@ -20908,11 +21006,11 @@ void Kern_sync_test_report(void* arg) {
     Kern_Process* cow_parent = Kern_Process_new(String_new("cow-parent"), Kern_kproc, ((void*)0));
 #line 539 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 #line 539 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    __LLPL_Tuple2_int_uint __llpl_destruct_815 = Kern_map_user_anonymous(cow_parent, ((uintptr_t)0), ((uintptr_t)MM_PAGE_SIZE));
+    __LLPL_Tuple2_int_uint __llpl_destruct_834 = Kern_map_user_anonymous(cow_parent, ((uintptr_t)0), ((uintptr_t)MM_PAGE_SIZE));
 #line 539 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    intptr_t cow_map_rc = __llpl_destruct_815._0;
+    intptr_t cow_map_rc = __llpl_destruct_834._0;
 #line 539 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    uintptr_t cow_addr = __llpl_destruct_815._1;
+    uintptr_t cow_addr = __llpl_destruct_834._1;
 #line 540 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     bool cow_faulted = ((cow_map_rc == EOK) && Kern_resolve_user_page_fault(cow_parent, cow_addr, ((uintptr_t)4)));
 #line 542 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -21033,17 +21131,17 @@ void Kern_sync_test_report(void* arg) {
 void Kern_thread_init() {
 #line 612 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     {
-        intptr_t __range_end817 = Kern_MAX_THREADS;
+        intptr_t __range_end836 = Kern_MAX_THREADS;
         intptr_t i = 0;
-        for (; i < __range_end817; i = i + 1) {
+        for (; i < __range_end836; i = i + 1) {
             (*(void**)__llpl_check_index(Kern_thread_table, i, 128, sizeof(void*), "thread.llpl", 612)) = ((void*)0);
         }
     }
 #line 613 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     {
-        intptr_t __range_end818 = MAX_PRIORITY;
+        intptr_t __range_end837 = MAX_PRIORITY;
         intptr_t i = 0;
-        for (; i < __range_end818; i = i + 1) {
+        for (; i < __range_end837; i = i + 1) {
             (*(Kern_Thread**)__llpl_check_index(Kern_runq_head, i, 32, sizeof(Kern_Thread*), "thread.llpl", 614)) = ((void*)0);
             (*(Kern_Thread**)__llpl_check_index(Kern_runq_tail, i, 32, sizeof(Kern_Thread*), "thread.llpl", 615)) = ((void*)0);
         }
@@ -21059,22 +21157,22 @@ void Kern_thread_init() {
     ({ Kern_Semaphore* __llpl_assign_tmp100 = Kern_Semaphore_new(((uintptr_t)0)); if (Kern_sync_test_detached_done) rc_release(Kern_sync_test_detached_done, Kern_Semaphore_destroy); Kern_sync_test_detached_done = __llpl_assign_tmp100; Kern_sync_test_detached_done; });
     Kern_sync_test_condition_predicate = 0;
     Kern_sync_test_counter = ((uintptr_t)0);
-    ({ Kern_Thread* __llpl_assign_tmp101 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure11, .env = ((void*)0) }), ((void*)0), String_new("sync-holder"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)20), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_t1) rc_release(Kern_t1, Kern_Thread_destroy); Kern_t1 = __llpl_assign_tmp101; Kern_t1; });
+    ({ Kern_Thread* __llpl_assign_tmp101 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure12, .env = ((void*)0) }), ((void*)0), String_new("sync-holder"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)20), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_t1) rc_release(Kern_t1, Kern_Thread_destroy); Kern_t1 = __llpl_assign_tmp101; Kern_t1; });
     Kern_mark_thread_ready(Kern_t1);
-    ({ Kern_Thread* __llpl_assign_tmp102 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure12, .env = ((void*)0) }), ((void*)0), String_new("sync-contender"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)4), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_t2) rc_release(Kern_t2, Kern_Thread_destroy); Kern_t2 = __llpl_assign_tmp102; Kern_t2; });
+    ({ Kern_Thread* __llpl_assign_tmp102 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure13, .env = ((void*)0) }), ((void*)0), String_new("sync-contender"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)4), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_t2) rc_release(Kern_t2, Kern_Thread_destroy); Kern_t2 = __llpl_assign_tmp102; Kern_t2; });
     Kern_mark_thread_ready(Kern_t2);
-    ({ Kern_Thread* __llpl_assign_tmp103 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure13, .env = ((void*)0) }), ((void*)0), String_new("sync-reporter"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_sync_test_reporter) rc_release(Kern_sync_test_reporter, Kern_Thread_destroy); Kern_sync_test_reporter = __llpl_assign_tmp103; Kern_sync_test_reporter; });
+    ({ Kern_Thread* __llpl_assign_tmp103 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure14, .env = ((void*)0) }), ((void*)0), String_new("sync-reporter"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_sync_test_reporter) rc_release(Kern_sync_test_reporter, Kern_Thread_destroy); Kern_sync_test_reporter = __llpl_assign_tmp103; Kern_sync_test_reporter; });
     Kern_mark_thread_ready(Kern_sync_test_reporter);
-    ({ Kern_Thread* __llpl_assign_tmp104 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure14, .env = ((void*)0) }), ((void*)0), String_new("sync-detached"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_sync_test_detached_thread) rc_release(Kern_sync_test_detached_thread, Kern_Thread_destroy); Kern_sync_test_detached_thread = __llpl_assign_tmp104; Kern_sync_test_detached_thread; });
+    ({ Kern_Thread* __llpl_assign_tmp104 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure15, .env = ((void*)0) }), ((void*)0), String_new("sync-detached"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_sync_test_detached_thread) rc_release(Kern_sync_test_detached_thread, Kern_Thread_destroy); Kern_sync_test_detached_thread = __llpl_assign_tmp104; Kern_sync_test_detached_thread; });
     Kern_detach_thread(Kern_sync_test_detached_thread);
     Kern_mark_thread_ready(Kern_sync_test_detached_thread);
     Kern_Deferred_init();
     Kern_reap_head = ((void*)0);
     Kern_reap_tail = ((void*)0);
     ({ Kern_WaitQueue* __llpl_assign_tmp105 = Kern_WaitQueue_new(); if (Kern_reap_waiters) rc_release(Kern_reap_waiters, Kern_WaitQueue_destroy); Kern_reap_waiters = __llpl_assign_tmp105; Kern_reap_waiters; });
-    ({ Kern_Thread* __llpl_assign_tmp106 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure15, .env = ((void*)0) }), ((void*)0), String_new("thread-reaper"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)(MAX_PRIORITY - 2)), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_reaper_thread) rc_release(Kern_reaper_thread, Kern_Thread_destroy); Kern_reaper_thread = __llpl_assign_tmp106; Kern_reaper_thread; });
+    ({ Kern_Thread* __llpl_assign_tmp106 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure16, .env = ((void*)0) }), ((void*)0), String_new("thread-reaper"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)(MAX_PRIORITY - 2)), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_reaper_thread) rc_release(Kern_reaper_thread, Kern_Thread_destroy); Kern_reaper_thread = __llpl_assign_tmp106; Kern_reaper_thread; });
     Kern_mark_thread_ready(Kern_reaper_thread);
-    ({ Kern_Thread* __llpl_assign_tmp107 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure16, .env = ((void*)0) }), ((void*)0), String_new("idle"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)(MAX_PRIORITY - 1)), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_idle_thread) rc_release(Kern_idle_thread, Kern_Thread_destroy); Kern_idle_thread = __llpl_assign_tmp107; Kern_idle_thread; });
+    ({ Kern_Thread* __llpl_assign_tmp107 = Kern_Thread_new(Kern_kproc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure17, .env = ((void*)0) }), ((void*)0), String_new("idle"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)(MAX_PRIORITY - 1)), ((uint64_t)(MM_PAGE_SIZE * 4))); if (Kern_idle_thread) rc_release(Kern_idle_thread, Kern_Thread_destroy); Kern_idle_thread = __llpl_assign_tmp107; Kern_idle_thread; });
     Kern_mark_thread_ready(Kern_idle_thread);
 }
 
@@ -21085,9 +21183,9 @@ void Kern_init_user_pml4(Kern_Process* proc) {
     uint64_t* pml4 = ((uint64_t*)MM_p2v(proc->pml4));
 #line 661 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     {
-        intptr_t __range_end819 = 256;
+        intptr_t __range_end838 = 256;
         intptr_t i = 0;
-        for (; i < __range_end819; i = i + 1) {
+        for (; i < __range_end838; i = i + 1) {
             pml4[i] = ((uint64_t)0);
         }
     }
@@ -21106,20 +21204,20 @@ uintptr_t Kern_map_user_zero_page(Kern_Process* proc, uintptr_t vaddr, bool writ
         flags = (flags | MM_PG_WRITABLE);
     }
     MM_map_page(proc->pml4, vaddr, paddr, ((uintptr_t)flags));
-    uintptr_t __llpl_ret820 = paddr;
-    return __llpl_ret820;
+    uintptr_t __llpl_ret839 = paddr;
+    return __llpl_ret839;
 }
 
 #line 680 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 uint64_t Kern_thread_cr3(Kern_Thread* thread) {
     if (((thread == ((void*)0)) || (thread->proc == ((void*)0)))) {
 #line 682 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        uint64_t __llpl_ret821 = MM_kernel_pml4;
-        return __llpl_ret821;
+        uint64_t __llpl_ret840 = MM_kernel_pml4;
+        return __llpl_ret840;
     }
 #line 685 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    uint64_t __llpl_ret822 = thread->proc->pml4;
-    return __llpl_ret822;
+    uint64_t __llpl_ret841 = thread->proc->pml4;
+    return __llpl_ret841;
 }
 
 #line 688 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -21150,39 +21248,39 @@ void Kern_switch_thread_fpu(void* current, Kern_Thread* next) {
 Kern_Thread* Kern_find_process_thread(Kern_Process* proc, uintptr_t tid) {
     if ((((proc == ((void*)0)) || (tid == ((uintptr_t)0))) || (tid >= ((uintptr_t)Kern_MAX_THREADS)))) {
 #line 703 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        Kern_Thread* __llpl_ret823 = ((void*)0);
-        return __llpl_ret823;
+        Kern_Thread* __llpl_ret842 = ((void*)0);
+        return __llpl_ret842;
     }
 #line 704 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     void* raw = (*(void**)__llpl_check_index(Kern_thread_table, tid, 128, sizeof(void*), "thread.llpl", 704));
     if (((raw == ((void*)0)) || ((((Kern_Thread*)raw))->proc != proc))) {
 #line 705 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        Kern_Thread* __llpl_ret824 = ((void*)0);
-        return __llpl_ret824;
+        Kern_Thread* __llpl_ret843 = ((void*)0);
+        return __llpl_ret843;
     }
 #line 706 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    Kern_Thread* __llpl_ret825 = ((Kern_Thread*)raw);
-    return __llpl_ret825;
+    Kern_Thread* __llpl_ret844 = ((Kern_Thread*)raw);
+    return __llpl_ret844;
 }
 
 #line 709 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 intptr_t Kern_create_user_thread(Kern_Process* proc, uintptr_t entry, uintptr_t arg, uintptr_t tls) {
     if (((((((proc == ((void*)0)) || (proc == Kern_kproc)) || proc->exited) || (entry < ((uintptr_t)4096))) || (entry >= ((uintptr_t)Kern_USER_MMAP_END))) || (tls >= ((uintptr_t)Kern_USER_MMAP_END)))) {
 #line 710 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        intptr_t __llpl_ret826 = EINVAL;
-        return __llpl_ret826;
+        intptr_t __llpl_ret845 = EINVAL;
+        return __llpl_ret845;
     }
 #line 712 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 #line 712 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    __LLPL_Tuple2_int_uint __llpl_destruct_826 = Kern_map_user_anonymous(proc, ((uintptr_t)0), ((uintptr_t)(MM_PAGE_SIZE * 4)));
+    __LLPL_Tuple2_int_uint __llpl_destruct_845 = Kern_map_user_anonymous(proc, ((uintptr_t)0), ((uintptr_t)(MM_PAGE_SIZE * 4)));
 #line 712 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    intptr_t rc = __llpl_destruct_826._0;
+    intptr_t rc = __llpl_destruct_845._0;
 #line 712 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    uintptr_t stack = __llpl_destruct_826._1;
+    uintptr_t stack = __llpl_destruct_845._1;
     if ((rc < 0)) {
 #line 713 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        intptr_t __llpl_ret828 = rc;
-        return __llpl_ret828;
+        intptr_t __llpl_ret847 = rc;
+        return __llpl_ret847;
     }
 #line 714 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     Kern_Thread* thread = Kern_Thread_new(proc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure3, .env = ((void*)0) }), ((void*)0), String_new("user-thread"), ((uintptr_t)THREAD_USER), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4)));
@@ -21192,38 +21290,38 @@ intptr_t Kern_create_user_thread(Kern_Process* proc, uintptr_t entry, uintptr_t 
     thread->tls_base = tls;
     Kern_mark_thread_ready(thread);
 #line 720 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    intptr_t __llpl_ret829 = ((intptr_t)thread->tid);
+    intptr_t __llpl_ret848 = ((intptr_t)thread->tid);
     if (thread) rc_release(thread, Kern_Thread_destroy);
-    return __llpl_ret829;
+    return __llpl_ret848;
     if (thread) rc_release(thread, Kern_Thread_destroy);
 }
 
 #line 723 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 void Kern_terminate_process_threads(Kern_Process* proc, Kern_Thread* except, uintptr_t status) {
-    __LLPL_EH_Frame __llpl_defer_frame96;
-    int __llpl_defer_active97 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame98;
+    int __llpl_defer_active99 = 0;
     if ((proc == ((void*)0))) {
 #line 724 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
         return;
     }
 #line 725 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     {
-        intptr_t __range_end830 = Kern_MAX_THREADS;
+        intptr_t __range_end849 = Kern_MAX_THREADS;
         intptr_t tid = 1;
-        for (; tid < __range_end830; tid = tid + 1) {
+        for (; tid < __range_end849; tid = tid + 1) {
 #line 726 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
             void* raw = (*(void**)__llpl_check_index(Kern_thread_table, tid, 128, sizeof(void*), "thread.llpl", 726));
             if (((((raw != ((void*)0)) && ((((Kern_Thread*)raw))->proc == proc)) && (raw != ((void*)except))) && ((((Kern_Thread*)raw))->state != ((uintptr_t)ThreadState_Zombie)))) {
                 {
                     SpinLock_acquire(&(Kern_lock));
-                    __llpl_defer_frame96.kind = LLPL_EH_FRAME_CLEANUP;
-                    __llpl_defer_frame96.type_id = ((void*)0);
-                    __llpl_defer_frame96.error_slot = ((void*)0);
-                    __llpl_defer_frame96.error_size = 0;
-                    llpl_eh_push(&__llpl_defer_frame96);
-                    __llpl_defer_active97 = 1;
-                    if (llpl_eh_setjmp(&__llpl_defer_frame96.env) != 0) {
-                        __llpl_defer_active97 = 0;
+                    __llpl_defer_frame98.kind = LLPL_EH_FRAME_CLEANUP;
+                    __llpl_defer_frame98.type_id = ((void*)0);
+                    __llpl_defer_frame98.error_slot = ((void*)0);
+                    __llpl_defer_frame98.error_size = 0;
+                    llpl_eh_push(&__llpl_defer_frame98);
+                    __llpl_defer_active99 = 1;
+                    if (llpl_eh_setjmp(&__llpl_defer_frame98.env) != 0) {
+                        __llpl_defer_active99 = 0;
                     SpinLock_release(&(Kern_lock));
                         llpl_eh_resume();
                         __builtin_unreachable();
@@ -21231,9 +21329,9 @@ void Kern_terminate_process_threads(Kern_Process* proc, Kern_Thread* except, uin
                     if (((((Kern_Thread*)raw))->state == ((uintptr_t)ThreadState_Ready))) {
                         Kern_remove_ready_locked(((Kern_Thread*)raw));
                     }
-                    if (__llpl_defer_active97) {
-                        __llpl_defer_active97 = 0;
-                        llpl_eh_pop(&__llpl_defer_frame96);
+                    if (__llpl_defer_active99) {
+                        __llpl_defer_active99 = 0;
+                        llpl_eh_pop(&__llpl_defer_frame98);
                     SpinLock_release(&(Kern_lock));
                     }
                 }
@@ -21242,9 +21340,9 @@ void Kern_terminate_process_threads(Kern_Process* proc, Kern_Thread* except, uin
             }
         }
     }
-    if (__llpl_defer_active97) {
-        __llpl_defer_active97 = 0;
-        llpl_eh_pop(&__llpl_defer_frame96);
+    if (__llpl_defer_active99) {
+        __llpl_defer_active99 = 0;
+        llpl_eh_pop(&__llpl_defer_frame98);
                     SpinLock_release(&(Kern_lock));
     }
 }
@@ -21253,14 +21351,14 @@ void Kern_terminate_process_threads(Kern_Process* proc, Kern_Thread* except, uin
 intptr_t Kern_terminate_process(Kern_Process* target, uintptr_t status) {
     if (((target == ((void*)0)) || (target == Kern_kproc))) {
 #line 746 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        intptr_t __llpl_ret831 = EINVAL;
-        return __llpl_ret831;
+        intptr_t __llpl_ret850 = EINVAL;
+        return __llpl_ret850;
     }
     Kern_terminate_process_threads(target, ((void*)0), status);
     Kern_mark_process_exited(target, status);
 #line 749 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    intptr_t __llpl_ret832 = EOK;
-    return __llpl_ret832;
+    intptr_t __llpl_ret851 = EOK;
+    return __llpl_ret851;
 }
 
 #line 752 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -21282,8 +21380,8 @@ void Kern_thread_trampoline() {
 
 #line 780 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 void Kern_mark_thread_ready(Kern_Thread* thread) {
-    __LLPL_EH_Frame __llpl_defer_frame98;
-    int __llpl_defer_active99 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame100;
+    int __llpl_defer_active101 = 0;
     if ((thread->state == ((uintptr_t)ThreadState_Zombie))) {
 #line 781 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
         return;
@@ -21291,28 +21389,28 @@ void Kern_mark_thread_ready(Kern_Thread* thread) {
     thread->state = ((uintptr_t)ThreadState_Ready);
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame98.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame98.type_id = ((void*)0);
-        __llpl_defer_frame98.error_slot = ((void*)0);
-        __llpl_defer_frame98.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame98);
-        __llpl_defer_active99 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame98.env) != 0) {
-            __llpl_defer_active99 = 0;
+        __llpl_defer_frame100.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame100.type_id = ((void*)0);
+        __llpl_defer_frame100.error_slot = ((void*)0);
+        __llpl_defer_frame100.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame100);
+        __llpl_defer_active101 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame100.env) != 0) {
+            __llpl_defer_active101 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         Kern_enqueue_ready_locked(thread);
-        if (__llpl_defer_active99) {
-            __llpl_defer_active99 = 0;
-            llpl_eh_pop(&__llpl_defer_frame98);
+        if (__llpl_defer_active101) {
+            __llpl_defer_active101 = 0;
+            llpl_eh_pop(&__llpl_defer_frame100);
         SpinLock_release(&(Kern_lock));
         }
     }
-    if (__llpl_defer_active99) {
-        __llpl_defer_active99 = 0;
-        llpl_eh_pop(&__llpl_defer_frame98);
+    if (__llpl_defer_active101) {
+        __llpl_defer_active101 = 0;
+        llpl_eh_pop(&__llpl_defer_frame100);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -21346,24 +21444,24 @@ void Kern_account_current_runtime_tick() {
 ThreadStats Kern_thread_stats(Kern_Thread* thread) {
     if ((thread == ((void*)0))) {
 #line 809 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        ThreadStats __llpl_ret833 = (ThreadStats){ .runtime_ticks = ((uintptr_t)0), .context_switches = ((uintptr_t)0), .wakeups = ((uintptr_t)0), .voluntary_yields = ((uintptr_t)0), .sleep_ticks = ((uintptr_t)0) };
-        return __llpl_ret833;
+        ThreadStats __llpl_ret852 = (ThreadStats){ .runtime_ticks = ((uintptr_t)0), .context_switches = ((uintptr_t)0), .wakeups = ((uintptr_t)0), .voluntary_yields = ((uintptr_t)0), .sleep_ticks = ((uintptr_t)0) };
+        return __llpl_ret852;
     }
 #line 811 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    ThreadStats __llpl_ret834 = (ThreadStats){ .runtime_ticks = thread->runtime_ticks, .context_switches = thread->context_switches, .wakeups = thread->wakeups, .voluntary_yields = thread->voluntary_yields, .sleep_ticks = thread->sleep_ticks_total };
-    return __llpl_ret834;
+    ThreadStats __llpl_ret853 = (ThreadStats){ .runtime_ticks = thread->runtime_ticks, .context_switches = thread->context_switches, .wakeups = thread->wakeups, .voluntary_yields = thread->voluntary_yields, .sleep_ticks = thread->sleep_ticks_total };
+    return __llpl_ret853;
 }
 
 #line 820 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 uintptr_t Kern_thread_priority(Kern_Thread* thread) {
     if ((thread == ((void*)0))) {
 #line 822 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        uintptr_t __llpl_ret835 = ((uintptr_t)MAX_PRIORITY);
-        return __llpl_ret835;
+        uintptr_t __llpl_ret854 = ((uintptr_t)MAX_PRIORITY);
+        return __llpl_ret854;
     }
 #line 824 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    uintptr_t __llpl_ret836 = thread->priority;
-    return __llpl_ret836;
+    uintptr_t __llpl_ret855 = thread->priority;
+    return __llpl_ret855;
 }
 
 #line 829 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -21392,43 +21490,43 @@ bool Kern_remove_ready_locked(Kern_Thread* thread) {
                 Kern_ready_summary = (Kern_ready_summary & ~(((uintptr_t)1) << priority));
             }
 #line 852 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-            bool __llpl_ret837 = 1;
-            return __llpl_ret837;
+            bool __llpl_ret856 = 1;
+            return __llpl_ret856;
         }
         previous = cursor;
         cursor = ((void*)(((Kern_Thread*)cursor))->runq_next);
     }
 #line 857 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    bool __llpl_ret838 = 0;
-    return __llpl_ret838;
+    bool __llpl_ret857 = 0;
+    return __llpl_ret857;
 }
 
 #line 862 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 bool Kern_set_thread_effective_priority(Kern_Thread* thread, uintptr_t priority) {
-    __LLPL_EH_Frame __llpl_defer_frame100;
-    int __llpl_defer_active101 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame102;
+    int __llpl_defer_active103 = 0;
     if ((((thread == ((void*)0)) || (priority >= ((uintptr_t)MAX_PRIORITY))) || (thread->state == ((uintptr_t)ThreadState_Zombie)))) {
 #line 864 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        bool __llpl_ret839 = 0;
-        return __llpl_ret839;
+        bool __llpl_ret858 = 0;
+        return __llpl_ret858;
     }
     if ((thread->priority == priority)) {
 #line 867 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        bool __llpl_ret840 = 1;
-        return __llpl_ret840;
+        bool __llpl_ret859 = 1;
+        return __llpl_ret859;
     }
 #line 870 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     bool changed = 1;
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame100.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame100.type_id = ((void*)0);
-        __llpl_defer_frame100.error_slot = ((void*)0);
-        __llpl_defer_frame100.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame100);
-        __llpl_defer_active101 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame100.env) != 0) {
-            __llpl_defer_active101 = 0;
+        __llpl_defer_frame102.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame102.type_id = ((void*)0);
+        __llpl_defer_frame102.error_slot = ((void*)0);
+        __llpl_defer_frame102.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame102);
+        __llpl_defer_active103 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame102.env) != 0) {
+            __llpl_defer_active103 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -21444,23 +21542,23 @@ bool Kern_set_thread_effective_priority(Kern_Thread* thread, uintptr_t priority)
                 Kern_enqueue_ready_locked(thread);
             }
         }
-        if (__llpl_defer_active101) {
-            __llpl_defer_active101 = 0;
-            llpl_eh_pop(&__llpl_defer_frame100);
+        if (__llpl_defer_active103) {
+            __llpl_defer_active103 = 0;
+            llpl_eh_pop(&__llpl_defer_frame102);
         SpinLock_release(&(Kern_lock));
         }
     }
 #line 883 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    bool __llpl_ret841 = changed;
-    if (__llpl_defer_active101) {
-        __llpl_defer_active101 = 0;
-        llpl_eh_pop(&__llpl_defer_frame100);
+    bool __llpl_ret860 = changed;
+    if (__llpl_defer_active103) {
+        __llpl_defer_active103 = 0;
+        llpl_eh_pop(&__llpl_defer_frame102);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret841;
-    if (__llpl_defer_active101) {
-        __llpl_defer_active101 = 0;
-        llpl_eh_pop(&__llpl_defer_frame100);
+    return __llpl_ret860;
+    if (__llpl_defer_active103) {
+        __llpl_defer_active103 = 0;
+        llpl_eh_pop(&__llpl_defer_frame102);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -21484,103 +21582,8 @@ void Kern_enqueue_ready_locked(Kern_Thread* thread) {
 
 #line 923 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 void* Kern_next_thread() {
-    __LLPL_EH_Frame __llpl_defer_frame102;
-    int __llpl_defer_active103 = 0;
-    {
-        SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame102.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame102.type_id = ((void*)0);
-        __llpl_defer_frame102.error_slot = ((void*)0);
-        __llpl_defer_frame102.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame102);
-        __llpl_defer_active103 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame102.env) != 0) {
-            __llpl_defer_active103 = 0;
-        SpinLock_release(&(Kern_lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        if ((Kern_ready_summary == ((uintptr_t)0))) {
-#line 926 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-            void* __llpl_ret842 = ((void*)0);
-            if (__llpl_defer_active103) {
-                __llpl_defer_active103 = 0;
-                llpl_eh_pop(&__llpl_defer_frame102);
-        SpinLock_release(&(Kern_lock));
-            }
-            return __llpl_ret842;
-        }
-#line 929 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        uintptr_t priority = ((uintptr_t)0);
-        while (((priority < ((uintptr_t)MAX_PRIORITY)) && ((Kern_ready_summary & (((uintptr_t)1) << priority)) == ((uintptr_t)0)))) {
-            priority = (priority + ((uintptr_t)1));
-        }
-        if ((priority == ((uintptr_t)MAX_PRIORITY))) {
-#line 935 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-            void* __llpl_ret843 = ((void*)0);
-            if (__llpl_defer_active103) {
-                __llpl_defer_active103 = 0;
-                llpl_eh_pop(&__llpl_defer_frame102);
-        SpinLock_release(&(Kern_lock));
-            }
-            return __llpl_ret843;
-        }
-#line 938 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        void* next = ((void*)(*(Kern_Thread**)__llpl_check_index(Kern_runq_head, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 938)));
-        if ((next == ((void*)0))) {
-            Kern_ready_summary = (Kern_ready_summary & ~(((uintptr_t)1) << priority));
-#line 941 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-            void* __llpl_ret844 = ((void*)0);
-            if (__llpl_defer_active103) {
-                __llpl_defer_active103 = 0;
-                llpl_eh_pop(&__llpl_defer_frame102);
-        SpinLock_release(&(Kern_lock));
-            }
-            return __llpl_ret844;
-        }
-        (*(Kern_Thread**)__llpl_check_index(Kern_runq_head, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 944)) = (((Kern_Thread*)next))->runq_next;
-        ({ Kern_Thread* __llpl_assign_tmp112 = ((void*)0); (((Kern_Thread*)next))->runq_next = __llpl_assign_tmp112; (((Kern_Thread*)next))->runq_next; });
-        if (((*(Kern_Thread**)__llpl_check_index(Kern_runq_head, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 946)) == ((void*)0))) {
-            (*(Kern_Thread**)__llpl_check_index(Kern_runq_tail, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 947)) = ((void*)0);
-            Kern_ready_summary = (Kern_ready_summary & ~(((uintptr_t)1) << priority));
-        }
-#line 951 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        void* __llpl_ret845 = next;
-        if (__llpl_defer_active103) {
-            __llpl_defer_active103 = 0;
-            llpl_eh_pop(&__llpl_defer_frame102);
-        SpinLock_release(&(Kern_lock));
-        }
-        return __llpl_ret845;
-        if (__llpl_defer_active103) {
-            __llpl_defer_active103 = 0;
-            llpl_eh_pop(&__llpl_defer_frame102);
-        SpinLock_release(&(Kern_lock));
-        }
-    }
-    if (__llpl_defer_active103) {
-        __llpl_defer_active103 = 0;
-        llpl_eh_pop(&__llpl_defer_frame102);
-        SpinLock_release(&(Kern_lock));
-    }
-}
-
-#line 955 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-HAL_IDT_Context* Kern_schedule_from_interrupt(HAL_IDT_Context* ctx) {
     __LLPL_EH_Frame __llpl_defer_frame104;
     int __llpl_defer_active105 = 0;
-#line 958 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    void* current = ((void*)current_thread());
-    if ((current != ((void*)0))) {
-        (((Kern_Thread*)current))->ctx = ctx;
-    }
-#line 963 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    void* next = Kern_next_thread();
-    if ((next == ((void*)0))) {
-#line 965 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret846 = ctx;
-        return __llpl_ret846;
-    }
     {
         SpinLock_acquire(&(Kern_lock));
         __llpl_defer_frame104.kind = LLPL_EH_FRAME_CLEANUP;
@@ -21595,6 +21598,101 @@ HAL_IDT_Context* Kern_schedule_from_interrupt(HAL_IDT_Context* ctx) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
+        if ((Kern_ready_summary == ((uintptr_t)0))) {
+#line 926 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+            void* __llpl_ret861 = ((void*)0);
+            if (__llpl_defer_active105) {
+                __llpl_defer_active105 = 0;
+                llpl_eh_pop(&__llpl_defer_frame104);
+        SpinLock_release(&(Kern_lock));
+            }
+            return __llpl_ret861;
+        }
+#line 929 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+        uintptr_t priority = ((uintptr_t)0);
+        while (((priority < ((uintptr_t)MAX_PRIORITY)) && ((Kern_ready_summary & (((uintptr_t)1) << priority)) == ((uintptr_t)0)))) {
+            priority = (priority + ((uintptr_t)1));
+        }
+        if ((priority == ((uintptr_t)MAX_PRIORITY))) {
+#line 935 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+            void* __llpl_ret862 = ((void*)0);
+            if (__llpl_defer_active105) {
+                __llpl_defer_active105 = 0;
+                llpl_eh_pop(&__llpl_defer_frame104);
+        SpinLock_release(&(Kern_lock));
+            }
+            return __llpl_ret862;
+        }
+#line 938 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+        void* next = ((void*)(*(Kern_Thread**)__llpl_check_index(Kern_runq_head, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 938)));
+        if ((next == ((void*)0))) {
+            Kern_ready_summary = (Kern_ready_summary & ~(((uintptr_t)1) << priority));
+#line 941 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+            void* __llpl_ret863 = ((void*)0);
+            if (__llpl_defer_active105) {
+                __llpl_defer_active105 = 0;
+                llpl_eh_pop(&__llpl_defer_frame104);
+        SpinLock_release(&(Kern_lock));
+            }
+            return __llpl_ret863;
+        }
+        (*(Kern_Thread**)__llpl_check_index(Kern_runq_head, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 944)) = (((Kern_Thread*)next))->runq_next;
+        ({ Kern_Thread* __llpl_assign_tmp112 = ((void*)0); (((Kern_Thread*)next))->runq_next = __llpl_assign_tmp112; (((Kern_Thread*)next))->runq_next; });
+        if (((*(Kern_Thread**)__llpl_check_index(Kern_runq_head, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 946)) == ((void*)0))) {
+            (*(Kern_Thread**)__llpl_check_index(Kern_runq_tail, priority, 32, sizeof(Kern_Thread*), "thread.llpl", 947)) = ((void*)0);
+            Kern_ready_summary = (Kern_ready_summary & ~(((uintptr_t)1) << priority));
+        }
+#line 951 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+        void* __llpl_ret864 = next;
+        if (__llpl_defer_active105) {
+            __llpl_defer_active105 = 0;
+            llpl_eh_pop(&__llpl_defer_frame104);
+        SpinLock_release(&(Kern_lock));
+        }
+        return __llpl_ret864;
+        if (__llpl_defer_active105) {
+            __llpl_defer_active105 = 0;
+            llpl_eh_pop(&__llpl_defer_frame104);
+        SpinLock_release(&(Kern_lock));
+        }
+    }
+    if (__llpl_defer_active105) {
+        __llpl_defer_active105 = 0;
+        llpl_eh_pop(&__llpl_defer_frame104);
+        SpinLock_release(&(Kern_lock));
+    }
+}
+
+#line 955 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+HAL_IDT_Context* Kern_schedule_from_interrupt(HAL_IDT_Context* ctx) {
+    __LLPL_EH_Frame __llpl_defer_frame106;
+    int __llpl_defer_active107 = 0;
+#line 958 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+    void* current = ((void*)current_thread());
+    if ((current != ((void*)0))) {
+        (((Kern_Thread*)current))->ctx = ctx;
+    }
+#line 963 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+    void* next = Kern_next_thread();
+    if ((next == ((void*)0))) {
+#line 965 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
+        HAL_IDT_Context* __llpl_ret865 = ctx;
+        return __llpl_ret865;
+    }
+    {
+        SpinLock_acquire(&(Kern_lock));
+        __llpl_defer_frame106.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame106.type_id = ((void*)0);
+        __llpl_defer_frame106.error_slot = ((void*)0);
+        __llpl_defer_frame106.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame106);
+        __llpl_defer_active107 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame106.env) != 0) {
+            __llpl_defer_active107 = 0;
+        SpinLock_release(&(Kern_lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
         if (((current != ((void*)0)) && ((((Kern_Thread*)current))->state == ((uintptr_t)ThreadState_Running)))) {
             (((Kern_Thread*)current))->state = ((uintptr_t)ThreadState_Ready);
             Kern_enqueue_ready_locked(((Kern_Thread*)current));
@@ -21605,23 +21703,23 @@ HAL_IDT_Context* Kern_schedule_from_interrupt(HAL_IDT_Context* ctx) {
         HAL_current()->thread = ((Kern_Thread*)next);
         Kern_switch_thread_address_space(((Kern_Thread*)next));
         set_tss_rsp0(((((uintptr_t)(((Kern_Thread*)next))->stack) + (((Kern_Thread*)next))->stack_size) & ((uint64_t)~15)));
-        if (__llpl_defer_active105) {
-            __llpl_defer_active105 = 0;
-            llpl_eh_pop(&__llpl_defer_frame104);
+        if (__llpl_defer_active107) {
+            __llpl_defer_active107 = 0;
+            llpl_eh_pop(&__llpl_defer_frame106);
         SpinLock_release(&(Kern_lock));
         }
     }
 #line 982 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    HAL_IDT_Context* __llpl_ret847 = (((Kern_Thread*)next))->ctx;
-    if (__llpl_defer_active105) {
-        __llpl_defer_active105 = 0;
-        llpl_eh_pop(&__llpl_defer_frame104);
+    HAL_IDT_Context* __llpl_ret866 = (((Kern_Thread*)next))->ctx;
+    if (__llpl_defer_active107) {
+        __llpl_defer_active107 = 0;
+        llpl_eh_pop(&__llpl_defer_frame106);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret847;
-    if (__llpl_defer_active105) {
-        __llpl_defer_active105 = 0;
-        llpl_eh_pop(&__llpl_defer_frame104);
+    return __llpl_ret866;
+    if (__llpl_defer_active107) {
+        __llpl_defer_active107 = 0;
+        llpl_eh_pop(&__llpl_defer_frame106);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -21632,8 +21730,8 @@ HAL_IDT_Context* Kern_exit_current_thread_from_syscall(HAL_IDT_Context* ctx, uin
     void* current = ((void*)current_thread());
     if ((current == ((void*)0))) {
 #line 988 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret848 = ctx;
-        return __llpl_ret848;
+        HAL_IDT_Context* __llpl_ret867 = ctx;
+        return __llpl_ret867;
     }
     (((Kern_Thread*)current))->ctx = ctx;
     Kern_finish_thread_exit(((Kern_Thread*)current), status);
@@ -21647,8 +21745,8 @@ HAL_IDT_Context* Kern_exit_current_thread_from_syscall(HAL_IDT_Context* ctx, uin
         }
     }
 #line 1003 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    HAL_IDT_Context* __llpl_ret849 = next_ctx;
-    return __llpl_ret849;
+    HAL_IDT_Context* __llpl_ret868 = next_ctx;
+    return __llpl_ret868;
 }
 
 #line 1006 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -21660,8 +21758,8 @@ HAL_IDT_Context* Kern_exit_current_process_from_syscall(HAL_IDT_Context* ctx, ui
         Kern_mark_process_exited((((Kern_Thread*)current))->proc, status);
     }
 #line 1012 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    HAL_IDT_Context* __llpl_ret850 = Kern_exit_current_thread_from_syscall(ctx, status);
-    return __llpl_ret850;
+    HAL_IDT_Context* __llpl_ret869 = Kern_exit_current_thread_from_syscall(ctx, status);
+    return __llpl_ret869;
 }
 
 #line 1015 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -21670,8 +21768,8 @@ HAL_IDT_Context* Kern_kill_current_thread_from_interrupt(HAL_IDT_Context* ctx, u
     void* current = ((void*)current_thread());
     if ((current == ((void*)0))) {
 #line 1018 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret851 = ctx;
-        return __llpl_ret851;
+        HAL_IDT_Context* __llpl_ret870 = ctx;
+        return __llpl_ret870;
     }
     (((Kern_Thread*)current))->ctx = ctx;
     Kern_finish_thread_exit(((Kern_Thread*)current), status);
@@ -21685,8 +21783,8 @@ HAL_IDT_Context* Kern_kill_current_thread_from_interrupt(HAL_IDT_Context* ctx, u
         }
     }
 #line 1033 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    HAL_IDT_Context* __llpl_ret852 = next_ctx;
-    return __llpl_ret852;
+    HAL_IDT_Context* __llpl_ret871 = next_ctx;
+    return __llpl_ret871;
 }
 
 #line 1036 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
@@ -21695,8 +21793,8 @@ HAL_IDT_Context* Kern_kill_current_process_from_interrupt(HAL_IDT_Context* ctx, 
     void* current = ((void*)current_thread());
     if ((current == ((void*)0))) {
 #line 1038 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret853 = ctx;
-        return __llpl_ret853;
+        HAL_IDT_Context* __llpl_ret872 = ctx;
+        return __llpl_ret872;
     }
 #line 1039 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     Kern_Process* proc = (((Kern_Thread*)current))->proc;
@@ -21704,9 +21802,9 @@ HAL_IDT_Context* Kern_kill_current_process_from_interrupt(HAL_IDT_Context* ctx, 
     Kern_terminate_process_threads(proc, ((Kern_Thread*)current), status);
     Kern_mark_process_exited(proc, status);
 #line 1042 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    HAL_IDT_Context* __llpl_ret854 = Kern_kill_current_thread_from_interrupt(ctx, status);
+    HAL_IDT_Context* __llpl_ret873 = Kern_kill_current_thread_from_interrupt(ctx, status);
     if (proc) rc_release(proc, Kern_Process_destroy);
-    return __llpl_ret854;
+    return __llpl_ret873;
     if (proc) rc_release(proc, Kern_Process_destroy);
 }
 
@@ -21739,15 +21837,15 @@ void Kern_write_apc_trampoline(uintptr_t addr, uintptr_t callback, uintptr_t arg
 HAL_IDT_Context* Kern_maybe_deliver_apc(HAL_IDT_Context* ctx, uintptr_t apc_return_syscall) {
     if (((ctx == ((void*)0)) || ((ctx->cs & ((uint64_t)3)) != ((uint64_t)3)))) {
 #line 1093 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret855 = ctx;
-        return __llpl_ret855;
+        HAL_IDT_Context* __llpl_ret874 = ctx;
+        return __llpl_ret874;
     }
 #line 1103 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     void* thread = ((void*)current_thread());
     if (((thread == ((void*)0)) || (((Kern_Thread*)thread))->in_apc)) {
 #line 1105 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret856 = ctx;
-        return __llpl_ret856;
+        HAL_IDT_Context* __llpl_ret875 = ctx;
+        return __llpl_ret875;
     }
 #line 1112 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     Kern_ApcEntry* entry = ((void*)0);
@@ -21762,9 +21860,9 @@ HAL_IDT_Context* Kern_maybe_deliver_apc(HAL_IDT_Context* ctx, uintptr_t apc_retu
     SpinLock_release(&((((Kern_Thread*)thread))->apc_lock));
     if ((entry == ((void*)0))) {
 #line 1121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret857 = ctx;
+        HAL_IDT_Context* __llpl_ret876 = ctx;
         if (entry) rc_release(entry, Kern_ApcEntry_destroy);
-        return __llpl_ret857;
+        return __llpl_ret876;
     }
     memcpy(((void*)&(((Kern_Thread*)thread))->saved_apc_ctx), ((void*)ctx), sizeof(HAL_IDT_Context));
     (((Kern_Thread*)thread))->in_apc = 1;
@@ -21776,16 +21874,16 @@ HAL_IDT_Context* Kern_maybe_deliver_apc(HAL_IDT_Context* ctx, uintptr_t apc_retu
     ctx->rsp = new_rsp;
     ctx->rip = new_rsp;
 #line 1136 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    HAL_IDT_Context* __llpl_ret858 = ctx;
-    return __llpl_ret858;
+    HAL_IDT_Context* __llpl_ret877 = ctx;
+    return __llpl_ret877;
 }
 
 #line 1159 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 HAL_IDT_Context* Kern_handle_user_exception(HAL_IDT_Context* ctx, uintptr_t fault_addr, uintptr_t exception_return_syscall) {
     if (((ctx->cs & ((uint64_t)3)) != ((uint64_t)3))) {
 #line 1161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-        HAL_IDT_Context* __llpl_ret859 = ((void*)0);
-        return __llpl_ret859;
+        HAL_IDT_Context* __llpl_ret878 = ((void*)0);
+        return __llpl_ret878;
     }
 #line 1164 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
     void* thread = ((void*)current_thread());
@@ -21808,20 +21906,20 @@ HAL_IDT_Context* Kern_handle_user_exception(HAL_IDT_Context* ctx, uintptr_t faul
             ctx->rsp = new_rsp;
             ctx->rip = new_rsp;
 #line 1182 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-            HAL_IDT_Context* __llpl_ret860 = ctx;
-            return __llpl_ret860;
+            HAL_IDT_Context* __llpl_ret879 = ctx;
+            return __llpl_ret879;
         }
     }
 #line 1186 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    HAL_IDT_Context* __llpl_ret861 = Kern_kill_current_thread_from_interrupt(ctx, ((uintptr_t)-14));
-    return __llpl_ret861;
+    HAL_IDT_Context* __llpl_ret880 = Kern_kill_current_thread_from_interrupt(ctx, ((uintptr_t)-14));
+    return __llpl_ret880;
 }
 
 #line 1189 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
 static inline Kern_Thread* Kern_current_thread() {
 #line 1190 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/thread.llpl"
-    Kern_Thread* __llpl_ret862 = HAL_current()->thread;
-    return __llpl_ret862;
+    Kern_Thread* __llpl_ret881 = HAL_current()->thread;
+    return __llpl_ret881;
 }
 
 
@@ -21875,59 +21973,59 @@ void Kern_wait_append_locked(Kern_WaitQueue* queue, Kern_Thread* thread) {
 
 #line 42 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 bool Kern_prepare_block_current(Kern_WaitQueue* queue) {
-    __LLPL_EH_Frame __llpl_defer_frame106;
-    int __llpl_defer_active107 = 0;
     __LLPL_EH_Frame __llpl_defer_frame108;
     int __llpl_defer_active109 = 0;
     __LLPL_EH_Frame __llpl_defer_frame110;
     int __llpl_defer_active111 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame112;
+    int __llpl_defer_active113 = 0;
 #line 43 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     void* current = ((void*)current_thread());
     if (((queue == ((void*)0)) || (current == ((void*)0)))) {
 #line 45 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret863 = 0;
-        return __llpl_ret863;
+        bool __llpl_ret882 = 0;
+        return __llpl_ret882;
     }
 #line 48 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     bool prepared = 0;
     {
         SpinLock_acquire(&(Kern_sleep_lock));
-        __llpl_defer_frame106.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame106.type_id = ((void*)0);
-        __llpl_defer_frame106.error_slot = ((void*)0);
-        __llpl_defer_frame106.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame106);
-        __llpl_defer_active107 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame106.env) != 0) {
-            __llpl_defer_active107 = 0;
+        __llpl_defer_frame108.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame108.type_id = ((void*)0);
+        __llpl_defer_frame108.error_slot = ((void*)0);
+        __llpl_defer_frame108.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame108);
+        __llpl_defer_active109 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame108.env) != 0) {
+            __llpl_defer_active109 = 0;
         SpinLock_release(&(Kern_sleep_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         {
             SpinLock_acquire(&(queue->lock));
-            __llpl_defer_frame108.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame108.type_id = ((void*)0);
-            __llpl_defer_frame108.error_slot = ((void*)0);
-            __llpl_defer_frame108.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame108);
-            __llpl_defer_active109 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame108.env) != 0) {
-                __llpl_defer_active109 = 0;
+            __llpl_defer_frame110.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame110.type_id = ((void*)0);
+            __llpl_defer_frame110.error_slot = ((void*)0);
+            __llpl_defer_frame110.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame110);
+            __llpl_defer_active111 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame110.env) != 0) {
+                __llpl_defer_active111 = 0;
             SpinLock_release(&(queue->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             {
                 SpinLock_acquire(&(Kern_lock));
-                __llpl_defer_frame110.kind = LLPL_EH_FRAME_CLEANUP;
-                __llpl_defer_frame110.type_id = ((void*)0);
-                __llpl_defer_frame110.error_slot = ((void*)0);
-                __llpl_defer_frame110.error_size = 0;
-                llpl_eh_push(&__llpl_defer_frame110);
-                __llpl_defer_active111 = 1;
-                if (llpl_eh_setjmp(&__llpl_defer_frame110.env) != 0) {
-                    __llpl_defer_active111 = 0;
+                __llpl_defer_frame112.kind = LLPL_EH_FRAME_CLEANUP;
+                __llpl_defer_frame112.type_id = ((void*)0);
+                __llpl_defer_frame112.error_slot = ((void*)0);
+                __llpl_defer_frame112.error_size = 0;
+                llpl_eh_push(&__llpl_defer_frame112);
+                __llpl_defer_active113 = 1;
+                if (llpl_eh_setjmp(&__llpl_defer_frame112.env) != 0) {
+                    __llpl_defer_active113 = 0;
                 SpinLock_release(&(Kern_lock));
                     llpl_eh_resume();
                     __builtin_unreachable();
@@ -21937,70 +22035,70 @@ bool Kern_prepare_block_current(Kern_WaitQueue* queue) {
                     Kern_wait_append_locked(queue, ((Kern_Thread*)current));
                     prepared = 1;
                 }
-                if (__llpl_defer_active111) {
-                    __llpl_defer_active111 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame110);
+                if (__llpl_defer_active113) {
+                    __llpl_defer_active113 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame112);
                 SpinLock_release(&(Kern_lock));
                 }
+            }
+            if (__llpl_defer_active113) {
+                __llpl_defer_active113 = 0;
+                llpl_eh_pop(&__llpl_defer_frame112);
+                SpinLock_release(&(Kern_lock));
             }
             if (__llpl_defer_active111) {
                 __llpl_defer_active111 = 0;
                 llpl_eh_pop(&__llpl_defer_frame110);
-                SpinLock_release(&(Kern_lock));
-            }
-            if (__llpl_defer_active109) {
-                __llpl_defer_active109 = 0;
-                llpl_eh_pop(&__llpl_defer_frame108);
             SpinLock_release(&(queue->lock));
             }
+        }
+        if (__llpl_defer_active113) {
+            __llpl_defer_active113 = 0;
+            llpl_eh_pop(&__llpl_defer_frame112);
+                SpinLock_release(&(Kern_lock));
         }
         if (__llpl_defer_active111) {
             __llpl_defer_active111 = 0;
             llpl_eh_pop(&__llpl_defer_frame110);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
         }
         if (__llpl_defer_active109) {
             __llpl_defer_active109 = 0;
             llpl_eh_pop(&__llpl_defer_frame108);
-            SpinLock_release(&(queue->lock));
-        }
-        if (__llpl_defer_active107) {
-            __llpl_defer_active107 = 0;
-            llpl_eh_pop(&__llpl_defer_frame106);
         SpinLock_release(&(Kern_sleep_lock));
         }
     }
 #line 60 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret864 = prepared;
+    bool __llpl_ret883 = prepared;
+    if (__llpl_defer_active113) {
+        __llpl_defer_active113 = 0;
+        llpl_eh_pop(&__llpl_defer_frame112);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active111) {
         __llpl_defer_active111 = 0;
         llpl_eh_pop(&__llpl_defer_frame110);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active109) {
         __llpl_defer_active109 = 0;
         llpl_eh_pop(&__llpl_defer_frame108);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active107) {
-        __llpl_defer_active107 = 0;
-        llpl_eh_pop(&__llpl_defer_frame106);
         SpinLock_release(&(Kern_sleep_lock));
     }
-    return __llpl_ret864;
+    return __llpl_ret883;
+    if (__llpl_defer_active113) {
+        __llpl_defer_active113 = 0;
+        llpl_eh_pop(&__llpl_defer_frame112);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active111) {
         __llpl_defer_active111 = 0;
         llpl_eh_pop(&__llpl_defer_frame110);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active109) {
         __llpl_defer_active109 = 0;
         llpl_eh_pop(&__llpl_defer_frame108);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active107) {
-        __llpl_defer_active107 = 0;
-        llpl_eh_pop(&__llpl_defer_frame106);
         SpinLock_release(&(Kern_sleep_lock));
     }
 }
@@ -22026,8 +22124,8 @@ void* Kern_wait_take_best_locked(Kern_WaitQueue* queue) {
     }
     if ((best == ((void*)0))) {
 #line 88 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        void* __llpl_ret865 = ((void*)0);
-        return __llpl_ret865;
+        void* __llpl_ret884 = ((void*)0);
+        return __llpl_ret884;
     }
 #line 91 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     void* following = (((Kern_Thread*)best))->wait_next;
@@ -22042,8 +22140,8 @@ void* Kern_wait_take_best_locked(Kern_WaitQueue* queue) {
     (((Kern_Thread*)best))->wait_next = ((void*)0);
     (((Kern_Thread*)best))->waiting_on = ((void*)0);
 #line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    void* __llpl_ret866 = best;
-    return __llpl_ret866;
+    void* __llpl_ret885 = best;
+    return __llpl_ret885;
 }
 
 #line 107 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
@@ -22067,54 +22165,54 @@ bool Kern_wait_remove_locked(Kern_WaitQueue* queue, Kern_Thread* thread) {
             thread->wait_next = ((void*)0);
             thread->waiting_on = ((void*)0);
 #line 123 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-            bool __llpl_ret867 = 1;
-            return __llpl_ret867;
+            bool __llpl_ret886 = 1;
+            return __llpl_ret886;
         }
         previous = cursor;
         cursor = (((Kern_Thread*)cursor))->wait_next;
     }
 #line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret868 = 0;
-    return __llpl_ret868;
+    bool __llpl_ret887 = 0;
+    return __llpl_ret887;
 }
 
 #line 131 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 uintptr_t Kern_wait_best_priority(Kern_WaitQueue* queue) {
-    __LLPL_EH_Frame __llpl_defer_frame112;
-    int __llpl_defer_active113 = 0;
     __LLPL_EH_Frame __llpl_defer_frame114;
     int __llpl_defer_active115 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame116;
+    int __llpl_defer_active117 = 0;
     if ((queue == ((void*)0))) {
 #line 133 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        uintptr_t __llpl_ret869 = ((uintptr_t)MAX_PRIORITY);
-        return __llpl_ret869;
+        uintptr_t __llpl_ret888 = ((uintptr_t)MAX_PRIORITY);
+        return __llpl_ret888;
     }
 #line 135 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     uintptr_t priority = ((uintptr_t)MAX_PRIORITY);
     {
         SpinLock_acquire(&(Kern_sleep_lock));
-        __llpl_defer_frame112.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame112.type_id = ((void*)0);
-        __llpl_defer_frame112.error_slot = ((void*)0);
-        __llpl_defer_frame112.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame112);
-        __llpl_defer_active113 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame112.env) != 0) {
-            __llpl_defer_active113 = 0;
+        __llpl_defer_frame114.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame114.type_id = ((void*)0);
+        __llpl_defer_frame114.error_slot = ((void*)0);
+        __llpl_defer_frame114.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame114);
+        __llpl_defer_active115 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame114.env) != 0) {
+            __llpl_defer_active115 = 0;
         SpinLock_release(&(Kern_sleep_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         {
             SpinLock_acquire(&(queue->lock));
-            __llpl_defer_frame114.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame114.type_id = ((void*)0);
-            __llpl_defer_frame114.error_slot = ((void*)0);
-            __llpl_defer_frame114.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame114);
-            __llpl_defer_active115 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame114.env) != 0) {
-                __llpl_defer_active115 = 0;
+            __llpl_defer_frame116.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame116.type_id = ((void*)0);
+            __llpl_defer_frame116.error_slot = ((void*)0);
+            __llpl_defer_frame116.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame116);
+            __llpl_defer_active117 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame116.env) != 0) {
+                __llpl_defer_active117 = 0;
             SpinLock_release(&(queue->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
@@ -22127,101 +22225,101 @@ uintptr_t Kern_wait_best_priority(Kern_WaitQueue* queue) {
                 }
                 cursor = (((Kern_Thread*)cursor))->wait_next;
             }
-            if (__llpl_defer_active115) {
-                __llpl_defer_active115 = 0;
-                llpl_eh_pop(&__llpl_defer_frame114);
+            if (__llpl_defer_active117) {
+                __llpl_defer_active117 = 0;
+                llpl_eh_pop(&__llpl_defer_frame116);
             SpinLock_release(&(queue->lock));
             }
+        }
+        if (__llpl_defer_active117) {
+            __llpl_defer_active117 = 0;
+            llpl_eh_pop(&__llpl_defer_frame116);
+            SpinLock_release(&(queue->lock));
         }
         if (__llpl_defer_active115) {
             __llpl_defer_active115 = 0;
             llpl_eh_pop(&__llpl_defer_frame114);
-            SpinLock_release(&(queue->lock));
-        }
-        if (__llpl_defer_active113) {
-            __llpl_defer_active113 = 0;
-            llpl_eh_pop(&__llpl_defer_frame112);
         SpinLock_release(&(Kern_sleep_lock));
         }
     }
 #line 147 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    uintptr_t __llpl_ret870 = priority;
+    uintptr_t __llpl_ret889 = priority;
+    if (__llpl_defer_active117) {
+        __llpl_defer_active117 = 0;
+        llpl_eh_pop(&__llpl_defer_frame116);
+            SpinLock_release(&(queue->lock));
+    }
     if (__llpl_defer_active115) {
         __llpl_defer_active115 = 0;
         llpl_eh_pop(&__llpl_defer_frame114);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active113) {
-        __llpl_defer_active113 = 0;
-        llpl_eh_pop(&__llpl_defer_frame112);
         SpinLock_release(&(Kern_sleep_lock));
     }
-    return __llpl_ret870;
+    return __llpl_ret889;
+    if (__llpl_defer_active117) {
+        __llpl_defer_active117 = 0;
+        llpl_eh_pop(&__llpl_defer_frame116);
+            SpinLock_release(&(queue->lock));
+    }
     if (__llpl_defer_active115) {
         __llpl_defer_active115 = 0;
         llpl_eh_pop(&__llpl_defer_frame114);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active113) {
-        __llpl_defer_active113 = 0;
-        llpl_eh_pop(&__llpl_defer_frame112);
         SpinLock_release(&(Kern_sleep_lock));
     }
 }
 
 #line 150 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 bool Kern_wake_one(Kern_WaitQueue* queue) {
-    __LLPL_EH_Frame __llpl_defer_frame116;
-    int __llpl_defer_active117 = 0;
     __LLPL_EH_Frame __llpl_defer_frame118;
     int __llpl_defer_active119 = 0;
     __LLPL_EH_Frame __llpl_defer_frame120;
     int __llpl_defer_active121 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame122;
+    int __llpl_defer_active123 = 0;
     if ((queue == ((void*)0))) {
 #line 152 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret871 = 0;
-        return __llpl_ret871;
+        bool __llpl_ret890 = 0;
+        return __llpl_ret890;
     }
 #line 155 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     void* thread = ((void*)0);
     {
         SpinLock_acquire(&(Kern_sleep_lock));
-        __llpl_defer_frame116.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame116.type_id = ((void*)0);
-        __llpl_defer_frame116.error_slot = ((void*)0);
-        __llpl_defer_frame116.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame116);
-        __llpl_defer_active117 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame116.env) != 0) {
-            __llpl_defer_active117 = 0;
+        __llpl_defer_frame118.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame118.type_id = ((void*)0);
+        __llpl_defer_frame118.error_slot = ((void*)0);
+        __llpl_defer_frame118.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame118);
+        __llpl_defer_active119 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame118.env) != 0) {
+            __llpl_defer_active119 = 0;
         SpinLock_release(&(Kern_sleep_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         {
             SpinLock_acquire(&(queue->lock));
-            __llpl_defer_frame118.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame118.type_id = ((void*)0);
-            __llpl_defer_frame118.error_slot = ((void*)0);
-            __llpl_defer_frame118.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame118);
-            __llpl_defer_active119 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame118.env) != 0) {
-                __llpl_defer_active119 = 0;
+            __llpl_defer_frame120.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame120.type_id = ((void*)0);
+            __llpl_defer_frame120.error_slot = ((void*)0);
+            __llpl_defer_frame120.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame120);
+            __llpl_defer_active121 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame120.env) != 0) {
+                __llpl_defer_active121 = 0;
             SpinLock_release(&(queue->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             {
                 SpinLock_acquire(&(Kern_lock));
-                __llpl_defer_frame120.kind = LLPL_EH_FRAME_CLEANUP;
-                __llpl_defer_frame120.type_id = ((void*)0);
-                __llpl_defer_frame120.error_slot = ((void*)0);
-                __llpl_defer_frame120.error_size = 0;
-                llpl_eh_push(&__llpl_defer_frame120);
-                __llpl_defer_active121 = 1;
-                if (llpl_eh_setjmp(&__llpl_defer_frame120.env) != 0) {
-                    __llpl_defer_active121 = 0;
+                __llpl_defer_frame122.kind = LLPL_EH_FRAME_CLEANUP;
+                __llpl_defer_frame122.type_id = ((void*)0);
+                __llpl_defer_frame122.error_slot = ((void*)0);
+                __llpl_defer_frame122.error_size = 0;
+                llpl_eh_push(&__llpl_defer_frame122);
+                __llpl_defer_active123 = 1;
+                if (llpl_eh_setjmp(&__llpl_defer_frame122.env) != 0) {
+                    __llpl_defer_active123 = 0;
                 SpinLock_release(&(Kern_lock));
                     llpl_eh_resume();
                     __builtin_unreachable();
@@ -22235,127 +22333,127 @@ bool Kern_wake_one(Kern_WaitQueue* queue) {
                     (((Kern_Thread*)thread))->state = ((uintptr_t)ThreadState_Ready);
                     Kern_enqueue_ready_locked(((Kern_Thread*)thread));
                 }
-                if (__llpl_defer_active121) {
-                    __llpl_defer_active121 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame120);
+                if (__llpl_defer_active123) {
+                    __llpl_defer_active123 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame122);
                 SpinLock_release(&(Kern_lock));
                 }
+            }
+            if (__llpl_defer_active123) {
+                __llpl_defer_active123 = 0;
+                llpl_eh_pop(&__llpl_defer_frame122);
+                SpinLock_release(&(Kern_lock));
             }
             if (__llpl_defer_active121) {
                 __llpl_defer_active121 = 0;
                 llpl_eh_pop(&__llpl_defer_frame120);
-                SpinLock_release(&(Kern_lock));
-            }
-            if (__llpl_defer_active119) {
-                __llpl_defer_active119 = 0;
-                llpl_eh_pop(&__llpl_defer_frame118);
             SpinLock_release(&(queue->lock));
             }
+        }
+        if (__llpl_defer_active123) {
+            __llpl_defer_active123 = 0;
+            llpl_eh_pop(&__llpl_defer_frame122);
+                SpinLock_release(&(Kern_lock));
         }
         if (__llpl_defer_active121) {
             __llpl_defer_active121 = 0;
             llpl_eh_pop(&__llpl_defer_frame120);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
         }
         if (__llpl_defer_active119) {
             __llpl_defer_active119 = 0;
             llpl_eh_pop(&__llpl_defer_frame118);
-            SpinLock_release(&(queue->lock));
-        }
-        if (__llpl_defer_active117) {
-            __llpl_defer_active117 = 0;
-            llpl_eh_pop(&__llpl_defer_frame116);
         SpinLock_release(&(Kern_sleep_lock));
         }
     }
 #line 171 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret872 = (thread != ((void*)0));
+    bool __llpl_ret891 = (thread != ((void*)0));
+    if (__llpl_defer_active123) {
+        __llpl_defer_active123 = 0;
+        llpl_eh_pop(&__llpl_defer_frame122);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active121) {
         __llpl_defer_active121 = 0;
         llpl_eh_pop(&__llpl_defer_frame120);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active119) {
         __llpl_defer_active119 = 0;
         llpl_eh_pop(&__llpl_defer_frame118);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active117) {
-        __llpl_defer_active117 = 0;
-        llpl_eh_pop(&__llpl_defer_frame116);
         SpinLock_release(&(Kern_sleep_lock));
     }
-    return __llpl_ret872;
+    return __llpl_ret891;
+    if (__llpl_defer_active123) {
+        __llpl_defer_active123 = 0;
+        llpl_eh_pop(&__llpl_defer_frame122);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active121) {
         __llpl_defer_active121 = 0;
         llpl_eh_pop(&__llpl_defer_frame120);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active119) {
         __llpl_defer_active119 = 0;
         llpl_eh_pop(&__llpl_defer_frame118);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active117) {
-        __llpl_defer_active117 = 0;
-        llpl_eh_pop(&__llpl_defer_frame116);
         SpinLock_release(&(Kern_sleep_lock));
     }
 }
 
 #line 174 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 uintptr_t Kern_wake_all(Kern_WaitQueue* queue) {
-    __LLPL_EH_Frame __llpl_defer_frame122;
-    int __llpl_defer_active123 = 0;
     __LLPL_EH_Frame __llpl_defer_frame124;
     int __llpl_defer_active125 = 0;
     __LLPL_EH_Frame __llpl_defer_frame126;
     int __llpl_defer_active127 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame128;
+    int __llpl_defer_active129 = 0;
     if ((queue == ((void*)0))) {
 #line 176 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        uintptr_t __llpl_ret873 = ((uintptr_t)0);
-        return __llpl_ret873;
+        uintptr_t __llpl_ret892 = ((uintptr_t)0);
+        return __llpl_ret892;
     }
 #line 179 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     uintptr_t woken = ((uintptr_t)0);
     {
         SpinLock_acquire(&(Kern_sleep_lock));
-        __llpl_defer_frame122.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame122.type_id = ((void*)0);
-        __llpl_defer_frame122.error_slot = ((void*)0);
-        __llpl_defer_frame122.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame122);
-        __llpl_defer_active123 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame122.env) != 0) {
-            __llpl_defer_active123 = 0;
+        __llpl_defer_frame124.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame124.type_id = ((void*)0);
+        __llpl_defer_frame124.error_slot = ((void*)0);
+        __llpl_defer_frame124.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame124);
+        __llpl_defer_active125 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame124.env) != 0) {
+            __llpl_defer_active125 = 0;
         SpinLock_release(&(Kern_sleep_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         {
             SpinLock_acquire(&(queue->lock));
-            __llpl_defer_frame124.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame124.type_id = ((void*)0);
-            __llpl_defer_frame124.error_slot = ((void*)0);
-            __llpl_defer_frame124.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame124);
-            __llpl_defer_active125 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame124.env) != 0) {
-                __llpl_defer_active125 = 0;
+            __llpl_defer_frame126.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame126.type_id = ((void*)0);
+            __llpl_defer_frame126.error_slot = ((void*)0);
+            __llpl_defer_frame126.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame126);
+            __llpl_defer_active127 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame126.env) != 0) {
+                __llpl_defer_active127 = 0;
             SpinLock_release(&(queue->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             {
                 SpinLock_acquire(&(Kern_lock));
-                __llpl_defer_frame126.kind = LLPL_EH_FRAME_CLEANUP;
-                __llpl_defer_frame126.type_id = ((void*)0);
-                __llpl_defer_frame126.error_slot = ((void*)0);
-                __llpl_defer_frame126.error_size = 0;
-                llpl_eh_push(&__llpl_defer_frame126);
-                __llpl_defer_active127 = 1;
-                if (llpl_eh_setjmp(&__llpl_defer_frame126.env) != 0) {
-                    __llpl_defer_active127 = 0;
+                __llpl_defer_frame128.kind = LLPL_EH_FRAME_CLEANUP;
+                __llpl_defer_frame128.type_id = ((void*)0);
+                __llpl_defer_frame128.error_slot = ((void*)0);
+                __llpl_defer_frame128.error_size = 0;
+                llpl_eh_push(&__llpl_defer_frame128);
+                __llpl_defer_active129 = 1;
+                if (llpl_eh_setjmp(&__llpl_defer_frame128.env) != 0) {
+                    __llpl_defer_active129 = 0;
                 SpinLock_release(&(Kern_lock));
                     llpl_eh_resume();
                     __builtin_unreachable();
@@ -22373,70 +22471,70 @@ uintptr_t Kern_wake_all(Kern_WaitQueue* queue) {
                         (woken = (woken + ((uintptr_t)1)));
                     }
                 }
-                if (__llpl_defer_active127) {
-                    __llpl_defer_active127 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame126);
+                if (__llpl_defer_active129) {
+                    __llpl_defer_active129 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame128);
                 SpinLock_release(&(Kern_lock));
                 }
+            }
+            if (__llpl_defer_active129) {
+                __llpl_defer_active129 = 0;
+                llpl_eh_pop(&__llpl_defer_frame128);
+                SpinLock_release(&(Kern_lock));
             }
             if (__llpl_defer_active127) {
                 __llpl_defer_active127 = 0;
                 llpl_eh_pop(&__llpl_defer_frame126);
-                SpinLock_release(&(Kern_lock));
-            }
-            if (__llpl_defer_active125) {
-                __llpl_defer_active125 = 0;
-                llpl_eh_pop(&__llpl_defer_frame124);
             SpinLock_release(&(queue->lock));
             }
+        }
+        if (__llpl_defer_active129) {
+            __llpl_defer_active129 = 0;
+            llpl_eh_pop(&__llpl_defer_frame128);
+                SpinLock_release(&(Kern_lock));
         }
         if (__llpl_defer_active127) {
             __llpl_defer_active127 = 0;
             llpl_eh_pop(&__llpl_defer_frame126);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
         }
         if (__llpl_defer_active125) {
             __llpl_defer_active125 = 0;
             llpl_eh_pop(&__llpl_defer_frame124);
-            SpinLock_release(&(queue->lock));
-        }
-        if (__llpl_defer_active123) {
-            __llpl_defer_active123 = 0;
-            llpl_eh_pop(&__llpl_defer_frame122);
         SpinLock_release(&(Kern_sleep_lock));
         }
     }
 #line 198 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    uintptr_t __llpl_ret874 = woken;
+    uintptr_t __llpl_ret893 = woken;
+    if (__llpl_defer_active129) {
+        __llpl_defer_active129 = 0;
+        llpl_eh_pop(&__llpl_defer_frame128);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active127) {
         __llpl_defer_active127 = 0;
         llpl_eh_pop(&__llpl_defer_frame126);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active125) {
         __llpl_defer_active125 = 0;
         llpl_eh_pop(&__llpl_defer_frame124);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active123) {
-        __llpl_defer_active123 = 0;
-        llpl_eh_pop(&__llpl_defer_frame122);
         SpinLock_release(&(Kern_sleep_lock));
     }
-    return __llpl_ret874;
+    return __llpl_ret893;
+    if (__llpl_defer_active129) {
+        __llpl_defer_active129 = 0;
+        llpl_eh_pop(&__llpl_defer_frame128);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active127) {
         __llpl_defer_active127 = 0;
         llpl_eh_pop(&__llpl_defer_frame126);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active125) {
         __llpl_defer_active125 = 0;
         llpl_eh_pop(&__llpl_defer_frame124);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active123) {
-        __llpl_defer_active123 = 0;
-        llpl_eh_pop(&__llpl_defer_frame122);
         SpinLock_release(&(Kern_sleep_lock));
     }
 }
@@ -22476,72 +22574,72 @@ bool Kern_sleep_remove_locked(Kern_Thread* thread) {
             }
             thread->sleep_next = ((void*)0);
 #line 230 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-            bool __llpl_ret875 = 1;
-            return __llpl_ret875;
+            bool __llpl_ret894 = 1;
+            return __llpl_ret894;
         }
         previous = cursor;
         cursor = (((Kern_Thread*)cursor))->sleep_next;
     }
 #line 235 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret876 = 0;
-    return __llpl_ret876;
+    bool __llpl_ret895 = 0;
+    return __llpl_ret895;
 }
 
 #line 241 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 bool Kern_prepare_block_current_timeout_ticks(Kern_WaitQueue* queue, uintptr_t delay) {
-    __LLPL_EH_Frame __llpl_defer_frame128;
-    int __llpl_defer_active129 = 0;
     __LLPL_EH_Frame __llpl_defer_frame130;
     int __llpl_defer_active131 = 0;
     __LLPL_EH_Frame __llpl_defer_frame132;
     int __llpl_defer_active133 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame134;
+    int __llpl_defer_active135 = 0;
 #line 242 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     void* current = ((void*)current_thread());
     if ((((queue == ((void*)0)) || (current == ((void*)0))) || (delay == ((uintptr_t)0)))) {
 #line 244 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret877 = 0;
-        return __llpl_ret877;
+        bool __llpl_ret896 = 0;
+        return __llpl_ret896;
     }
 #line 247 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     bool prepared = 0;
     {
         SpinLock_acquire(&(Kern_sleep_lock));
-        __llpl_defer_frame128.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame128.type_id = ((void*)0);
-        __llpl_defer_frame128.error_slot = ((void*)0);
-        __llpl_defer_frame128.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame128);
-        __llpl_defer_active129 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame128.env) != 0) {
-            __llpl_defer_active129 = 0;
+        __llpl_defer_frame130.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame130.type_id = ((void*)0);
+        __llpl_defer_frame130.error_slot = ((void*)0);
+        __llpl_defer_frame130.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame130);
+        __llpl_defer_active131 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame130.env) != 0) {
+            __llpl_defer_active131 = 0;
         SpinLock_release(&(Kern_sleep_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         {
             SpinLock_acquire(&(queue->lock));
-            __llpl_defer_frame130.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame130.type_id = ((void*)0);
-            __llpl_defer_frame130.error_slot = ((void*)0);
-            __llpl_defer_frame130.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame130);
-            __llpl_defer_active131 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame130.env) != 0) {
-                __llpl_defer_active131 = 0;
+            __llpl_defer_frame132.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame132.type_id = ((void*)0);
+            __llpl_defer_frame132.error_slot = ((void*)0);
+            __llpl_defer_frame132.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame132);
+            __llpl_defer_active133 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame132.env) != 0) {
+                __llpl_defer_active133 = 0;
             SpinLock_release(&(queue->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             {
                 SpinLock_acquire(&(Kern_lock));
-                __llpl_defer_frame132.kind = LLPL_EH_FRAME_CLEANUP;
-                __llpl_defer_frame132.type_id = ((void*)0);
-                __llpl_defer_frame132.error_slot = ((void*)0);
-                __llpl_defer_frame132.error_size = 0;
-                llpl_eh_push(&__llpl_defer_frame132);
-                __llpl_defer_active133 = 1;
-                if (llpl_eh_setjmp(&__llpl_defer_frame132.env) != 0) {
-                    __llpl_defer_active133 = 0;
+                __llpl_defer_frame134.kind = LLPL_EH_FRAME_CLEANUP;
+                __llpl_defer_frame134.type_id = ((void*)0);
+                __llpl_defer_frame134.error_slot = ((void*)0);
+                __llpl_defer_frame134.error_size = 0;
+                llpl_eh_push(&__llpl_defer_frame134);
+                __llpl_defer_active135 = 1;
+                if (llpl_eh_setjmp(&__llpl_defer_frame134.env) != 0) {
+                    __llpl_defer_active135 = 0;
                 SpinLock_release(&(Kern_lock));
                     llpl_eh_resume();
                     __builtin_unreachable();
@@ -22553,90 +22651,90 @@ bool Kern_prepare_block_current_timeout_ticks(Kern_WaitQueue* queue, uintptr_t d
                     Kern_sleep_insert_locked(((Kern_Thread*)current));
                     prepared = 1;
                 }
-                if (__llpl_defer_active133) {
-                    __llpl_defer_active133 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame132);
+                if (__llpl_defer_active135) {
+                    __llpl_defer_active135 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame134);
                 SpinLock_release(&(Kern_lock));
                 }
+            }
+            if (__llpl_defer_active135) {
+                __llpl_defer_active135 = 0;
+                llpl_eh_pop(&__llpl_defer_frame134);
+                SpinLock_release(&(Kern_lock));
             }
             if (__llpl_defer_active133) {
                 __llpl_defer_active133 = 0;
                 llpl_eh_pop(&__llpl_defer_frame132);
-                SpinLock_release(&(Kern_lock));
-            }
-            if (__llpl_defer_active131) {
-                __llpl_defer_active131 = 0;
-                llpl_eh_pop(&__llpl_defer_frame130);
             SpinLock_release(&(queue->lock));
             }
+        }
+        if (__llpl_defer_active135) {
+            __llpl_defer_active135 = 0;
+            llpl_eh_pop(&__llpl_defer_frame134);
+                SpinLock_release(&(Kern_lock));
         }
         if (__llpl_defer_active133) {
             __llpl_defer_active133 = 0;
             llpl_eh_pop(&__llpl_defer_frame132);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
         }
         if (__llpl_defer_active131) {
             __llpl_defer_active131 = 0;
             llpl_eh_pop(&__llpl_defer_frame130);
-            SpinLock_release(&(queue->lock));
-        }
-        if (__llpl_defer_active129) {
-            __llpl_defer_active129 = 0;
-            llpl_eh_pop(&__llpl_defer_frame128);
         SpinLock_release(&(Kern_sleep_lock));
         }
     }
     if (!prepared) {
 #line 262 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret878 = 0;
+        bool __llpl_ret897 = 0;
+        if (__llpl_defer_active135) {
+            __llpl_defer_active135 = 0;
+            llpl_eh_pop(&__llpl_defer_frame134);
+                SpinLock_release(&(Kern_lock));
+        }
         if (__llpl_defer_active133) {
             __llpl_defer_active133 = 0;
             llpl_eh_pop(&__llpl_defer_frame132);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
         }
         if (__llpl_defer_active131) {
             __llpl_defer_active131 = 0;
             llpl_eh_pop(&__llpl_defer_frame130);
-            SpinLock_release(&(queue->lock));
-        }
-        if (__llpl_defer_active129) {
-            __llpl_defer_active129 = 0;
-            llpl_eh_pop(&__llpl_defer_frame128);
         SpinLock_release(&(Kern_sleep_lock));
         }
-        return __llpl_ret878;
+        return __llpl_ret897;
     }
 #line 265 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret879 = 1;
+    bool __llpl_ret898 = 1;
+    if (__llpl_defer_active135) {
+        __llpl_defer_active135 = 0;
+        llpl_eh_pop(&__llpl_defer_frame134);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active133) {
         __llpl_defer_active133 = 0;
         llpl_eh_pop(&__llpl_defer_frame132);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active131) {
         __llpl_defer_active131 = 0;
         llpl_eh_pop(&__llpl_defer_frame130);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active129) {
-        __llpl_defer_active129 = 0;
-        llpl_eh_pop(&__llpl_defer_frame128);
         SpinLock_release(&(Kern_sleep_lock));
     }
-    return __llpl_ret879;
+    return __llpl_ret898;
+    if (__llpl_defer_active135) {
+        __llpl_defer_active135 = 0;
+        llpl_eh_pop(&__llpl_defer_frame134);
+                SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active133) {
         __llpl_defer_active133 = 0;
         llpl_eh_pop(&__llpl_defer_frame132);
-                SpinLock_release(&(Kern_lock));
+            SpinLock_release(&(queue->lock));
     }
     if (__llpl_defer_active131) {
         __llpl_defer_active131 = 0;
         llpl_eh_pop(&__llpl_defer_frame130);
-            SpinLock_release(&(queue->lock));
-    }
-    if (__llpl_defer_active129) {
-        __llpl_defer_active129 = 0;
-        llpl_eh_pop(&__llpl_defer_frame128);
         SpinLock_release(&(Kern_sleep_lock));
     }
 }
@@ -22647,172 +22745,176 @@ bool Kern_finish_block_current_timeout() {
     void* current = ((void*)current_thread());
     if ((current == ((void*)0))) {
 #line 272 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret880 = 0;
-        return __llpl_ret880;
+        bool __llpl_ret899 = 0;
+        return __llpl_ret899;
     }
     Kern_scheduler_yield();
 #line 276 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret881 = !(((Kern_Thread*)current))->wait_timed_out;
-    return __llpl_ret881;
+    bool __llpl_ret900 = !(((Kern_Thread*)current))->wait_timed_out;
+    return __llpl_ret900;
 }
 
 
 
 #line 297 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 bool Kern_sleep_ticks(uintptr_t delay) {
-    __LLPL_EH_Frame __llpl_defer_frame134;
-    int __llpl_defer_active135 = 0;
     __LLPL_EH_Frame __llpl_defer_frame136;
     int __llpl_defer_active137 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame138;
+    int __llpl_defer_active139 = 0;
 #line 298 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     void* current = ((void*)current_thread());
     if ((current == ((void*)0))) {
 #line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret882 = 0;
-        return __llpl_ret882;
+        bool __llpl_ret901 = 0;
+        return __llpl_ret901;
     }
     if ((delay == ((uintptr_t)0))) {
         Kern_scheduler_yield();
 #line 304 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret883 = 1;
-        return __llpl_ret883;
+        bool __llpl_ret902 = 1;
+        return __llpl_ret902;
     }
     {
         SpinLock_acquire(&(Kern_sleep_lock));
-        __llpl_defer_frame134.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame134.type_id = ((void*)0);
-        __llpl_defer_frame134.error_slot = ((void*)0);
-        __llpl_defer_frame134.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame134);
-        __llpl_defer_active135 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame134.env) != 0) {
-            __llpl_defer_active135 = 0;
+        __llpl_defer_frame136.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame136.type_id = ((void*)0);
+        __llpl_defer_frame136.error_slot = ((void*)0);
+        __llpl_defer_frame136.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame136);
+        __llpl_defer_active137 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame136.env) != 0) {
+            __llpl_defer_active137 = 0;
         SpinLock_release(&(Kern_sleep_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         {
             SpinLock_acquire(&(Kern_lock));
-            __llpl_defer_frame136.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame136.type_id = ((void*)0);
-            __llpl_defer_frame136.error_slot = ((void*)0);
-            __llpl_defer_frame136.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame136);
-            __llpl_defer_active137 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame136.env) != 0) {
-                __llpl_defer_active137 = 0;
+            __llpl_defer_frame138.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame138.type_id = ((void*)0);
+            __llpl_defer_frame138.error_slot = ((void*)0);
+            __llpl_defer_frame138.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame138);
+            __llpl_defer_active139 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame138.env) != 0) {
+                __llpl_defer_active139 = 0;
             SpinLock_release(&(Kern_lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             if (((((Kern_Thread*)current))->state != ((uintptr_t)ThreadState_Running))) {
 #line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-                bool __llpl_ret884 = 0;
+                bool __llpl_ret903 = 0;
+                if (__llpl_defer_active139) {
+                    __llpl_defer_active139 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame138);
+            SpinLock_release(&(Kern_lock));
+                }
                 if (__llpl_defer_active137) {
                     __llpl_defer_active137 = 0;
                     llpl_eh_pop(&__llpl_defer_frame136);
-            SpinLock_release(&(Kern_lock));
-                }
-                if (__llpl_defer_active135) {
-                    __llpl_defer_active135 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame134);
         SpinLock_release(&(Kern_sleep_lock));
                 }
-                return __llpl_ret884;
+                return __llpl_ret903;
             }
-            (((Kern_Thread*)current))->wake_tick = Timer_deadline_after_ticks(delay);
-            (((Kern_Thread*)current))->state = ((uintptr_t)ThreadState_Sleeping);
-            (((Kern_Thread*)current))->sleep_started_tick = Timer_current_tick();
-            Kern_sleep_insert_locked(((Kern_Thread*)current));
-            if (__llpl_defer_active137) {
-                __llpl_defer_active137 = 0;
-                llpl_eh_pop(&__llpl_defer_frame136);
+#line 312 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+            {
+                Kern_Thread* __llpl_with0 = ((Kern_Thread*)current);
+                __llpl_with0->wake_tick = Timer_deadline_after_ticks(delay);
+                __llpl_with0->state = ((uintptr_t)ThreadState_Sleeping);
+                __llpl_with0->sleep_started_tick = Timer_current_tick();
+                Kern_sleep_insert_locked(((Kern_Thread*)current));
+            }
+            if (__llpl_defer_active139) {
+                __llpl_defer_active139 = 0;
+                llpl_eh_pop(&__llpl_defer_frame138);
             SpinLock_release(&(Kern_lock));
             }
+        }
+        if (__llpl_defer_active139) {
+            __llpl_defer_active139 = 0;
+            llpl_eh_pop(&__llpl_defer_frame138);
+            SpinLock_release(&(Kern_lock));
         }
         if (__llpl_defer_active137) {
             __llpl_defer_active137 = 0;
             llpl_eh_pop(&__llpl_defer_frame136);
-            SpinLock_release(&(Kern_lock));
-        }
-        if (__llpl_defer_active135) {
-            __llpl_defer_active135 = 0;
-            llpl_eh_pop(&__llpl_defer_frame134);
         SpinLock_release(&(Kern_sleep_lock));
         }
     }
     Kern_scheduler_yield();
-#line 320 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret885 = 1;
+#line 322 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+    bool __llpl_ret904 = 1;
+    if (__llpl_defer_active139) {
+        __llpl_defer_active139 = 0;
+        llpl_eh_pop(&__llpl_defer_frame138);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active137) {
         __llpl_defer_active137 = 0;
         llpl_eh_pop(&__llpl_defer_frame136);
-            SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active135) {
-        __llpl_defer_active135 = 0;
-        llpl_eh_pop(&__llpl_defer_frame134);
         SpinLock_release(&(Kern_sleep_lock));
     }
-    return __llpl_ret885;
+    return __llpl_ret904;
+    if (__llpl_defer_active139) {
+        __llpl_defer_active139 = 0;
+        llpl_eh_pop(&__llpl_defer_frame138);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active137) {
         __llpl_defer_active137 = 0;
         llpl_eh_pop(&__llpl_defer_frame136);
-            SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active135) {
-        __llpl_defer_active135 = 0;
-        llpl_eh_pop(&__llpl_defer_frame134);
         SpinLock_release(&(Kern_sleep_lock));
     }
 }
 
-#line 324 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+#line 326 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 bool Kern_sleep_ms(uintptr_t milliseconds) {
     if ((milliseconds == ((uintptr_t)0))) {
-#line 326 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-        bool __llpl_ret886 = Kern_sleep_ticks(((uintptr_t)0));
-        return __llpl_ret886;
-    }
 #line 328 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+        bool __llpl_ret905 = Kern_sleep_ticks(((uintptr_t)0));
+        return __llpl_ret905;
+    }
+#line 330 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     uintptr_t delay_ticks = (((milliseconds + ((uintptr_t)HAL_PIT_MSECS_PER_TICK)) - ((uintptr_t)1)) / ((uintptr_t)HAL_PIT_MSECS_PER_TICK));
-#line 329 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret887 = Kern_sleep_ticks(delay_ticks);
-    return __llpl_ret887;
+#line 331 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+    bool __llpl_ret906 = Kern_sleep_ticks(delay_ticks);
+    return __llpl_ret906;
 }
 
-#line 334 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+#line 336 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 bool Kern_timeout_waiter_locked(Kern_WaitQueue* queue, Kern_Thread* thread) {
-    __LLPL_EH_Frame __llpl_defer_frame138;
-    int __llpl_defer_active139 = 0;
     __LLPL_EH_Frame __llpl_defer_frame140;
     int __llpl_defer_active141 = 0;
-#line 335 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+    __LLPL_EH_Frame __llpl_defer_frame142;
+    int __llpl_defer_active143 = 0;
+#line 337 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     bool expired = 0;
     {
         SpinLock_acquire(&(queue->lock));
-        __llpl_defer_frame138.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame138.type_id = ((void*)0);
-        __llpl_defer_frame138.error_slot = ((void*)0);
-        __llpl_defer_frame138.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame138);
-        __llpl_defer_active139 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame138.env) != 0) {
-            __llpl_defer_active139 = 0;
+        __llpl_defer_frame140.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame140.type_id = ((void*)0);
+        __llpl_defer_frame140.error_slot = ((void*)0);
+        __llpl_defer_frame140.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame140);
+        __llpl_defer_active141 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame140.env) != 0) {
+            __llpl_defer_active141 = 0;
         SpinLock_release(&(queue->lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         {
             SpinLock_acquire(&(Kern_lock));
-            __llpl_defer_frame140.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame140.type_id = ((void*)0);
-            __llpl_defer_frame140.error_slot = ((void*)0);
-            __llpl_defer_frame140.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame140);
-            __llpl_defer_active141 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame140.env) != 0) {
-                __llpl_defer_active141 = 0;
+            __llpl_defer_frame142.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame142.type_id = ((void*)0);
+            __llpl_defer_frame142.error_slot = ((void*)0);
+            __llpl_defer_frame142.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame142);
+            __llpl_defer_active143 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame142.env) != 0) {
+                __llpl_defer_active143 = 0;
             SpinLock_release(&(Kern_lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
@@ -22825,76 +22927,76 @@ bool Kern_timeout_waiter_locked(Kern_WaitQueue* queue, Kern_Thread* thread) {
                 Kern_enqueue_ready_locked(thread);
                 expired = 1;
             }
-            if (__llpl_defer_active141) {
-                __llpl_defer_active141 = 0;
-                llpl_eh_pop(&__llpl_defer_frame140);
+            if (__llpl_defer_active143) {
+                __llpl_defer_active143 = 0;
+                llpl_eh_pop(&__llpl_defer_frame142);
             SpinLock_release(&(Kern_lock));
             }
+        }
+        if (__llpl_defer_active143) {
+            __llpl_defer_active143 = 0;
+            llpl_eh_pop(&__llpl_defer_frame142);
+            SpinLock_release(&(Kern_lock));
         }
         if (__llpl_defer_active141) {
             __llpl_defer_active141 = 0;
             llpl_eh_pop(&__llpl_defer_frame140);
-            SpinLock_release(&(Kern_lock));
-        }
-        if (__llpl_defer_active139) {
-            __llpl_defer_active139 = 0;
-            llpl_eh_pop(&__llpl_defer_frame138);
         SpinLock_release(&(queue->lock));
         }
     }
-#line 348 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    bool __llpl_ret888 = expired;
+#line 350 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+    bool __llpl_ret907 = expired;
+    if (__llpl_defer_active143) {
+        __llpl_defer_active143 = 0;
+        llpl_eh_pop(&__llpl_defer_frame142);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active141) {
         __llpl_defer_active141 = 0;
         llpl_eh_pop(&__llpl_defer_frame140);
-            SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active139) {
-        __llpl_defer_active139 = 0;
-        llpl_eh_pop(&__llpl_defer_frame138);
         SpinLock_release(&(queue->lock));
     }
-    return __llpl_ret888;
+    return __llpl_ret907;
+    if (__llpl_defer_active143) {
+        __llpl_defer_active143 = 0;
+        llpl_eh_pop(&__llpl_defer_frame142);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active141) {
         __llpl_defer_active141 = 0;
         llpl_eh_pop(&__llpl_defer_frame140);
-            SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active139) {
-        __llpl_defer_active139 = 0;
-        llpl_eh_pop(&__llpl_defer_frame138);
         SpinLock_release(&(queue->lock));
     }
 }
 
-#line 353 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+#line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
 uintptr_t Kern_wake_sleepers(uintptr_t now) {
-    __LLPL_EH_Frame __llpl_defer_frame142;
-    int __llpl_defer_active143 = 0;
     __LLPL_EH_Frame __llpl_defer_frame144;
     int __llpl_defer_active145 = 0;
-#line 354 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+    __LLPL_EH_Frame __llpl_defer_frame146;
+    int __llpl_defer_active147 = 0;
+#line 356 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
     uintptr_t woken = ((uintptr_t)0);
     {
         SpinLock_acquire(&(Kern_sleep_lock));
-        __llpl_defer_frame142.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame142.type_id = ((void*)0);
-        __llpl_defer_frame142.error_slot = ((void*)0);
-        __llpl_defer_frame142.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame142);
-        __llpl_defer_active143 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame142.env) != 0) {
-            __llpl_defer_active143 = 0;
+        __llpl_defer_frame144.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame144.type_id = ((void*)0);
+        __llpl_defer_frame144.error_slot = ((void*)0);
+        __llpl_defer_frame144.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame144);
+        __llpl_defer_active145 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame144.env) != 0) {
+            __llpl_defer_active145 = 0;
         SpinLock_release(&(Kern_sleep_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         while (((Kern_sleep_head != ((void*)0)) && ((((Kern_Thread*)Kern_sleep_head))->wake_tick <= now))) {
-#line 357 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+#line 359 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
             void* thread = Kern_sleep_head;
             Kern_sleep_head = (((Kern_Thread*)thread))->sleep_next;
             (((Kern_Thread*)thread))->sleep_next = ((void*)0);
-#line 360 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+#line 362 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
             void* queue = (((Kern_Thread*)thread))->waiting_on;
             if ((queue != ((void*)0))) {
                 if (Kern_timeout_waiter_locked(((Kern_WaitQueue*)queue), ((Kern_Thread*)thread))) {
@@ -22903,65 +23005,69 @@ uintptr_t Kern_wake_sleepers(uintptr_t now) {
             } else {
                 {
                     SpinLock_acquire(&(Kern_lock));
-                    __llpl_defer_frame144.kind = LLPL_EH_FRAME_CLEANUP;
-                    __llpl_defer_frame144.type_id = ((void*)0);
-                    __llpl_defer_frame144.error_slot = ((void*)0);
-                    __llpl_defer_frame144.error_size = 0;
-                    llpl_eh_push(&__llpl_defer_frame144);
-                    __llpl_defer_active145 = 1;
-                    if (llpl_eh_setjmp(&__llpl_defer_frame144.env) != 0) {
-                        __llpl_defer_active145 = 0;
+                    __llpl_defer_frame146.kind = LLPL_EH_FRAME_CLEANUP;
+                    __llpl_defer_frame146.type_id = ((void*)0);
+                    __llpl_defer_frame146.error_slot = ((void*)0);
+                    __llpl_defer_frame146.error_size = 0;
+                    llpl_eh_push(&__llpl_defer_frame146);
+                    __llpl_defer_active147 = 1;
+                    if (llpl_eh_setjmp(&__llpl_defer_frame146.env) != 0) {
+                        __llpl_defer_active147 = 0;
                     SpinLock_release(&(Kern_lock));
                         llpl_eh_resume();
                         __builtin_unreachable();
                     }
-                    if (((((Kern_Thread*)thread))->state == ((uintptr_t)ThreadState_Sleeping))) {
-                        ((((Kern_Thread*)thread))->wakeups = ((((Kern_Thread*)thread))->wakeups + ((uintptr_t)1)));
-                        (((Kern_Thread*)thread))->sleep_ticks_total = ((((Kern_Thread*)thread))->sleep_ticks_total + (now - (((Kern_Thread*)thread))->sleep_started_tick));
-                        (((Kern_Thread*)thread))->state = ((uintptr_t)ThreadState_Ready);
+#line 370 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+                    {
+                        Kern_Thread* __llpl_with1 = ((Kern_Thread*)thread);
+                        if ((__llpl_with1->state == ((uintptr_t)ThreadState_Sleeping))) {
+                            (__llpl_with1->wakeups = (__llpl_with1->wakeups + ((uintptr_t)1)));
+                            __llpl_with1->sleep_ticks_total = (__llpl_with1->sleep_ticks_total + (now - __llpl_with1->sleep_started_tick));
+                            __llpl_with1->state = ((uintptr_t)ThreadState_Ready);
+                        }
                         Kern_enqueue_ready_locked(((Kern_Thread*)thread));
                         (woken = (woken + ((uintptr_t)1)));
                     }
-                    if (__llpl_defer_active145) {
-                        __llpl_defer_active145 = 0;
-                        llpl_eh_pop(&__llpl_defer_frame144);
+                    if (__llpl_defer_active147) {
+                        __llpl_defer_active147 = 0;
+                        llpl_eh_pop(&__llpl_defer_frame146);
                     SpinLock_release(&(Kern_lock));
                     }
                 }
             }
         }
+        if (__llpl_defer_active147) {
+            __llpl_defer_active147 = 0;
+            llpl_eh_pop(&__llpl_defer_frame146);
+                    SpinLock_release(&(Kern_lock));
+        }
         if (__llpl_defer_active145) {
             __llpl_defer_active145 = 0;
             llpl_eh_pop(&__llpl_defer_frame144);
-                    SpinLock_release(&(Kern_lock));
-        }
-        if (__llpl_defer_active143) {
-            __llpl_defer_active143 = 0;
-            llpl_eh_pop(&__llpl_defer_frame142);
         SpinLock_release(&(Kern_sleep_lock));
         }
     }
-#line 379 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
-    uintptr_t __llpl_ret889 = woken;
+#line 383 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/wait.llpl"
+    uintptr_t __llpl_ret908 = woken;
+    if (__llpl_defer_active147) {
+        __llpl_defer_active147 = 0;
+        llpl_eh_pop(&__llpl_defer_frame146);
+                    SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active145) {
         __llpl_defer_active145 = 0;
         llpl_eh_pop(&__llpl_defer_frame144);
-                    SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active143) {
-        __llpl_defer_active143 = 0;
-        llpl_eh_pop(&__llpl_defer_frame142);
         SpinLock_release(&(Kern_sleep_lock));
     }
-    return __llpl_ret889;
+    return __llpl_ret908;
+    if (__llpl_defer_active147) {
+        __llpl_defer_active147 = 0;
+        llpl_eh_pop(&__llpl_defer_frame146);
+                    SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active145) {
         __llpl_defer_active145 = 0;
         llpl_eh_pop(&__llpl_defer_frame144);
-                    SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active143) {
-        __llpl_defer_active143 = 0;
-        llpl_eh_pop(&__llpl_defer_frame142);
         SpinLock_release(&(Kern_sleep_lock));
     }
 }
@@ -22992,20 +23098,20 @@ void Kern_Waitable__destroy_impl(void* ptr) {
 
 bool Kern_Waitable_wait(Kern_Waitable* self) {
 #line 13 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret890 = 0;
-    return __llpl_ret890;
+    bool __llpl_ret909 = 0;
+    return __llpl_ret909;
 }
 
 bool Kern_Waitable_is_signaled(Kern_Waitable* self) {
 #line 17 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret891 = 0;
-    return __llpl_ret891;
+    bool __llpl_ret910 = 0;
+    return __llpl_ret910;
 }
 
 bool Kern_Waitable_is_message_queue(Kern_Waitable* self) {
 #line 21 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret892 = 0;
-    return __llpl_ret892;
+    bool __llpl_ret911 = 0;
+    return __llpl_ret911;
 }
 
 
@@ -23037,38 +23143,6 @@ void Kern_KernelEvent__destroy_impl(void* ptr) {
 }
 
 void Kern_KernelEvent_set(Kern_KernelEvent* self) {
-    __LLPL_EH_Frame __llpl_defer_frame146;
-    int __llpl_defer_active147 = 0;
-    {
-        SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame146.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame146.type_id = ((void*)0);
-        __llpl_defer_frame146.error_slot = ((void*)0);
-        __llpl_defer_frame146.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame146);
-        __llpl_defer_active147 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame146.env) != 0) {
-            __llpl_defer_active147 = 0;
-        SpinLock_release(&(self->lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        self->signaled = 1;
-        if (__llpl_defer_active147) {
-            __llpl_defer_active147 = 0;
-            llpl_eh_pop(&__llpl_defer_frame146);
-        SpinLock_release(&(self->lock));
-        }
-    }
-    Kern_wake_all(self->waiters);
-    if (__llpl_defer_active147) {
-        __llpl_defer_active147 = 0;
-        llpl_eh_pop(&__llpl_defer_frame146);
-        SpinLock_release(&(self->lock));
-    }
-}
-
-void Kern_KernelEvent_reset(Kern_KernelEvent* self) {
     __LLPL_EH_Frame __llpl_defer_frame148;
     int __llpl_defer_active149 = 0;
     {
@@ -23085,13 +23159,14 @@ void Kern_KernelEvent_reset(Kern_KernelEvent* self) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        self->signaled = 0;
+        self->signaled = 1;
         if (__llpl_defer_active149) {
             __llpl_defer_active149 = 0;
             llpl_eh_pop(&__llpl_defer_frame148);
         SpinLock_release(&(self->lock));
         }
     }
+    Kern_wake_all(self->waiters);
     if (__llpl_defer_active149) {
         __llpl_defer_active149 = 0;
         llpl_eh_pop(&__llpl_defer_frame148);
@@ -23099,28 +23174,59 @@ void Kern_KernelEvent_reset(Kern_KernelEvent* self) {
     }
 }
 
+void Kern_KernelEvent_reset(Kern_KernelEvent* self) {
+    __LLPL_EH_Frame __llpl_defer_frame150;
+    int __llpl_defer_active151 = 0;
+    {
+        SpinLock_acquire(&(self->lock));
+        __llpl_defer_frame150.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame150.type_id = ((void*)0);
+        __llpl_defer_frame150.error_slot = ((void*)0);
+        __llpl_defer_frame150.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame150);
+        __llpl_defer_active151 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame150.env) != 0) {
+            __llpl_defer_active151 = 0;
+        SpinLock_release(&(self->lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        self->signaled = 0;
+        if (__llpl_defer_active151) {
+            __llpl_defer_active151 = 0;
+            llpl_eh_pop(&__llpl_defer_frame150);
+        SpinLock_release(&(self->lock));
+        }
+    }
+    if (__llpl_defer_active151) {
+        __llpl_defer_active151 = 0;
+        llpl_eh_pop(&__llpl_defer_frame150);
+        SpinLock_release(&(self->lock));
+    }
+}
+
 bool Kern_KernelEvent_is_signaled(Kern_KernelEvent* self) {
 #line 55 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret893 = self->signaled;
-    return __llpl_ret893;
+    bool __llpl_ret912 = self->signaled;
+    return __llpl_ret912;
 }
 
 bool Kern_KernelEvent_wait(Kern_KernelEvent* self) {
-    __LLPL_EH_Frame __llpl_defer_frame150;
-    int __llpl_defer_active151 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame152;
+    int __llpl_defer_active153 = 0;
     while (1) {
 #line 60 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->lock));
-            __llpl_defer_frame150.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame150.type_id = ((void*)0);
-            __llpl_defer_frame150.error_slot = ((void*)0);
-            __llpl_defer_frame150.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame150);
-            __llpl_defer_active151 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame150.env) != 0) {
-                __llpl_defer_active151 = 0;
+            __llpl_defer_frame152.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame152.type_id = ((void*)0);
+            __llpl_defer_frame152.error_slot = ((void*)0);
+            __llpl_defer_frame152.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame152);
+            __llpl_defer_active153 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame152.env) != 0) {
+                __llpl_defer_active153 = 0;
             SpinLock_release(&(self->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
@@ -23130,44 +23236,44 @@ bool Kern_KernelEvent_wait(Kern_KernelEvent* self) {
                     self->signaled = 0;
                 }
 #line 64 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-                bool __llpl_ret894 = 1;
-                if (__llpl_defer_active151) {
-                    __llpl_defer_active151 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame150);
+                bool __llpl_ret913 = 1;
+                if (__llpl_defer_active153) {
+                    __llpl_defer_active153 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame152);
             SpinLock_release(&(self->lock));
                 }
-                return __llpl_ret894;
+                return __llpl_ret913;
             }
             prepared = Kern_prepare_block_current(self->waiters);
-            if (__llpl_defer_active151) {
-                __llpl_defer_active151 = 0;
-                llpl_eh_pop(&__llpl_defer_frame150);
+            if (__llpl_defer_active153) {
+                __llpl_defer_active153 = 0;
+                llpl_eh_pop(&__llpl_defer_frame152);
             SpinLock_release(&(self->lock));
             }
         }
         if (!prepared) {
 #line 68 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-            bool __llpl_ret895 = 0;
-            if (__llpl_defer_active151) {
-                __llpl_defer_active151 = 0;
-                llpl_eh_pop(&__llpl_defer_frame150);
+            bool __llpl_ret914 = 0;
+            if (__llpl_defer_active153) {
+                __llpl_defer_active153 = 0;
+                llpl_eh_pop(&__llpl_defer_frame152);
             SpinLock_release(&(self->lock));
             }
-            return __llpl_ret895;
+            return __llpl_ret914;
         }
         Kern_scheduler_yield();
     }
 #line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret896 = 0;
-    if (__llpl_defer_active151) {
-        __llpl_defer_active151 = 0;
-        llpl_eh_pop(&__llpl_defer_frame150);
+    bool __llpl_ret915 = 0;
+    if (__llpl_defer_active153) {
+        __llpl_defer_active153 = 0;
+        llpl_eh_pop(&__llpl_defer_frame152);
             SpinLock_release(&(self->lock));
     }
-    return __llpl_ret896;
-    if (__llpl_defer_active151) {
-        __llpl_defer_active151 = 0;
-        llpl_eh_pop(&__llpl_defer_frame150);
+    return __llpl_ret915;
+    if (__llpl_defer_active153) {
+        __llpl_defer_active153 = 0;
+        llpl_eh_pop(&__llpl_defer_frame152);
             SpinLock_release(&(self->lock));
     }
 }
@@ -23200,29 +23306,29 @@ void Kern_ProcessWaitable__destroy_impl(void* ptr) {
 
 bool Kern_ProcessWaitable_is_signaled(Kern_ProcessWaitable* self) {
 #line 92 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret897 = self->proc->exited;
-    return __llpl_ret897;
+    bool __llpl_ret916 = self->proc->exited;
+    return __llpl_ret916;
 }
 
 bool Kern_ProcessWaitable_wait(Kern_ProcessWaitable* self) {
     while (1) {
         if (self->proc->exited) {
 #line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-            bool __llpl_ret898 = 1;
-            return __llpl_ret898;
+            bool __llpl_ret917 = 1;
+            return __llpl_ret917;
         }
 #line 98 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
         bool prepared = Kern_prepare_block_current(self->proc->death_waiters);
         if (!prepared) {
 #line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-            bool __llpl_ret899 = 0;
-            return __llpl_ret899;
+            bool __llpl_ret918 = 0;
+            return __llpl_ret918;
         }
         Kern_scheduler_yield();
     }
 #line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret900 = 0;
-    return __llpl_ret900;
+    bool __llpl_ret919 = 0;
+    return __llpl_ret919;
 }
 
 
@@ -23253,29 +23359,29 @@ void Kern_ThreadWaitable__destroy_impl(void* ptr) {
 
 bool Kern_ThreadWaitable_is_signaled(Kern_ThreadWaitable* self) {
 #line 119 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret901 = (self->thread->state == ((uintptr_t)ThreadState_Zombie));
-    return __llpl_ret901;
+    bool __llpl_ret920 = (self->thread->state == ((uintptr_t)ThreadState_Zombie));
+    return __llpl_ret920;
 }
 
 bool Kern_ThreadWaitable_wait(Kern_ThreadWaitable* self) {
     while (1) {
         if ((self->thread->state == ((uintptr_t)ThreadState_Zombie))) {
 #line 124 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-            bool __llpl_ret902 = 1;
-            return __llpl_ret902;
+            bool __llpl_ret921 = 1;
+            return __llpl_ret921;
         }
 #line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
         bool prepared = Kern_prepare_block_current(self->thread->join_waiters);
         if (!prepared) {
 #line 126 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-            bool __llpl_ret903 = 0;
-            return __llpl_ret903;
+            bool __llpl_ret922 = 0;
+            return __llpl_ret922;
         }
         Kern_scheduler_yield();
     }
 #line 129 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/waitable.llpl"
-    bool __llpl_ret904 = 0;
-    return __llpl_ret904;
+    bool __llpl_ret923 = 0;
+    return __llpl_ret923;
 }
 
 
@@ -23360,14 +23466,14 @@ VFS_Vnode* VFS_Vnode_new(VFS_Filesystem* fs, String* path, intptr_t kind, uint64
 
 bool VFS_Vnode_is_file(VFS_Vnode* self) {
 #line 58 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret905 = (self->kind == VFS_NODE_FILE);
-    return __llpl_ret905;
+    bool __llpl_ret924 = (self->kind == VFS_NODE_FILE);
+    return __llpl_ret924;
 }
 
 bool VFS_Vnode_is_dir(VFS_Vnode* self) {
 #line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret906 = (self->kind == VFS_NODE_DIR);
-    return __llpl_ret906;
+    bool __llpl_ret925 = (self->kind == VFS_NODE_DIR);
+    return __llpl_ret925;
 }
 
 
@@ -23396,74 +23502,74 @@ void VFS_Filesystem__destroy_impl(void* ptr) {
 
 String* VFS_Filesystem_name(VFS_Filesystem* self) {
 #line 74 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret907 = self->label;
-    return __llpl_ret907;
+    String* __llpl_ret926 = self->label;
+    return __llpl_ret926;
 }
 
 intptr_t VFS_Filesystem_mount(VFS_Filesystem* self, String* path) {
 #line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret908 = EOK;
-    return __llpl_ret908;
+    intptr_t __llpl_ret927 = EOK;
+    return __llpl_ret927;
 }
 
 VFS_Vnode* VFS_Filesystem_lookup(VFS_Filesystem* self, String* path) {
 #line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_Vnode* __llpl_ret909 = VFS_Vnode_new(self, path, VFS_NODE_MISSING, ((uint64_t)0));
-    return __llpl_ret909;
+    VFS_Vnode* __llpl_ret928 = VFS_Vnode_new(self, path, VFS_NODE_MISSING, ((uint64_t)0));
+    return __llpl_ret928;
 }
 
 VFS_Vnode* VFS_Filesystem_stat(VFS_Filesystem* self, String* path) {
 #line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_Vnode* __llpl_ret910 = ((VFS_Filesystem_VTable*)(self)->__vtable)->lookup((VFS_Filesystem*)(self), path);
-    return __llpl_ret910;
+    VFS_Vnode* __llpl_ret929 = ((VFS_Filesystem_VTable*)(self)->__vtable)->lookup((VFS_Filesystem*)(self), path);
+    return __llpl_ret929;
 }
 
 intptr_t VFS_Filesystem_mkdir(VFS_Filesystem* self, String* path) {
 #line 90 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret911 = EINVAL;
-    return __llpl_ret911;
+    intptr_t __llpl_ret930 = EINVAL;
+    return __llpl_ret930;
 }
 
 intptr_t VFS_Filesystem_touch(VFS_Filesystem* self, String* path) {
 #line 94 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret912 = EINVAL;
-    return __llpl_ret912;
+    intptr_t __llpl_ret931 = EINVAL;
+    return __llpl_ret931;
 }
 
 intptr_t VFS_Filesystem_remove(VFS_Filesystem* self, String* path) {
 #line 98 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret913 = EINVAL;
-    return __llpl_ret913;
+    intptr_t __llpl_ret932 = EINVAL;
+    return __llpl_ret932;
 }
 
 String* VFS_Filesystem_read_text(VFS_Filesystem* self, String* path) {
 #line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret914 = ((void*)0);
-    return __llpl_ret914;
+    String* __llpl_ret933 = ((void*)0);
+    return __llpl_ret933;
 }
 
 __LLPL_Tuple2_char_ptr_u64 VFS_Filesystem_read_binary(VFS_Filesystem* self, String* path) {
 #line 106 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    __LLPL_Tuple2_char_ptr_u64 __llpl_ret915 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
-    return __llpl_ret915;
+    __LLPL_Tuple2_char_ptr_u64 __llpl_ret934 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
+    return __llpl_ret934;
 }
 
 intptr_t VFS_Filesystem_write_text(VFS_Filesystem* self, String* path, String* data) {
 #line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret916 = EINVAL;
-    return __llpl_ret916;
+    intptr_t __llpl_ret935 = EINVAL;
+    return __llpl_ret935;
 }
 
 intptr_t VFS_Filesystem_write_binary(VFS_Filesystem* self, String* path, char* data, uint64_t size) {
 #line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret917 = EINVAL;
-    return __llpl_ret917;
+    intptr_t __llpl_ret936 = EINVAL;
+    return __llpl_ret936;
 }
 
 String* VFS_Filesystem_list(VFS_Filesystem* self, String* path) {
 #line 118 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret918 = ((void*)0);
-    return __llpl_ret918;
+    String* __llpl_ret937 = ((void*)0);
+    return __llpl_ret937;
 }
 
 
@@ -23505,46 +23611,46 @@ VFS_FileHandle* VFS_FileHandle_new(VFS_Filesystem* fs, String* path, intptr_t mo
 VFS_Vnode* VFS_FileHandle_stat(VFS_FileHandle* self) {
     if (self->closed) {
 #line 159 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        VFS_Vnode* __llpl_ret919 = VFS_Vnode_new(self->fs, self->path, VFS_NODE_MISSING, ((uint64_t)0));
-        return __llpl_ret919;
+        VFS_Vnode* __llpl_ret938 = VFS_Vnode_new(self->fs, self->path, VFS_NODE_MISSING, ((uint64_t)0));
+        return __llpl_ret938;
     }
 #line 161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_Vnode* __llpl_ret920 = ((VFS_Filesystem_VTable*)(self->fs)->__vtable)->stat((VFS_Filesystem*)(self->fs), self->path);
-    return __llpl_ret920;
+    VFS_Vnode* __llpl_ret939 = ((VFS_Filesystem_VTable*)(self->fs)->__vtable)->stat((VFS_Filesystem*)(self->fs), self->path);
+    return __llpl_ret939;
 }
 
 String* VFS_FileHandle_read_all(VFS_FileHandle* self) {
     if ((self->closed || ((self->mode & VFS_O_READ) == 0))) {
 #line 166 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret921 = ((void*)0);
-        return __llpl_ret921;
+        String* __llpl_ret940 = ((void*)0);
+        return __llpl_ret940;
     }
 #line 168 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret922 = ((VFS_Filesystem_VTable*)(self->fs)->__vtable)->read_text((VFS_Filesystem*)(self->fs), self->path);
-    return __llpl_ret922;
+    String* __llpl_ret941 = ((VFS_Filesystem_VTable*)(self->fs)->__vtable)->read_text((VFS_Filesystem*)(self->fs), self->path);
+    return __llpl_ret941;
 }
 
 intptr_t VFS_FileHandle_write_text(VFS_FileHandle* self, String* data) {
     if (self->closed) {
 #line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret923 = VFS_EBADF;
-        return __llpl_ret923;
+        intptr_t __llpl_ret942 = VFS_EBADF;
+        return __llpl_ret942;
     }
     if (((self->mode & VFS_O_WRITE) == 0)) {
 #line 176 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret924 = VFS_EACCES;
-        return __llpl_ret924;
+        intptr_t __llpl_ret943 = VFS_EACCES;
+        return __llpl_ret943;
     }
 #line 178 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret925 = ((VFS_Filesystem_VTable*)(self->fs)->__vtable)->write_text((VFS_Filesystem*)(self->fs), self->path, data);
-    return __llpl_ret925;
+    intptr_t __llpl_ret944 = ((VFS_Filesystem_VTable*)(self->fs)->__vtable)->write_text((VFS_Filesystem*)(self->fs), self->path, data);
+    return __llpl_ret944;
 }
 
 intptr_t VFS_FileHandle_close(VFS_FileHandle* self) {
     self->closed = 1;
 #line 183 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret926 = EOK;
-    return __llpl_ret926;
+    intptr_t __llpl_ret945 = EOK;
+    return __llpl_ret945;
 }
 
 
@@ -23590,17 +23696,17 @@ void VFS_MemNode_destroy(void* ptr) {
 uint64_t VFS_MemNode_size(VFS_MemNode* self) {
     if ((self->binary != ((void*)0))) {
 #line 222 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        uint64_t __llpl_ret927 = self->binary_size;
-        return __llpl_ret927;
+        uint64_t __llpl_ret946 = self->binary_size;
+        return __llpl_ret946;
     }
     if ((self->data == ((void*)0))) {
 #line 225 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        uint64_t __llpl_ret928 = ((uint64_t)0);
-        return __llpl_ret928;
+        uint64_t __llpl_ret947 = ((uint64_t)0);
+        return __llpl_ret947;
     }
 #line 227 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    uint64_t __llpl_ret929 = ((uint64_t)String_byte_len(self->data));
-    return __llpl_ret929;
+    uint64_t __llpl_ret948 = ((uint64_t)String_byte_len(self->data));
+    return __llpl_ret948;
 }
 
 
@@ -23635,21 +23741,21 @@ intptr_t VFS_MemFilesystem_find(VFS_MemFilesystem* self, String* path) {
     while ((i < self->count)) {
         if ((((*(VFS_MemNode**)__llpl_check_index(self->nodes, i, 64, sizeof(VFS_MemNode*), "vfs.llpl", 244)) != ((void*)0)) && String_op_eq__ov_String((*(VFS_MemNode**)__llpl_check_index(self->nodes, i, 64, sizeof(VFS_MemNode*), "vfs.llpl", 244))->path, path))) {
 #line 245 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_ret930 = ((intptr_t)i);
-            return __llpl_ret930;
+            intptr_t __llpl_ret949 = ((intptr_t)i);
+            return __llpl_ret949;
         }
         i = (i + ((uintptr_t)1));
     }
 #line 249 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret931 = -1;
-    return __llpl_ret931;
+    intptr_t __llpl_ret950 = -1;
+    return __llpl_ret950;
 }
 
 String* VFS_MemFilesystem_parent_path(VFS_MemFilesystem* self, String* path) {
     if (((path == ((void*)0)) || String_op_eq__ov_char_ptr(path, "/"))) {
 #line 254 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret932 = ((void*)0);
-        return __llpl_ret932;
+        String* __llpl_ret951 = ((void*)0);
+        return __llpl_ret951;
     }
 #line 257 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     int64_t last_slash = -1;
@@ -23663,12 +23769,12 @@ String* VFS_MemFilesystem_parent_path(VFS_MemFilesystem* self, String* path) {
     }
     if ((last_slash <= 0)) {
 #line 267 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret933 = String_new("/");
-        return __llpl_ret933;
+        String* __llpl_ret952 = String_new("/");
+        return __llpl_ret952;
     }
 #line 269 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret934 = String_byte_substring(path, 0, last_slash);
-    return __llpl_ret934;
+    String* __llpl_ret953 = String_byte_substring(path, 0, last_slash);
+    return __llpl_ret953;
 }
 
 bool VFS_MemFilesystem_parent_dir_exists(VFS_MemFilesystem* self, String* path) {
@@ -23676,24 +23782,24 @@ bool VFS_MemFilesystem_parent_dir_exists(VFS_MemFilesystem* self, String* path) 
     String* parent = VFS_MemFilesystem_parent_path(self, path);
     if ((parent == ((void*)0))) {
 #line 275 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret935 = 1;
+        bool __llpl_ret954 = 1;
         if (parent) rc_release(parent, String_destroy);
-        return __llpl_ret935;
+        return __llpl_ret954;
     }
 #line 277 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     intptr_t idx = VFS_MemFilesystem_find(self, parent);
 #line 278 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret936 = ((idx >= 0) && ((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 278))->kind == VFS_NODE_DIR));
+    bool __llpl_ret955 = ((idx >= 0) && ((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 278))->kind == VFS_NODE_DIR));
     if (parent) rc_release(parent, String_destroy);
-    return __llpl_ret936;
+    return __llpl_ret955;
     if (parent) rc_release(parent, String_destroy);
 }
 
 intptr_t VFS_MemFilesystem_mkdir_parents(VFS_MemFilesystem* self, String* path) {
     if (((path == ((void*)0)) || (String_byte_len(path) == 0))) {
 #line 283 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret937 = EINVAL;
-        return __llpl_ret937;
+        intptr_t __llpl_ret956 = EINVAL;
+        return __llpl_ret956;
     }
 #line 286 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     int64_t i = 1;
@@ -23708,22 +23814,22 @@ intptr_t VFS_MemFilesystem_mkdir_parents(VFS_MemFilesystem* self, String* path) 
                 intptr_t rc = VFS_MemFilesystem_add_dir(self, dir);
                 if (((rc < 0) && (rc != EEXIST))) {
 #line 294 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-                    intptr_t __llpl_ret938 = rc;
-                    return __llpl_ret938;
+                    intptr_t __llpl_ret957 = rc;
+                    return __llpl_ret957;
                 }
             } else {
                 if (((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 296))->kind != VFS_NODE_DIR)) {
 #line 297 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-                    intptr_t __llpl_ret939 = VFS_ENOTDIR;
-                    return __llpl_ret939;
+                    intptr_t __llpl_ret958 = VFS_ENOTDIR;
+                    return __llpl_ret958;
                 }
             }
         }
         i = (i + 1);
     }
 #line 302 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret940 = EOK;
-    return __llpl_ret940;
+    intptr_t __llpl_ret959 = EOK;
+    return __llpl_ret959;
 }
 
 bool VFS_MemFilesystem_has_children(VFS_MemFilesystem* self, String* path) {
@@ -23734,21 +23840,21 @@ bool VFS_MemFilesystem_has_children(VFS_MemFilesystem* self, String* path) {
         VFS_MemNode* node = (*(VFS_MemNode**)__llpl_check_index(self->nodes, i, 64, sizeof(VFS_MemNode*), "vfs.llpl", 308));
         if ((((node != ((void*)0)) && String_op_ne__ov_String(node->path, path)) && VFS_path_is_child(path, node->path))) {
 #line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret941 = 1;
-            return __llpl_ret941;
+            bool __llpl_ret960 = 1;
+            return __llpl_ret960;
         }
         i = (i + ((uintptr_t)1));
     }
 #line 314 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret942 = 0;
-    return __llpl_ret942;
+    bool __llpl_ret961 = 0;
+    return __llpl_ret961;
 }
 
 intptr_t VFS_MemFilesystem_add_node(VFS_MemFilesystem* self, String* path, intptr_t kind, String* data) {
     if (((path == ((void*)0)) || (String_byte_len(path) == 0))) {
 #line 319 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret943 = EINVAL;
-        return __llpl_ret943;
+        intptr_t __llpl_ret962 = EINVAL;
+        return __llpl_ret962;
     }
 #line 322 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     intptr_t existing = VFS_MemFilesystem_find(self, path);
@@ -23756,87 +23862,87 @@ intptr_t VFS_MemFilesystem_add_node(VFS_MemFilesystem* self, String* path, intpt
         if (((*(VFS_MemNode**)__llpl_check_index(self->nodes, existing, 64, sizeof(VFS_MemNode*), "vfs.llpl", 324))->kind != kind)) {
             if (((*(VFS_MemNode**)__llpl_check_index(self->nodes, existing, 64, sizeof(VFS_MemNode*), "vfs.llpl", 325))->kind == VFS_NODE_DIR)) {
 #line 325 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-                intptr_t __llpl_ret944 = VFS_EISDIR;
-                return __llpl_ret944;
+                intptr_t __llpl_ret963 = VFS_EISDIR;
+                return __llpl_ret963;
             }
 #line 326 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_ret945 = EEXIST;
-            return __llpl_ret945;
+            intptr_t __llpl_ret964 = EEXIST;
+            return __llpl_ret964;
         }
         (*(VFS_MemNode**)__llpl_check_index(self->nodes, existing, 64, sizeof(VFS_MemNode*), "vfs.llpl", 328)) = VFS_MemNode_new__ov_String_int_String(path, kind, data);
 #line 329 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret946 = EOK;
-        return __llpl_ret946;
+        intptr_t __llpl_ret965 = EOK;
+        return __llpl_ret965;
     }
     if (!VFS_MemFilesystem_parent_dir_exists(self, path)) {
 #line 332 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret947 = ENOENT;
-        return __llpl_ret947;
+        intptr_t __llpl_ret966 = ENOENT;
+        return __llpl_ret966;
     }
     if ((self->count >= ((uintptr_t)VFS_MAX_MEM_NODES))) {
 #line 335 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret948 = ENOMEM;
-        return __llpl_ret948;
+        intptr_t __llpl_ret967 = ENOMEM;
+        return __llpl_ret967;
     }
     (*(VFS_MemNode**)__llpl_check_index(self->nodes, self->count, 64, sizeof(VFS_MemNode*), "vfs.llpl", 337)) = VFS_MemNode_new__ov_String_int_String(path, kind, data);
     self->count = (self->count + ((uintptr_t)1));
 #line 339 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret949 = EOK;
-    return __llpl_ret949;
+    intptr_t __llpl_ret968 = EOK;
+    return __llpl_ret968;
 }
 
 intptr_t VFS_MemFilesystem_add_binary(VFS_MemFilesystem* self, String* path, char* source, uint64_t size) {
     if ((((path == ((void*)0)) || (String_byte_len(path) == 0)) || (source == ((void*)0)))) {
 #line 344 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret950 = EINVAL;
-        return __llpl_ret950;
+        intptr_t __llpl_ret969 = EINVAL;
+        return __llpl_ret969;
     }
 #line 346 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     intptr_t existing = VFS_MemFilesystem_find(self, path);
     if ((existing >= 0)) {
         if (((*(VFS_MemNode**)__llpl_check_index(self->nodes, existing, 64, sizeof(VFS_MemNode*), "vfs.llpl", 348))->kind == VFS_NODE_DIR)) {
 #line 349 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_ret951 = VFS_EISDIR;
-            return __llpl_ret951;
+            intptr_t __llpl_ret970 = VFS_EISDIR;
+            return __llpl_ret970;
         }
         (*(VFS_MemNode**)__llpl_check_index(self->nodes, existing, 64, sizeof(VFS_MemNode*), "vfs.llpl", 351)) = VFS_MemNode_new__ov_String_char_ptr_u64(path, source, size);
 #line 352 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret952 = EOK;
-        return __llpl_ret952;
+        intptr_t __llpl_ret971 = EOK;
+        return __llpl_ret971;
     }
     if (!VFS_MemFilesystem_parent_dir_exists(self, path)) {
 #line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret953 = ENOENT;
-        return __llpl_ret953;
+        intptr_t __llpl_ret972 = ENOENT;
+        return __llpl_ret972;
     }
     if ((self->count >= ((uintptr_t)VFS_MAX_MEM_NODES))) {
 #line 358 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret954 = ENOMEM;
-        return __llpl_ret954;
+        intptr_t __llpl_ret973 = ENOMEM;
+        return __llpl_ret973;
     }
     (*(VFS_MemNode**)__llpl_check_index(self->nodes, self->count, 64, sizeof(VFS_MemNode*), "vfs.llpl", 360)) = VFS_MemNode_new__ov_String_char_ptr_u64(path, source, size);
     self->count = (self->count + ((uintptr_t)1));
 #line 362 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret955 = EOK;
-    return __llpl_ret955;
+    intptr_t __llpl_ret974 = EOK;
+    return __llpl_ret974;
 }
 
 intptr_t VFS_MemFilesystem_add_dir(VFS_MemFilesystem* self, String* path) {
 #line 366 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret956 = VFS_MemFilesystem_add_node(self, path, VFS_NODE_DIR, ((void*)0));
-    return __llpl_ret956;
+    intptr_t __llpl_ret975 = VFS_MemFilesystem_add_node(self, path, VFS_NODE_DIR, ((void*)0));
+    return __llpl_ret975;
 }
 
 String* VFS_MemFilesystem_name(VFS_MemFilesystem* self) {
 #line 370 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret957 = self->label;
-    return __llpl_ret957;
+    String* __llpl_ret976 = self->label;
+    return __llpl_ret976;
 }
 
 intptr_t VFS_MemFilesystem_mount(VFS_MemFilesystem* self, String* path) {
 #line 374 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret958 = EOK;
-    return __llpl_ret958;
+    intptr_t __llpl_ret977 = EOK;
+    return __llpl_ret977;
 }
 
 VFS_Vnode* VFS_MemFilesystem_lookup(VFS_MemFilesystem* self, String* path) {
@@ -23844,34 +23950,34 @@ VFS_Vnode* VFS_MemFilesystem_lookup(VFS_MemFilesystem* self, String* path) {
     intptr_t idx = VFS_MemFilesystem_find(self, path);
     if ((idx < 0)) {
 #line 380 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        VFS_Vnode* __llpl_ret959 = VFS_Vnode_new(((VFS_Filesystem*)self), path, VFS_NODE_MISSING, ((uint64_t)0));
-        return __llpl_ret959;
+        VFS_Vnode* __llpl_ret978 = VFS_Vnode_new(((VFS_Filesystem*)self), path, VFS_NODE_MISSING, ((uint64_t)0));
+        return __llpl_ret978;
     }
 #line 382 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     VFS_MemNode* node = (*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 382));
     if (node) rc_retain((char*)node);
 #line 383 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_Vnode* __llpl_ret960 = VFS_Vnode_new(((VFS_Filesystem*)self), path, node->kind, VFS_MemNode_size(node));
+    VFS_Vnode* __llpl_ret979 = VFS_Vnode_new(((VFS_Filesystem*)self), path, node->kind, VFS_MemNode_size(node));
     if (node) rc_release(node, VFS_MemNode_destroy);
-    return __llpl_ret960;
+    return __llpl_ret979;
     if (node) rc_release(node, VFS_MemNode_destroy);
 }
 
 VFS_Vnode* VFS_MemFilesystem_stat(VFS_MemFilesystem* self, String* path) {
 #line 387 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_Vnode* __llpl_ret961 = VFS_MemFilesystem_lookup(self, path);
-    return __llpl_ret961;
+    VFS_Vnode* __llpl_ret980 = VFS_MemFilesystem_lookup(self, path);
+    return __llpl_ret980;
 }
 
 intptr_t VFS_MemFilesystem_mkdir(VFS_MemFilesystem* self, String* path) {
     if ((VFS_MemFilesystem_find(self, path) >= 0)) {
 #line 392 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret962 = EEXIST;
-        return __llpl_ret962;
+        intptr_t __llpl_ret981 = EEXIST;
+        return __llpl_ret981;
     }
 #line 394 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret963 = VFS_MemFilesystem_add_dir(self, path);
-    return __llpl_ret963;
+    intptr_t __llpl_ret982 = VFS_MemFilesystem_add_dir(self, path);
+    return __llpl_ret982;
 }
 
 intptr_t VFS_MemFilesystem_touch(VFS_MemFilesystem* self, String* path) {
@@ -23880,35 +23986,35 @@ intptr_t VFS_MemFilesystem_touch(VFS_MemFilesystem* self, String* path) {
     if ((idx >= 0)) {
         if (((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 400))->kind == VFS_NODE_DIR)) {
 #line 401 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_ret964 = VFS_EISDIR;
-            return __llpl_ret964;
+            intptr_t __llpl_ret983 = VFS_EISDIR;
+            return __llpl_ret983;
         }
 #line 403 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret965 = EOK;
-        return __llpl_ret965;
+        intptr_t __llpl_ret984 = EOK;
+        return __llpl_ret984;
     }
 #line 405 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret966 = VFS_MemFilesystem_add_node(self, path, VFS_NODE_FILE, String_new(""));
-    return __llpl_ret966;
+    intptr_t __llpl_ret985 = VFS_MemFilesystem_add_node(self, path, VFS_NODE_FILE, String_new(""));
+    return __llpl_ret985;
 }
 
 intptr_t VFS_MemFilesystem_remove(VFS_MemFilesystem* self, String* path) {
     if (((path == ((void*)0)) || String_op_eq__ov_char_ptr(path, "/"))) {
 #line 410 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret967 = EINVAL;
-        return __llpl_ret967;
+        intptr_t __llpl_ret986 = EINVAL;
+        return __llpl_ret986;
     }
 #line 412 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     intptr_t idx = VFS_MemFilesystem_find(self, path);
     if ((idx < 0)) {
 #line 414 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret968 = ENOENT;
-        return __llpl_ret968;
+        intptr_t __llpl_ret987 = ENOENT;
+        return __llpl_ret987;
     }
     if ((((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 416))->kind == VFS_NODE_DIR) && VFS_MemFilesystem_has_children(self, path))) {
 #line 417 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret969 = VFS_ENOTEMPTY;
-        return __llpl_ret969;
+        intptr_t __llpl_ret988 = VFS_ENOTEMPTY;
+        return __llpl_ret988;
     }
     self->count = (self->count - ((uintptr_t)1));
     if ((((uintptr_t)idx) != self->count)) {
@@ -23916,8 +24022,8 @@ intptr_t VFS_MemFilesystem_remove(VFS_MemFilesystem* self, String* path) {
     }
     (*(VFS_MemNode**)__llpl_check_index(self->nodes, self->count, 64, sizeof(VFS_MemNode*), "vfs.llpl", 424)) = ((void*)0);
 #line 425 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret970 = EOK;
-    return __llpl_ret970;
+    intptr_t __llpl_ret989 = EOK;
+    return __llpl_ret989;
 }
 
 String* VFS_MemFilesystem_read_text(VFS_MemFilesystem* self, String* path) {
@@ -23925,34 +24031,34 @@ String* VFS_MemFilesystem_read_text(VFS_MemFilesystem* self, String* path) {
     intptr_t idx = VFS_MemFilesystem_find(self, path);
     if ((idx < 0)) {
 #line 431 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret971 = ((void*)0);
-        return __llpl_ret971;
+        String* __llpl_ret990 = ((void*)0);
+        return __llpl_ret990;
     }
 #line 433 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     VFS_MemNode* node = (*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 433));
     if (node) rc_retain((char*)node);
     if ((node->kind != VFS_NODE_FILE)) {
 #line 435 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret972 = ((void*)0);
+        String* __llpl_ret991 = ((void*)0);
         if (node) rc_release(node, VFS_MemNode_destroy);
-        return __llpl_ret972;
+        return __llpl_ret991;
     }
     if ((node->data != ((void*)0))) {
 #line 438 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret973 = node->data;
+        String* __llpl_ret992 = node->data;
         if (node) rc_release(node, VFS_MemNode_destroy);
-        return __llpl_ret973;
+        return __llpl_ret992;
     }
     if ((node->binary == ((void*)0))) {
 #line 441 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret974 = ((void*)0);
+        String* __llpl_ret993 = ((void*)0);
         if (node) rc_release(node, VFS_MemNode_destroy);
-        return __llpl_ret974;
+        return __llpl_ret993;
     }
 #line 443 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret975 = String_new(node->binary);
+    String* __llpl_ret994 = String_new(node->binary);
     if (node) rc_release(node, VFS_MemNode_destroy);
-    return __llpl_ret975;
+    return __llpl_ret994;
     if (node) rc_release(node, VFS_MemNode_destroy);
 }
 
@@ -23961,28 +24067,28 @@ __LLPL_Tuple2_char_ptr_u64 VFS_MemFilesystem_read_binary(VFS_MemFilesystem* self
     intptr_t idx = VFS_MemFilesystem_find(self, path);
     if (((idx < 0) || ((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 448))->kind != VFS_NODE_FILE))) {
 #line 449 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        __LLPL_Tuple2_char_ptr_u64 __llpl_ret976 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
-        return __llpl_ret976;
+        __LLPL_Tuple2_char_ptr_u64 __llpl_ret995 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
+        return __llpl_ret995;
     }
 #line 451 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     VFS_MemNode* node = (*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 451));
     if (node) rc_retain((char*)node);
     if ((node->binary != ((void*)0))) {
 #line 453 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        __LLPL_Tuple2_char_ptr_u64 __llpl_ret977 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = node->binary, ._1 = node->binary_size };
+        __LLPL_Tuple2_char_ptr_u64 __llpl_ret996 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = node->binary, ._1 = node->binary_size };
         if (node) rc_release(node, VFS_MemNode_destroy);
-        return __llpl_ret977;
+        return __llpl_ret996;
     }
     if ((node->data == ((void*)0))) {
 #line 456 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        __LLPL_Tuple2_char_ptr_u64 __llpl_ret978 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
+        __LLPL_Tuple2_char_ptr_u64 __llpl_ret997 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
         if (node) rc_release(node, VFS_MemNode_destroy);
-        return __llpl_ret978;
+        return __llpl_ret997;
     }
 #line 458 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    __LLPL_Tuple2_char_ptr_u64 __llpl_ret979 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = String_c_str(node->data), ._1 = ((uint64_t)String_byte_len(node->data)) };
+    __LLPL_Tuple2_char_ptr_u64 __llpl_ret998 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = String_c_str(node->data), ._1 = ((uint64_t)String_byte_len(node->data)) };
     if (node) rc_release(node, VFS_MemNode_destroy);
-    return __llpl_ret979;
+    return __llpl_ret998;
     if (node) rc_release(node, VFS_MemNode_destroy);
 }
 
@@ -23991,51 +24097,51 @@ intptr_t VFS_MemFilesystem_write_text(VFS_MemFilesystem* self, String* path, Str
     intptr_t idx = VFS_MemFilesystem_find(self, path);
     if (((idx >= 0) && ((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 463))->kind == VFS_NODE_DIR))) {
 #line 464 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret980 = VFS_EISDIR;
-        return __llpl_ret980;
+        intptr_t __llpl_ret999 = VFS_EISDIR;
+        return __llpl_ret999;
     }
 #line 466 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret981 = VFS_MemFilesystem_add_node(self, path, VFS_NODE_FILE, data);
-    return __llpl_ret981;
+    intptr_t __llpl_ret1000 = VFS_MemFilesystem_add_node(self, path, VFS_NODE_FILE, data);
+    return __llpl_ret1000;
 }
 
 intptr_t VFS_MemFilesystem_write_binary(VFS_MemFilesystem* self, String* path, char* data, uint64_t size) {
 #line 470 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret982 = VFS_MemFilesystem_add_binary(self, path, data, size);
-    return __llpl_ret982;
+    intptr_t __llpl_ret1001 = VFS_MemFilesystem_add_binary(self, path, data, size);
+    return __llpl_ret1001;
 }
 
 bool VFS_MemFilesystem_is_direct_child(VFS_MemFilesystem* self, String* parent, String* child) {
     if (((parent == ((void*)0)) || (child == ((void*)0)))) {
 #line 475 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret983 = 0;
-        return __llpl_ret983;
+        bool __llpl_ret1002 = 0;
+        return __llpl_ret1002;
     }
 #line 478 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     int64_t start = 1;
     if (String_op_eq__ov_char_ptr(parent, "/")) {
         if (((String_byte_len(child) <= 1) || (String_byte_at(child, 0) != ((char)VFS_PS1)))) {
 #line 481 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret984 = 0;
-            return __llpl_ret984;
+            bool __llpl_ret1003 = 0;
+            return __llpl_ret1003;
         }
     } else {
 #line 484 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
         int64_t plen = String_byte_len(parent);
         if ((String_byte_len(child) <= plen)) {
 #line 486 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret985 = 0;
-            return __llpl_ret985;
+            bool __llpl_ret1004 = 0;
+            return __llpl_ret1004;
         }
         if (!VFS_fnmatch(child, 0, parent, 0, plen)) {
 #line 489 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret986 = 0;
-            return __llpl_ret986;
+            bool __llpl_ret1005 = 0;
+            return __llpl_ret1005;
         }
         if ((String_byte_at(child, plen) != ((char)VFS_PS1))) {
 #line 492 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret987 = 0;
-            return __llpl_ret987;
+            bool __llpl_ret1006 = 0;
+            return __llpl_ret1006;
         }
         start = (plen + 1);
     }
@@ -24044,14 +24150,14 @@ bool VFS_MemFilesystem_is_direct_child(VFS_MemFilesystem* self, String* parent, 
     while ((i < String_byte_len(child))) {
         if ((String_byte_at(child, i) == ((char)VFS_PS1))) {
 #line 500 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret988 = 0;
-            return __llpl_ret988;
+            bool __llpl_ret1007 = 0;
+            return __llpl_ret1007;
         }
         i = (i + 1);
     }
 #line 504 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret989 = 1;
-    return __llpl_ret989;
+    bool __llpl_ret1008 = 1;
+    return __llpl_ret1008;
 }
 
 String* VFS_MemFilesystem_child_name(VFS_MemFilesystem* self, String* parent, String* child) {
@@ -24061,8 +24167,8 @@ String* VFS_MemFilesystem_child_name(VFS_MemFilesystem* self, String* parent, St
         start = (String_byte_len(parent) + 1);
     }
 #line 512 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret990 = String_byte_substring(child, start, (String_byte_len(child) - start));
-    return __llpl_ret990;
+    String* __llpl_ret1009 = String_byte_substring(child, start, (String_byte_len(child) - start));
+    return __llpl_ret1009;
 }
 
 String* VFS_MemFilesystem_list(VFS_MemFilesystem* self, String* path) {
@@ -24070,8 +24176,8 @@ String* VFS_MemFilesystem_list(VFS_MemFilesystem* self, String* path) {
     intptr_t idx = VFS_MemFilesystem_find(self, path);
     if (((idx < 0) || ((*(VFS_MemNode**)__llpl_check_index(self->nodes, idx, 64, sizeof(VFS_MemNode*), "vfs.llpl", 517))->kind != VFS_NODE_DIR))) {
 #line 518 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret991 = ((void*)0);
-        return __llpl_ret991;
+        String* __llpl_ret1010 = ((void*)0);
+        return __llpl_ret1010;
     }
 #line 521 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     String* out = String_new("");
@@ -24090,8 +24196,8 @@ String* VFS_MemFilesystem_list(VFS_MemFilesystem* self, String* path) {
         i = (i + ((uintptr_t)1));
     }
 #line 534 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret992 = out;
-    return __llpl_ret992;
+    String* __llpl_ret1011 = out;
+    return __llpl_ret1011;
     if (out) rc_release(out, String_destroy);
 }
 
@@ -24128,8 +24234,8 @@ intptr_t VFS_BootFilesystem_load_initrd(VFS_BootFilesystem* self, LimineModuleRe
     if ((((modules == ((void*)0)) || (modules->module_count == ((uint64_t)0))) || (modules->modules == ((void*)0)))) {
         HAL_Serial_write("VFS initrd: no Limine modules\n");
 #line 551 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret993 = ENOENT;
-        return __llpl_ret993;
+        intptr_t __llpl_ret1012 = ENOENT;
+        return __llpl_ret1012;
     }
 #line 554 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     uint64_t i = ((uint64_t)0);
@@ -24145,15 +24251,15 @@ intptr_t VFS_BootFilesystem_load_initrd(VFS_BootFilesystem* self, LimineModuleRe
             }
             HAL_Serial_write("\n");
 #line 565 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_ret994 = VFS_BootFilesystem_load_tar(self, ((char*)file->address), file->size);
-            return __llpl_ret994;
+            intptr_t __llpl_ret1013 = VFS_BootFilesystem_load_tar(self, ((char*)file->address), file->size);
+            return __llpl_ret1013;
         }
         i = (i + ((uint64_t)1));
     }
     HAL_Serial_write("VFS initrd: no usable module\n");
 #line 571 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret995 = ENOENT;
-    return __llpl_ret995;
+    intptr_t __llpl_ret1014 = ENOENT;
+    return __llpl_ret1014;
 }
 
 intptr_t VFS_BootFilesystem_load_tar(VFS_BootFilesystem* self, char* base, uint64_t total_size) {
@@ -24167,8 +24273,8 @@ intptr_t VFS_BootFilesystem_load_tar(VFS_BootFilesystem* self, char* base, uint6
         if (VFS_tar_header_empty(header)) {
             HAL_Serial_write(({ ksnprintf(__llpl_interp15, 256, "VFS initrd files loaded: %u\n", ((long long)(loaded))); (char*)__llpl_interp15; }));
 #line 582 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_ret996 = EOK;
-            return __llpl_ret996;
+            intptr_t __llpl_ret1015 = EOK;
+            return __llpl_ret1015;
         }
 #line 585 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
         String* path = VFS_tar_entry_path(header);
@@ -24201,8 +24307,8 @@ intptr_t VFS_BootFilesystem_load_tar(VFS_BootFilesystem* self, char* base, uint6
     }
     HAL_Serial_write("VFS initrd: tar ended without zero block\n");
 #line 610 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret997 = EOK;
-    return __llpl_ret997;
+    intptr_t __llpl_ret1016 = EOK;
+    return __llpl_ret1016;
 }
 
 
@@ -24219,54 +24325,54 @@ bool VFS_fnmatch(String* name, int64_t name_start, String* mount, int64_t mount_
     int64_t i = 0;
     if (((name == ((void*)0)) || (mount == ((void*)0)))) {
 #line 625 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret998 = 0;
-        return __llpl_ret998;
+        bool __llpl_ret1017 = 0;
+        return __llpl_ret1017;
     }
     if ((((name_start + count) > String_byte_len(name)) || ((mount_start + count) > String_byte_len(mount)))) {
 #line 626 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret999 = 0;
-        return __llpl_ret999;
+        bool __llpl_ret1018 = 0;
+        return __llpl_ret1018;
     }
     while ((i < count)) {
         if ((String_byte_at(name, (name_start + i)) != String_byte_at(mount, (mount_start + i)))) {
 #line 629 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret1000 = 0;
-            return __llpl_ret1000;
+            bool __llpl_ret1019 = 0;
+            return __llpl_ret1019;
         }
         (i = (i + 1));
     }
 #line 633 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret1001 = 1;
-    return __llpl_ret1001;
+    bool __llpl_ret1020 = 1;
+    return __llpl_ret1020;
 }
 
 #line 636 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
 bool VFS_path_is_child(String* parent, String* child) {
     if (((parent == ((void*)0)) || (child == ((void*)0)))) {
 #line 638 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1002 = 0;
-        return __llpl_ret1002;
+        bool __llpl_ret1021 = 0;
+        return __llpl_ret1021;
     }
     if (String_op_eq__ov_char_ptr(parent, "/")) {
 #line 641 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1003 = ((String_byte_len(child) > 1) && (String_byte_at(child, 0) == ((char)VFS_PS1)));
-        return __llpl_ret1003;
+        bool __llpl_ret1022 = ((String_byte_len(child) > 1) && (String_byte_at(child, 0) == ((char)VFS_PS1)));
+        return __llpl_ret1022;
     }
 #line 643 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     int64_t plen = String_byte_len(parent);
     if ((String_byte_len(child) <= plen)) {
 #line 645 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1004 = 0;
-        return __llpl_ret1004;
+        bool __llpl_ret1023 = 0;
+        return __llpl_ret1023;
     }
     if (!VFS_fnmatch(child, 0, parent, 0, plen)) {
 #line 648 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1005 = 0;
-        return __llpl_ret1005;
+        bool __llpl_ret1024 = 0;
+        return __llpl_ret1024;
     }
 #line 650 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret1006 = (String_byte_at(child, plen) == ((char)VFS_PS1));
-    return __llpl_ret1006;
+    bool __llpl_ret1025 = (String_byte_at(child, plen) == ((char)VFS_PS1));
+    return __llpl_ret1025;
 }
 
 
@@ -24278,14 +24384,14 @@ bool VFS_tar_header_empty(char* header) {
     while ((i < VFS_TAR_BLOCK)) {
         if ((header[i] != ((char)0))) {
 #line 683 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            bool __llpl_ret1007 = 0;
-            return __llpl_ret1007;
+            bool __llpl_ret1026 = 0;
+            return __llpl_ret1026;
         }
         i = (i + 1);
     }
 #line 687 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret1008 = 1;
-    return __llpl_ret1008;
+    bool __llpl_ret1027 = 1;
+    return __llpl_ret1027;
 }
 
 #line 690 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
@@ -24303,15 +24409,15 @@ uint64_t VFS_tar_octal(char* src, int64_t count) {
         i = (i + 1);
     }
 #line 700 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    uint64_t __llpl_ret1009 = value;
-    return __llpl_ret1009;
+    uint64_t __llpl_ret1028 = value;
+    return __llpl_ret1028;
 }
 
 #line 703 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
 uint64_t VFS_tar_align(uint64_t size) {
 #line 704 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    uint64_t __llpl_ret1010 = (((size + ((uint64_t)511)) / ((uint64_t)512)) * ((uint64_t)512));
-    return __llpl_ret1010;
+    uint64_t __llpl_ret1029 = (((size + ((uint64_t)511)) / ((uint64_t)512)) * ((uint64_t)512));
+    return __llpl_ret1029;
 }
 
 
@@ -24319,44 +24425,44 @@ uint64_t VFS_tar_align(uint64_t size) {
 String* VFS_tar_entry_path(char* header) {
     if ((header[0] == ((char)0))) {
 #line 718 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1011 = ((void*)0);
-        return __llpl_ret1011;
+        String* __llpl_ret1030 = ((void*)0);
+        return __llpl_ret1030;
     }
 #line 721 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     String* raw = String_new(header);
     if ((String_op_eq__ov_char_ptr(raw, ".") || String_op_eq__ov_char_ptr(raw, "./"))) {
 #line 723 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1012 = ((void*)0);
+        String* __llpl_ret1031 = ((void*)0);
         if (raw) rc_release(raw, String_destroy);
-        return __llpl_ret1012;
+        return __llpl_ret1031;
     }
     if ((((String_byte_len(raw) >= 2) && (String_byte_at(raw, 0) == 46)) && (String_byte_at(raw, 1) == ((char)VFS_PS1)))) {
         ({ String* __llpl_assign_tmp136 = String_byte_substring(raw, 1, (String_byte_len(raw) - 1)); if (raw) rc_release(raw, String_destroy); raw = __llpl_assign_tmp136; raw; });
     }
     if ((String_byte_len(raw) == 0)) {
 #line 731 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1013 = ((void*)0);
+        String* __llpl_ret1032 = ((void*)0);
         if (raw) rc_release(raw, String_destroy);
-        return __llpl_ret1013;
+        return __llpl_ret1032;
     }
     if ((String_byte_at(raw, (String_byte_len(raw) - 1)) == ((char)VFS_PS1))) {
         ({ String* __llpl_assign_tmp137 = String_byte_substring(raw, 0, (String_byte_len(raw) - 1)); if (raw) rc_release(raw, String_destroy); raw = __llpl_assign_tmp137; raw; });
     }
     if ((String_byte_len(raw) == 0)) {
 #line 739 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1014 = ((void*)0);
+        String* __llpl_ret1033 = ((void*)0);
         if (raw) rc_release(raw, String_destroy);
-        return __llpl_ret1014;
+        return __llpl_ret1033;
     }
     if ((String_byte_at(raw, 0) != ((char)VFS_PS1))) {
 #line 743 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1015 = String_op_add(String_new("/"), String_c_str(raw));
+        String* __llpl_ret1034 = String_op_add(String_new("/"), String_c_str(raw));
         if (raw) rc_release(raw, String_destroy);
-        return __llpl_ret1015;
+        return __llpl_ret1034;
     }
 #line 745 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret1016 = raw;
-    return __llpl_ret1016;
+    String* __llpl_ret1035 = raw;
+    return __llpl_ret1035;
     if (raw) rc_release(raw, String_destroy);
 }
 
@@ -24364,48 +24470,48 @@ String* VFS_tar_entry_path(char* header) {
 bool VFS_mount_matches(String* path, String* mount_path) {
     if (((path == ((void*)0)) || (mount_path == ((void*)0)))) {
 #line 750 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1017 = 0;
-        return __llpl_ret1017;
+        bool __llpl_ret1036 = 0;
+        return __llpl_ret1036;
     }
     if (String_op_eq__ov_char_ptr(mount_path, "/")) {
 #line 753 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1018 = ((String_byte_len(path) > 0) && (String_byte_at(path, 0) == ((char)VFS_PS1)));
-        return __llpl_ret1018;
+        bool __llpl_ret1037 = ((String_byte_len(path) > 0) && (String_byte_at(path, 0) == ((char)VFS_PS1)));
+        return __llpl_ret1037;
     }
 #line 755 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     int64_t mlen = String_byte_len(mount_path);
     if ((String_byte_len(path) < mlen)) {
 #line 757 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1019 = 0;
-        return __llpl_ret1019;
+        bool __llpl_ret1038 = 0;
+        return __llpl_ret1038;
     }
     if (!VFS_fnmatch(path, 0, mount_path, 0, mlen)) {
 #line 760 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        bool __llpl_ret1020 = 0;
-        return __llpl_ret1020;
+        bool __llpl_ret1039 = 0;
+        return __llpl_ret1039;
     }
 #line 762 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    bool __llpl_ret1021 = ((String_byte_len(path) == mlen) || (String_byte_at(path, mlen) == ((char)VFS_PS1)));
-    return __llpl_ret1021;
+    bool __llpl_ret1040 = ((String_byte_len(path) == mlen) || (String_byte_at(path, mlen) == ((char)VFS_PS1)));
+    return __llpl_ret1040;
 }
 
 #line 765 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
 String* VFS_mount_relative_path(String* path, String* mount_path) {
     if (String_op_eq__ov_char_ptr(mount_path, "/")) {
 #line 767 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1022 = path;
-        return __llpl_ret1022;
+        String* __llpl_ret1041 = path;
+        return __llpl_ret1041;
     }
 #line 769 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     int64_t mlen = String_byte_len(mount_path);
     if ((String_byte_len(path) == mlen)) {
 #line 771 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1023 = String_new("/");
-        return __llpl_ret1023;
+        String* __llpl_ret1042 = String_new("/");
+        return __llpl_ret1042;
     }
 #line 773 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret1024 = String_byte_substring(path, mlen, (String_byte_len(path) - mlen));
-    return __llpl_ret1024;
+    String* __llpl_ret1043 = String_byte_substring(path, mlen, (String_byte_len(path) - mlen));
+    return __llpl_ret1043;
 }
 
 #line 776 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
@@ -24420,8 +24526,8 @@ String* VFS_canonicalize(String* path) {
     int64_t len = 0;
     if ((path == ((void*)0))) {
 #line 782 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_throw_value152 = EINVAL;
-        llpl_eh_throw("int", &__llpl_throw_value152, sizeof(intptr_t), "vfs.llpl", 782);
+        intptr_t __llpl_throw_value154 = EINVAL;
+        llpl_eh_throw("int", &__llpl_throw_value154, sizeof(intptr_t), "vfs.llpl", 782);
         __builtin_unreachable();
     }
     if (((String_byte_len(path) > 1) && (String_byte_at(path, 1) == 58))) {
@@ -24438,8 +24544,8 @@ String* VFS_canonicalize(String* path) {
                 while ((cwd_pos < len)) {
                     if ((pos >= (VFS_MAXPATH - 1))) {
 #line 805 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-                        intptr_t __llpl_throw_value153 = ENAMETOOLONG;
-                        llpl_eh_throw("int", &__llpl_throw_value153, sizeof(intptr_t), "vfs.llpl", 805);
+                        intptr_t __llpl_throw_value155 = ENAMETOOLONG;
+                        llpl_eh_throw("int", &__llpl_throw_value155, sizeof(intptr_t), "vfs.llpl", 805);
                         __builtin_unreachable();
                     }
                     (*(char*)__llpl_check_index(buffer, pos, 2048, sizeof(char), "vfs.llpl", 806)) = String_byte_at(t->curdir, cwd_pos);
@@ -24455,8 +24561,8 @@ String* VFS_canonicalize(String* path) {
         }
         if ((pos >= (VFS_MAXPATH - 1))) {
 #line 816 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_throw_value154 = ENAMETOOLONG;
-            llpl_eh_throw("int", &__llpl_throw_value154, sizeof(intptr_t), "vfs.llpl", 816);
+            intptr_t __llpl_throw_value156 = ENAMETOOLONG;
+            llpl_eh_throw("int", &__llpl_throw_value156, sizeof(intptr_t), "vfs.llpl", 816);
             __builtin_unreachable();
         }
         (*(char*)__llpl_check_index(buffer, pos, 2048, sizeof(char), "vfs.llpl", 817)) = VFS_pathsep;
@@ -24467,14 +24573,14 @@ String* VFS_canonicalize(String* path) {
             char ch = String_byte_at(path, path_pos);
             if (((ch > ((char)0)) && (ch < 32))) {
 #line 823 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-                intptr_t __llpl_throw_value155 = EINVAL;
-                llpl_eh_throw("int", &__llpl_throw_value155, sizeof(intptr_t), "vfs.llpl", 823);
+                intptr_t __llpl_throw_value157 = EINVAL;
+                llpl_eh_throw("int", &__llpl_throw_value157, sizeof(intptr_t), "vfs.llpl", 823);
                 __builtin_unreachable();
             }
             if ((pos >= (VFS_MAXPATH - 1))) {
 #line 824 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-                intptr_t __llpl_throw_value156 = ENAMETOOLONG;
-                llpl_eh_throw("int", &__llpl_throw_value156, sizeof(intptr_t), "vfs.llpl", 824);
+                intptr_t __llpl_throw_value158 = ENAMETOOLONG;
+                llpl_eh_throw("int", &__llpl_throw_value158, sizeof(intptr_t), "vfs.llpl", 824);
                 __builtin_unreachable();
             }
             (*(char*)__llpl_check_index(buffer, pos, 2048, sizeof(char), "vfs.llpl", 826)) = ch;
@@ -24507,27 +24613,27 @@ String* VFS_canonicalize(String* path) {
     }
     if ((pos >= VFS_MAXPATH)) {
 #line 855 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_throw_value157 = ENAMETOOLONG;
-        llpl_eh_throw("int", &__llpl_throw_value157, sizeof(intptr_t), "vfs.llpl", 855);
+        intptr_t __llpl_throw_value159 = ENAMETOOLONG;
+        llpl_eh_throw("int", &__llpl_throw_value159, sizeof(intptr_t), "vfs.llpl", 855);
         __builtin_unreachable();
     }
     (*(char*)__llpl_check_index(buffer, pos, 2048, sizeof(char), "vfs.llpl", 856)) = ((char)0);
 #line 858 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret1025 = String_new(((char*)buffer));
-    return __llpl_ret1025;
+    String* __llpl_ret1044 = String_new(((char*)buffer));
+    return __llpl_ret1044;
 }
 
 #line 861 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
 intptr_t VFS_mount(String* path, VFS_Filesystem* fs) {
     if ((fs == ((void*)0))) {
 #line 863 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret1026 = EINVAL;
-        return __llpl_ret1026;
+        intptr_t __llpl_ret1045 = EINVAL;
+        return __llpl_ret1045;
     }
     if ((VFS_mount_count >= ((uintptr_t)VFS_MAX_MOUNTS))) {
 #line 866 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret1027 = ENOMEM;
-        return __llpl_ret1027;
+        intptr_t __llpl_ret1046 = ENOMEM;
+        return __llpl_ret1046;
     }
 #line 869 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     String* mnt = VFS_canonicalize(path);
@@ -24535,9 +24641,9 @@ intptr_t VFS_mount(String* path, VFS_Filesystem* fs) {
     intptr_t rc = ((VFS_Filesystem_VTable*)(fs)->__vtable)->mount((VFS_Filesystem*)(fs), mnt);
     if ((rc < 0)) {
 #line 872 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret1028 = rc;
+        intptr_t __llpl_ret1047 = rc;
         if (mnt) rc_release(mnt, String_destroy);
-        return __llpl_ret1028;
+        return __llpl_ret1047;
     }
 #line 875 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     VFS_Mount* node = VFS_Mount_new(mnt, fs);
@@ -24545,10 +24651,10 @@ intptr_t VFS_mount(String* path, VFS_Filesystem* fs) {
     ({ VFS_Mount* __llpl_assign_tmp139 = node; rc_retain((char*)__llpl_assign_tmp139); if (VFS_mounts) rc_release(VFS_mounts, ((void*)0)); VFS_mounts = __llpl_assign_tmp139; VFS_mounts; });
     VFS_mount_count = (VFS_mount_count + ((uintptr_t)1));
 #line 879 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret1029 = EOK;
+    intptr_t __llpl_ret1048 = EOK;
     if (node) rc_release(node, ((void*)0));
     if (mnt) rc_release(mnt, String_destroy);
-    return __llpl_ret1029;
+    return __llpl_ret1048;
     if (node) rc_release(node, ((void*)0));
     if (mnt) rc_release(mnt, String_destroy);
 }
@@ -24575,18 +24681,18 @@ VFS_ResolvedPath* VFS_resolve(String* path) {
     }
     if ((best == ((void*)0))) {
 #line 898 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        VFS_ResolvedPath* __llpl_ret1030 = ((void*)0);
+        VFS_ResolvedPath* __llpl_ret1049 = ((void*)0);
         if (cur) rc_release(cur, ((void*)0));
         if (best) rc_release(best, ((void*)0));
         if (full) rc_release(full, String_destroy);
-        return __llpl_ret1030;
+        return __llpl_ret1049;
     }
 #line 900 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_ResolvedPath* __llpl_ret1031 = VFS_ResolvedPath_new(best->fs, VFS_mount_relative_path(full, best->path));
+    VFS_ResolvedPath* __llpl_ret1050 = VFS_ResolvedPath_new(best->fs, VFS_mount_relative_path(full, best->path));
     if (cur) rc_release(cur, ((void*)0));
     if (best) rc_release(best, ((void*)0));
     if (full) rc_release(full, String_destroy);
-    return __llpl_ret1031;
+    return __llpl_ret1050;
     if (cur) rc_release(cur, ((void*)0));
     if (best) rc_release(best, ((void*)0));
     if (full) rc_release(full, String_destroy);
@@ -24599,14 +24705,14 @@ VFS_Vnode* VFS_stat(String* path) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 914 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        VFS_Vnode* __llpl_ret1032 = VFS_Vnode_new(((void*)0), path, VFS_NODE_MISSING, ((uint64_t)0));
+        VFS_Vnode* __llpl_ret1051 = VFS_Vnode_new(((void*)0), path, VFS_NODE_MISSING, ((uint64_t)0));
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1032;
+        return __llpl_ret1051;
     }
 #line 916 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_Vnode* __llpl_ret1033 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->stat((VFS_Filesystem*)(resolved->fs), resolved->path);
+    VFS_Vnode* __llpl_ret1052 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->stat((VFS_Filesystem*)(resolved->fs), resolved->path);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1033;
+    return __llpl_ret1052;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24616,14 +24722,14 @@ intptr_t VFS_mkdir(String* path) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 922 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret1034 = ENOENT;
+        intptr_t __llpl_ret1053 = ENOENT;
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1034;
+        return __llpl_ret1053;
     }
 #line 924 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret1035 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->mkdir((VFS_Filesystem*)(resolved->fs), resolved->path);
+    intptr_t __llpl_ret1054 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->mkdir((VFS_Filesystem*)(resolved->fs), resolved->path);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1035;
+    return __llpl_ret1054;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24633,14 +24739,14 @@ intptr_t VFS_touch(String* path) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 930 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret1036 = ENOENT;
+        intptr_t __llpl_ret1055 = ENOENT;
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1036;
+        return __llpl_ret1055;
     }
 #line 932 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret1037 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->touch((VFS_Filesystem*)(resolved->fs), resolved->path);
+    intptr_t __llpl_ret1056 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->touch((VFS_Filesystem*)(resolved->fs), resolved->path);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1037;
+    return __llpl_ret1056;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24650,14 +24756,14 @@ intptr_t VFS_remove(String* path) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 938 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret1038 = ENOENT;
+        intptr_t __llpl_ret1057 = ENOENT;
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1038;
+        return __llpl_ret1057;
     }
 #line 940 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret1039 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->remove((VFS_Filesystem*)(resolved->fs), resolved->path);
+    intptr_t __llpl_ret1058 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->remove((VFS_Filesystem*)(resolved->fs), resolved->path);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1039;
+    return __llpl_ret1058;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24667,14 +24773,14 @@ intptr_t VFS_write_text(String* path, String* data) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 946 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        intptr_t __llpl_ret1040 = ENOENT;
+        intptr_t __llpl_ret1059 = ENOENT;
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1040;
+        return __llpl_ret1059;
     }
 #line 948 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    intptr_t __llpl_ret1041 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->write_text((VFS_Filesystem*)(resolved->fs), resolved->path, data);
+    intptr_t __llpl_ret1060 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->write_text((VFS_Filesystem*)(resolved->fs), resolved->path, data);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1041;
+    return __llpl_ret1060;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24684,14 +24790,14 @@ String* VFS_read_text(String* path) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 954 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1042 = ((void*)0);
+        String* __llpl_ret1061 = ((void*)0);
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1042;
+        return __llpl_ret1061;
     }
 #line 956 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret1043 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->read_text((VFS_Filesystem*)(resolved->fs), resolved->path);
+    String* __llpl_ret1062 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->read_text((VFS_Filesystem*)(resolved->fs), resolved->path);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1043;
+    return __llpl_ret1062;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24701,14 +24807,14 @@ __LLPL_Tuple2_char_ptr_u64 VFS_read_binary(String* path) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 962 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        __LLPL_Tuple2_char_ptr_u64 __llpl_ret1044 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
+        __LLPL_Tuple2_char_ptr_u64 __llpl_ret1063 = (__LLPL_Tuple2_char_ptr_u64){ ._0 = ((void*)0), ._1 = 0 };
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1044;
+        return __llpl_ret1063;
     }
 #line 964 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    __LLPL_Tuple2_char_ptr_u64 __llpl_ret1045 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->read_binary((VFS_Filesystem*)(resolved->fs), resolved->path);
+    __LLPL_Tuple2_char_ptr_u64 __llpl_ret1064 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->read_binary((VFS_Filesystem*)(resolved->fs), resolved->path);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1045;
+    return __llpl_ret1064;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24718,14 +24824,14 @@ String* VFS_list(String* path) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 970 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        String* __llpl_ret1046 = ((void*)0);
+        String* __llpl_ret1065 = ((void*)0);
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1046;
+        return __llpl_ret1065;
     }
 #line 972 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    String* __llpl_ret1047 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->list((VFS_Filesystem*)(resolved->fs), resolved->path);
+    String* __llpl_ret1066 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->list((VFS_Filesystem*)(resolved->fs), resolved->path);
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1047;
+    return __llpl_ret1066;
     if (resolved) rc_release(resolved, ((void*)0));
 }
 
@@ -24735,61 +24841,61 @@ VFS_FileHandle* VFS_open(String* path, intptr_t mode) {
     VFS_ResolvedPath* resolved = VFS_resolve(path);
     if ((resolved == ((void*)0))) {
 #line 978 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-        VFS_FileHandle* __llpl_ret1048 = ((void*)0);
+        VFS_FileHandle* __llpl_ret1067 = ((void*)0);
         if (resolved) rc_release(resolved, ((void*)0));
-        return __llpl_ret1048;
+        return __llpl_ret1067;
     }
 #line 981 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     VFS_Vnode* node = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->lookup((VFS_Filesystem*)(resolved->fs), resolved->path);
     if ((node->kind == VFS_NODE_MISSING)) {
         if (((mode & VFS_O_CREATE) == 0)) {
 #line 984 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            VFS_FileHandle* __llpl_ret1049 = ((void*)0);
+            VFS_FileHandle* __llpl_ret1068 = ((void*)0);
             if (node) rc_release(node, ((void*)0));
             if (resolved) rc_release(resolved, ((void*)0));
-            return __llpl_ret1049;
+            return __llpl_ret1068;
         }
 #line 986 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
         intptr_t rc = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->touch((VFS_Filesystem*)(resolved->fs), resolved->path);
         if ((rc < 0)) {
 #line 988 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            VFS_FileHandle* __llpl_ret1050 = ((void*)0);
+            VFS_FileHandle* __llpl_ret1069 = ((void*)0);
             if (node) rc_release(node, ((void*)0));
             if (resolved) rc_release(resolved, ((void*)0));
-            return __llpl_ret1050;
+            return __llpl_ret1069;
         }
     } else {
         if ((node->kind == VFS_NODE_DIR)) {
 #line 991 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            VFS_FileHandle* __llpl_ret1051 = ((void*)0);
+            VFS_FileHandle* __llpl_ret1070 = ((void*)0);
             if (node) rc_release(node, ((void*)0));
             if (resolved) rc_release(resolved, ((void*)0));
-            return __llpl_ret1051;
+            return __llpl_ret1070;
         }
     }
     if (((mode & VFS_O_TRUNC) != 0)) {
         if (((mode & VFS_O_WRITE) == 0)) {
 #line 996 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            VFS_FileHandle* __llpl_ret1052 = ((void*)0);
+            VFS_FileHandle* __llpl_ret1071 = ((void*)0);
             if (node) rc_release(node, ((void*)0));
             if (resolved) rc_release(resolved, ((void*)0));
-            return __llpl_ret1052;
+            return __llpl_ret1071;
         }
 #line 998 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
         intptr_t rc__shadow1 = ((VFS_Filesystem_VTable*)(resolved->fs)->__vtable)->write_text((VFS_Filesystem*)(resolved->fs), resolved->path, String_new(""));
         if ((rc__shadow1 < 0)) {
 #line 1000 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            VFS_FileHandle* __llpl_ret1053 = ((void*)0);
+            VFS_FileHandle* __llpl_ret1072 = ((void*)0);
             if (node) rc_release(node, ((void*)0));
             if (resolved) rc_release(resolved, ((void*)0));
-            return __llpl_ret1053;
+            return __llpl_ret1072;
         }
     }
 #line 1004 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-    VFS_FileHandle* __llpl_ret1054 = VFS_FileHandle_new(resolved->fs, resolved->path, mode);
+    VFS_FileHandle* __llpl_ret1073 = VFS_FileHandle_new(resolved->fs, resolved->path, mode);
     if (node) rc_release(node, ((void*)0));
     if (resolved) rc_release(resolved, ((void*)0));
-    return __llpl_ret1054;
+    return __llpl_ret1073;
     if (node) rc_release(node, ((void*)0));
     if (resolved) rc_release(resolved, ((void*)0));
 }
@@ -24799,14 +24905,14 @@ void VFS_init(LimineModuleResponse* modules) {
     HAL_Serial_write("VFS.init\n");
 #line 1010 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
     {
-        intptr_t __llpl_try_err159;
-        __LLPL_EH_Frame __llpl_eh_frame159;
-        __llpl_eh_frame159.kind = LLPL_EH_FRAME_CATCH;
-        __llpl_eh_frame159.type_id = "int";
-        __llpl_eh_frame159.error_slot = &__llpl_try_err159;
-        __llpl_eh_frame159.error_size = sizeof(intptr_t);
-        llpl_eh_push(&__llpl_eh_frame159);
-        if (llpl_eh_setjmp(&__llpl_eh_frame159.env) == 0) {
+        intptr_t __llpl_try_err161;
+        __LLPL_EH_Frame __llpl_eh_frame161;
+        __llpl_eh_frame161.kind = LLPL_EH_FRAME_CATCH;
+        __llpl_eh_frame161.type_id = "int";
+        __llpl_eh_frame161.error_slot = &__llpl_try_err161;
+        __llpl_eh_frame161.error_size = sizeof(intptr_t);
+        llpl_eh_push(&__llpl_eh_frame161);
+        if (llpl_eh_setjmp(&__llpl_eh_frame161.env) == 0) {
 #line 1011 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
         VFS_MemFilesystem* trait_probe = VFS_MemFilesystem_new(String_new("memfs"));
 #line 1012 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
@@ -24825,8 +24931,8 @@ void VFS_init(LimineModuleResponse* modules) {
         intptr_t rc = VFS_mount(String_new("/"), ((VFS_Filesystem*)bootfs));
         if ((rc < 0)) {
 #line 1025 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            intptr_t __llpl_throw_value159 = rc;
-            llpl_eh_throw("int", &__llpl_throw_value159, sizeof(intptr_t), "vfs.llpl", 1025);
+            intptr_t __llpl_throw_value161 = rc;
+            llpl_eh_throw("int", &__llpl_throw_value161, sizeof(intptr_t), "vfs.llpl", 1025);
             __builtin_unreachable();
         }
         VFS_BootFilesystem_load_initrd(bootfs, modules);
@@ -24868,16 +24974,16 @@ void VFS_init(LimineModuleResponse* modules) {
             HAL_Serial_write("/etc entries:\n");
             HAL_Serial_write(String_c_str(etc_entries));
         }
-            llpl_eh_pop(&__llpl_eh_frame159);
-            goto __try_done_159;
+            llpl_eh_pop(&__llpl_eh_frame161);
+            goto __try_done_161;
         } else {
-__catch_159: ;
+__catch_161: ;
             {
-                intptr_t e = __llpl_try_err159;
+                intptr_t e = __llpl_try_err161;
                 HAL_Serial_write(({ ksnprintf(__llpl_interp16, 256, "VFS.init() failed with error code: %d\n", ((long long)(e))); (char*)__llpl_interp16; }));
             }
         }
-__try_done_159: ;
+__try_done_161: ;
     }
     Terminal_write("VFS initialized\n");
 }
@@ -24912,27 +25018,27 @@ void Kern_BlockingMutex__destroy_impl(void* ptr) {
 }
 
 bool Kern_BlockingMutex_try_lock(Kern_BlockingMutex* self) {
-    __LLPL_EH_Frame __llpl_defer_frame160;
-    int __llpl_defer_active161 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame162;
+    int __llpl_defer_active163 = 0;
 #line 28 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     void* current = ((void*)current_thread());
     if ((current == ((void*)0))) {
 #line 30 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1057 = 0;
-        return __llpl_ret1057;
+        bool __llpl_ret1076 = 0;
+        return __llpl_ret1076;
     }
 #line 33 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     bool acquired = 0;
     {
         SpinLock_acquire(&(self->gate));
-        __llpl_defer_frame160.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame160.type_id = ((void*)0);
-        __llpl_defer_frame160.error_slot = ((void*)0);
-        __llpl_defer_frame160.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame160);
-        __llpl_defer_active161 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame160.env) != 0) {
-            __llpl_defer_active161 = 0;
+        __llpl_defer_frame162.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame162.type_id = ((void*)0);
+        __llpl_defer_frame162.error_slot = ((void*)0);
+        __llpl_defer_frame162.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame162);
+        __llpl_defer_active163 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame162.env) != 0) {
+            __llpl_defer_active163 = 0;
         SpinLock_release(&(self->gate));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -24941,121 +25047,41 @@ bool Kern_BlockingMutex_try_lock(Kern_BlockingMutex* self) {
             Kern_mutex_assign_owner_locked(self, ((Kern_Thread*)current));
             acquired = 1;
         }
-        if (__llpl_defer_active161) {
-            __llpl_defer_active161 = 0;
-            llpl_eh_pop(&__llpl_defer_frame160);
+        if (__llpl_defer_active163) {
+            __llpl_defer_active163 = 0;
+            llpl_eh_pop(&__llpl_defer_frame162);
         SpinLock_release(&(self->gate));
         }
     }
 #line 40 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1058 = acquired;
-    if (__llpl_defer_active161) {
-        __llpl_defer_active161 = 0;
-        llpl_eh_pop(&__llpl_defer_frame160);
+    bool __llpl_ret1077 = acquired;
+    if (__llpl_defer_active163) {
+        __llpl_defer_active163 = 0;
+        llpl_eh_pop(&__llpl_defer_frame162);
         SpinLock_release(&(self->gate));
     }
-    return __llpl_ret1058;
-    if (__llpl_defer_active161) {
-        __llpl_defer_active161 = 0;
-        llpl_eh_pop(&__llpl_defer_frame160);
+    return __llpl_ret1077;
+    if (__llpl_defer_active163) {
+        __llpl_defer_active163 = 0;
+        llpl_eh_pop(&__llpl_defer_frame162);
         SpinLock_release(&(self->gate));
     }
 }
 
 bool Kern_BlockingMutex_lock(Kern_BlockingMutex* self) {
-    __LLPL_EH_Frame __llpl_defer_frame162;
-    int __llpl_defer_active163 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame164;
+    int __llpl_defer_active165 = 0;
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     void* current = ((void*)current_thread());
     if ((current == ((void*)0))) {
 #line 46 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1059 = 0;
-        return __llpl_ret1059;
+        bool __llpl_ret1078 = 0;
+        return __llpl_ret1078;
     }
     while (1) {
 #line 50 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
         bool acquired = 0;
 #line 51 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool prepared = 0;
-        {
-            SpinLock_acquire(&(self->gate));
-            __llpl_defer_frame162.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame162.type_id = ((void*)0);
-            __llpl_defer_frame162.error_slot = ((void*)0);
-            __llpl_defer_frame162.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame162);
-            __llpl_defer_active163 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame162.env) != 0) {
-                __llpl_defer_active163 = 0;
-            SpinLock_release(&(self->gate));
-                llpl_eh_resume();
-                __builtin_unreachable();
-            }
-            if ((self->owner == ((void*)0))) {
-                Kern_mutex_assign_owner_locked(self, ((Kern_Thread*)current));
-                acquired = 1;
-            } else {
-                if ((self->owner != current)) {
-                    Kern_donate_mutex_priority_locked(self, ((Kern_Thread*)current), ((uintptr_t)0));
-                    (((Kern_Thread*)current))->blocked_mutex = ((void*)self);
-                    prepared = Kern_prepare_block_current(self->waiters);
-                }
-            }
-            if (__llpl_defer_active163) {
-                __llpl_defer_active163 = 0;
-                llpl_eh_pop(&__llpl_defer_frame162);
-            SpinLock_release(&(self->gate));
-            }
-        }
-        if (acquired) {
-            (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
-#line 65 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1060 = 1;
-            if (__llpl_defer_active163) {
-                __llpl_defer_active163 = 0;
-                llpl_eh_pop(&__llpl_defer_frame162);
-            SpinLock_release(&(self->gate));
-            }
-            return __llpl_ret1060;
-        }
-        if (!prepared) {
-            (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
-#line 69 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1061 = 0;
-            if (__llpl_defer_active163) {
-                __llpl_defer_active163 = 0;
-                llpl_eh_pop(&__llpl_defer_frame162);
-            SpinLock_release(&(self->gate));
-            }
-            return __llpl_ret1061;
-        }
-        Kern_scheduler_yield();
-        (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
-        Kern_refresh_mutex_donation(self);
-    }
-    if (__llpl_defer_active163) {
-        __llpl_defer_active163 = 0;
-        llpl_eh_pop(&__llpl_defer_frame162);
-            SpinLock_release(&(self->gate));
-    }
-}
-
-bool Kern_BlockingMutex_lock_timeout_ticks(Kern_BlockingMutex* self, uintptr_t delay) {
-    __LLPL_EH_Frame __llpl_defer_frame164;
-    int __llpl_defer_active165 = 0;
-#line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    void* current = ((void*)current_thread());
-    if (((current == ((void*)0)) || (delay == ((uintptr_t)0)))) {
-#line 80 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1062 = Kern_BlockingMutex_try_lock(self);
-        return __llpl_ret1062;
-    }
-#line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    uintptr_t deadline = Timer_deadline_after_ticks(delay);
-    while (1) {
-#line 85 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool acquired = 0;
-#line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->gate));
@@ -25078,11 +25104,7 @@ bool Kern_BlockingMutex_lock_timeout_ticks(Kern_BlockingMutex* self, uintptr_t d
                 if ((self->owner != current)) {
                     Kern_donate_mutex_priority_locked(self, ((Kern_Thread*)current), ((uintptr_t)0));
                     (((Kern_Thread*)current))->blocked_mutex = ((void*)self);
-#line 94 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-                    uintptr_t now = Timer_current_tick();
-                    if ((now < deadline)) {
-                        prepared = Kern_prepare_block_current_timeout_ticks(self->waiters, (deadline - now));
-                    }
+                    prepared = Kern_prepare_block_current(self->waiters);
                 }
             }
             if (__llpl_defer_active165) {
@@ -25093,27 +25115,27 @@ bool Kern_BlockingMutex_lock_timeout_ticks(Kern_BlockingMutex* self, uintptr_t d
         }
         if (acquired) {
             (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
-#line 103 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1063 = 1;
+#line 65 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1079 = 1;
             if (__llpl_defer_active165) {
                 __llpl_defer_active165 = 0;
                 llpl_eh_pop(&__llpl_defer_frame164);
             SpinLock_release(&(self->gate));
             }
-            return __llpl_ret1063;
+            return __llpl_ret1079;
         }
-        if ((!prepared || !Kern_finish_block_current_timeout())) {
+        if (!prepared) {
             (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
-            Kern_refresh_mutex_donation(self);
-#line 108 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1064 = 0;
+#line 69 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1080 = 0;
             if (__llpl_defer_active165) {
                 __llpl_defer_active165 = 0;
                 llpl_eh_pop(&__llpl_defer_frame164);
             SpinLock_release(&(self->gate));
             }
-            return __llpl_ret1064;
+            return __llpl_ret1080;
         }
+        Kern_scheduler_yield();
         (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
         Kern_refresh_mutex_donation(self);
     }
@@ -25124,75 +25146,110 @@ bool Kern_BlockingMutex_lock_timeout_ticks(Kern_BlockingMutex* self, uintptr_t d
     }
 }
 
+bool Kern_BlockingMutex_lock_timeout_ticks(Kern_BlockingMutex* self, uintptr_t delay) {
+    __LLPL_EH_Frame __llpl_defer_frame166;
+    int __llpl_defer_active167 = 0;
+#line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    void* current = ((void*)current_thread());
+    if (((current == ((void*)0)) || (delay == ((uintptr_t)0)))) {
+#line 80 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool __llpl_ret1081 = Kern_BlockingMutex_try_lock(self);
+        return __llpl_ret1081;
+    }
+#line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    uintptr_t deadline = Timer_deadline_after_ticks(delay);
+    while (1) {
+#line 85 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool acquired = 0;
+#line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool prepared = 0;
+        {
+            SpinLock_acquire(&(self->gate));
+            __llpl_defer_frame166.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame166.type_id = ((void*)0);
+            __llpl_defer_frame166.error_slot = ((void*)0);
+            __llpl_defer_frame166.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame166);
+            __llpl_defer_active167 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame166.env) != 0) {
+                __llpl_defer_active167 = 0;
+            SpinLock_release(&(self->gate));
+                llpl_eh_resume();
+                __builtin_unreachable();
+            }
+            if ((self->owner == ((void*)0))) {
+                Kern_mutex_assign_owner_locked(self, ((Kern_Thread*)current));
+                acquired = 1;
+            } else {
+                if ((self->owner != current)) {
+                    Kern_donate_mutex_priority_locked(self, ((Kern_Thread*)current), ((uintptr_t)0));
+                    (((Kern_Thread*)current))->blocked_mutex = ((void*)self);
+#line 94 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+                    uintptr_t now = Timer_current_tick();
+                    if ((now < deadline)) {
+                        prepared = Kern_prepare_block_current_timeout_ticks(self->waiters, (deadline - now));
+                    }
+                }
+            }
+            if (__llpl_defer_active167) {
+                __llpl_defer_active167 = 0;
+                llpl_eh_pop(&__llpl_defer_frame166);
+            SpinLock_release(&(self->gate));
+            }
+        }
+        if (acquired) {
+            (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
+#line 103 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1082 = 1;
+            if (__llpl_defer_active167) {
+                __llpl_defer_active167 = 0;
+                llpl_eh_pop(&__llpl_defer_frame166);
+            SpinLock_release(&(self->gate));
+            }
+            return __llpl_ret1082;
+        }
+        if ((!prepared || !Kern_finish_block_current_timeout())) {
+            (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
+            Kern_refresh_mutex_donation(self);
+#line 108 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1083 = 0;
+            if (__llpl_defer_active167) {
+                __llpl_defer_active167 = 0;
+                llpl_eh_pop(&__llpl_defer_frame166);
+            SpinLock_release(&(self->gate));
+            }
+            return __llpl_ret1083;
+        }
+        (((Kern_Thread*)current))->blocked_mutex = ((void*)0);
+        Kern_refresh_mutex_donation(self);
+    }
+    if (__llpl_defer_active167) {
+        __llpl_defer_active167 = 0;
+        llpl_eh_pop(&__llpl_defer_frame166);
+            SpinLock_release(&(self->gate));
+    }
+}
+
 bool Kern_BlockingMutex_lock_timeout_ms(Kern_BlockingMutex* self, uintptr_t milliseconds) {
     if ((milliseconds == ((uintptr_t)0))) {
 #line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1065 = Kern_BlockingMutex_try_lock(self);
-        return __llpl_ret1065;
+        bool __llpl_ret1084 = Kern_BlockingMutex_try_lock(self);
+        return __llpl_ret1084;
     }
 #line 119 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     uintptr_t delay_ticks = (((milliseconds + ((uintptr_t)HAL_PIT_MSECS_PER_TICK)) - ((uintptr_t)1)) / ((uintptr_t)HAL_PIT_MSECS_PER_TICK));
 #line 120 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1066 = Kern_BlockingMutex_lock_timeout_ticks(self, delay_ticks);
-    return __llpl_ret1066;
+    bool __llpl_ret1085 = Kern_BlockingMutex_lock_timeout_ticks(self, delay_ticks);
+    return __llpl_ret1085;
 }
 
 bool Kern_BlockingMutex_unlock(Kern_BlockingMutex* self) {
-    __LLPL_EH_Frame __llpl_defer_frame166;
-    int __llpl_defer_active167 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame168;
+    int __llpl_defer_active169 = 0;
 #line 124 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     void* current = ((void*)current_thread());
 #line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     bool released = 0;
-    {
-        SpinLock_acquire(&(self->gate));
-        __llpl_defer_frame166.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame166.type_id = ((void*)0);
-        __llpl_defer_frame166.error_slot = ((void*)0);
-        __llpl_defer_frame166.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame166);
-        __llpl_defer_active167 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame166.env) != 0) {
-            __llpl_defer_active167 = 0;
-        SpinLock_release(&(self->gate));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        if (((current != ((void*)0)) && (self->owner == current))) {
-            Kern_mutex_remove_owner_locked(self, ((Kern_Thread*)current));
-            released = 1;
-        }
-        if (__llpl_defer_active167) {
-            __llpl_defer_active167 = 0;
-            llpl_eh_pop(&__llpl_defer_frame166);
-        SpinLock_release(&(self->gate));
-        }
-    }
-    if (released) {
-        Kern_wake_one(self->waiters);
-    }
-#line 135 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1067 = released;
-    if (__llpl_defer_active167) {
-        __llpl_defer_active167 = 0;
-        llpl_eh_pop(&__llpl_defer_frame166);
-        SpinLock_release(&(self->gate));
-    }
-    return __llpl_ret1067;
-    if (__llpl_defer_active167) {
-        __llpl_defer_active167 = 0;
-        llpl_eh_pop(&__llpl_defer_frame166);
-        SpinLock_release(&(self->gate));
-    }
-}
-
-bool Kern_BlockingMutex_is_owned_by_current(Kern_BlockingMutex* self) {
-    __LLPL_EH_Frame __llpl_defer_frame168;
-    int __llpl_defer_active169 = 0;
-#line 139 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    void* current = ((void*)current_thread());
-#line 140 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool owned = 0;
     {
         SpinLock_acquire(&(self->gate));
         __llpl_defer_frame168.kind = LLPL_EH_FRAME_CLEANUP;
@@ -25207,38 +25264,87 @@ bool Kern_BlockingMutex_is_owned_by_current(Kern_BlockingMutex* self) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        owned = ((current != ((void*)0)) && (self->owner == current));
+        if (((current != ((void*)0)) && (self->owner == current))) {
+            Kern_mutex_remove_owner_locked(self, ((Kern_Thread*)current));
+            released = 1;
+        }
         if (__llpl_defer_active169) {
             __llpl_defer_active169 = 0;
             llpl_eh_pop(&__llpl_defer_frame168);
         SpinLock_release(&(self->gate));
         }
     }
-#line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1068 = owned;
+    if (released) {
+        Kern_wake_one(self->waiters);
+    }
+#line 135 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    bool __llpl_ret1086 = released;
     if (__llpl_defer_active169) {
         __llpl_defer_active169 = 0;
         llpl_eh_pop(&__llpl_defer_frame168);
         SpinLock_release(&(self->gate));
     }
-    return __llpl_ret1068;
+    return __llpl_ret1086;
     if (__llpl_defer_active169) {
         __llpl_defer_active169 = 0;
         llpl_eh_pop(&__llpl_defer_frame168);
+        SpinLock_release(&(self->gate));
+    }
+}
+
+bool Kern_BlockingMutex_is_owned_by_current(Kern_BlockingMutex* self) {
+    __LLPL_EH_Frame __llpl_defer_frame170;
+    int __llpl_defer_active171 = 0;
+#line 139 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    void* current = ((void*)current_thread());
+#line 140 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    bool owned = 0;
+    {
+        SpinLock_acquire(&(self->gate));
+        __llpl_defer_frame170.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame170.type_id = ((void*)0);
+        __llpl_defer_frame170.error_slot = ((void*)0);
+        __llpl_defer_frame170.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame170);
+        __llpl_defer_active171 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame170.env) != 0) {
+            __llpl_defer_active171 = 0;
+        SpinLock_release(&(self->gate));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        owned = ((current != ((void*)0)) && (self->owner == current));
+        if (__llpl_defer_active171) {
+            __llpl_defer_active171 = 0;
+            llpl_eh_pop(&__llpl_defer_frame170);
+        SpinLock_release(&(self->gate));
+        }
+    }
+#line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    bool __llpl_ret1087 = owned;
+    if (__llpl_defer_active171) {
+        __llpl_defer_active171 = 0;
+        llpl_eh_pop(&__llpl_defer_frame170);
+        SpinLock_release(&(self->gate));
+    }
+    return __llpl_ret1087;
+    if (__llpl_defer_active171) {
+        __llpl_defer_active171 = 0;
+        llpl_eh_pop(&__llpl_defer_frame170);
         SpinLock_release(&(self->gate));
     }
 }
 
 bool Kern_BlockingMutex_wait(Kern_BlockingMutex* self) {
 #line 151 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1069 = Kern_BlockingMutex_lock(self);
-    return __llpl_ret1069;
+    bool __llpl_ret1088 = Kern_BlockingMutex_lock(self);
+    return __llpl_ret1088;
 }
 
 bool Kern_BlockingMutex_is_signaled(Kern_BlockingMutex* self) {
 #line 155 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1070 = (self->owner == ((void*)0));
-    return __llpl_ret1070;
+    bool __llpl_ret1089 = (self->owner == ((void*)0));
+    return __llpl_ret1089;
 }
 
 
@@ -25316,44 +25422,8 @@ void Kern_donate_mutex_priority_locked(Kern_BlockingMutex* mutex, Kern_Thread* w
 
 #line 214 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
 void Kern_donate_blocked_mutex(Kern_BlockingMutex* mutex, Kern_Thread* waiter, uintptr_t depth) {
-    __LLPL_EH_Frame __llpl_defer_frame170;
-    int __llpl_defer_active171 = 0;
-    {
-        SpinLock_acquire(&(mutex->gate));
-        __llpl_defer_frame170.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame170.type_id = ((void*)0);
-        __llpl_defer_frame170.error_slot = ((void*)0);
-        __llpl_defer_frame170.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame170);
-        __llpl_defer_active171 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame170.env) != 0) {
-            __llpl_defer_active171 = 0;
-        SpinLock_release(&(mutex->gate));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        Kern_donate_mutex_priority_locked(mutex, waiter, depth);
-        if (__llpl_defer_active171) {
-            __llpl_defer_active171 = 0;
-            llpl_eh_pop(&__llpl_defer_frame170);
-        SpinLock_release(&(mutex->gate));
-        }
-    }
-    if (__llpl_defer_active171) {
-        __llpl_defer_active171 = 0;
-        llpl_eh_pop(&__llpl_defer_frame170);
-        SpinLock_release(&(mutex->gate));
-    }
-}
-
-#line 220 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-void Kern_refresh_mutex_donation(Kern_BlockingMutex* mutex) {
     __LLPL_EH_Frame __llpl_defer_frame172;
     int __llpl_defer_active173 = 0;
-    if ((mutex == ((void*)0))) {
-#line 221 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        return;
-    }
     {
         SpinLock_acquire(&(mutex->gate));
         __llpl_defer_frame172.kind = LLPL_EH_FRAME_CLEANUP;
@@ -25368,10 +25438,7 @@ void Kern_refresh_mutex_donation(Kern_BlockingMutex* mutex) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        mutex->donated_priority = Kern_wait_best_priority(mutex->waiters);
-        if ((mutex->owner != ((void*)0))) {
-            Kern_refresh_thread_inherited_priority(((Kern_Thread*)mutex->owner));
-        }
+        Kern_donate_mutex_priority_locked(mutex, waiter, depth);
         if (__llpl_defer_active173) {
             __llpl_defer_active173 = 0;
             llpl_eh_pop(&__llpl_defer_frame172);
@@ -25381,6 +25448,45 @@ void Kern_refresh_mutex_donation(Kern_BlockingMutex* mutex) {
     if (__llpl_defer_active173) {
         __llpl_defer_active173 = 0;
         llpl_eh_pop(&__llpl_defer_frame172);
+        SpinLock_release(&(mutex->gate));
+    }
+}
+
+#line 220 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+void Kern_refresh_mutex_donation(Kern_BlockingMutex* mutex) {
+    __LLPL_EH_Frame __llpl_defer_frame174;
+    int __llpl_defer_active175 = 0;
+    if ((mutex == ((void*)0))) {
+#line 221 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        return;
+    }
+    {
+        SpinLock_acquire(&(mutex->gate));
+        __llpl_defer_frame174.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame174.type_id = ((void*)0);
+        __llpl_defer_frame174.error_slot = ((void*)0);
+        __llpl_defer_frame174.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame174);
+        __llpl_defer_active175 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame174.env) != 0) {
+            __llpl_defer_active175 = 0;
+        SpinLock_release(&(mutex->gate));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        mutex->donated_priority = Kern_wait_best_priority(mutex->waiters);
+        if ((mutex->owner != ((void*)0))) {
+            Kern_refresh_thread_inherited_priority(((Kern_Thread*)mutex->owner));
+        }
+        if (__llpl_defer_active175) {
+            __llpl_defer_active175 = 0;
+            llpl_eh_pop(&__llpl_defer_frame174);
+        SpinLock_release(&(mutex->gate));
+        }
+    }
+    if (__llpl_defer_active175) {
+        __llpl_defer_active175 = 0;
+        llpl_eh_pop(&__llpl_defer_frame174);
         SpinLock_release(&(mutex->gate));
     }
 }
@@ -25411,86 +25517,16 @@ void Kern_ConditionVariable__destroy_impl(void* ptr) {
 }
 
 bool Kern_ConditionVariable_wait(Kern_ConditionVariable* self, Kern_BlockingMutex* mutex) {
-    __LLPL_EH_Frame __llpl_defer_frame174;
-    int __llpl_defer_active175 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame176;
+    int __llpl_defer_active177 = 0;
 #line 240 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     void* current = ((void*)current_thread());
     if (((mutex == ((void*)0)) || (current == ((void*)0)))) {
 #line 242 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1071 = 0;
-        return __llpl_ret1071;
+        bool __llpl_ret1090 = 0;
+        return __llpl_ret1090;
     }
 #line 245 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool prepared = 0;
-    {
-        SpinLock_acquire(&(mutex->gate));
-        __llpl_defer_frame174.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame174.type_id = ((void*)0);
-        __llpl_defer_frame174.error_slot = ((void*)0);
-        __llpl_defer_frame174.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame174);
-        __llpl_defer_active175 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame174.env) != 0) {
-            __llpl_defer_active175 = 0;
-        SpinLock_release(&(mutex->gate));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        if ((mutex->owner == current)) {
-            prepared = Kern_prepare_block_current(self->waiters);
-            if (prepared) {
-                Kern_mutex_remove_owner_locked(mutex, ((Kern_Thread*)current));
-            }
-        }
-        if (__llpl_defer_active175) {
-            __llpl_defer_active175 = 0;
-            llpl_eh_pop(&__llpl_defer_frame174);
-        SpinLock_release(&(mutex->gate));
-        }
-    }
-    if (!prepared) {
-#line 255 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1072 = 0;
-        if (__llpl_defer_active175) {
-            __llpl_defer_active175 = 0;
-            llpl_eh_pop(&__llpl_defer_frame174);
-        SpinLock_release(&(mutex->gate));
-        }
-        return __llpl_ret1072;
-    }
-    Kern_wake_one(mutex->waiters);
-    Kern_scheduler_yield();
-#line 259 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1073 = Kern_BlockingMutex_lock(mutex);
-    if (__llpl_defer_active175) {
-        __llpl_defer_active175 = 0;
-        llpl_eh_pop(&__llpl_defer_frame174);
-        SpinLock_release(&(mutex->gate));
-    }
-    return __llpl_ret1073;
-    if (__llpl_defer_active175) {
-        __llpl_defer_active175 = 0;
-        llpl_eh_pop(&__llpl_defer_frame174);
-        SpinLock_release(&(mutex->gate));
-    }
-}
-
-bool Kern_ConditionVariable_wait_timeout_ticks(Kern_ConditionVariable* self, Kern_BlockingMutex* mutex, uintptr_t delay) {
-    __LLPL_EH_Frame __llpl_defer_frame176;
-    int __llpl_defer_active177 = 0;
-    if ((delay == ((uintptr_t)0))) {
-#line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1074 = 0;
-        return __llpl_ret1074;
-    }
-#line 268 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    void* current = ((void*)current_thread());
-    if (((mutex == ((void*)0)) || (current == ((void*)0)))) {
-#line 270 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1075 = 0;
-        return __llpl_ret1075;
-    }
-#line 273 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     bool prepared = 0;
     {
         SpinLock_acquire(&(mutex->gate));
@@ -25507,7 +25543,7 @@ bool Kern_ConditionVariable_wait_timeout_ticks(Kern_ConditionVariable* self, Ker
             __builtin_unreachable();
         }
         if ((mutex->owner == current)) {
-            prepared = Kern_prepare_block_current_timeout_ticks(self->waiters, delay);
+            prepared = Kern_prepare_block_current(self->waiters);
             if (prepared) {
                 Kern_mutex_remove_owner_locked(mutex, ((Kern_Thread*)current));
             }
@@ -25519,39 +25555,109 @@ bool Kern_ConditionVariable_wait_timeout_ticks(Kern_ConditionVariable* self, Ker
         }
     }
     if (!prepared) {
-#line 283 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1076 = 0;
+#line 255 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool __llpl_ret1091 = 0;
         if (__llpl_defer_active177) {
             __llpl_defer_active177 = 0;
             llpl_eh_pop(&__llpl_defer_frame176);
         SpinLock_release(&(mutex->gate));
         }
-        return __llpl_ret1076;
+        return __llpl_ret1091;
+    }
+    Kern_wake_one(mutex->waiters);
+    Kern_scheduler_yield();
+#line 259 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    bool __llpl_ret1092 = Kern_BlockingMutex_lock(mutex);
+    if (__llpl_defer_active177) {
+        __llpl_defer_active177 = 0;
+        llpl_eh_pop(&__llpl_defer_frame176);
+        SpinLock_release(&(mutex->gate));
+    }
+    return __llpl_ret1092;
+    if (__llpl_defer_active177) {
+        __llpl_defer_active177 = 0;
+        llpl_eh_pop(&__llpl_defer_frame176);
+        SpinLock_release(&(mutex->gate));
+    }
+}
+
+bool Kern_ConditionVariable_wait_timeout_ticks(Kern_ConditionVariable* self, Kern_BlockingMutex* mutex, uintptr_t delay) {
+    __LLPL_EH_Frame __llpl_defer_frame178;
+    int __llpl_defer_active179 = 0;
+    if ((delay == ((uintptr_t)0))) {
+#line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool __llpl_ret1093 = 0;
+        return __llpl_ret1093;
+    }
+#line 268 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    void* current = ((void*)current_thread());
+    if (((mutex == ((void*)0)) || (current == ((void*)0)))) {
+#line 270 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool __llpl_ret1094 = 0;
+        return __llpl_ret1094;
+    }
+#line 273 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    bool prepared = 0;
+    {
+        SpinLock_acquire(&(mutex->gate));
+        __llpl_defer_frame178.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame178.type_id = ((void*)0);
+        __llpl_defer_frame178.error_slot = ((void*)0);
+        __llpl_defer_frame178.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame178);
+        __llpl_defer_active179 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame178.env) != 0) {
+            __llpl_defer_active179 = 0;
+        SpinLock_release(&(mutex->gate));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        if ((mutex->owner == current)) {
+            prepared = Kern_prepare_block_current_timeout_ticks(self->waiters, delay);
+            if (prepared) {
+                Kern_mutex_remove_owner_locked(mutex, ((Kern_Thread*)current));
+            }
+        }
+        if (__llpl_defer_active179) {
+            __llpl_defer_active179 = 0;
+            llpl_eh_pop(&__llpl_defer_frame178);
+        SpinLock_release(&(mutex->gate));
+        }
+    }
+    if (!prepared) {
+#line 283 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool __llpl_ret1095 = 0;
+        if (__llpl_defer_active179) {
+            __llpl_defer_active179 = 0;
+            llpl_eh_pop(&__llpl_defer_frame178);
+        SpinLock_release(&(mutex->gate));
+        }
+        return __llpl_ret1095;
     }
     Kern_wake_one(mutex->waiters);
 #line 286 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     bool signaled = Kern_finish_block_current_timeout();
     if (!Kern_BlockingMutex_lock(mutex)) {
 #line 288 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1077 = 0;
-        if (__llpl_defer_active177) {
-            __llpl_defer_active177 = 0;
-            llpl_eh_pop(&__llpl_defer_frame176);
+        bool __llpl_ret1096 = 0;
+        if (__llpl_defer_active179) {
+            __llpl_defer_active179 = 0;
+            llpl_eh_pop(&__llpl_defer_frame178);
         SpinLock_release(&(mutex->gate));
         }
-        return __llpl_ret1077;
+        return __llpl_ret1096;
     }
 #line 290 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1078 = signaled;
-    if (__llpl_defer_active177) {
-        __llpl_defer_active177 = 0;
-        llpl_eh_pop(&__llpl_defer_frame176);
+    bool __llpl_ret1097 = signaled;
+    if (__llpl_defer_active179) {
+        __llpl_defer_active179 = 0;
+        llpl_eh_pop(&__llpl_defer_frame178);
         SpinLock_release(&(mutex->gate));
     }
-    return __llpl_ret1078;
-    if (__llpl_defer_active177) {
-        __llpl_defer_active177 = 0;
-        llpl_eh_pop(&__llpl_defer_frame176);
+    return __llpl_ret1097;
+    if (__llpl_defer_active179) {
+        __llpl_defer_active179 = 0;
+        llpl_eh_pop(&__llpl_defer_frame178);
         SpinLock_release(&(mutex->gate));
     }
 }
@@ -25559,26 +25665,26 @@ bool Kern_ConditionVariable_wait_timeout_ticks(Kern_ConditionVariable* self, Ker
 bool Kern_ConditionVariable_wait_timeout_ms(Kern_ConditionVariable* self, Kern_BlockingMutex* mutex, uintptr_t milliseconds) {
     if ((milliseconds == ((uintptr_t)0))) {
 #line 295 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1079 = 0;
-        return __llpl_ret1079;
+        bool __llpl_ret1098 = 0;
+        return __llpl_ret1098;
     }
 #line 297 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     uintptr_t delay_ticks = (((milliseconds + ((uintptr_t)HAL_PIT_MSECS_PER_TICK)) - ((uintptr_t)1)) / ((uintptr_t)HAL_PIT_MSECS_PER_TICK));
 #line 298 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1080 = Kern_ConditionVariable_wait_timeout_ticks(self, mutex, delay_ticks);
-    return __llpl_ret1080;
+    bool __llpl_ret1099 = Kern_ConditionVariable_wait_timeout_ticks(self, mutex, delay_ticks);
+    return __llpl_ret1099;
 }
 
 bool Kern_ConditionVariable_signal(Kern_ConditionVariable* self) {
 #line 302 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1081 = Kern_wake_one(self->waiters);
-    return __llpl_ret1081;
+    bool __llpl_ret1100 = Kern_wake_one(self->waiters);
+    return __llpl_ret1100;
 }
 
 uintptr_t Kern_ConditionVariable_broadcast(Kern_ConditionVariable* self) {
 #line 306 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    uintptr_t __llpl_ret1082 = Kern_wake_all(self->waiters);
-    return __llpl_ret1082;
+    uintptr_t __llpl_ret1101 = Kern_wake_all(self->waiters);
+    return __llpl_ret1101;
 }
 
 
@@ -25609,20 +25715,20 @@ void Kern_Semaphore__destroy_impl(void* ptr) {
 }
 
 bool Kern_Semaphore_try_wait(Kern_Semaphore* self) {
-    __LLPL_EH_Frame __llpl_defer_frame178;
-    int __llpl_defer_active179 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame180;
+    int __llpl_defer_active181 = 0;
 #line 325 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     bool acquired = 0;
     {
         SpinLock_acquire(&(self->gate));
-        __llpl_defer_frame178.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame178.type_id = ((void*)0);
-        __llpl_defer_frame178.error_slot = ((void*)0);
-        __llpl_defer_frame178.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame178);
-        __llpl_defer_active179 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame178.env) != 0) {
-            __llpl_defer_active179 = 0;
+        __llpl_defer_frame180.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame180.type_id = ((void*)0);
+        __llpl_defer_frame180.error_slot = ((void*)0);
+        __llpl_defer_frame180.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame180);
+        __llpl_defer_active181 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame180.env) != 0) {
+            __llpl_defer_active181 = 0;
         SpinLock_release(&(self->gate));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -25631,104 +25737,34 @@ bool Kern_Semaphore_try_wait(Kern_Semaphore* self) {
             (self->count = (self->count - ((uintptr_t)1)));
             acquired = 1;
         }
-        if (__llpl_defer_active179) {
-            __llpl_defer_active179 = 0;
-            llpl_eh_pop(&__llpl_defer_frame178);
+        if (__llpl_defer_active181) {
+            __llpl_defer_active181 = 0;
+            llpl_eh_pop(&__llpl_defer_frame180);
         SpinLock_release(&(self->gate));
         }
     }
 #line 332 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1083 = acquired;
-    if (__llpl_defer_active179) {
-        __llpl_defer_active179 = 0;
-        llpl_eh_pop(&__llpl_defer_frame178);
+    bool __llpl_ret1102 = acquired;
+    if (__llpl_defer_active181) {
+        __llpl_defer_active181 = 0;
+        llpl_eh_pop(&__llpl_defer_frame180);
         SpinLock_release(&(self->gate));
     }
-    return __llpl_ret1083;
-    if (__llpl_defer_active179) {
-        __llpl_defer_active179 = 0;
-        llpl_eh_pop(&__llpl_defer_frame178);
+    return __llpl_ret1102;
+    if (__llpl_defer_active181) {
+        __llpl_defer_active181 = 0;
+        llpl_eh_pop(&__llpl_defer_frame180);
         SpinLock_release(&(self->gate));
     }
 }
 
 bool Kern_Semaphore_wait(Kern_Semaphore* self) {
-    __LLPL_EH_Frame __llpl_defer_frame180;
-    int __llpl_defer_active181 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame182;
+    int __llpl_defer_active183 = 0;
     while (1) {
 #line 337 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
         bool acquired = 0;
 #line 338 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool prepared = 0;
-        {
-            SpinLock_acquire(&(self->gate));
-            __llpl_defer_frame180.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame180.type_id = ((void*)0);
-            __llpl_defer_frame180.error_slot = ((void*)0);
-            __llpl_defer_frame180.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame180);
-            __llpl_defer_active181 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame180.env) != 0) {
-                __llpl_defer_active181 = 0;
-            SpinLock_release(&(self->gate));
-                llpl_eh_resume();
-                __builtin_unreachable();
-            }
-            if ((self->count != ((uintptr_t)0))) {
-                (self->count = (self->count - ((uintptr_t)1)));
-                acquired = 1;
-            } else {
-                prepared = Kern_prepare_block_current(self->waiters);
-            }
-            if (__llpl_defer_active181) {
-                __llpl_defer_active181 = 0;
-                llpl_eh_pop(&__llpl_defer_frame180);
-            SpinLock_release(&(self->gate));
-            }
-        }
-        if (acquired) {
-#line 348 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1084 = 1;
-            if (__llpl_defer_active181) {
-                __llpl_defer_active181 = 0;
-                llpl_eh_pop(&__llpl_defer_frame180);
-            SpinLock_release(&(self->gate));
-            }
-            return __llpl_ret1084;
-        }
-        if (!prepared) {
-#line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1085 = 0;
-            if (__llpl_defer_active181) {
-                __llpl_defer_active181 = 0;
-                llpl_eh_pop(&__llpl_defer_frame180);
-            SpinLock_release(&(self->gate));
-            }
-            return __llpl_ret1085;
-        }
-        Kern_scheduler_yield();
-    }
-    if (__llpl_defer_active181) {
-        __llpl_defer_active181 = 0;
-        llpl_eh_pop(&__llpl_defer_frame180);
-            SpinLock_release(&(self->gate));
-    }
-}
-
-bool Kern_Semaphore_wait_timeout_ticks(Kern_Semaphore* self, uintptr_t delay) {
-    __LLPL_EH_Frame __llpl_defer_frame182;
-    int __llpl_defer_active183 = 0;
-    if ((delay == ((uintptr_t)0))) {
-#line 359 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1086 = Kern_Semaphore_try_wait(self);
-        return __llpl_ret1086;
-    }
-#line 361 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    uintptr_t deadline = Timer_deadline_after_ticks(delay);
-    while (1) {
-#line 364 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool acquired = 0;
-#line 365 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->gate));
@@ -25748,11 +25784,7 @@ bool Kern_Semaphore_wait_timeout_ticks(Kern_Semaphore* self, uintptr_t delay) {
                 (self->count = (self->count - ((uintptr_t)1)));
                 acquired = 1;
             } else {
-#line 371 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-                uintptr_t now = Timer_current_tick();
-                if ((now < deadline)) {
-                    prepared = Kern_prepare_block_current_timeout_ticks(self->waiters, (deadline - now));
-                }
+                prepared = Kern_prepare_block_current(self->waiters);
             }
             if (__llpl_defer_active183) {
                 __llpl_defer_active183 = 0;
@@ -25761,25 +25793,26 @@ bool Kern_Semaphore_wait_timeout_ticks(Kern_Semaphore* self, uintptr_t delay) {
             }
         }
         if (acquired) {
-#line 378 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1087 = 1;
+#line 348 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1103 = 1;
             if (__llpl_defer_active183) {
                 __llpl_defer_active183 = 0;
                 llpl_eh_pop(&__llpl_defer_frame182);
             SpinLock_release(&(self->gate));
             }
-            return __llpl_ret1087;
+            return __llpl_ret1103;
         }
-        if ((!prepared || !Kern_finish_block_current_timeout())) {
-#line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-            bool __llpl_ret1088 = 0;
+        if (!prepared) {
+#line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1104 = 0;
             if (__llpl_defer_active183) {
                 __llpl_defer_active183 = 0;
                 llpl_eh_pop(&__llpl_defer_frame182);
             SpinLock_release(&(self->gate));
             }
-            return __llpl_ret1088;
+            return __llpl_ret1104;
         }
+        Kern_scheduler_yield();
     }
     if (__llpl_defer_active183) {
         __llpl_defer_active183 = 0;
@@ -25788,83 +25821,102 @@ bool Kern_Semaphore_wait_timeout_ticks(Kern_Semaphore* self, uintptr_t delay) {
     }
 }
 
+bool Kern_Semaphore_wait_timeout_ticks(Kern_Semaphore* self, uintptr_t delay) {
+    __LLPL_EH_Frame __llpl_defer_frame184;
+    int __llpl_defer_active185 = 0;
+    if ((delay == ((uintptr_t)0))) {
+#line 359 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool __llpl_ret1105 = Kern_Semaphore_try_wait(self);
+        return __llpl_ret1105;
+    }
+#line 361 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    uintptr_t deadline = Timer_deadline_after_ticks(delay);
+    while (1) {
+#line 364 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool acquired = 0;
+#line 365 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        bool prepared = 0;
+        {
+            SpinLock_acquire(&(self->gate));
+            __llpl_defer_frame184.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame184.type_id = ((void*)0);
+            __llpl_defer_frame184.error_slot = ((void*)0);
+            __llpl_defer_frame184.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame184);
+            __llpl_defer_active185 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame184.env) != 0) {
+                __llpl_defer_active185 = 0;
+            SpinLock_release(&(self->gate));
+                llpl_eh_resume();
+                __builtin_unreachable();
+            }
+            if ((self->count != ((uintptr_t)0))) {
+                (self->count = (self->count - ((uintptr_t)1)));
+                acquired = 1;
+            } else {
+#line 371 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+                uintptr_t now = Timer_current_tick();
+                if ((now < deadline)) {
+                    prepared = Kern_prepare_block_current_timeout_ticks(self->waiters, (deadline - now));
+                }
+            }
+            if (__llpl_defer_active185) {
+                __llpl_defer_active185 = 0;
+                llpl_eh_pop(&__llpl_defer_frame184);
+            SpinLock_release(&(self->gate));
+            }
+        }
+        if (acquired) {
+#line 378 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1106 = 1;
+            if (__llpl_defer_active185) {
+                __llpl_defer_active185 = 0;
+                llpl_eh_pop(&__llpl_defer_frame184);
+            SpinLock_release(&(self->gate));
+            }
+            return __llpl_ret1106;
+        }
+        if ((!prepared || !Kern_finish_block_current_timeout())) {
+#line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+            bool __llpl_ret1107 = 0;
+            if (__llpl_defer_active185) {
+                __llpl_defer_active185 = 0;
+                llpl_eh_pop(&__llpl_defer_frame184);
+            SpinLock_release(&(self->gate));
+            }
+            return __llpl_ret1107;
+        }
+    }
+    if (__llpl_defer_active185) {
+        __llpl_defer_active185 = 0;
+        llpl_eh_pop(&__llpl_defer_frame184);
+            SpinLock_release(&(self->gate));
+    }
+}
+
 bool Kern_Semaphore_wait_timeout_ms(Kern_Semaphore* self, uintptr_t milliseconds) {
     if ((milliseconds == ((uintptr_t)0))) {
 #line 388 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1089 = Kern_Semaphore_try_wait(self);
-        return __llpl_ret1089;
+        bool __llpl_ret1108 = Kern_Semaphore_try_wait(self);
+        return __llpl_ret1108;
     }
 #line 390 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     uintptr_t delay_ticks = (((milliseconds + ((uintptr_t)HAL_PIT_MSECS_PER_TICK)) - ((uintptr_t)1)) / ((uintptr_t)HAL_PIT_MSECS_PER_TICK));
 #line 391 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1090 = Kern_Semaphore_wait_timeout_ticks(self, delay_ticks);
-    return __llpl_ret1090;
+    bool __llpl_ret1109 = Kern_Semaphore_wait_timeout_ticks(self, delay_ticks);
+    return __llpl_ret1109;
 }
 
 bool Kern_Semaphore_post(Kern_Semaphore* self, uintptr_t amount) {
-    __LLPL_EH_Frame __llpl_defer_frame184;
-    int __llpl_defer_active185 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame186;
+    int __llpl_defer_active187 = 0;
     if ((amount == ((uintptr_t)0))) {
 #line 396 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        bool __llpl_ret1091 = 1;
-        return __llpl_ret1091;
+        bool __llpl_ret1110 = 1;
+        return __llpl_ret1110;
     }
 #line 398 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
     bool posted = 0;
-    {
-        SpinLock_acquire(&(self->gate));
-        __llpl_defer_frame184.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame184.type_id = ((void*)0);
-        __llpl_defer_frame184.error_slot = ((void*)0);
-        __llpl_defer_frame184.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame184);
-        __llpl_defer_active185 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame184.env) != 0) {
-            __llpl_defer_active185 = 0;
-        SpinLock_release(&(self->gate));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        if (((self->count + amount) >= self->count)) {
-            self->count = (self->count + amount);
-            posted = 1;
-        }
-        if (__llpl_defer_active185) {
-            __llpl_defer_active185 = 0;
-            llpl_eh_pop(&__llpl_defer_frame184);
-        SpinLock_release(&(self->gate));
-        }
-    }
-    if (posted) {
-#line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-        {
-            intptr_t __range_end1092 = amount;
-            intptr_t i = 0;
-            for (; i < __range_end1092; i = i + 1) {
-                Kern_wake_one(self->waiters);
-            }
-        }
-    }
-#line 410 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1093 = posted;
-    if (__llpl_defer_active185) {
-        __llpl_defer_active185 = 0;
-        llpl_eh_pop(&__llpl_defer_frame184);
-        SpinLock_release(&(self->gate));
-    }
-    return __llpl_ret1093;
-    if (__llpl_defer_active185) {
-        __llpl_defer_active185 = 0;
-        llpl_eh_pop(&__llpl_defer_frame184);
-        SpinLock_release(&(self->gate));
-    }
-}
-
-uintptr_t Kern_Semaphore_value(Kern_Semaphore* self) {
-    __LLPL_EH_Frame __llpl_defer_frame186;
-    int __llpl_defer_active187 = 0;
-#line 414 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    uintptr_t result = ((uintptr_t)0);
     {
         SpinLock_acquire(&(self->gate));
         __llpl_defer_frame186.kind = LLPL_EH_FRAME_CLEANUP;
@@ -25879,21 +25931,34 @@ uintptr_t Kern_Semaphore_value(Kern_Semaphore* self) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        result = self->count;
+        if (((self->count + amount) >= self->count)) {
+            self->count = (self->count + amount);
+            posted = 1;
+        }
         if (__llpl_defer_active187) {
             __llpl_defer_active187 = 0;
             llpl_eh_pop(&__llpl_defer_frame186);
         SpinLock_release(&(self->gate));
         }
     }
-#line 418 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    uintptr_t __llpl_ret1094 = result;
+    if (posted) {
+#line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+        {
+            intptr_t __range_end1111 = amount;
+            intptr_t i = 0;
+            for (; i < __range_end1111; i = i + 1) {
+                Kern_wake_one(self->waiters);
+            }
+        }
+    }
+#line 410 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    bool __llpl_ret1112 = posted;
     if (__llpl_defer_active187) {
         __llpl_defer_active187 = 0;
         llpl_eh_pop(&__llpl_defer_frame186);
         SpinLock_release(&(self->gate));
     }
-    return __llpl_ret1094;
+    return __llpl_ret1112;
     if (__llpl_defer_active187) {
         __llpl_defer_active187 = 0;
         llpl_eh_pop(&__llpl_defer_frame186);
@@ -25901,10 +25966,51 @@ uintptr_t Kern_Semaphore_value(Kern_Semaphore* self) {
     }
 }
 
+uintptr_t Kern_Semaphore_value(Kern_Semaphore* self) {
+    __LLPL_EH_Frame __llpl_defer_frame188;
+    int __llpl_defer_active189 = 0;
+#line 414 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    uintptr_t result = ((uintptr_t)0);
+    {
+        SpinLock_acquire(&(self->gate));
+        __llpl_defer_frame188.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame188.type_id = ((void*)0);
+        __llpl_defer_frame188.error_slot = ((void*)0);
+        __llpl_defer_frame188.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame188);
+        __llpl_defer_active189 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame188.env) != 0) {
+            __llpl_defer_active189 = 0;
+        SpinLock_release(&(self->gate));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        result = self->count;
+        if (__llpl_defer_active189) {
+            __llpl_defer_active189 = 0;
+            llpl_eh_pop(&__llpl_defer_frame188);
+        SpinLock_release(&(self->gate));
+        }
+    }
+#line 418 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
+    uintptr_t __llpl_ret1113 = result;
+    if (__llpl_defer_active189) {
+        __llpl_defer_active189 = 0;
+        llpl_eh_pop(&__llpl_defer_frame188);
+        SpinLock_release(&(self->gate));
+    }
+    return __llpl_ret1113;
+    if (__llpl_defer_active189) {
+        __llpl_defer_active189 = 0;
+        llpl_eh_pop(&__llpl_defer_frame188);
+        SpinLock_release(&(self->gate));
+    }
+}
+
 bool Kern_Semaphore_is_signaled(Kern_Semaphore* self) {
 #line 422 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/sync.llpl"
-    bool __llpl_ret1095 = (self->count != ((uintptr_t)0));
-    return __llpl_ret1095;
+    bool __llpl_ret1114 = (self->count != ((uintptr_t)0));
+    return __llpl_ret1114;
 }
 
 
@@ -25939,15 +26045,15 @@ Kern_TcpConnection Kern_tcp_connection;
 #line 40 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
 uint16_t Kern_be16(uint8_t* data, uintptr_t at) {
 #line 41 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    uint16_t __llpl_ret1096 = ((((uint16_t)data[at]) << ((uint16_t)8)) | ((uint16_t)data[(at + ((uintptr_t)1))]));
-    return __llpl_ret1096;
+    uint16_t __llpl_ret1115 = ((((uint16_t)data[at]) << ((uint16_t)8)) | ((uint16_t)data[(at + ((uintptr_t)1))]));
+    return __llpl_ret1115;
 }
 
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
 uint32_t Kern_be32(uint8_t* data, uintptr_t at) {
 #line 45 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    uint32_t __llpl_ret1097 = ((((((uint32_t)data[at]) << ((uint32_t)24)) | (((uint32_t)data[(at + ((uintptr_t)1))]) << ((uint32_t)16))) | (((uint32_t)data[(at + ((uintptr_t)2))]) << ((uint32_t)8))) | ((uint32_t)data[(at + ((uintptr_t)3))]));
-    return __llpl_ret1097;
+    uint32_t __llpl_ret1116 = ((((((uint32_t)data[at]) << ((uint32_t)24)) | (((uint32_t)data[(at + ((uintptr_t)1))]) << ((uint32_t)16))) | (((uint32_t)data[(at + ((uintptr_t)2))]) << ((uint32_t)8))) | ((uint32_t)data[(at + ((uintptr_t)3))]));
+    return __llpl_ret1116;
 }
 
 #line 49 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -25981,8 +26087,8 @@ uint16_t Kern_internet_checksum(uint8_t* data, uintptr_t length) {
         sum = ((sum & ((uint32_t)65535)) + (sum >> ((uint32_t)16)));
     }
 #line 70 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    uint16_t __llpl_ret1098 = ((uint16_t)~sum);
-    return __llpl_ret1098;
+    uint16_t __llpl_ret1117 = ((uint16_t)~sum);
+    return __llpl_ret1117;
 }
 
 #line 73 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26002,8 +26108,8 @@ uint16_t Kern_tcp_checksum(uint32_t source, uint32_t destination, uint8_t* tcp, 
         sum = ((sum & ((uint32_t)65535)) + (sum >> ((uint32_t)16)));
     }
 #line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    uint16_t __llpl_ret1099 = ((uint16_t)~sum);
-    return __llpl_ret1099;
+    uint16_t __llpl_ret1118 = ((uint16_t)~sum);
+    return __llpl_ret1118;
 }
 
 #line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26047,14 +26153,14 @@ intptr_t Kern_poll_frame(uint8_t* frame, uintptr_t deadline) {
         intptr_t length = ((Object_VTable*)(Kern_primary_network_device)->__vtable)->receive((Object*)(Kern_primary_network_device), frame, Kern_E1000_BUFFER_SIZE);
         if ((length > 0)) {
 #line 112 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            intptr_t __llpl_ret1100 = length;
-            return __llpl_ret1100;
+            intptr_t __llpl_ret1119 = length;
+            return __llpl_ret1119;
         }
         Kern_scheduler_yield();
     }
 #line 115 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    intptr_t __llpl_ret1101 = 0;
-    return __llpl_ret1101;
+    intptr_t __llpl_ret1120 = 0;
+    return __llpl_ret1120;
 }
 
 #line 118 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26087,8 +26193,8 @@ bool Kern_arp_resolve(uint32_t address, uint8_t* mac_out) {
     Kern_put32(&(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 130)), ((uintptr_t)38), address);
     if (!((Object_VTable*)(Kern_primary_network_device)->__vtable)->send((Object*)(Kern_primary_network_device), &(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 131)), ((uintptr_t)42))) {
 #line 131 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1102 = 0;
-        return __llpl_ret1102;
+        bool __llpl_ret1121 = 0;
+        return __llpl_ret1121;
     }
 #line 133 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uintptr_t deadline = (Timer_current_tick() + Kern_NET_WAIT_TICKS);
@@ -26097,8 +26203,8 @@ bool Kern_arp_resolve(uint32_t address, uint8_t* mac_out) {
         intptr_t length = Kern_poll_frame(&(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 135)), deadline);
         if ((length < 42)) {
 #line 136 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1103 = 0;
-            return __llpl_ret1103;
+            bool __llpl_ret1122 = 0;
+            return __llpl_ret1122;
         }
         if ((((Kern_be16(&(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 137)), ((uintptr_t)12)) == Kern_ETH_ARP) && (Kern_be16(&(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 137)), ((uintptr_t)20)) == ((uint16_t)2))) && (Kern_be32(&(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 138)), ((uintptr_t)28)) == address))) {
             {
@@ -26109,13 +26215,13 @@ bool Kern_arp_resolve(uint32_t address, uint8_t* mac_out) {
                 }
             }
 #line 140 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1104 = 1;
-            return __llpl_ret1104;
+            bool __llpl_ret1123 = 1;
+            return __llpl_ret1123;
         }
     }
 #line 143 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1105 = 0;
-    return __llpl_ret1105;
+    bool __llpl_ret1124 = 0;
+    return __llpl_ret1124;
 }
 
 #line 146 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26154,14 +26260,14 @@ uintptr_t Kern_dhcp_option(uint8_t* packet, uintptr_t length, uint8_t wanted, ui
                 }
             }
 #line 159 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            uintptr_t __llpl_ret1106 = size;
-            return __llpl_ret1106;
+            uintptr_t __llpl_ret1125 = size;
+            return __llpl_ret1125;
         }
         at = (at + size);
     }
 #line 163 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    uintptr_t __llpl_ret1107 = ((uintptr_t)0);
-    return __llpl_ret1107;
+    uintptr_t __llpl_ret1126 = ((uintptr_t)0);
+    return __llpl_ret1126;
 }
 
 #line 166 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26231,8 +26337,8 @@ bool Kern_send_dhcp(uint8_t message_type, uint32_t requested, uint32_t server, u
     Kern_put16(udp, ((uintptr_t)6), ((uint16_t)0));
     Kern_ipv4_header(ip, (((uintptr_t)8) + bootp_length), Kern_IP_UDP, ((uint32_t)0), ((uint32_t)4294967295), ((uint8_t)64));
 #line 212 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1108 = ((Object_VTable*)(Kern_primary_network_device)->__vtable)->send((Object*)(Kern_primary_network_device), &(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 212)), (((uintptr_t)((14 + 20) + 8)) + bootp_length));
-    return __llpl_ret1108;
+    bool __llpl_ret1127 = ((Object_VTable*)(Kern_primary_network_device)->__vtable)->send((Object*)(Kern_primary_network_device), &(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 212)), (((uintptr_t)((14 + 20) + 8)) + bootp_length));
+    return __llpl_ret1127;
 }
 
 #line 215 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26278,20 +26384,20 @@ bool Kern_wait_dhcp(uint32_t xid, uint8_t wanted_type, Kern_NetworkConfig* confi
             config->nameserver = Kern_be32(&(*(uint8_t*)__llpl_check_index(value, 0, 16, sizeof(uint8_t), "ipv4.llpl", 230)), ((uintptr_t)0));
         }
 #line 231 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1109 = 1;
-        return __llpl_ret1109;
+        bool __llpl_ret1128 = 1;
+        return __llpl_ret1128;
     }
 #line 233 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1110 = 0;
-    return __llpl_ret1110;
+    bool __llpl_ret1129 = 0;
+    return __llpl_ret1129;
 }
 
 #line 236 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
 bool Kern_dhcp_configure(Kern_NetworkConfig* out) {
     if (((Kern_primary_network_device == ((void*)0)) || !((Object_VTable*)(Kern_primary_network_device)->__vtable)->link_up((Object*)(Kern_primary_network_device)))) {
 #line 237 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1111 = 0;
-        return __llpl_ret1111;
+        bool __llpl_ret1130 = 0;
+        return __llpl_ret1130;
     }
 #line 238 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uint32_t xid = ((uint32_t)1280069708);
@@ -26299,18 +26405,18 @@ bool Kern_dhcp_configure(Kern_NetworkConfig* out) {
     Kern_NetworkConfig offer;
     if ((!Kern_send_dhcp(((uint8_t)1), ((uint32_t)0), ((uint32_t)0), xid) || !Kern_wait_dhcp(xid, ((uint8_t)2), &offer))) {
 #line 240 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1112 = 0;
-        return __llpl_ret1112;
+        bool __llpl_ret1131 = 0;
+        return __llpl_ret1131;
     }
     if ((!Kern_send_dhcp(((uint8_t)3), offer.address, offer.dhcp_server, xid) || !Kern_wait_dhcp(xid, ((uint8_t)5), out))) {
 #line 241 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1113 = 0;
-        return __llpl_ret1113;
+        bool __llpl_ret1132 = 0;
+        return __llpl_ret1132;
     }
     Kern_network_config = *out;
 #line 243 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1114 = 1;
-    return __llpl_ret1114;
+    bool __llpl_ret1133 = 1;
+    return __llpl_ret1133;
 }
 
 #line 246 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26324,45 +26430,45 @@ bool Kern_dns_skip_name(uint8_t* packet, uintptr_t length, uintptr_t* at_ptr) {
         if ((size == ((uintptr_t)0))) {
             *at_ptr = at;
 #line 253 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1115 = 1;
-            return __llpl_ret1115;
+            bool __llpl_ret1134 = 1;
+            return __llpl_ret1134;
         }
         if (((size & ((uintptr_t)192)) == ((uintptr_t)192))) {
             if ((at >= length)) {
 #line 256 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-                bool __llpl_ret1116 = 0;
-                return __llpl_ret1116;
+                bool __llpl_ret1135 = 0;
+                return __llpl_ret1135;
             }
             *at_ptr = (at + ((uintptr_t)1));
 #line 258 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1117 = 1;
-            return __llpl_ret1117;
+            bool __llpl_ret1136 = 1;
+            return __llpl_ret1136;
         }
         if (((size > ((uintptr_t)63)) || ((at + size) > length))) {
 #line 260 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1118 = 0;
-            return __llpl_ret1118;
+            bool __llpl_ret1137 = 0;
+            return __llpl_ret1137;
         }
         at = (at + size);
     }
 #line 263 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1119 = 0;
-    return __llpl_ret1119;
+    bool __llpl_ret1138 = 0;
+    return __llpl_ret1138;
 }
 
 #line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
 bool Kern_dns_resolve(String* hostname, uint32_t* out) {
     if (((((Kern_primary_network_device == ((void*)0)) || (Kern_network_config.address == ((uint32_t)0))) || (Kern_network_config.nameserver == ((uint32_t)0))) || (hostname == ((void*)0)))) {
 #line 268 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1120 = 0;
-        return __llpl_ret1120;
+        bool __llpl_ret1139 = 0;
+        return __llpl_ret1139;
     }
 #line 269 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     int64_t name_length = String_byte_len(hostname);
     if (((name_length == 0) || (name_length > 253))) {
 #line 270 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1121 = 0;
-        return __llpl_ret1121;
+        bool __llpl_ret1140 = 0;
+        return __llpl_ret1140;
     }
 #line 271 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uint8_t destination_mac[6];
@@ -26373,8 +26479,8 @@ bool Kern_dns_resolve(String* hostname, uint32_t* out) {
     }
     if (!Kern_arp_resolve(next_hop, &(*(uint8_t*)__llpl_check_index(destination_mac, 0, 6, sizeof(uint8_t), "ipv4.llpl", 275)))) {
 #line 275 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1122 = 0;
-        return __llpl_ret1122;
+        bool __llpl_ret1141 = 0;
+        return __llpl_ret1141;
     }
 #line 277 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uint8_t frame[2048];
@@ -26417,8 +26523,8 @@ bool Kern_dns_resolve(String* hostname, uint32_t* out) {
             if (((c == 46) || (c == ((char)0)))) {
                 if (((label_length == ((uintptr_t)0)) || (label_length > ((uintptr_t)63)))) {
 #line 296 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-                    bool __llpl_ret1123 = 0;
-                    return __llpl_ret1123;
+                    bool __llpl_ret1142 = 0;
+                    return __llpl_ret1142;
                 }
                 dns[label_position] = ((uint8_t)label_length);
                 label_length = ((uintptr_t)0);
@@ -26448,8 +26554,8 @@ bool Kern_dns_resolve(String* hostname, uint32_t* out) {
     Kern_ipv4_header(ip, (((uintptr_t)8) + cursor), Kern_IP_UDP, Kern_network_config.address, Kern_network_config.nameserver, ((uint8_t)64));
     if (!((Object_VTable*)(Kern_primary_network_device)->__vtable)->send((Object*)(Kern_primary_network_device), &(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 320)), (((uintptr_t)42) + cursor))) {
 #line 320 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1124 = 0;
-        return __llpl_ret1124;
+        bool __llpl_ret1143 = 0;
+        return __llpl_ret1143;
     }
 #line 322 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uintptr_t deadline = (Timer_current_tick() + Kern_NET_WAIT_TICKS);
@@ -26494,8 +26600,8 @@ bool Kern_dns_resolve(String* hostname, uint32_t* out) {
             for (; (question < ((uintptr_t)Kern_be16(reply, ((uintptr_t)4)))); (question = (question + ((uintptr_t)1)))) {
                 if ((!Kern_dns_skip_name(reply, dns_length, &at) || ((at + ((uintptr_t)4)) > dns_length))) {
 #line 338 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-                    bool __llpl_ret1125 = 0;
-                    return __llpl_ret1125;
+                    bool __llpl_ret1144 = 0;
+                    return __llpl_ret1144;
                 }
                 at = (at + ((uintptr_t)4));
             }
@@ -26506,8 +26612,8 @@ bool Kern_dns_resolve(String* hostname, uint32_t* out) {
             for (; (answer < ((uintptr_t)Kern_be16(reply, ((uintptr_t)6)))); (answer = (answer + ((uintptr_t)1)))) {
                 if ((!Kern_dns_skip_name(reply, dns_length, &at) || ((at + ((uintptr_t)10)) > dns_length))) {
 #line 342 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-                    bool __llpl_ret1126 = 0;
-                    return __llpl_ret1126;
+                    bool __llpl_ret1145 = 0;
+                    return __llpl_ret1145;
                 }
 #line 343 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
                 uint16_t kind = Kern_be16(reply, at);
@@ -26518,25 +26624,25 @@ bool Kern_dns_resolve(String* hostname, uint32_t* out) {
                 at = (at + ((uintptr_t)10));
                 if (((at + data_length) > dns_length)) {
 #line 347 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-                    bool __llpl_ret1127 = 0;
-                    return __llpl_ret1127;
+                    bool __llpl_ret1146 = 0;
+                    return __llpl_ret1146;
                 }
                 if ((((kind == ((uint16_t)1)) && (record_class == ((uint16_t)1))) && (data_length == ((uintptr_t)4)))) {
                     *out = Kern_be32(reply, at);
 #line 350 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-                    bool __llpl_ret1128 = 1;
-                    return __llpl_ret1128;
+                    bool __llpl_ret1147 = 1;
+                    return __llpl_ret1147;
                 }
                 at = (at + data_length);
             }
         }
 #line 354 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1129 = 0;
-        return __llpl_ret1129;
+        bool __llpl_ret1148 = 0;
+        return __llpl_ret1148;
     }
 #line 356 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1130 = 0;
-    return __llpl_ret1130;
+    bool __llpl_ret1149 = 0;
+    return __llpl_ret1149;
 }
 
 #line 359 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26572,8 +26678,8 @@ bool Kern_tcp_transmit(uint8_t flags, uint8_t* payload, uintptr_t payload_length
     Kern_put16(tcp, ((uintptr_t)16), Kern_tcp_checksum(Kern_network_config.address, Kern_tcp_connection.target, tcp, (((uintptr_t)20) + payload_length)));
     Kern_ipv4_header(ip, (((uintptr_t)20) + payload_length), Kern_IP_TCP, Kern_network_config.address, Kern_tcp_connection.target, ((uint8_t)64));
 #line 377 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1131 = ((Object_VTable*)(Kern_primary_network_device)->__vtable)->send((Object*)(Kern_primary_network_device), &(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 377)), (((uintptr_t)54) + payload_length));
-    return __llpl_ret1131;
+    bool __llpl_ret1150 = ((Object_VTable*)(Kern_primary_network_device)->__vtable)->send((Object*)(Kern_primary_network_device), &(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 377)), (((uintptr_t)54) + payload_length));
+    return __llpl_ret1150;
 }
 
 #line 380 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26602,8 +26708,8 @@ bool Kern_tcp_wait(uint8_t wanted_flags, uint8_t* output, uintptr_t capacity, ui
         if (((flags & ((uint8_t)4)) != ((uint8_t)0))) {
             Kern_tcp_connection.open = 0;
 #line 395 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1132 = 0;
-            return __llpl_ret1132;
+            bool __llpl_ret1151 = 0;
+            return __llpl_ret1151;
         }
 #line 397 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
         uintptr_t tcp_size = (((uintptr_t)(tcp[12] >> ((uint8_t)4))) * ((uintptr_t)4));
@@ -26653,35 +26759,35 @@ bool Kern_tcp_wait(uint8_t wanted_flags, uint8_t* output, uintptr_t capacity, ui
                 Kern_tcp_connection.open = 0;
             }
 #line 428 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1133 = 1;
-            return __llpl_ret1133;
+            bool __llpl_ret1152 = 1;
+            return __llpl_ret1152;
         }
         if (((wanted_flags != ((uint8_t)0)) && ((flags & wanted_flags) == wanted_flags))) {
             *received_out = ((uintptr_t)0);
 #line 432 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1134 = 1;
-            return __llpl_ret1134;
+            bool __llpl_ret1153 = 1;
+            return __llpl_ret1153;
         }
         if (((flags & ((uint8_t)1)) != ((uint8_t)0))) {
             Kern_tcp_transmit(((uint8_t)16), ((void*)0), ((uintptr_t)0));
             Kern_tcp_connection.open = 0;
             *received_out = ((uintptr_t)0);
 #line 438 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-            bool __llpl_ret1135 = 1;
-            return __llpl_ret1135;
+            bool __llpl_ret1154 = 1;
+            return __llpl_ret1154;
         }
     }
 #line 441 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1136 = 0;
-    return __llpl_ret1136;
+    bool __llpl_ret1155 = 0;
+    return __llpl_ret1155;
 }
 
 #line 444 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
 bool Kern_tcp_connect(uint32_t target, uint16_t port) {
     if (((Kern_primary_network_device == ((void*)0)) || (Kern_network_config.address == ((uint32_t)0)))) {
 #line 445 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1137 = 0;
-        return __llpl_ret1137;
+        bool __llpl_ret1156 = 0;
+        return __llpl_ret1156;
     }
 #line 446 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uint32_t next_hop = target;
@@ -26695,44 +26801,44 @@ bool Kern_tcp_connect(uint32_t target, uint16_t port) {
     Kern_tcp_connection.acknowledge = ((uint32_t)0);
     if ((!Kern_arp_resolve(next_hop, &(*(uint8_t*)__llpl_check_index(Kern_tcp_connection.mac, 0, 6, sizeof(uint8_t), "ipv4.llpl", 455))) || !Kern_tcp_transmit(((uint8_t)2), ((void*)0), ((uintptr_t)0)))) {
 #line 455 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1138 = 0;
-        return __llpl_ret1138;
+        bool __llpl_ret1157 = 0;
+        return __llpl_ret1157;
     }
 #line 456 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uintptr_t ignored = ((uintptr_t)0);
     if (!Kern_tcp_wait(((uint8_t)18), ((void*)0), ((uintptr_t)0), &ignored)) {
 #line 457 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1139 = 0;
-        return __llpl_ret1139;
+        bool __llpl_ret1158 = 0;
+        return __llpl_ret1158;
     }
     (Kern_tcp_connection.sequence = (Kern_tcp_connection.sequence + ((uint32_t)1)));
     if (!Kern_tcp_transmit(((uint8_t)16), ((void*)0), ((uintptr_t)0))) {
 #line 459 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1140 = 0;
-        return __llpl_ret1140;
+        bool __llpl_ret1159 = 0;
+        return __llpl_ret1159;
     }
     Kern_tcp_connection.open = 1;
 #line 461 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1141 = 1;
-    return __llpl_ret1141;
+    bool __llpl_ret1160 = 1;
+    return __llpl_ret1160;
 }
 
 #line 464 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
 bool Kern_tcp_send(uint8_t* data, uintptr_t length) {
     if (((!Kern_tcp_connection.open || (length == ((uintptr_t)0))) || (length > ((uintptr_t)1400)))) {
 #line 465 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1142 = 0;
-        return __llpl_ret1142;
+        bool __llpl_ret1161 = 0;
+        return __llpl_ret1161;
     }
     if (!Kern_tcp_transmit(((uint8_t)24), data, length)) {
 #line 466 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1143 = 0;
-        return __llpl_ret1143;
+        bool __llpl_ret1162 = 0;
+        return __llpl_ret1162;
     }
     Kern_tcp_connection.sequence = (Kern_tcp_connection.sequence + ((uint32_t)length));
 #line 468 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1144 = 1;
-    return __llpl_ret1144;
+    bool __llpl_ret1163 = 1;
+    return __llpl_ret1163;
 }
 
 #line 471 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26740,12 +26846,12 @@ bool Kern_tcp_receive(uint8_t* data, uintptr_t capacity, uintptr_t* received) {
     if (!Kern_tcp_connection.open) {
         *received = ((uintptr_t)0);
 #line 474 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1145 = 1;
-        return __llpl_ret1145;
+        bool __llpl_ret1164 = 1;
+        return __llpl_ret1164;
     }
 #line 476 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1146 = Kern_tcp_wait(((uint8_t)0), data, capacity, received);
-    return __llpl_ret1146;
+    bool __llpl_ret1165 = Kern_tcp_wait(((uint8_t)0), data, capacity, received);
+    return __llpl_ret1165;
 }
 
 #line 479 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
@@ -26764,8 +26870,8 @@ bool Kern_icmp_probe(uint32_t target, uint8_t ttl, uint16_t sequence, Kern_Probe
     result->ticks = ((uint32_t)0);
     if (((Kern_primary_network_device == ((void*)0)) || (Kern_network_config.address == ((uint32_t)0)))) {
 #line 491 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1147 = 0;
-        return __llpl_ret1147;
+        bool __llpl_ret1166 = 0;
+        return __llpl_ret1166;
     }
 #line 492 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uint32_t next_hop = target;
@@ -26776,8 +26882,8 @@ bool Kern_icmp_probe(uint32_t target, uint8_t ttl, uint16_t sequence, Kern_Probe
     uint8_t destination_mac[6];
     if (!Kern_arp_resolve(next_hop, &(*(uint8_t*)__llpl_check_index(destination_mac, 0, 6, sizeof(uint8_t), "ipv4.llpl", 497)))) {
 #line 497 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1148 = 0;
-        return __llpl_ret1148;
+        bool __llpl_ret1167 = 0;
+        return __llpl_ret1167;
     }
 #line 498 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uint8_t frame[2048];
@@ -26803,8 +26909,8 @@ bool Kern_icmp_probe(uint32_t target, uint8_t ttl, uint16_t sequence, Kern_Probe
     uintptr_t started = Timer_current_tick();
     if (!((Object_VTable*)(Kern_primary_network_device)->__vtable)->send((Object*)(Kern_primary_network_device), &(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 510)), ((uintptr_t)74))) {
 #line 510 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1149 = 0;
-        return __llpl_ret1149;
+        bool __llpl_ret1168 = 0;
+        return __llpl_ret1168;
     }
 #line 511 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
     uintptr_t deadline = (started + Kern_NET_WAIT_TICKS);
@@ -26838,12 +26944,12 @@ bool Kern_icmp_probe(uint32_t target, uint8_t ttl, uint16_t sequence, Kern_Probe
         result->responder = Kern_be32(&(*(uint8_t*)__llpl_check_index(frame, 0, 2048, sizeof(uint8_t), "ipv4.llpl", 522)), ((uintptr_t)26));
         result->ticks = ((uint32_t)(Timer_current_tick() - started));
 #line 524 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-        bool __llpl_ret1150 = 1;
-        return __llpl_ret1150;
+        bool __llpl_ret1169 = 1;
+        return __llpl_ret1169;
     }
 #line 526 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipv4.llpl"
-    bool __llpl_ret1151 = 1;
-    return __llpl_ret1151;
+    bool __llpl_ret1170 = 1;
+    return __llpl_ret1170;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl
@@ -26932,95 +27038,21 @@ void Kern_MessageQueue__destroy_impl(void* ptr) {
 
 bool Kern_MessageQueue_is_signaled(Kern_MessageQueue* self) {
 #line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    bool __llpl_ret1152 = (self->count != ((uintptr_t)0));
-    return __llpl_ret1152;
+    bool __llpl_ret1171 = (self->count != ((uintptr_t)0));
+    return __llpl_ret1171;
 }
 
 bool Kern_MessageQueue_is_message_queue(Kern_MessageQueue* self) {
 #line 66 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    bool __llpl_ret1153 = 1;
-    return __llpl_ret1153;
+    bool __llpl_ret1172 = 1;
+    return __llpl_ret1172;
 }
 
 bool Kern_MessageQueue_wait(Kern_MessageQueue* self) {
-    __LLPL_EH_Frame __llpl_defer_frame188;
-    int __llpl_defer_active189 = 0;
-    while (1) {
-#line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        bool prepared = 0;
-        {
-            SpinLock_acquire(&(self->lock));
-            __llpl_defer_frame188.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame188.type_id = ((void*)0);
-            __llpl_defer_frame188.error_slot = ((void*)0);
-            __llpl_defer_frame188.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame188);
-            __llpl_defer_active189 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame188.env) != 0) {
-                __llpl_defer_active189 = 0;
-            SpinLock_release(&(self->lock));
-                llpl_eh_resume();
-                __builtin_unreachable();
-            }
-            if ((self->count != ((uintptr_t)0))) {
-#line 73 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-                bool __llpl_ret1154 = 1;
-                if (__llpl_defer_active189) {
-                    __llpl_defer_active189 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame188);
-            SpinLock_release(&(self->lock));
-                }
-                return __llpl_ret1154;
-            }
-            prepared = Kern_prepare_block_current(self->readers);
-            if (__llpl_defer_active189) {
-                __llpl_defer_active189 = 0;
-                llpl_eh_pop(&__llpl_defer_frame188);
-            SpinLock_release(&(self->lock));
-            }
-        }
-        if (!prepared) {
-#line 76 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-            bool __llpl_ret1155 = 0;
-            if (__llpl_defer_active189) {
-                __llpl_defer_active189 = 0;
-                llpl_eh_pop(&__llpl_defer_frame188);
-            SpinLock_release(&(self->lock));
-            }
-            return __llpl_ret1155;
-        }
-        Kern_scheduler_yield();
-    }
-#line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    bool __llpl_ret1156 = 0;
-    if (__llpl_defer_active189) {
-        __llpl_defer_active189 = 0;
-        llpl_eh_pop(&__llpl_defer_frame188);
-            SpinLock_release(&(self->lock));
-    }
-    return __llpl_ret1156;
-    if (__llpl_defer_active189) {
-        __llpl_defer_active189 = 0;
-        llpl_eh_pop(&__llpl_defer_frame188);
-            SpinLock_release(&(self->lock));
-    }
-}
-
-intptr_t Kern_MessageQueue_send(Kern_MessageQueue* self, char* data, uintptr_t size, uintptr_t priority) {
     __LLPL_EH_Frame __llpl_defer_frame190;
     int __llpl_defer_active191 = 0;
-    if ((((data == ((void*)0)) || (size == ((uintptr_t)0))) || (size > ((uintptr_t)Kern_MESSAGE_MAX_SIZE)))) {
-#line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        intptr_t __llpl_ret1157 = EINVAL;
-        return __llpl_ret1157;
-    }
-#line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    char* copy = MM_malloc_char(size);
-    memcpy(((void*)copy), ((void*)data), size);
-#line 88 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    Kern_QueuedMessage* message = Kern_QueuedMessage_new(copy, size, priority);
     while (1) {
-#line 91 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+#line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->lock));
@@ -27032,6 +27064,80 @@ intptr_t Kern_MessageQueue_send(Kern_MessageQueue* self, char* data, uintptr_t s
             __llpl_defer_active191 = 1;
             if (llpl_eh_setjmp(&__llpl_defer_frame190.env) != 0) {
                 __llpl_defer_active191 = 0;
+            SpinLock_release(&(self->lock));
+                llpl_eh_resume();
+                __builtin_unreachable();
+            }
+            if ((self->count != ((uintptr_t)0))) {
+#line 73 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+                bool __llpl_ret1173 = 1;
+                if (__llpl_defer_active191) {
+                    __llpl_defer_active191 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame190);
+            SpinLock_release(&(self->lock));
+                }
+                return __llpl_ret1173;
+            }
+            prepared = Kern_prepare_block_current(self->readers);
+            if (__llpl_defer_active191) {
+                __llpl_defer_active191 = 0;
+                llpl_eh_pop(&__llpl_defer_frame190);
+            SpinLock_release(&(self->lock));
+            }
+        }
+        if (!prepared) {
+#line 76 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+            bool __llpl_ret1174 = 0;
+            if (__llpl_defer_active191) {
+                __llpl_defer_active191 = 0;
+                llpl_eh_pop(&__llpl_defer_frame190);
+            SpinLock_release(&(self->lock));
+            }
+            return __llpl_ret1174;
+        }
+        Kern_scheduler_yield();
+    }
+#line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    bool __llpl_ret1175 = 0;
+    if (__llpl_defer_active191) {
+        __llpl_defer_active191 = 0;
+        llpl_eh_pop(&__llpl_defer_frame190);
+            SpinLock_release(&(self->lock));
+    }
+    return __llpl_ret1175;
+    if (__llpl_defer_active191) {
+        __llpl_defer_active191 = 0;
+        llpl_eh_pop(&__llpl_defer_frame190);
+            SpinLock_release(&(self->lock));
+    }
+}
+
+intptr_t Kern_MessageQueue_send(Kern_MessageQueue* self, char* data, uintptr_t size, uintptr_t priority) {
+    __LLPL_EH_Frame __llpl_defer_frame192;
+    int __llpl_defer_active193 = 0;
+    if ((((data == ((void*)0)) || (size == ((uintptr_t)0))) || (size > ((uintptr_t)Kern_MESSAGE_MAX_SIZE)))) {
+#line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+        intptr_t __llpl_ret1176 = EINVAL;
+        return __llpl_ret1176;
+    }
+#line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    char* copy = MM_malloc_char(size);
+    memcpy(((void*)copy), ((void*)data), size);
+#line 88 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    Kern_QueuedMessage* message = Kern_QueuedMessage_new(copy, size, priority);
+    while (1) {
+#line 91 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+        bool prepared = 0;
+        {
+            SpinLock_acquire(&(self->lock));
+            __llpl_defer_frame192.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame192.type_id = ((void*)0);
+            __llpl_defer_frame192.error_slot = ((void*)0);
+            __llpl_defer_frame192.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame192);
+            __llpl_defer_active193 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame192.env) != 0) {
+                __llpl_defer_active193 = 0;
             SpinLock_release(&(self->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
@@ -27055,19 +27161,19 @@ intptr_t Kern_MessageQueue_send(Kern_MessageQueue* self, char* data, uintptr_t s
                 (self->count = (self->count + ((uintptr_t)1)));
                 Kern_wake_all(self->readers);
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-                intptr_t __llpl_ret1158 = ((intptr_t)size);
-                if (__llpl_defer_active191) {
-                    __llpl_defer_active191 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame190);
+                intptr_t __llpl_ret1177 = ((intptr_t)size);
+                if (__llpl_defer_active193) {
+                    __llpl_defer_active193 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame192);
             SpinLock_release(&(self->lock));
                 }
                 if (message) rc_release(message, Kern_QueuedMessage_destroy);
-                return __llpl_ret1158;
+                return __llpl_ret1177;
             }
             prepared = Kern_prepare_block_current(self->writers);
-            if (__llpl_defer_active191) {
-                __llpl_defer_active191 = 0;
-                llpl_eh_pop(&__llpl_defer_frame190);
+            if (__llpl_defer_active193) {
+                __llpl_defer_active193 = 0;
+                llpl_eh_pop(&__llpl_defer_frame192);
             SpinLock_release(&(self->lock));
             }
         }
@@ -27075,52 +27181,52 @@ intptr_t Kern_MessageQueue_send(Kern_MessageQueue* self, char* data, uintptr_t s
 #line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
             rc_release(message, Kern_QueuedMessage_destroy);
 #line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-            intptr_t __llpl_ret1159 = EINVAL;
-            if (__llpl_defer_active191) {
-                __llpl_defer_active191 = 0;
-                llpl_eh_pop(&__llpl_defer_frame190);
+            intptr_t __llpl_ret1178 = EINVAL;
+            if (__llpl_defer_active193) {
+                __llpl_defer_active193 = 0;
+                llpl_eh_pop(&__llpl_defer_frame192);
             SpinLock_release(&(self->lock));
             }
-            return __llpl_ret1159;
+            return __llpl_ret1178;
         }
         Kern_scheduler_yield();
     }
 #line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    intptr_t __llpl_ret1160 = EINVAL;
-    if (__llpl_defer_active191) {
-        __llpl_defer_active191 = 0;
-        llpl_eh_pop(&__llpl_defer_frame190);
+    intptr_t __llpl_ret1179 = EINVAL;
+    if (__llpl_defer_active193) {
+        __llpl_defer_active193 = 0;
+        llpl_eh_pop(&__llpl_defer_frame192);
             SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1160;
-    if (__llpl_defer_active191) {
-        __llpl_defer_active191 = 0;
-        llpl_eh_pop(&__llpl_defer_frame190);
+    return __llpl_ret1179;
+    if (__llpl_defer_active193) {
+        __llpl_defer_active193 = 0;
+        llpl_eh_pop(&__llpl_defer_frame192);
             SpinLock_release(&(self->lock));
     }
 }
 
 intptr_t Kern_MessageQueue_receive(Kern_MessageQueue* self, char* dest, uintptr_t capacity, uintptr_t* priority) {
-    __LLPL_EH_Frame __llpl_defer_frame192;
-    int __llpl_defer_active193 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame194;
+    int __llpl_defer_active195 = 0;
     if ((dest == ((void*)0))) {
 #line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        intptr_t __llpl_ret1161 = EINVAL;
-        return __llpl_ret1161;
+        intptr_t __llpl_ret1180 = EINVAL;
+        return __llpl_ret1180;
     }
     while (1) {
 #line 127 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->lock));
-            __llpl_defer_frame192.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame192.type_id = ((void*)0);
-            __llpl_defer_frame192.error_slot = ((void*)0);
-            __llpl_defer_frame192.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame192);
-            __llpl_defer_active193 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame192.env) != 0) {
-                __llpl_defer_active193 = 0;
+            __llpl_defer_frame194.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame194.type_id = ((void*)0);
+            __llpl_defer_frame194.error_slot = ((void*)0);
+            __llpl_defer_frame194.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame194);
+            __llpl_defer_active195 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame194.env) != 0) {
+                __llpl_defer_active195 = 0;
             SpinLock_release(&(self->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
@@ -27128,13 +27234,13 @@ intptr_t Kern_MessageQueue_receive(Kern_MessageQueue* self, char* dest, uintptr_
             if ((self->head != ((void*)0))) {
                 if ((capacity < self->head->size)) {
 #line 132 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-                    intptr_t __llpl_ret1162 = Kern_EMSGSIZE;
-                    if (__llpl_defer_active193) {
-                        __llpl_defer_active193 = 0;
-                        llpl_eh_pop(&__llpl_defer_frame192);
+                    intptr_t __llpl_ret1181 = Kern_EMSGSIZE;
+                    if (__llpl_defer_active195) {
+                        __llpl_defer_active195 = 0;
+                        llpl_eh_pop(&__llpl_defer_frame194);
             SpinLock_release(&(self->lock));
                     }
-                    return __llpl_ret1162;
+                    return __llpl_ret1181;
                 }
 #line 133 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
                 Kern_QueuedMessage* message = self->head;
@@ -27151,44 +27257,44 @@ intptr_t Kern_MessageQueue_receive(Kern_MessageQueue* self, char* dest, uintptr_
                 rc_release(message, Kern_QueuedMessage_destroy);
                 Kern_wake_all(self->writers);
 #line 142 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-                intptr_t __llpl_ret1163 = ((intptr_t)size);
-                if (__llpl_defer_active193) {
-                    __llpl_defer_active193 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame192);
+                intptr_t __llpl_ret1182 = ((intptr_t)size);
+                if (__llpl_defer_active195) {
+                    __llpl_defer_active195 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame194);
             SpinLock_release(&(self->lock));
                 }
-                return __llpl_ret1163;
+                return __llpl_ret1182;
             }
             prepared = Kern_prepare_block_current(self->readers);
-            if (__llpl_defer_active193) {
-                __llpl_defer_active193 = 0;
-                llpl_eh_pop(&__llpl_defer_frame192);
+            if (__llpl_defer_active195) {
+                __llpl_defer_active195 = 0;
+                llpl_eh_pop(&__llpl_defer_frame194);
             SpinLock_release(&(self->lock));
             }
         }
         if (!prepared) {
 #line 146 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-            intptr_t __llpl_ret1164 = EINVAL;
-            if (__llpl_defer_active193) {
-                __llpl_defer_active193 = 0;
-                llpl_eh_pop(&__llpl_defer_frame192);
+            intptr_t __llpl_ret1183 = EINVAL;
+            if (__llpl_defer_active195) {
+                __llpl_defer_active195 = 0;
+                llpl_eh_pop(&__llpl_defer_frame194);
             SpinLock_release(&(self->lock));
             }
-            return __llpl_ret1164;
+            return __llpl_ret1183;
         }
         Kern_scheduler_yield();
     }
 #line 149 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    intptr_t __llpl_ret1165 = EINVAL;
-    if (__llpl_defer_active193) {
-        __llpl_defer_active193 = 0;
-        llpl_eh_pop(&__llpl_defer_frame192);
+    intptr_t __llpl_ret1184 = EINVAL;
+    if (__llpl_defer_active195) {
+        __llpl_defer_active195 = 0;
+        llpl_eh_pop(&__llpl_defer_frame194);
             SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1165;
-    if (__llpl_defer_active193) {
-        __llpl_defer_active193 = 0;
-        llpl_eh_pop(&__llpl_defer_frame192);
+    return __llpl_ret1184;
+    if (__llpl_defer_active195) {
+        __llpl_defer_active195 = 0;
+        llpl_eh_pop(&__llpl_defer_frame194);
             SpinLock_release(&(self->lock));
     }
 }
@@ -27204,47 +27310,47 @@ void Kern_message_queue_init() {
 
 #line 159 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
 intptr_t Kern_message_queue_create(Kern_Process* proc, String* name, uintptr_t capacity) {
-    __LLPL_EH_Frame __llpl_defer_frame194;
-    int __llpl_defer_active195 = 0;
     __LLPL_EH_Frame __llpl_defer_frame196;
     int __llpl_defer_active197 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame198;
+    int __llpl_defer_active199 = 0;
     if ((((((proc == ((void*)0)) || (name == ((void*)0))) || (String_byte_len(name) == 0)) || (capacity == ((uintptr_t)0))) || (capacity > ((uintptr_t)Kern_MESSAGE_QUEUE_MAX_DEPTH)))) {
 #line 162 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        intptr_t __llpl_ret1166 = EINVAL;
-        return __llpl_ret1166;
+        intptr_t __llpl_ret1185 = EINVAL;
+        return __llpl_ret1185;
     }
 #line 164 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
     Kern_MessageQueue* queue = ((void*)0);
     {
         SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame194.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame194.type_id = ((void*)0);
-        __llpl_defer_frame194.error_slot = ((void*)0);
-        __llpl_defer_frame194.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame194);
-        __llpl_defer_active195 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame194.env) != 0) {
-            __llpl_defer_active195 = 0;
+        __llpl_defer_frame196.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame196.type_id = ((void*)0);
+        __llpl_defer_frame196.error_slot = ((void*)0);
+        __llpl_defer_frame196.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame196);
+        __llpl_defer_active197 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame196.env) != 0) {
+            __llpl_defer_active197 = 0;
         SpinLock_release(&(Kern_lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         if (HashMap_String_Kern_MessageQueue_contains(Kern_message_queues, name)) {
 #line 166 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-            intptr_t __llpl_ret1167 = EEXIST;
-            if (__llpl_defer_active195) {
-                __llpl_defer_active195 = 0;
-                llpl_eh_pop(&__llpl_defer_frame194);
+            intptr_t __llpl_ret1186 = EEXIST;
+            if (__llpl_defer_active197) {
+                __llpl_defer_active197 = 0;
+                llpl_eh_pop(&__llpl_defer_frame196);
         SpinLock_release(&(Kern_lock));
             }
             if (queue) rc_release(queue, Kern_MessageQueue_destroy);
-            return __llpl_ret1167;
+            return __llpl_ret1186;
         }
         ({ Kern_MessageQueue* __llpl_assign_tmp158 = Kern_MessageQueue_new(name, capacity); if (queue) rc_release(queue, Kern_MessageQueue_destroy); queue = __llpl_assign_tmp158; queue; });
         HashMap_String_Kern_MessageQueue_insert(Kern_message_queues, name, queue);
-        if (__llpl_defer_active195) {
-            __llpl_defer_active195 = 0;
-            llpl_eh_pop(&__llpl_defer_frame194);
+        if (__llpl_defer_active197) {
+            __llpl_defer_active197 = 0;
+            llpl_eh_pop(&__llpl_defer_frame196);
         SpinLock_release(&(Kern_lock));
         }
     }
@@ -27253,22 +27359,22 @@ intptr_t Kern_message_queue_create(Kern_Process* proc, String* name, uintptr_t c
     if ((fd < 0)) {
         {
             SpinLock_acquire(&(Kern_lock));
-            __llpl_defer_frame196.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame196.type_id = ((void*)0);
-            __llpl_defer_frame196.error_slot = ((void*)0);
-            __llpl_defer_frame196.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame196);
-            __llpl_defer_active197 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame196.env) != 0) {
-                __llpl_defer_active197 = 0;
+            __llpl_defer_frame198.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame198.type_id = ((void*)0);
+            __llpl_defer_frame198.error_slot = ((void*)0);
+            __llpl_defer_frame198.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame198);
+            __llpl_defer_active199 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame198.env) != 0) {
+                __llpl_defer_active199 = 0;
             SpinLock_release(&(Kern_lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             HashMap_String_Kern_MessageQueue_remove(Kern_message_queues, name);
-            if (__llpl_defer_active197) {
-                __llpl_defer_active197 = 0;
-                llpl_eh_pop(&__llpl_defer_frame196);
+            if (__llpl_defer_active199) {
+                __llpl_defer_active199 = 0;
+                llpl_eh_pop(&__llpl_defer_frame198);
             SpinLock_release(&(Kern_lock));
             }
         }
@@ -27276,107 +27382,40 @@ intptr_t Kern_message_queue_create(Kern_Process* proc, String* name, uintptr_t c
 #line 174 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
     rc_release(queue, Kern_MessageQueue_destroy);
 #line 175 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    intptr_t __llpl_ret1168 = fd;
+    intptr_t __llpl_ret1187 = fd;
+    if (__llpl_defer_active199) {
+        __llpl_defer_active199 = 0;
+        llpl_eh_pop(&__llpl_defer_frame198);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active197) {
         __llpl_defer_active197 = 0;
         llpl_eh_pop(&__llpl_defer_frame196);
-            SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active195) {
-        __llpl_defer_active195 = 0;
-        llpl_eh_pop(&__llpl_defer_frame194);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret1168;
+    return __llpl_ret1187;
+    if (__llpl_defer_active199) {
+        __llpl_defer_active199 = 0;
+        llpl_eh_pop(&__llpl_defer_frame198);
+            SpinLock_release(&(Kern_lock));
+    }
     if (__llpl_defer_active197) {
         __llpl_defer_active197 = 0;
         llpl_eh_pop(&__llpl_defer_frame196);
-            SpinLock_release(&(Kern_lock));
-    }
-    if (__llpl_defer_active195) {
-        __llpl_defer_active195 = 0;
-        llpl_eh_pop(&__llpl_defer_frame194);
         SpinLock_release(&(Kern_lock));
     }
 }
 
 #line 178 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
 intptr_t Kern_message_queue_open(Kern_Process* proc, String* name) {
-    __LLPL_EH_Frame __llpl_defer_frame198;
-    int __llpl_defer_active199 = 0;
-    if ((((proc == ((void*)0)) || (name == ((void*)0))) || (String_byte_len(name) == 0))) {
-#line 179 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        intptr_t __llpl_ret1169 = EINVAL;
-        return __llpl_ret1169;
-    }
-#line 180 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    Kern_MessageQueue* queue = ((void*)0);
-    {
-        SpinLock_acquire(&(Kern_lock));
-        __llpl_defer_frame198.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame198.type_id = ((void*)0);
-        __llpl_defer_frame198.error_slot = ((void*)0);
-        __llpl_defer_frame198.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame198);
-        __llpl_defer_active199 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame198.env) != 0) {
-            __llpl_defer_active199 = 0;
-        SpinLock_release(&(Kern_lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-#line 182 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        Optional_Kern_MessageQueue* found = HashMap_String_Kern_MessageQueue_get(Kern_message_queues, name);
-        if (Optional_Kern_MessageQueue_is_none(found)) {
-#line 183 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-            intptr_t __llpl_ret1170 = ENOENT;
-            if (__llpl_defer_active199) {
-                __llpl_defer_active199 = 0;
-                llpl_eh_pop(&__llpl_defer_frame198);
-        SpinLock_release(&(Kern_lock));
-            }
-            if (queue) rc_release(queue, Kern_MessageQueue_destroy);
-            return __llpl_ret1170;
-        }
-        ({ Kern_MessageQueue* __llpl_assign_tmp159 = Optional_Kern_MessageQueue_get(found); if (queue) rc_release(queue, Kern_MessageQueue_destroy); queue = __llpl_assign_tmp159; queue; });
-        rc_retain(((char*)queue));
-#line 186 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        rc_release(found, Optional_Kern_MessageQueue_destroy);
-        if (__llpl_defer_active199) {
-            __llpl_defer_active199 = 0;
-            llpl_eh_pop(&__llpl_defer_frame198);
-        SpinLock_release(&(Kern_lock));
-        }
-    }
-#line 188 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    intptr_t fd = Kern_DescriptorTable_install_waitable(proc->fds, ((Kern_Waitable*)queue));
-#line 189 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    rc_release(queue, Kern_MessageQueue_destroy);
-#line 190 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    intptr_t __llpl_ret1171 = fd;
-    if (__llpl_defer_active199) {
-        __llpl_defer_active199 = 0;
-        llpl_eh_pop(&__llpl_defer_frame198);
-        SpinLock_release(&(Kern_lock));
-    }
-    return __llpl_ret1171;
-    if (__llpl_defer_active199) {
-        __llpl_defer_active199 = 0;
-        llpl_eh_pop(&__llpl_defer_frame198);
-        SpinLock_release(&(Kern_lock));
-    }
-}
-
-#line 193 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-intptr_t Kern_message_queue_unlink(String* name) {
     __LLPL_EH_Frame __llpl_defer_frame200;
     int __llpl_defer_active201 = 0;
-    if ((name == ((void*)0))) {
-#line 194 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-        intptr_t __llpl_ret1172 = EINVAL;
-        return __llpl_ret1172;
+    if ((((proc == ((void*)0)) || (name == ((void*)0))) || (String_byte_len(name) == 0))) {
+#line 179 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+        intptr_t __llpl_ret1188 = EINVAL;
+        return __llpl_ret1188;
     }
-#line 195 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+#line 180 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
     Kern_MessageQueue* queue = ((void*)0);
     {
         SpinLock_acquire(&(Kern_lock));
@@ -27392,22 +27431,22 @@ intptr_t Kern_message_queue_unlink(String* name) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
-#line 197 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+#line 182 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
         Optional_Kern_MessageQueue* found = HashMap_String_Kern_MessageQueue_get(Kern_message_queues, name);
         if (Optional_Kern_MessageQueue_is_none(found)) {
-#line 198 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-            intptr_t __llpl_ret1173 = ENOENT;
+#line 183 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+            intptr_t __llpl_ret1189 = ENOENT;
             if (__llpl_defer_active201) {
                 __llpl_defer_active201 = 0;
                 llpl_eh_pop(&__llpl_defer_frame200);
         SpinLock_release(&(Kern_lock));
             }
             if (queue) rc_release(queue, Kern_MessageQueue_destroy);
-            return __llpl_ret1173;
+            return __llpl_ret1189;
         }
-        ({ Kern_MessageQueue* __llpl_assign_tmp160 = Optional_Kern_MessageQueue_get(found); if (queue) rc_release(queue, Kern_MessageQueue_destroy); queue = __llpl_assign_tmp160; queue; });
-        HashMap_String_Kern_MessageQueue_remove(Kern_message_queues, name);
-#line 201 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+        ({ Kern_MessageQueue* __llpl_assign_tmp159 = Optional_Kern_MessageQueue_get(found); if (queue) rc_release(queue, Kern_MessageQueue_destroy); queue = __llpl_assign_tmp159; queue; });
+        rc_retain(((char*)queue));
+#line 186 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
         rc_release(found, Optional_Kern_MessageQueue_destroy);
         if (__llpl_defer_active201) {
             __llpl_defer_active201 = 0;
@@ -27415,19 +27454,86 @@ intptr_t Kern_message_queue_unlink(String* name) {
         SpinLock_release(&(Kern_lock));
         }
     }
-#line 203 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+#line 188 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    intptr_t fd = Kern_DescriptorTable_install_waitable(proc->fds, ((Kern_Waitable*)queue));
+#line 189 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
     rc_release(queue, Kern_MessageQueue_destroy);
-#line 204 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
-    intptr_t __llpl_ret1174 = EOK;
+#line 190 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    intptr_t __llpl_ret1190 = fd;
     if (__llpl_defer_active201) {
         __llpl_defer_active201 = 0;
         llpl_eh_pop(&__llpl_defer_frame200);
         SpinLock_release(&(Kern_lock));
     }
-    return __llpl_ret1174;
+    return __llpl_ret1190;
     if (__llpl_defer_active201) {
         __llpl_defer_active201 = 0;
         llpl_eh_pop(&__llpl_defer_frame200);
+        SpinLock_release(&(Kern_lock));
+    }
+}
+
+#line 193 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+intptr_t Kern_message_queue_unlink(String* name) {
+    __LLPL_EH_Frame __llpl_defer_frame202;
+    int __llpl_defer_active203 = 0;
+    if ((name == ((void*)0))) {
+#line 194 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+        intptr_t __llpl_ret1191 = EINVAL;
+        return __llpl_ret1191;
+    }
+#line 195 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    Kern_MessageQueue* queue = ((void*)0);
+    {
+        SpinLock_acquire(&(Kern_lock));
+        __llpl_defer_frame202.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame202.type_id = ((void*)0);
+        __llpl_defer_frame202.error_slot = ((void*)0);
+        __llpl_defer_frame202.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame202);
+        __llpl_defer_active203 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame202.env) != 0) {
+            __llpl_defer_active203 = 0;
+        SpinLock_release(&(Kern_lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+#line 197 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+        Optional_Kern_MessageQueue* found = HashMap_String_Kern_MessageQueue_get(Kern_message_queues, name);
+        if (Optional_Kern_MessageQueue_is_none(found)) {
+#line 198 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+            intptr_t __llpl_ret1192 = ENOENT;
+            if (__llpl_defer_active203) {
+                __llpl_defer_active203 = 0;
+                llpl_eh_pop(&__llpl_defer_frame202);
+        SpinLock_release(&(Kern_lock));
+            }
+            if (queue) rc_release(queue, Kern_MessageQueue_destroy);
+            return __llpl_ret1192;
+        }
+        ({ Kern_MessageQueue* __llpl_assign_tmp160 = Optional_Kern_MessageQueue_get(found); if (queue) rc_release(queue, Kern_MessageQueue_destroy); queue = __llpl_assign_tmp160; queue; });
+        HashMap_String_Kern_MessageQueue_remove(Kern_message_queues, name);
+#line 201 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+        rc_release(found, Optional_Kern_MessageQueue_destroy);
+        if (__llpl_defer_active203) {
+            __llpl_defer_active203 = 0;
+            llpl_eh_pop(&__llpl_defer_frame202);
+        SpinLock_release(&(Kern_lock));
+        }
+    }
+#line 203 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    rc_release(queue, Kern_MessageQueue_destroy);
+#line 204 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ipc.llpl"
+    intptr_t __llpl_ret1193 = EOK;
+    if (__llpl_defer_active203) {
+        __llpl_defer_active203 = 0;
+        llpl_eh_pop(&__llpl_defer_frame202);
+        SpinLock_release(&(Kern_lock));
+    }
+    return __llpl_ret1193;
+    if (__llpl_defer_active203) {
+        __llpl_defer_active203 = 0;
+        llpl_eh_pop(&__llpl_defer_frame202);
         SpinLock_release(&(Kern_lock));
     }
 }
@@ -27475,102 +27581,10 @@ void Kern_Pipe__destroy_impl(void* ptr) {
 }
 
 intptr_t Kern_Pipe_read(Kern_Pipe* self, char* dest, uintptr_t size) {
-    __LLPL_EH_Frame __llpl_defer_frame202;
-    int __llpl_defer_active203 = 0;
-    while (1) {
-#line 34 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        bool prepared = 0;
-        {
-            SpinLock_acquire(&(self->lock));
-            __llpl_defer_frame202.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame202.type_id = ((void*)0);
-            __llpl_defer_frame202.error_slot = ((void*)0);
-            __llpl_defer_frame202.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame202);
-            __llpl_defer_active203 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame202.env) != 0) {
-                __llpl_defer_active203 = 0;
-            SpinLock_release(&(self->lock));
-                llpl_eh_resume();
-                __builtin_unreachable();
-            }
-            if ((self->count != ((uintptr_t)0))) {
-#line 37 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                uintptr_t amount = size;
-                if ((amount > self->count)) {
-                    amount = self->count;
-                }
-#line 39 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                {
-                    intptr_t __range_end1175 = amount;
-                    intptr_t i = 0;
-                    for (; i < __range_end1175; i = i + 1) {
-                        dest[i] = (*(char*)__llpl_check_index(self->buffer, self->read_at, 4096, sizeof(char), "handle.llpl", 40));
-                        self->read_at = ((self->read_at + ((uintptr_t)1)) % ((uintptr_t)Kern_PIPE_CAPACITY));
-                    }
-                }
-                self->count = (self->count - amount);
-                Kern_wake_all(self->write_waiters);
-#line 45 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                intptr_t __llpl_ret1176 = ((intptr_t)amount);
-                if (__llpl_defer_active203) {
-                    __llpl_defer_active203 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame202);
-            SpinLock_release(&(self->lock));
-                }
-                return __llpl_ret1176;
-            }
-            if ((self->writers == ((uintptr_t)0))) {
-#line 47 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                intptr_t __llpl_ret1177 = 0;
-                if (__llpl_defer_active203) {
-                    __llpl_defer_active203 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame202);
-            SpinLock_release(&(self->lock));
-                }
-                return __llpl_ret1177;
-            }
-            prepared = Kern_prepare_block_current(self->read_waiters);
-            if (__llpl_defer_active203) {
-                __llpl_defer_active203 = 0;
-                llpl_eh_pop(&__llpl_defer_frame202);
-            SpinLock_release(&(self->lock));
-            }
-        }
-        if (!prepared) {
-#line 50 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-            intptr_t __llpl_ret1178 = EINVAL;
-            if (__llpl_defer_active203) {
-                __llpl_defer_active203 = 0;
-                llpl_eh_pop(&__llpl_defer_frame202);
-            SpinLock_release(&(self->lock));
-            }
-            return __llpl_ret1178;
-        }
-        Kern_scheduler_yield();
-    }
-#line 53 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1179 = EINVAL;
-    if (__llpl_defer_active203) {
-        __llpl_defer_active203 = 0;
-        llpl_eh_pop(&__llpl_defer_frame202);
-            SpinLock_release(&(self->lock));
-    }
-    return __llpl_ret1179;
-    if (__llpl_defer_active203) {
-        __llpl_defer_active203 = 0;
-        llpl_eh_pop(&__llpl_defer_frame202);
-            SpinLock_release(&(self->lock));
-    }
-}
-
-intptr_t Kern_Pipe_write(Kern_Pipe* self, char* src, uintptr_t size) {
     __LLPL_EH_Frame __llpl_defer_frame204;
     int __llpl_defer_active205 = 0;
-#line 57 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    uintptr_t written = ((uintptr_t)0);
-    while ((written < size)) {
-#line 59 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    while (1) {
+#line 34 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->lock));
@@ -27586,25 +27600,117 @@ intptr_t Kern_Pipe_write(Kern_Pipe* self, char* src, uintptr_t size) {
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
-            if ((self->readers == ((uintptr_t)0))) {
-                if ((written == ((uintptr_t)0))) {
-#line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                    intptr_t __llpl_ret1180 = Kern_EPIPE;
-                    if (__llpl_defer_active205) {
-                        __llpl_defer_active205 = 0;
-                        llpl_eh_pop(&__llpl_defer_frame204);
-            SpinLock_release(&(self->lock));
-                    }
-                    return __llpl_ret1180;
+            if ((self->count != ((uintptr_t)0))) {
+#line 37 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+                uintptr_t amount = size;
+                if ((amount > self->count)) {
+                    amount = self->count;
                 }
-#line 63 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                intptr_t __llpl_ret1181 = ((intptr_t)written);
+#line 39 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+                {
+                    intptr_t __range_end1194 = amount;
+                    intptr_t i = 0;
+                    for (; i < __range_end1194; i = i + 1) {
+                        dest[i] = (*(char*)__llpl_check_index(self->buffer, self->read_at, 4096, sizeof(char), "handle.llpl", 40));
+                        self->read_at = ((self->read_at + ((uintptr_t)1)) % ((uintptr_t)Kern_PIPE_CAPACITY));
+                    }
+                }
+                self->count = (self->count - amount);
+                Kern_wake_all(self->write_waiters);
+#line 45 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+                intptr_t __llpl_ret1195 = ((intptr_t)amount);
                 if (__llpl_defer_active205) {
                     __llpl_defer_active205 = 0;
                     llpl_eh_pop(&__llpl_defer_frame204);
             SpinLock_release(&(self->lock));
                 }
-                return __llpl_ret1181;
+                return __llpl_ret1195;
+            }
+            if ((self->writers == ((uintptr_t)0))) {
+#line 47 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+                intptr_t __llpl_ret1196 = 0;
+                if (__llpl_defer_active205) {
+                    __llpl_defer_active205 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame204);
+            SpinLock_release(&(self->lock));
+                }
+                return __llpl_ret1196;
+            }
+            prepared = Kern_prepare_block_current(self->read_waiters);
+            if (__llpl_defer_active205) {
+                __llpl_defer_active205 = 0;
+                llpl_eh_pop(&__llpl_defer_frame204);
+            SpinLock_release(&(self->lock));
+            }
+        }
+        if (!prepared) {
+#line 50 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+            intptr_t __llpl_ret1197 = EINVAL;
+            if (__llpl_defer_active205) {
+                __llpl_defer_active205 = 0;
+                llpl_eh_pop(&__llpl_defer_frame204);
+            SpinLock_release(&(self->lock));
+            }
+            return __llpl_ret1197;
+        }
+        Kern_scheduler_yield();
+    }
+#line 53 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t __llpl_ret1198 = EINVAL;
+    if (__llpl_defer_active205) {
+        __llpl_defer_active205 = 0;
+        llpl_eh_pop(&__llpl_defer_frame204);
+            SpinLock_release(&(self->lock));
+    }
+    return __llpl_ret1198;
+    if (__llpl_defer_active205) {
+        __llpl_defer_active205 = 0;
+        llpl_eh_pop(&__llpl_defer_frame204);
+            SpinLock_release(&(self->lock));
+    }
+}
+
+intptr_t Kern_Pipe_write(Kern_Pipe* self, char* src, uintptr_t size) {
+    __LLPL_EH_Frame __llpl_defer_frame206;
+    int __llpl_defer_active207 = 0;
+#line 57 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    uintptr_t written = ((uintptr_t)0);
+    while ((written < size)) {
+#line 59 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        bool prepared = 0;
+        {
+            SpinLock_acquire(&(self->lock));
+            __llpl_defer_frame206.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame206.type_id = ((void*)0);
+            __llpl_defer_frame206.error_slot = ((void*)0);
+            __llpl_defer_frame206.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame206);
+            __llpl_defer_active207 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame206.env) != 0) {
+                __llpl_defer_active207 = 0;
+            SpinLock_release(&(self->lock));
+                llpl_eh_resume();
+                __builtin_unreachable();
+            }
+            if ((self->readers == ((uintptr_t)0))) {
+                if ((written == ((uintptr_t)0))) {
+#line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+                    intptr_t __llpl_ret1199 = Kern_EPIPE;
+                    if (__llpl_defer_active207) {
+                        __llpl_defer_active207 = 0;
+                        llpl_eh_pop(&__llpl_defer_frame206);
+            SpinLock_release(&(self->lock));
+                    }
+                    return __llpl_ret1199;
+                }
+#line 63 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+                intptr_t __llpl_ret1200 = ((intptr_t)written);
+                if (__llpl_defer_active207) {
+                    __llpl_defer_active207 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame206);
+            SpinLock_release(&(self->lock));
+                }
+                return __llpl_ret1200;
             }
 #line 65 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
             uintptr_t room = (((uintptr_t)Kern_PIPE_CAPACITY) - self->count);
@@ -27616,9 +27722,9 @@ intptr_t Kern_Pipe_write(Kern_Pipe* self, char* src, uintptr_t size) {
                 }
 #line 69 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
                 {
-                    intptr_t __range_end1182 = amount;
+                    intptr_t __range_end1201 = amount;
                     intptr_t i = 0;
-                    for (; i < __range_end1182; i = i + 1) {
+                    for (; i < __range_end1201; i = i + 1) {
                         (*(char*)__llpl_check_index(self->buffer, self->write_at, 4096, sizeof(char), "handle.llpl", 70)) = src[(written + ((uintptr_t)i))];
                         self->write_at = ((self->write_at + ((uintptr_t)1)) % ((uintptr_t)Kern_PIPE_CAPACITY));
                     }
@@ -27629,9 +27735,9 @@ intptr_t Kern_Pipe_write(Kern_Pipe* self, char* src, uintptr_t size) {
             } else {
                 prepared = Kern_prepare_block_current(self->write_waiters);
             }
-            if (__llpl_defer_active205) {
-                __llpl_defer_active205 = 0;
-                llpl_eh_pop(&__llpl_defer_frame204);
+            if (__llpl_defer_active207) {
+                __llpl_defer_active207 = 0;
+                llpl_eh_pop(&__llpl_defer_frame206);
             SpinLock_release(&(self->lock));
             }
         }
@@ -27640,55 +27746,21 @@ intptr_t Kern_Pipe_write(Kern_Pipe* self, char* src, uintptr_t size) {
         }
     }
 #line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1183 = ((intptr_t)written);
-    if (__llpl_defer_active205) {
-        __llpl_defer_active205 = 0;
-        llpl_eh_pop(&__llpl_defer_frame204);
+    intptr_t __llpl_ret1202 = ((intptr_t)written);
+    if (__llpl_defer_active207) {
+        __llpl_defer_active207 = 0;
+        llpl_eh_pop(&__llpl_defer_frame206);
             SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1183;
-    if (__llpl_defer_active205) {
-        __llpl_defer_active205 = 0;
-        llpl_eh_pop(&__llpl_defer_frame204);
+    return __llpl_ret1202;
+    if (__llpl_defer_active207) {
+        __llpl_defer_active207 = 0;
+        llpl_eh_pop(&__llpl_defer_frame206);
             SpinLock_release(&(self->lock));
     }
 }
 
 void Kern_Pipe_close_reader(Kern_Pipe* self) {
-    __LLPL_EH_Frame __llpl_defer_frame206;
-    int __llpl_defer_active207 = 0;
-    {
-        SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame206.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame206.type_id = ((void*)0);
-        __llpl_defer_frame206.error_slot = ((void*)0);
-        __llpl_defer_frame206.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame206);
-        __llpl_defer_active207 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame206.env) != 0) {
-            __llpl_defer_active207 = 0;
-        SpinLock_release(&(self->lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        if ((self->readers != ((uintptr_t)0))) {
-            (self->readers = (self->readers - ((uintptr_t)1)));
-        }
-        if (__llpl_defer_active207) {
-            __llpl_defer_active207 = 0;
-            llpl_eh_pop(&__llpl_defer_frame206);
-        SpinLock_release(&(self->lock));
-        }
-    }
-    Kern_wake_all(self->write_waiters);
-    if (__llpl_defer_active207) {
-        __llpl_defer_active207 = 0;
-        llpl_eh_pop(&__llpl_defer_frame206);
-        SpinLock_release(&(self->lock));
-    }
-}
-
-void Kern_Pipe_close_writer(Kern_Pipe* self) {
     __LLPL_EH_Frame __llpl_defer_frame208;
     int __llpl_defer_active209 = 0;
     {
@@ -27705,8 +27777,8 @@ void Kern_Pipe_close_writer(Kern_Pipe* self) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        if ((self->writers != ((uintptr_t)0))) {
-            (self->writers = (self->writers - ((uintptr_t)1)));
+        if ((self->readers != ((uintptr_t)0))) {
+            (self->readers = (self->readers - ((uintptr_t)1)));
         }
         if (__llpl_defer_active209) {
             __llpl_defer_active209 = 0;
@@ -27714,10 +27786,44 @@ void Kern_Pipe_close_writer(Kern_Pipe* self) {
         SpinLock_release(&(self->lock));
         }
     }
-    Kern_wake_all(self->read_waiters);
+    Kern_wake_all(self->write_waiters);
     if (__llpl_defer_active209) {
         __llpl_defer_active209 = 0;
         llpl_eh_pop(&__llpl_defer_frame208);
+        SpinLock_release(&(self->lock));
+    }
+}
+
+void Kern_Pipe_close_writer(Kern_Pipe* self) {
+    __LLPL_EH_Frame __llpl_defer_frame210;
+    int __llpl_defer_active211 = 0;
+    {
+        SpinLock_acquire(&(self->lock));
+        __llpl_defer_frame210.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame210.type_id = ((void*)0);
+        __llpl_defer_frame210.error_slot = ((void*)0);
+        __llpl_defer_frame210.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame210);
+        __llpl_defer_active211 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame210.env) != 0) {
+            __llpl_defer_active211 = 0;
+        SpinLock_release(&(self->lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        if ((self->writers != ((uintptr_t)0))) {
+            (self->writers = (self->writers - ((uintptr_t)1)));
+        }
+        if (__llpl_defer_active211) {
+            __llpl_defer_active211 = 0;
+            llpl_eh_pop(&__llpl_defer_frame210);
+        SpinLock_release(&(self->lock));
+        }
+    }
+    Kern_wake_all(self->read_waiters);
+    if (__llpl_defer_active211) {
+        __llpl_defer_active211 = 0;
+        llpl_eh_pop(&__llpl_defer_frame210);
         SpinLock_release(&(self->lock));
     }
 }
@@ -27825,121 +27931,35 @@ void Kern_FileDescriptor__destroy_impl(void* ptr) {
 }
 
 intptr_t Kern_FileDescriptor_read(Kern_FileDescriptor* self, char* buffer, uintptr_t size) {
-    __LLPL_EH_Frame __llpl_defer_frame210;
-    int __llpl_defer_active211 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame212;
+    int __llpl_defer_active213 = 0;
     if ((self->device != ((void*)0))) {
 #line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1184 = ((Object_VTable*)(self->device)->__vtable)->read((Object*)(self->device), buffer, size);
-        return __llpl_ret1184;
+        intptr_t __llpl_ret1203 = ((Object_VTable*)(self->device)->__vtable)->read((Object*)(self->device), buffer, size);
+        return __llpl_ret1203;
     }
     if ((self->pipe != ((void*)0))) {
         if (self->pipe_write) {
 #line 163 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-            intptr_t __llpl_ret1185 = VFS_EBADF;
-            return __llpl_ret1185;
+            intptr_t __llpl_ret1204 = VFS_EBADF;
+            return __llpl_ret1204;
         }
 #line 164 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1186 = Kern_Pipe_read(self->pipe, buffer, size);
-        return __llpl_ret1186;
+        intptr_t __llpl_ret1205 = Kern_Pipe_read(self->pipe, buffer, size);
+        return __llpl_ret1205;
     }
     if ((((self->file == ((void*)0)) || self->file->closed) || ((self->file->mode & VFS_O_READ) == 0))) {
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1187 = VFS_EBADF;
-        return __llpl_ret1187;
+        intptr_t __llpl_ret1206 = VFS_EBADF;
+        return __llpl_ret1206;
     }
     if ((size == ((uintptr_t)0))) {
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1188 = 0;
-        return __llpl_ret1188;
+        intptr_t __llpl_ret1207 = 0;
+        return __llpl_ret1207;
     }
 #line 171 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
     intptr_t result = 0;
-    {
-        SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame210.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame210.type_id = ((void*)0);
-        __llpl_defer_frame210.error_slot = ((void*)0);
-        __llpl_defer_frame210.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame210);
-        __llpl_defer_active211 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame210.env) != 0) {
-            __llpl_defer_active211 = 0;
-        SpinLock_release(&(self->lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1188 = ((VFS_Filesystem_VTable*)(self->file->fs)->__vtable)->read_binary((VFS_Filesystem*)(self->file->fs), self->file->path);
-#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        char* data = __llpl_destruct_1188._0;
-#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        uint64_t length = __llpl_destruct_1188._1;
-        if (((data == ((void*)0)) || (self->offset >= ((uintptr_t)length)))) {
-            result = 0;
-        } else {
-#line 177 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-            uintptr_t available = (((uintptr_t)length) - self->offset);
-#line 178 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-            uintptr_t read_count = size;
-            if ((read_count > available)) {
-                read_count = available;
-            }
-            memcpy(((void*)buffer), ((void*)(((uintptr_t)data) + self->offset)), read_count);
-            self->offset = (self->offset + read_count);
-            result = ((intptr_t)read_count);
-        }
-        if (__llpl_defer_active211) {
-            __llpl_defer_active211 = 0;
-            llpl_eh_pop(&__llpl_defer_frame210);
-        SpinLock_release(&(self->lock));
-        }
-    }
-#line 185 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1190 = result;
-    if (__llpl_defer_active211) {
-        __llpl_defer_active211 = 0;
-        llpl_eh_pop(&__llpl_defer_frame210);
-        SpinLock_release(&(self->lock));
-    }
-    return __llpl_ret1190;
-    if (__llpl_defer_active211) {
-        __llpl_defer_active211 = 0;
-        llpl_eh_pop(&__llpl_defer_frame210);
-        SpinLock_release(&(self->lock));
-    }
-}
-
-intptr_t Kern_FileDescriptor_write(Kern_FileDescriptor* self, char* buffer, uintptr_t size) {
-    __LLPL_EH_Frame __llpl_defer_frame212;
-    int __llpl_defer_active213 = 0;
-    if ((self->device != ((void*)0))) {
-#line 190 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1191 = ((Object_VTable*)(self->device)->__vtable)->write((Object*)(self->device), buffer, size);
-        return __llpl_ret1191;
-    }
-    if ((self->pipe != ((void*)0))) {
-        if (!self->pipe_write) {
-#line 193 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-            intptr_t __llpl_ret1192 = VFS_EBADF;
-            return __llpl_ret1192;
-        }
-#line 194 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1193 = Kern_Pipe_write(self->pipe, buffer, size);
-        return __llpl_ret1193;
-    }
-    if ((((self->file == ((void*)0)) || self->file->closed) || ((self->file->mode & VFS_O_WRITE) == 0))) {
-#line 197 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1194 = VFS_EBADF;
-        return __llpl_ret1194;
-    }
-    if ((size == ((uintptr_t)0))) {
-#line 199 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1195 = 0;
-        return __llpl_ret1195;
-    }
-#line 201 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t result = VFS_EBADF;
     {
         SpinLock_acquire(&(self->lock));
         __llpl_defer_frame212.kind = LLPL_EH_FRAME_CLEANUP;
@@ -27954,13 +27974,99 @@ intptr_t Kern_FileDescriptor_write(Kern_FileDescriptor* self, char* buffer, uint
             llpl_eh_resume();
             __builtin_unreachable();
         }
+#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1207 = ((VFS_Filesystem_VTable*)(self->file->fs)->__vtable)->read_binary((VFS_Filesystem*)(self->file->fs), self->file->path);
+#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        char* data = __llpl_destruct_1207._0;
+#line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        uint64_t length = __llpl_destruct_1207._1;
+        if (((data == ((void*)0)) || (self->offset >= ((uintptr_t)length)))) {
+            result = 0;
+        } else {
+#line 177 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+            uintptr_t available = (((uintptr_t)length) - self->offset);
+#line 178 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+            uintptr_t read_count = size;
+            if ((read_count > available)) {
+                read_count = available;
+            }
+            memcpy(((void*)buffer), ((void*)(((uintptr_t)data) + self->offset)), read_count);
+            self->offset = (self->offset + read_count);
+            result = ((intptr_t)read_count);
+        }
+        if (__llpl_defer_active213) {
+            __llpl_defer_active213 = 0;
+            llpl_eh_pop(&__llpl_defer_frame212);
+        SpinLock_release(&(self->lock));
+        }
+    }
+#line 185 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t __llpl_ret1209 = result;
+    if (__llpl_defer_active213) {
+        __llpl_defer_active213 = 0;
+        llpl_eh_pop(&__llpl_defer_frame212);
+        SpinLock_release(&(self->lock));
+    }
+    return __llpl_ret1209;
+    if (__llpl_defer_active213) {
+        __llpl_defer_active213 = 0;
+        llpl_eh_pop(&__llpl_defer_frame212);
+        SpinLock_release(&(self->lock));
+    }
+}
+
+intptr_t Kern_FileDescriptor_write(Kern_FileDescriptor* self, char* buffer, uintptr_t size) {
+    __LLPL_EH_Frame __llpl_defer_frame214;
+    int __llpl_defer_active215 = 0;
+    if ((self->device != ((void*)0))) {
+#line 190 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1210 = ((Object_VTable*)(self->device)->__vtable)->write((Object*)(self->device), buffer, size);
+        return __llpl_ret1210;
+    }
+    if ((self->pipe != ((void*)0))) {
+        if (!self->pipe_write) {
+#line 193 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+            intptr_t __llpl_ret1211 = VFS_EBADF;
+            return __llpl_ret1211;
+        }
+#line 194 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1212 = Kern_Pipe_write(self->pipe, buffer, size);
+        return __llpl_ret1212;
+    }
+    if ((((self->file == ((void*)0)) || self->file->closed) || ((self->file->mode & VFS_O_WRITE) == 0))) {
+#line 197 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1213 = VFS_EBADF;
+        return __llpl_ret1213;
+    }
+    if ((size == ((uintptr_t)0))) {
+#line 199 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1214 = 0;
+        return __llpl_ret1214;
+    }
+#line 201 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t result = VFS_EBADF;
+    {
+        SpinLock_acquire(&(self->lock));
+        __llpl_defer_frame214.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame214.type_id = ((void*)0);
+        __llpl_defer_frame214.error_slot = ((void*)0);
+        __llpl_defer_frame214.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame214);
+        __llpl_defer_active215 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame214.env) != 0) {
+            __llpl_defer_active215 = 0;
+        SpinLock_release(&(self->lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
 #line 203 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
 #line 203 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1195 = ((VFS_Filesystem_VTable*)(self->file->fs)->__vtable)->read_binary((VFS_Filesystem*)(self->file->fs), self->file->path);
+        __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1214 = ((VFS_Filesystem_VTable*)(self->file->fs)->__vtable)->read_binary((VFS_Filesystem*)(self->file->fs), self->file->path);
 #line 203 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        char* old_data = __llpl_destruct_1195._0;
+        char* old_data = __llpl_destruct_1214._0;
 #line 203 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        uint64_t old_size_u64 = __llpl_destruct_1195._1;
+        uint64_t old_size_u64 = __llpl_destruct_1214._1;
 #line 204 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
         uintptr_t old_size = ((uintptr_t)old_size_u64);
 #line 205 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
@@ -27990,47 +28096,47 @@ intptr_t Kern_FileDescriptor_write(Kern_FileDescriptor* self, char* buffer, uint
                 result = ((intptr_t)size);
             }
         }
-        if (__llpl_defer_active213) {
-            __llpl_defer_active213 = 0;
-            llpl_eh_pop(&__llpl_defer_frame212);
+        if (__llpl_defer_active215) {
+            __llpl_defer_active215 = 0;
+            llpl_eh_pop(&__llpl_defer_frame214);
         SpinLock_release(&(self->lock));
         }
     }
 #line 230 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1197 = result;
-    if (__llpl_defer_active213) {
-        __llpl_defer_active213 = 0;
-        llpl_eh_pop(&__llpl_defer_frame212);
+    intptr_t __llpl_ret1216 = result;
+    if (__llpl_defer_active215) {
+        __llpl_defer_active215 = 0;
+        llpl_eh_pop(&__llpl_defer_frame214);
         SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1197;
-    if (__llpl_defer_active213) {
-        __llpl_defer_active213 = 0;
-        llpl_eh_pop(&__llpl_defer_frame212);
+    return __llpl_ret1216;
+    if (__llpl_defer_active215) {
+        __llpl_defer_active215 = 0;
+        llpl_eh_pop(&__llpl_defer_frame214);
         SpinLock_release(&(self->lock));
     }
 }
 
 intptr_t Kern_FileDescriptor_seek(Kern_FileDescriptor* self, uintptr_t offset, uintptr_t whence) {
-    __LLPL_EH_Frame __llpl_defer_frame214;
-    int __llpl_defer_active215 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame216;
+    int __llpl_defer_active217 = 0;
     if (((self->file == ((void*)0)) || self->file->closed)) {
 #line 234 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1198 = VFS_EBADF;
-        return __llpl_ret1198;
+        intptr_t __llpl_ret1217 = VFS_EBADF;
+        return __llpl_ret1217;
     }
 #line 235 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
     intptr_t result = EINVAL;
     {
         SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame214.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame214.type_id = ((void*)0);
-        __llpl_defer_frame214.error_slot = ((void*)0);
-        __llpl_defer_frame214.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame214);
-        __llpl_defer_active215 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame214.env) != 0) {
-            __llpl_defer_active215 = 0;
+        __llpl_defer_frame216.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame216.type_id = ((void*)0);
+        __llpl_defer_frame216.error_slot = ((void*)0);
+        __llpl_defer_frame216.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame216);
+        __llpl_defer_active217 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame216.env) != 0) {
+            __llpl_defer_active217 = 0;
         SpinLock_release(&(self->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -28046,51 +28152,51 @@ intptr_t Kern_FileDescriptor_seek(Kern_FileDescriptor* self, uintptr_t offset, u
                 if ((whence == ((uintptr_t)2))) {
 #line 243 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
 #line 243 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                    __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1198 = ((VFS_Filesystem_VTable*)(self->file->fs)->__vtable)->read_binary((VFS_Filesystem*)(self->file->fs), self->file->path);
+                    __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1217 = ((VFS_Filesystem_VTable*)(self->file->fs)->__vtable)->read_binary((VFS_Filesystem*)(self->file->fs), self->file->path);
 #line 243 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                    uint64_t length = __llpl_destruct_1198._1;
+                    uint64_t length = __llpl_destruct_1217._1;
                     base = ((uintptr_t)length);
                 } else {
 #line 246 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-                    intptr_t __llpl_ret1200 = EINVAL;
-                    if (__llpl_defer_active215) {
-                        __llpl_defer_active215 = 0;
-                        llpl_eh_pop(&__llpl_defer_frame214);
+                    intptr_t __llpl_ret1219 = EINVAL;
+                    if (__llpl_defer_active217) {
+                        __llpl_defer_active217 = 0;
+                        llpl_eh_pop(&__llpl_defer_frame216);
         SpinLock_release(&(self->lock));
                     }
-                    return __llpl_ret1200;
+                    return __llpl_ret1219;
                 }
             }
         }
         if (((base + offset) < base)) {
 #line 248 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-            intptr_t __llpl_ret1201 = EINVAL;
-            if (__llpl_defer_active215) {
-                __llpl_defer_active215 = 0;
-                llpl_eh_pop(&__llpl_defer_frame214);
+            intptr_t __llpl_ret1220 = EINVAL;
+            if (__llpl_defer_active217) {
+                __llpl_defer_active217 = 0;
+                llpl_eh_pop(&__llpl_defer_frame216);
         SpinLock_release(&(self->lock));
             }
-            return __llpl_ret1201;
+            return __llpl_ret1220;
         }
         self->offset = (base + offset);
         result = ((intptr_t)self->offset);
-        if (__llpl_defer_active215) {
-            __llpl_defer_active215 = 0;
-            llpl_eh_pop(&__llpl_defer_frame214);
+        if (__llpl_defer_active217) {
+            __llpl_defer_active217 = 0;
+            llpl_eh_pop(&__llpl_defer_frame216);
         SpinLock_release(&(self->lock));
         }
     }
 #line 252 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1202 = result;
-    if (__llpl_defer_active215) {
-        __llpl_defer_active215 = 0;
-        llpl_eh_pop(&__llpl_defer_frame214);
+    intptr_t __llpl_ret1221 = result;
+    if (__llpl_defer_active217) {
+        __llpl_defer_active217 = 0;
+        llpl_eh_pop(&__llpl_defer_frame216);
         SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1202;
-    if (__llpl_defer_active215) {
-        __llpl_defer_active215 = 0;
-        llpl_eh_pop(&__llpl_defer_frame214);
+    return __llpl_ret1221;
+    if (__llpl_defer_active217) {
+        __llpl_defer_active217 = 0;
+        llpl_eh_pop(&__llpl_defer_frame216);
         SpinLock_release(&(self->lock));
     }
 }
@@ -28098,28 +28204,28 @@ intptr_t Kern_FileDescriptor_seek(Kern_FileDescriptor* self, uintptr_t offset, u
 intptr_t Kern_FileDescriptor_close(Kern_FileDescriptor* self) {
     if ((self->file == ((void*)0))) {
 #line 256 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1203 = VFS_EBADF;
-        return __llpl_ret1203;
+        intptr_t __llpl_ret1222 = VFS_EBADF;
+        return __llpl_ret1222;
     }
 #line 257 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1204 = VFS_FileHandle_close(self->file);
-    return __llpl_ret1204;
+    intptr_t __llpl_ret1223 = VFS_FileHandle_close(self->file);
+    return __llpl_ret1223;
 }
 
 intptr_t Kern_FileDescriptor_wait(Kern_FileDescriptor* self) {
     if ((self->waitable == ((void*)0))) {
 #line 261 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1205 = VFS_EBADF;
-        return __llpl_ret1205;
+        intptr_t __llpl_ret1224 = VFS_EBADF;
+        return __llpl_ret1224;
     }
     if (((Object_VTable*)(self->waitable)->__vtable)->wait((Object*)(self->waitable))) {
 #line 262 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1206 = EOK;
-        return __llpl_ret1206;
+        intptr_t __llpl_ret1225 = EOK;
+        return __llpl_ret1225;
     }
 #line 263 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1207 = EINVAL;
-    return __llpl_ret1207;
+    intptr_t __llpl_ret1226 = EINVAL;
+    return __llpl_ret1226;
 }
 
 
@@ -28158,61 +28264,12 @@ void Kern_DescriptorTable__destroy_impl(void* ptr) {
 }
 
 intptr_t Kern_DescriptorTable_install(Kern_DescriptorTable* self, VFS_FileHandle* file) {
-    __LLPL_EH_Frame __llpl_defer_frame216;
-    int __llpl_defer_active217 = 0;
-    if ((file == ((void*)0))) {
-#line 295 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1208 = VFS_EBADF;
-        return __llpl_ret1208;
-    }
-    {
-        SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame216.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame216.type_id = ((void*)0);
-        __llpl_defer_frame216.error_slot = ((void*)0);
-        __llpl_defer_frame216.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame216);
-        __llpl_defer_active217 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame216.env) != 0) {
-            __llpl_defer_active217 = 0;
-        SpinLock_release(&(self->lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-#line 297 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t fd = Kern_FIRST_USER_FD;
-        while (HashMap_u64_Kern_FileDescriptor_contains(self->entries, ((uint64_t)fd))) {
-            (fd = (fd + 1));
-        }
-        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), Kern_FileDescriptor_new__ov_VFS_FileHandle(file));
-#line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1209 = ((intptr_t)fd);
-        if (__llpl_defer_active217) {
-            __llpl_defer_active217 = 0;
-            llpl_eh_pop(&__llpl_defer_frame216);
-        SpinLock_release(&(self->lock));
-        }
-        return __llpl_ret1209;
-        if (__llpl_defer_active217) {
-            __llpl_defer_active217 = 0;
-            llpl_eh_pop(&__llpl_defer_frame216);
-        SpinLock_release(&(self->lock));
-        }
-    }
-    if (__llpl_defer_active217) {
-        __llpl_defer_active217 = 0;
-        llpl_eh_pop(&__llpl_defer_frame216);
-        SpinLock_release(&(self->lock));
-    }
-}
-
-intptr_t Kern_DescriptorTable_install_device(Kern_DescriptorTable* self, Kern_Device* dev) {
     __LLPL_EH_Frame __llpl_defer_frame218;
     int __llpl_defer_active219 = 0;
-    if ((dev == ((void*)0))) {
-#line 305 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1210 = VFS_EBADF;
-        return __llpl_ret1210;
+    if ((file == ((void*)0))) {
+#line 295 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1227 = VFS_EBADF;
+        return __llpl_ret1227;
     }
     {
         SpinLock_acquire(&(self->lock));
@@ -28228,20 +28285,20 @@ intptr_t Kern_DescriptorTable_install_device(Kern_DescriptorTable* self, Kern_De
             llpl_eh_resume();
             __builtin_unreachable();
         }
-#line 307 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+#line 297 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
         intptr_t fd = Kern_FIRST_USER_FD;
         while (HashMap_u64_Kern_FileDescriptor_contains(self->entries, ((uint64_t)fd))) {
             (fd = (fd + 1));
         }
-        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), Kern_FileDescriptor_new__ov_Kern_Device(dev));
-#line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1211 = ((intptr_t)fd);
+        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), Kern_FileDescriptor_new__ov_VFS_FileHandle(file));
+#line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1228 = ((intptr_t)fd);
         if (__llpl_defer_active219) {
             __llpl_defer_active219 = 0;
             llpl_eh_pop(&__llpl_defer_frame218);
         SpinLock_release(&(self->lock));
         }
-        return __llpl_ret1211;
+        return __llpl_ret1228;
         if (__llpl_defer_active219) {
             __llpl_defer_active219 = 0;
             llpl_eh_pop(&__llpl_defer_frame218);
@@ -28255,13 +28312,13 @@ intptr_t Kern_DescriptorTable_install_device(Kern_DescriptorTable* self, Kern_De
     }
 }
 
-intptr_t Kern_DescriptorTable_install_waitable(Kern_DescriptorTable* self, Kern_Waitable* waitable) {
+intptr_t Kern_DescriptorTable_install_device(Kern_DescriptorTable* self, Kern_Device* dev) {
     __LLPL_EH_Frame __llpl_defer_frame220;
     int __llpl_defer_active221 = 0;
-    if ((waitable == ((void*)0))) {
-#line 315 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1212 = VFS_EBADF;
-        return __llpl_ret1212;
+    if ((dev == ((void*)0))) {
+#line 305 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1229 = VFS_EBADF;
+        return __llpl_ret1229;
     }
     {
         SpinLock_acquire(&(self->lock));
@@ -28277,20 +28334,20 @@ intptr_t Kern_DescriptorTable_install_waitable(Kern_DescriptorTable* self, Kern_
             llpl_eh_resume();
             __builtin_unreachable();
         }
-#line 317 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+#line 307 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
         intptr_t fd = Kern_FIRST_USER_FD;
         while (HashMap_u64_Kern_FileDescriptor_contains(self->entries, ((uint64_t)fd))) {
             (fd = (fd + 1));
         }
-        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), Kern_FileDescriptor_new__ov_Kern_Waitable(waitable));
-#line 320 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1213 = ((intptr_t)fd);
+        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), Kern_FileDescriptor_new__ov_Kern_Device(dev));
+#line 310 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1230 = ((intptr_t)fd);
         if (__llpl_defer_active221) {
             __llpl_defer_active221 = 0;
             llpl_eh_pop(&__llpl_defer_frame220);
         SpinLock_release(&(self->lock));
         }
-        return __llpl_ret1213;
+        return __llpl_ret1230;
         if (__llpl_defer_active221) {
             __llpl_defer_active221 = 0;
             llpl_eh_pop(&__llpl_defer_frame220);
@@ -28304,13 +28361,13 @@ intptr_t Kern_DescriptorTable_install_waitable(Kern_DescriptorTable* self, Kern_
     }
 }
 
-intptr_t Kern_DescriptorTable_install_descriptor(Kern_DescriptorTable* self, Kern_FileDescriptor* descriptor, uintptr_t minimum) {
+intptr_t Kern_DescriptorTable_install_waitable(Kern_DescriptorTable* self, Kern_Waitable* waitable) {
     __LLPL_EH_Frame __llpl_defer_frame222;
     int __llpl_defer_active223 = 0;
-    if ((descriptor == ((void*)0))) {
-#line 325 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1214 = VFS_EBADF;
-        return __llpl_ret1214;
+    if ((waitable == ((void*)0))) {
+#line 315 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1231 = VFS_EBADF;
+        return __llpl_ret1231;
     }
     {
         SpinLock_acquire(&(self->lock));
@@ -28326,21 +28383,20 @@ intptr_t Kern_DescriptorTable_install_descriptor(Kern_DescriptorTable* self, Ker
             llpl_eh_resume();
             __builtin_unreachable();
         }
-#line 327 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        uintptr_t fd = minimum;
+#line 317 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t fd = Kern_FIRST_USER_FD;
         while (HashMap_u64_Kern_FileDescriptor_contains(self->entries, ((uint64_t)fd))) {
-            (fd = (fd + ((uintptr_t)1)));
+            (fd = (fd + 1));
         }
-        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), descriptor);
-        HashMap_u64_bool_insert(self->close_exec, ((uint64_t)fd), 0);
-#line 344 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1215 = ((intptr_t)fd);
+        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), Kern_FileDescriptor_new__ov_Kern_Waitable(waitable));
+#line 320 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1232 = ((intptr_t)fd);
         if (__llpl_defer_active223) {
             __llpl_defer_active223 = 0;
             llpl_eh_pop(&__llpl_defer_frame222);
         SpinLock_release(&(self->lock));
         }
-        return __llpl_ret1215;
+        return __llpl_ret1232;
         if (__llpl_defer_active223) {
             __llpl_defer_active223 = 0;
             llpl_eh_pop(&__llpl_defer_frame222);
@@ -28354,86 +28410,13 @@ intptr_t Kern_DescriptorTable_install_descriptor(Kern_DescriptorTable* self, Ker
     }
 }
 
-intptr_t Kern_DescriptorTable_create_pipe(Kern_DescriptorTable* self, intptr_t* fds) {
-    if ((fds == ((void*)0))) {
-#line 349 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1216 = EINVAL;
-        return __llpl_ret1216;
-    }
-#line 350 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_Pipe* pipe = Kern_Pipe_new();
-#line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_FileDescriptor* reader = Kern_FileDescriptor_new__ov_Kern_Pipe_bool(pipe, 0);
-#line 352 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_FileDescriptor* writer = Kern_FileDescriptor_new__ov_Kern_Pipe_bool(pipe, 1);
-#line 353 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t read_fd = Kern_DescriptorTable_install_descriptor(self, reader, ((uintptr_t)Kern_FIRST_USER_FD));
-    if ((read_fd < 0)) {
-#line 354 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1217 = read_fd;
-        if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
-        if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
-        if (pipe) rc_release(pipe, Kern_Pipe_destroy);
-        return __llpl_ret1217;
-    }
-#line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t write_fd = Kern_DescriptorTable_install_descriptor(self, writer, ((uintptr_t)Kern_FIRST_USER_FD));
-    if ((write_fd < 0)) {
-        Kern_DescriptorTable_close(self, ((uintptr_t)read_fd));
-#line 358 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1218 = write_fd;
-        if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
-        if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
-        if (pipe) rc_release(pipe, Kern_Pipe_destroy);
-        return __llpl_ret1218;
-    }
-    fds[0] = read_fd;
-    fds[1] = write_fd;
-#line 362 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1219 = EOK;
-    if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
-    if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
-    if (pipe) rc_release(pipe, Kern_Pipe_destroy);
-    return __llpl_ret1219;
-    if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
-    if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
-    if (pipe) rc_release(pipe, Kern_Pipe_destroy);
-}
-
-intptr_t Kern_DescriptorTable_duplicate(Kern_DescriptorTable* self, uintptr_t old_fd, uintptr_t minimum) {
-#line 366 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_FileDescriptor* descriptor = Kern_DescriptorTable_get(self, old_fd);
-    if ((descriptor == ((void*)0))) {
-#line 367 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1220 = VFS_EBADF;
-        if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
-        return __llpl_ret1220;
-    }
-#line 368 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1221 = Kern_DescriptorTable_install_descriptor(self, descriptor, minimum);
-    if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
-    return __llpl_ret1221;
-    if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
-}
-
-intptr_t Kern_DescriptorTable_duplicate_to(Kern_DescriptorTable* self, uintptr_t old_fd, uintptr_t new_fd) {
+intptr_t Kern_DescriptorTable_install_descriptor(Kern_DescriptorTable* self, Kern_FileDescriptor* descriptor, uintptr_t minimum) {
     __LLPL_EH_Frame __llpl_defer_frame224;
     int __llpl_defer_active225 = 0;
-    if (({ Kern_FileDescriptor* __llpl_rctmp1 = 0; bool __llpl_rcres2 = ((old_fd == new_fd) && ((__llpl_rctmp1 = Kern_DescriptorTable_get(self, old_fd)) != ((void*)0))); if (__llpl_rctmp1) rc_release(__llpl_rctmp1, Kern_FileDescriptor_destroy); __llpl_rcres2; })) {
-#line 372 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1222 = ((intptr_t)new_fd);
-        return __llpl_ret1222;
-    }
-#line 373 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_FileDescriptor* descriptor = Kern_DescriptorTable_get(self, old_fd);
     if ((descriptor == ((void*)0))) {
-#line 374 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1223 = VFS_EBADF;
-        if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
-        return __llpl_ret1223;
-    }
-    if (({ Kern_FileDescriptor* __llpl_rctmp2 = 0; bool __llpl_rcres3 = ((__llpl_rctmp2 = Kern_DescriptorTable_get(self, new_fd)) != ((void*)0)); if (__llpl_rctmp2) rc_release(__llpl_rctmp2, Kern_FileDescriptor_destroy); __llpl_rcres3; })) {
-        Kern_DescriptorTable_close(self, new_fd);
+#line 325 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1233 = VFS_EBADF;
+        return __llpl_ret1233;
     }
     {
         SpinLock_acquire(&(self->lock));
@@ -28449,38 +28432,114 @@ intptr_t Kern_DescriptorTable_duplicate_to(Kern_DescriptorTable* self, uintptr_t
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)new_fd), descriptor);
-        HashMap_u64_bool_insert(self->close_exec, ((uint64_t)new_fd), 0);
+#line 327 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        uintptr_t fd = minimum;
+        while (HashMap_u64_Kern_FileDescriptor_contains(self->entries, ((uint64_t)fd))) {
+            (fd = (fd + ((uintptr_t)1)));
+        }
+        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)fd), descriptor);
+        HashMap_u64_bool_insert(self->close_exec, ((uint64_t)fd), 0);
+#line 344 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1234 = ((intptr_t)fd);
+        if (__llpl_defer_active225) {
+            __llpl_defer_active225 = 0;
+            llpl_eh_pop(&__llpl_defer_frame224);
+        SpinLock_release(&(self->lock));
+        }
+        return __llpl_ret1234;
         if (__llpl_defer_active225) {
             __llpl_defer_active225 = 0;
             llpl_eh_pop(&__llpl_defer_frame224);
         SpinLock_release(&(self->lock));
         }
     }
-#line 382 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1224 = ((intptr_t)new_fd);
     if (__llpl_defer_active225) {
         __llpl_defer_active225 = 0;
         llpl_eh_pop(&__llpl_defer_frame224);
         SpinLock_release(&(self->lock));
     }
+}
+
+intptr_t Kern_DescriptorTable_create_pipe(Kern_DescriptorTable* self, intptr_t* fds) {
+    if ((fds == ((void*)0))) {
+#line 349 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1235 = EINVAL;
+        return __llpl_ret1235;
+    }
+#line 350 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_Pipe* pipe = Kern_Pipe_new();
+#line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_FileDescriptor* reader = Kern_FileDescriptor_new__ov_Kern_Pipe_bool(pipe, 0);
+#line 352 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_FileDescriptor* writer = Kern_FileDescriptor_new__ov_Kern_Pipe_bool(pipe, 1);
+#line 353 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t read_fd = Kern_DescriptorTable_install_descriptor(self, reader, ((uintptr_t)Kern_FIRST_USER_FD));
+    if ((read_fd < 0)) {
+#line 354 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1236 = read_fd;
+        if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
+        if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
+        if (pipe) rc_release(pipe, Kern_Pipe_destroy);
+        return __llpl_ret1236;
+    }
+#line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t write_fd = Kern_DescriptorTable_install_descriptor(self, writer, ((uintptr_t)Kern_FIRST_USER_FD));
+    if ((write_fd < 0)) {
+        Kern_DescriptorTable_close(self, ((uintptr_t)read_fd));
+#line 358 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1237 = write_fd;
+        if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
+        if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
+        if (pipe) rc_release(pipe, Kern_Pipe_destroy);
+        return __llpl_ret1237;
+    }
+    fds[0] = read_fd;
+    fds[1] = write_fd;
+#line 362 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t __llpl_ret1238 = EOK;
+    if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
+    if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
+    if (pipe) rc_release(pipe, Kern_Pipe_destroy);
+    return __llpl_ret1238;
+    if (writer) rc_release(writer, Kern_FileDescriptor_destroy);
+    if (reader) rc_release(reader, Kern_FileDescriptor_destroy);
+    if (pipe) rc_release(pipe, Kern_Pipe_destroy);
+}
+
+intptr_t Kern_DescriptorTable_duplicate(Kern_DescriptorTable* self, uintptr_t old_fd, uintptr_t minimum) {
+#line 366 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_FileDescriptor* descriptor = Kern_DescriptorTable_get(self, old_fd);
+    if ((descriptor == ((void*)0))) {
+#line 367 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1239 = VFS_EBADF;
+        if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
+        return __llpl_ret1239;
+    }
+#line 368 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t __llpl_ret1240 = Kern_DescriptorTable_install_descriptor(self, descriptor, minimum);
     if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
-    return __llpl_ret1224;
-    if (__llpl_defer_active225) {
-        __llpl_defer_active225 = 0;
-        llpl_eh_pop(&__llpl_defer_frame224);
-        SpinLock_release(&(self->lock));
-    }
+    return __llpl_ret1240;
     if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
 }
 
-intptr_t Kern_DescriptorTable_set_close_exec(Kern_DescriptorTable* self, uintptr_t fd, bool enabled) {
+intptr_t Kern_DescriptorTable_duplicate_to(Kern_DescriptorTable* self, uintptr_t old_fd, uintptr_t new_fd) {
     __LLPL_EH_Frame __llpl_defer_frame226;
     int __llpl_defer_active227 = 0;
-    if (({ Kern_FileDescriptor* __llpl_rctmp3 = 0; bool __llpl_rcres4 = ((__llpl_rctmp3 = Kern_DescriptorTable_get(self, fd)) == ((void*)0)); if (__llpl_rctmp3) rc_release(__llpl_rctmp3, Kern_FileDescriptor_destroy); __llpl_rcres4; })) {
-#line 386 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1225 = VFS_EBADF;
-        return __llpl_ret1225;
+    if (({ Kern_FileDescriptor* __llpl_rctmp1 = 0; bool __llpl_rcres2 = ((old_fd == new_fd) && ((__llpl_rctmp1 = Kern_DescriptorTable_get(self, old_fd)) != ((void*)0))); if (__llpl_rctmp1) rc_release(__llpl_rctmp1, Kern_FileDescriptor_destroy); __llpl_rcres2; })) {
+#line 372 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1241 = ((intptr_t)new_fd);
+        return __llpl_ret1241;
+    }
+#line 373 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_FileDescriptor* descriptor = Kern_DescriptorTable_get(self, old_fd);
+    if ((descriptor == ((void*)0))) {
+#line 374 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1242 = VFS_EBADF;
+        if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
+        return __llpl_ret1242;
+    }
+    if (({ Kern_FileDescriptor* __llpl_rctmp2 = 0; bool __llpl_rcres3 = ((__llpl_rctmp2 = Kern_DescriptorTable_get(self, new_fd)) != ((void*)0)); if (__llpl_rctmp2) rc_release(__llpl_rctmp2, Kern_FileDescriptor_destroy); __llpl_rcres3; })) {
+        Kern_DescriptorTable_close(self, new_fd);
     }
     {
         SpinLock_acquire(&(self->lock));
@@ -28496,33 +28555,39 @@ intptr_t Kern_DescriptorTable_set_close_exec(Kern_DescriptorTable* self, uintptr
             llpl_eh_resume();
             __builtin_unreachable();
         }
-        HashMap_u64_bool_insert(self->close_exec, ((uint64_t)fd), enabled);
+        HashMap_u64_Kern_FileDescriptor_insert(self->entries, ((uint64_t)new_fd), descriptor);
+        HashMap_u64_bool_insert(self->close_exec, ((uint64_t)new_fd), 0);
         if (__llpl_defer_active227) {
             __llpl_defer_active227 = 0;
             llpl_eh_pop(&__llpl_defer_frame226);
         SpinLock_release(&(self->lock));
         }
     }
-#line 388 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1226 = EOK;
+#line 382 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t __llpl_ret1243 = ((intptr_t)new_fd);
     if (__llpl_defer_active227) {
         __llpl_defer_active227 = 0;
         llpl_eh_pop(&__llpl_defer_frame226);
         SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1226;
+    if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
+    return __llpl_ret1243;
     if (__llpl_defer_active227) {
         __llpl_defer_active227 = 0;
         llpl_eh_pop(&__llpl_defer_frame226);
         SpinLock_release(&(self->lock));
     }
+    if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
 }
 
-Kern_DescriptorTable* Kern_DescriptorTable_clone_for_exec(Kern_DescriptorTable* self) {
+intptr_t Kern_DescriptorTable_set_close_exec(Kern_DescriptorTable* self, uintptr_t fd, bool enabled) {
     __LLPL_EH_Frame __llpl_defer_frame228;
     int __llpl_defer_active229 = 0;
-#line 392 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_DescriptorTable* copy = Kern_DescriptorTable_new();
+    if (({ Kern_FileDescriptor* __llpl_rctmp3 = 0; bool __llpl_rcres4 = ((__llpl_rctmp3 = Kern_DescriptorTable_get(self, fd)) == ((void*)0)); if (__llpl_rctmp3) rc_release(__llpl_rctmp3, Kern_FileDescriptor_destroy); __llpl_rcres4; })) {
+#line 386 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        intptr_t __llpl_ret1244 = VFS_EBADF;
+        return __llpl_ret1244;
+    }
     {
         SpinLock_acquire(&(self->lock));
         __llpl_defer_frame228.kind = LLPL_EH_FRAME_CLEANUP;
@@ -28533,6 +28598,47 @@ Kern_DescriptorTable* Kern_DescriptorTable_clone_for_exec(Kern_DescriptorTable* 
         __llpl_defer_active229 = 1;
         if (llpl_eh_setjmp(&__llpl_defer_frame228.env) != 0) {
             __llpl_defer_active229 = 0;
+        SpinLock_release(&(self->lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
+        HashMap_u64_bool_insert(self->close_exec, ((uint64_t)fd), enabled);
+        if (__llpl_defer_active229) {
+            __llpl_defer_active229 = 0;
+            llpl_eh_pop(&__llpl_defer_frame228);
+        SpinLock_release(&(self->lock));
+        }
+    }
+#line 388 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    intptr_t __llpl_ret1245 = EOK;
+    if (__llpl_defer_active229) {
+        __llpl_defer_active229 = 0;
+        llpl_eh_pop(&__llpl_defer_frame228);
+        SpinLock_release(&(self->lock));
+    }
+    return __llpl_ret1245;
+    if (__llpl_defer_active229) {
+        __llpl_defer_active229 = 0;
+        llpl_eh_pop(&__llpl_defer_frame228);
+        SpinLock_release(&(self->lock));
+    }
+}
+
+Kern_DescriptorTable* Kern_DescriptorTable_clone_for_exec(Kern_DescriptorTable* self) {
+    __LLPL_EH_Frame __llpl_defer_frame230;
+    int __llpl_defer_active231 = 0;
+#line 392 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_DescriptorTable* copy = Kern_DescriptorTable_new();
+    {
+        SpinLock_acquire(&(self->lock));
+        __llpl_defer_frame230.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame230.type_id = ((void*)0);
+        __llpl_defer_frame230.error_slot = ((void*)0);
+        __llpl_defer_frame230.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame230);
+        __llpl_defer_active231 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame230.env) != 0) {
+            __llpl_defer_active231 = 0;
         SpinLock_release(&(self->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -28549,82 +28655,33 @@ Kern_DescriptorTable* Kern_DescriptorTable_clone_for_exec(Kern_DescriptorTable* 
                 HashMap_u64_Kern_FileDescriptor_insert(copy->entries, item.key, item.value);
             }
         }
-        if (__llpl_defer_active229) {
-            __llpl_defer_active229 = 0;
-            llpl_eh_pop(&__llpl_defer_frame228);
-        SpinLock_release(&(self->lock));
-        }
-    }
-#line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_DescriptorTable* __llpl_ret1227 = copy;
-    if (__llpl_defer_active229) {
-        __llpl_defer_active229 = 0;
-        llpl_eh_pop(&__llpl_defer_frame228);
-        SpinLock_release(&(self->lock));
-    }
-    return __llpl_ret1227;
-    if (__llpl_defer_active229) {
-        __llpl_defer_active229 = 0;
-        llpl_eh_pop(&__llpl_defer_frame228);
-        SpinLock_release(&(self->lock));
-    }
-    if (copy) rc_release(copy, Kern_DescriptorTable_destroy);
-}
-
-Kern_FileDescriptor* Kern_DescriptorTable_get(Kern_DescriptorTable* self, uintptr_t fd) {
-    __LLPL_EH_Frame __llpl_defer_frame230;
-    int __llpl_defer_active231 = 0;
-#line 410 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_FileDescriptor* result = ((void*)0);
-    {
-        SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame230.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame230.type_id = ((void*)0);
-        __llpl_defer_frame230.error_slot = ((void*)0);
-        __llpl_defer_frame230.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame230);
-        __llpl_defer_active231 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame230.env) != 0) {
-            __llpl_defer_active231 = 0;
-        SpinLock_release(&(self->lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-#line 412 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        Optional_Kern_FileDescriptor* found = HashMap_u64_Kern_FileDescriptor_get(self->entries, ((uint64_t)fd));
-        if (Optional_Kern_FileDescriptor_is_some(found)) {
-            ({ Kern_FileDescriptor* __llpl_assign_tmp181 = Optional_Kern_FileDescriptor_get(found); if (result) rc_release(result, Kern_FileDescriptor_destroy); result = __llpl_assign_tmp181; result; });
-            rc_retain(((char*)result));
-        }
-#line 433 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        rc_release(found, Optional_Kern_FileDescriptor_destroy);
         if (__llpl_defer_active231) {
             __llpl_defer_active231 = 0;
             llpl_eh_pop(&__llpl_defer_frame230);
         SpinLock_release(&(self->lock));
         }
     }
-#line 435 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_FileDescriptor* __llpl_ret1228 = result;
+#line 406 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_DescriptorTable* __llpl_ret1246 = copy;
     if (__llpl_defer_active231) {
         __llpl_defer_active231 = 0;
         llpl_eh_pop(&__llpl_defer_frame230);
         SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1228;
+    return __llpl_ret1246;
     if (__llpl_defer_active231) {
         __llpl_defer_active231 = 0;
         llpl_eh_pop(&__llpl_defer_frame230);
         SpinLock_release(&(self->lock));
     }
-    if (result) rc_release(result, Kern_FileDescriptor_destroy);
+    if (copy) rc_release(copy, Kern_DescriptorTable_destroy);
 }
 
-intptr_t Kern_DescriptorTable_close(Kern_DescriptorTable* self, uintptr_t fd) {
+Kern_FileDescriptor* Kern_DescriptorTable_get(Kern_DescriptorTable* self, uintptr_t fd) {
     __LLPL_EH_Frame __llpl_defer_frame232;
     int __llpl_defer_active233 = 0;
-#line 439 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    Kern_FileDescriptor* descriptor = ((void*)0);
+#line 410 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_FileDescriptor* result = ((void*)0);
     {
         SpinLock_acquire(&(self->lock));
         __llpl_defer_frame232.kind = LLPL_EH_FRAME_CLEANUP;
@@ -28639,6 +28696,55 @@ intptr_t Kern_DescriptorTable_close(Kern_DescriptorTable* self, uintptr_t fd) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
+#line 412 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        Optional_Kern_FileDescriptor* found = HashMap_u64_Kern_FileDescriptor_get(self->entries, ((uint64_t)fd));
+        if (Optional_Kern_FileDescriptor_is_some(found)) {
+            ({ Kern_FileDescriptor* __llpl_assign_tmp181 = Optional_Kern_FileDescriptor_get(found); if (result) rc_release(result, Kern_FileDescriptor_destroy); result = __llpl_assign_tmp181; result; });
+            rc_retain(((char*)result));
+        }
+#line 433 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+        rc_release(found, Optional_Kern_FileDescriptor_destroy);
+        if (__llpl_defer_active233) {
+            __llpl_defer_active233 = 0;
+            llpl_eh_pop(&__llpl_defer_frame232);
+        SpinLock_release(&(self->lock));
+        }
+    }
+#line 435 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_FileDescriptor* __llpl_ret1247 = result;
+    if (__llpl_defer_active233) {
+        __llpl_defer_active233 = 0;
+        llpl_eh_pop(&__llpl_defer_frame232);
+        SpinLock_release(&(self->lock));
+    }
+    return __llpl_ret1247;
+    if (__llpl_defer_active233) {
+        __llpl_defer_active233 = 0;
+        llpl_eh_pop(&__llpl_defer_frame232);
+        SpinLock_release(&(self->lock));
+    }
+    if (result) rc_release(result, Kern_FileDescriptor_destroy);
+}
+
+intptr_t Kern_DescriptorTable_close(Kern_DescriptorTable* self, uintptr_t fd) {
+    __LLPL_EH_Frame __llpl_defer_frame234;
+    int __llpl_defer_active235 = 0;
+#line 439 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
+    Kern_FileDescriptor* descriptor = ((void*)0);
+    {
+        SpinLock_acquire(&(self->lock));
+        __llpl_defer_frame234.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame234.type_id = ((void*)0);
+        __llpl_defer_frame234.error_slot = ((void*)0);
+        __llpl_defer_frame234.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame234);
+        __llpl_defer_active235 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame234.env) != 0) {
+            __llpl_defer_active235 = 0;
+        SpinLock_release(&(self->lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
 #line 441 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
         Optional_Kern_FileDescriptor* found = HashMap_u64_Kern_FileDescriptor_get(self->entries, ((uint64_t)fd));
         if (Optional_Kern_FileDescriptor_is_some(found)) {
@@ -28648,36 +28754,36 @@ intptr_t Kern_DescriptorTable_close(Kern_DescriptorTable* self, uintptr_t fd) {
         rc_release(found, Optional_Kern_FileDescriptor_destroy);
         HashMap_u64_Kern_FileDescriptor_remove(self->entries, ((uint64_t)fd));
         HashMap_u64_bool_remove(self->close_exec, ((uint64_t)fd));
-        if (__llpl_defer_active233) {
-            __llpl_defer_active233 = 0;
-            llpl_eh_pop(&__llpl_defer_frame232);
+        if (__llpl_defer_active235) {
+            __llpl_defer_active235 = 0;
+            llpl_eh_pop(&__llpl_defer_frame234);
         SpinLock_release(&(self->lock));
         }
     }
     if ((descriptor == ((void*)0))) {
 #line 461 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-        intptr_t __llpl_ret1229 = VFS_EBADF;
-        if (__llpl_defer_active233) {
-            __llpl_defer_active233 = 0;
-            llpl_eh_pop(&__llpl_defer_frame232);
+        intptr_t __llpl_ret1248 = VFS_EBADF;
+        if (__llpl_defer_active235) {
+            __llpl_defer_active235 = 0;
+            llpl_eh_pop(&__llpl_defer_frame234);
         SpinLock_release(&(self->lock));
         }
         if (descriptor) rc_release(descriptor, Kern_FileDescriptor_destroy);
-        return __llpl_ret1229;
+        return __llpl_ret1248;
     }
 #line 462 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
     rc_release(descriptor, Kern_FileDescriptor_destroy);
 #line 463 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/handle.llpl"
-    intptr_t __llpl_ret1230 = EOK;
-    if (__llpl_defer_active233) {
-        __llpl_defer_active233 = 0;
-        llpl_eh_pop(&__llpl_defer_frame232);
+    intptr_t __llpl_ret1249 = EOK;
+    if (__llpl_defer_active235) {
+        __llpl_defer_active235 = 0;
+        llpl_eh_pop(&__llpl_defer_frame234);
         SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1230;
-    if (__llpl_defer_active233) {
-        __llpl_defer_active233 = 0;
-        llpl_eh_pop(&__llpl_defer_frame232);
+    return __llpl_ret1249;
+    if (__llpl_defer_active235) {
+        __llpl_defer_active235 = 0;
+        llpl_eh_pop(&__llpl_defer_frame234);
         SpinLock_release(&(self->lock));
     }
 }
@@ -28781,8 +28887,8 @@ void Kern_E1000Device__destroy_impl(void* ptr) {
 
 uint32_t Kern_E1000Device_read_reg(Kern_E1000Device* self, uintptr_t offset) {
 #line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    uint32_t __llpl_ret1231 = *((uint32_t*)(self->mmio + offset));
-    return __llpl_ret1231;
+    uint32_t __llpl_ret1250 = *((uint32_t*)(self->mmio + offset));
+    return __llpl_ret1250;
 }
 
 void Kern_E1000Device_write_reg(Kern_E1000Device* self, uintptr_t offset, uint32_t value) {
@@ -28791,19 +28897,19 @@ void Kern_E1000Device_write_reg(Kern_E1000Device* self, uintptr_t offset, uint32
 
 bool Kern_E1000Device_link_up(Kern_E1000Device* self) {
 #line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    bool __llpl_ret1232 = ((Kern_E1000Device_read_reg(self, Kern_E1000_STATUS) & ((uint32_t)2)) != ((uint32_t)0));
-    return __llpl_ret1232;
+    bool __llpl_ret1251 = ((Kern_E1000Device_read_reg(self, Kern_E1000_STATUS) & ((uint32_t)2)) != ((uint32_t)0));
+    return __llpl_ret1251;
 }
 
 uint8_t Kern_E1000Device_mac_byte(Kern_E1000Device* self, uintptr_t index) {
     if ((index >= ((uintptr_t)6))) {
 #line 81 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-        uint8_t __llpl_ret1233 = ((uint8_t)0);
-        return __llpl_ret1233;
+        uint8_t __llpl_ret1252 = ((uint8_t)0);
+        return __llpl_ret1252;
     }
 #line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    uint8_t __llpl_ret1234 = (*(uint8_t*)__llpl_check_index(self->mac, index, 6, sizeof(uint8_t), "e1000.llpl", 82));
-    return __llpl_ret1234;
+    uint8_t __llpl_ret1253 = (*(uint8_t*)__llpl_check_index(self->mac, index, 6, sizeof(uint8_t), "e1000.llpl", 82));
+    return __llpl_ret1253;
 }
 
 void Kern_E1000Device_initialize(Kern_E1000Device* self) {
@@ -28863,23 +28969,23 @@ void Kern_E1000Device_initialize(Kern_E1000Device* self) {
 }
 
 bool Kern_E1000Device_send(Kern_E1000Device* self, uint8_t* frame, uintptr_t length) {
-    __LLPL_EH_Frame __llpl_defer_frame234;
-    int __llpl_defer_active235 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame236;
+    int __llpl_defer_active237 = 0;
     if (((length == ((uintptr_t)0)) || (length > Kern_ETHERNET_FRAME_MAX))) {
 #line 135 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-        bool __llpl_ret1235 = 0;
-        return __llpl_ret1235;
+        bool __llpl_ret1254 = 0;
+        return __llpl_ret1254;
     }
     {
         SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame234.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame234.type_id = ((void*)0);
-        __llpl_defer_frame234.error_slot = ((void*)0);
-        __llpl_defer_frame234.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame234);
-        __llpl_defer_active235 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame234.env) != 0) {
-            __llpl_defer_active235 = 0;
+        __llpl_defer_frame236.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame236.type_id = ((void*)0);
+        __llpl_defer_frame236.error_slot = ((void*)0);
+        __llpl_defer_frame236.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame236);
+        __llpl_defer_active237 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame236.env) != 0) {
+            __llpl_defer_active237 = 0;
         SpinLock_release(&(self->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -28888,13 +28994,13 @@ bool Kern_E1000Device_send(Kern_E1000Device* self, uint8_t* frame, uintptr_t len
         Kern_E1000TxDescriptor* desc = &self->tx_ring[self->tx_index];
         if (((desc->status & ((uint8_t)1)) == ((uint8_t)0))) {
 #line 138 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-            bool __llpl_ret1236 = 0;
-            if (__llpl_defer_active235) {
-                __llpl_defer_active235 = 0;
-                llpl_eh_pop(&__llpl_defer_frame234);
+            bool __llpl_ret1255 = 0;
+            if (__llpl_defer_active237) {
+                __llpl_defer_active237 = 0;
+                llpl_eh_pop(&__llpl_defer_frame236);
         SpinLock_release(&(self->lock));
             }
-            return __llpl_ret1236;
+            return __llpl_ret1255;
         }
 #line 139 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
         uint8_t* buffer = ((uint8_t*)MM_pf2v((*(MM_PageFrame**)__llpl_check_index(self->tx_frames, self->tx_index, 16, sizeof(MM_PageFrame*), "e1000.llpl", 139))));
@@ -28904,23 +29010,23 @@ bool Kern_E1000Device_send(Kern_E1000Device* self, uint8_t* frame, uintptr_t len
         desc->status = ((uint8_t)0);
         self->tx_index = ((self->tx_index + ((uintptr_t)1)) % Kern_E1000_TX_COUNT);
         Kern_E1000Device_write_reg(self, Kern_E1000_TDT, ((uint32_t)self->tx_index));
-        if (__llpl_defer_active235) {
-            __llpl_defer_active235 = 0;
-            llpl_eh_pop(&__llpl_defer_frame234);
+        if (__llpl_defer_active237) {
+            __llpl_defer_active237 = 0;
+            llpl_eh_pop(&__llpl_defer_frame236);
         SpinLock_release(&(self->lock));
         }
     }
 #line 147 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    bool __llpl_ret1237 = 1;
-    if (__llpl_defer_active235) {
-        __llpl_defer_active235 = 0;
-        llpl_eh_pop(&__llpl_defer_frame234);
+    bool __llpl_ret1256 = 1;
+    if (__llpl_defer_active237) {
+        __llpl_defer_active237 = 0;
+        llpl_eh_pop(&__llpl_defer_frame236);
         SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1237;
-    if (__llpl_defer_active235) {
-        __llpl_defer_active235 = 0;
-        llpl_eh_pop(&__llpl_defer_frame234);
+    return __llpl_ret1256;
+    if (__llpl_defer_active237) {
+        __llpl_defer_active237 = 0;
+        llpl_eh_pop(&__llpl_defer_frame236);
         SpinLock_release(&(self->lock));
     }
 }
@@ -28930,8 +29036,8 @@ intptr_t Kern_E1000Device_receive(Kern_E1000Device* self, uint8_t* frame, uintpt
     Kern_E1000RxDescriptor* desc = &self->rx_ring[self->rx_index];
     if (((desc->status & ((uint8_t)1)) == ((uint8_t)0))) {
 #line 152 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-        intptr_t __llpl_ret1238 = 0;
-        return __llpl_ret1238;
+        intptr_t __llpl_ret1257 = 0;
+        return __llpl_ret1257;
     }
 #line 153 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
     uintptr_t length = ((uintptr_t)desc->length);
@@ -28949,8 +29055,8 @@ intptr_t Kern_E1000Device_receive(Kern_E1000Device* self, uint8_t* frame, uintpt
     self->rx_index = ((self->rx_index + ((uintptr_t)1)) % Kern_E1000_RX_COUNT);
     Kern_E1000Device_write_reg(self, Kern_E1000_RDT, ((uint32_t)completed));
 #line 162 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    intptr_t __llpl_ret1239 = ((intptr_t)amount);
-    return __llpl_ret1239;
+    intptr_t __llpl_ret1258 = ((intptr_t)amount);
+    return __llpl_ret1258;
 }
 
 
@@ -28958,16 +29064,16 @@ intptr_t Kern_E1000Device_receive(Kern_E1000Device* self, uint8_t* frame, uintpt
 bool Kern_e1000_init() {
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    __LLPL_Tuple2_bool_HAL_PCI_PciDevice __llpl_destruct_1239 = HAL_PCI_find_vendor_device(Kern_E1000_VENDOR, Kern_E1000_82540EM);
+    __LLPL_Tuple2_bool_HAL_PCI_PciDevice __llpl_destruct_1258 = HAL_PCI_find_vendor_device(Kern_E1000_VENDOR, Kern_E1000_82540EM);
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    bool found = __llpl_destruct_1239._0;
+    bool found = __llpl_destruct_1258._0;
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    HAL_PCI_PciDevice pci_dev = __llpl_destruct_1239._1;
+    HAL_PCI_PciDevice pci_dev = __llpl_destruct_1258._1;
     if (!found) {
         HAL_Serial_write("E1000: Intel 82540EM not found\n");
 #line 170 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-        bool __llpl_ret1241 = 0;
-        return __llpl_ret1241;
+        bool __llpl_ret1260 = 0;
+        return __llpl_ret1260;
     }
     HAL_PCI_enable_bus_master(pci_dev);
 #line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
@@ -28976,9 +29082,9 @@ bool Kern_e1000_init() {
     Kern_register_network_device(((Kern_NetworkDevice*)device));
     HAL_Serial_write(({ ksnprintf(__llpl_interp17, 256, "E1000: MAC 0x%x:0x%x:0x%x:0x%x:0x%x:0x%x, link=%d\n", ((long long)((*(uint8_t*)__llpl_check_index(device->mac, 0, 6, sizeof(uint8_t), "e1000.llpl", 176)))), ((long long)((*(uint8_t*)__llpl_check_index(device->mac, 1, 6, sizeof(uint8_t), "e1000.llpl", 176)))), ((long long)((*(uint8_t*)__llpl_check_index(device->mac, 2, 6, sizeof(uint8_t), "e1000.llpl", 176)))), ((long long)((*(uint8_t*)__llpl_check_index(device->mac, 3, 6, sizeof(uint8_t), "e1000.llpl", 176)))), ((long long)((*(uint8_t*)__llpl_check_index(device->mac, 4, 6, sizeof(uint8_t), "e1000.llpl", 176)))), ((long long)((*(uint8_t*)__llpl_check_index(device->mac, 5, 6, sizeof(uint8_t), "e1000.llpl", 176)))), ((long long)(Kern_E1000Device_link_up(device)))); (char*)__llpl_interp17; }));
 #line 178 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/e1000.llpl"
-    bool __llpl_ret1242 = 1;
+    bool __llpl_ret1261 = 1;
     if (device) rc_release(device, Kern_E1000Device_destroy);
-    return __llpl_ret1242;
+    return __llpl_ret1261;
     if (device) rc_release(device, Kern_E1000Device_destroy);
 }
 
@@ -29218,8 +29324,8 @@ const intptr_t SYS_TOUCH = 75;
 String* device_name_for_path(String* path) {
     if ((path == ((void*)0))) {
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        String* __llpl_ret1243 = ((void*)0);
-        return __llpl_ret1243;
+        String* __llpl_ret1262 = ((void*)0);
+        return __llpl_ret1262;
     }
 #line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     String* prefix = String_new("/dev/");
@@ -29227,49 +29333,49 @@ String* device_name_for_path(String* path) {
     int64_t prefix_len = String_byte_len(prefix);
     if ((String_byte_len(path) <= prefix_len)) {
 #line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        String* __llpl_ret1244 = ((void*)0);
+        String* __llpl_ret1263 = ((void*)0);
         if (prefix) rc_release(prefix, String_destroy);
-        return __llpl_ret1244;
+        return __llpl_ret1263;
     }
 #line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     {
-        intptr_t __range_end1245 = prefix_len;
+        intptr_t __range_end1264 = prefix_len;
         intptr_t i = 0;
-        for (; i < __range_end1245; i = i + 1) {
+        for (; i < __range_end1264; i = i + 1) {
             if ((String_byte_at(path, i) != String_byte_at(prefix, i))) {
 #line 118 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                String* __llpl_ret1246 = ((void*)0);
+                String* __llpl_ret1265 = ((void*)0);
                 if (prefix) rc_release(prefix, String_destroy);
-                return __llpl_ret1246;
+                return __llpl_ret1265;
             }
         }
     }
 #line 120 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    String* __llpl_ret1247 = String_byte_substring(path, prefix_len, (String_byte_len(path) - prefix_len));
+    String* __llpl_ret1266 = String_byte_substring(path, prefix_len, (String_byte_len(path) - prefix_len));
     if (prefix) rc_release(prefix, String_destroy);
-    return __llpl_ret1247;
+    return __llpl_ret1266;
     if (prefix) rc_release(prefix, String_destroy);
 }
 
 #line 123 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 static inline bool user_pte_ok(MM_Pte* pte) {
 #line 124 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    bool __llpl_ret1248 = (pte->pte.present && pte->pte.user);
-    return __llpl_ret1248;
+    bool __llpl_ret1267 = (pte->pte.present && pte->pte.user);
+    return __llpl_ret1267;
 }
 
 #line 127 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 static inline bool user_pte_write_ok(MM_Pte* pte) {
 #line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    bool __llpl_ret1249 = ((pte->pte.present && pte->pte.user) && pte->pte.rw);
-    return __llpl_ret1249;
+    bool __llpl_ret1268 = ((pte->pte.present && pte->pte.user) && pte->pte.rw);
+    return __llpl_ret1268;
 }
 
 #line 131 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 static inline bool user_table_paddr_ok(uintptr_t paddr) {
 #line 132 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    bool __llpl_ret1250 = (paddr < MM_max_phys_addr);
-    return __llpl_ret1250;
+    bool __llpl_ret1269 = (paddr < MM_max_phys_addr);
+    return __llpl_ret1269;
 }
 
 #line 135 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29280,100 +29386,100 @@ __LLPL_Tuple2_bool_uint user_v2p(uintptr_t pgdir, uintptr_t vaddr, bool writable
     uintptr_t pml4_paddr = (pgdir & ((uintptr_t)MM_PADDR_4K_MASK));
     if (!user_table_paddr_ok(pml4_paddr)) {
 #line 140 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1251 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1251;
+        __LLPL_Tuple2_bool_uint __llpl_ret1270 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1270;
     }
 #line 143 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     MM_Pte* pml4 = ((MM_Pte*)MM_p2v(pml4_paddr));
     if ((!user_pte_ok(&pml4[MM_PageFrameIndexer_l4(&(idx))]) || (writable && !pml4[MM_PageFrameIndexer_l4(&(idx))].pte.rw))) {
 #line 145 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1252 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1252;
+        __LLPL_Tuple2_bool_uint __llpl_ret1271 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1271;
     }
 #line 148 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t pdpt_paddr = MM_Pte_paddr(&(pml4[MM_PageFrameIndexer_l4(&(idx))]));
     if (!user_table_paddr_ok(pdpt_paddr)) {
 #line 150 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1253 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1253;
+        __LLPL_Tuple2_bool_uint __llpl_ret1272 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1272;
     }
 #line 153 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     MM_Pte* pdpt = ((MM_Pte*)MM_p2v(pdpt_paddr));
     if ((!user_pte_ok(&pdpt[MM_PageFrameIndexer_l3(&(idx))]) || (writable && !pdpt[MM_PageFrameIndexer_l3(&(idx))].pte.rw))) {
 #line 155 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1254 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1254;
+        __LLPL_Tuple2_bool_uint __llpl_ret1273 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1273;
     }
     if (pdpt[MM_PageFrameIndexer_l3(&(idx))].pte.ps) {
 #line 159 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
         uintptr_t paddr = ((pdpt[MM_PageFrameIndexer_l3(&(idx))].raw & ((uintptr_t)MM_PADDR_1G_MASK)) | (vaddr & ((uintptr_t)((1 << 30) - 1))));
         if ((paddr >= MM_max_phys_addr)) {
 #line 161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            __LLPL_Tuple2_bool_uint __llpl_ret1255 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-            return __llpl_ret1255;
+            __LLPL_Tuple2_bool_uint __llpl_ret1274 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+            return __llpl_ret1274;
         }
 #line 163 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1256 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = paddr };
-        return __llpl_ret1256;
+        __LLPL_Tuple2_bool_uint __llpl_ret1275 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = paddr };
+        return __llpl_ret1275;
     }
 #line 166 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t pd_paddr = MM_Pte_paddr(&(pdpt[MM_PageFrameIndexer_l3(&(idx))]));
     if (!user_table_paddr_ok(pd_paddr)) {
 #line 168 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1257 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1257;
+        __LLPL_Tuple2_bool_uint __llpl_ret1276 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1276;
     }
 #line 171 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     MM_Pte* pd = ((MM_Pte*)MM_p2v(pd_paddr));
     if ((!user_pte_ok(&pd[MM_PageFrameIndexer_l2(&(idx))]) || (writable && !pd[MM_PageFrameIndexer_l2(&(idx))].pte.rw))) {
 #line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1258 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1258;
+        __LLPL_Tuple2_bool_uint __llpl_ret1277 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1277;
     }
     if (pd[MM_PageFrameIndexer_l2(&(idx))].pte.ps) {
 #line 177 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
         uintptr_t paddr__shadow1 = ((pd[MM_PageFrameIndexer_l2(&(idx))].raw & ((uintptr_t)MM_PADDR_2M_MASK)) | (vaddr & ((uintptr_t)((1 << 21) - 1))));
         if ((paddr__shadow1 >= MM_max_phys_addr)) {
 #line 179 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            __LLPL_Tuple2_bool_uint __llpl_ret1259 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-            return __llpl_ret1259;
+            __LLPL_Tuple2_bool_uint __llpl_ret1278 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+            return __llpl_ret1278;
         }
 #line 181 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1260 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = paddr__shadow1 };
-        return __llpl_ret1260;
+        __LLPL_Tuple2_bool_uint __llpl_ret1279 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = paddr__shadow1 };
+        return __llpl_ret1279;
     }
 #line 184 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t pt_paddr = MM_Pte_paddr(&(pd[MM_PageFrameIndexer_l2(&(idx))]));
     if (!user_table_paddr_ok(pt_paddr)) {
 #line 186 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1261 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1261;
+        __LLPL_Tuple2_bool_uint __llpl_ret1280 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1280;
     }
 #line 189 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     MM_Pte* pt = ((MM_Pte*)MM_p2v(pt_paddr));
     if (writable) {
         if (!user_pte_write_ok(&pt[MM_PageFrameIndexer_l1(&(idx))])) {
 #line 192 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            __LLPL_Tuple2_bool_uint __llpl_ret1262 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-            return __llpl_ret1262;
+            __LLPL_Tuple2_bool_uint __llpl_ret1281 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+            return __llpl_ret1281;
         }
     } else {
         if (!user_pte_ok(&pt[MM_PageFrameIndexer_l1(&(idx))])) {
 #line 195 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            __LLPL_Tuple2_bool_uint __llpl_ret1263 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-            return __llpl_ret1263;
+            __LLPL_Tuple2_bool_uint __llpl_ret1282 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+            return __llpl_ret1282;
         }
     }
 #line 198 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t paddr__shadow2 = (MM_Pte_paddr(&(pt[MM_PageFrameIndexer_l1(&(idx))])) | (vaddr & ((uintptr_t)(MM_PAGE_SIZE - 1))));
     if ((paddr__shadow2 >= MM_max_phys_addr)) {
 #line 200 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1264 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1264;
+        __LLPL_Tuple2_bool_uint __llpl_ret1283 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1283;
     }
 #line 202 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    __LLPL_Tuple2_bool_uint __llpl_ret1265 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = paddr__shadow2 };
-    return __llpl_ret1265;
+    __LLPL_Tuple2_bool_uint __llpl_ret1284 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = paddr__shadow2 };
+    return __llpl_ret1284;
 }
 
 #line 207 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29405,25 +29511,25 @@ void HAL_Syscall_init() {
 bool copy_from_user(void* dest, uintptr_t src, uint64_t size) {
     if ((size == ((uint64_t)0))) {
 #line 228 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1266 = 1;
-        return __llpl_ret1266;
+        bool __llpl_ret1285 = 1;
+        return __llpl_ret1285;
     }
     if ((dest == ((void*)0))) {
 #line 229 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1267 = 0;
-        return __llpl_ret1267;
+        bool __llpl_ret1286 = 0;
+        return __llpl_ret1286;
     }
 #line 231 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t count = ((uintptr_t)size);
     if ((((uint64_t)count) != size)) {
 #line 232 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1268 = 0;
-        return __llpl_ret1268;
+        bool __llpl_ret1287 = 0;
+        return __llpl_ret1287;
     }
     if ((((src < ((uintptr_t)USER_COPY_LOW)) || (src >= ((uintptr_t)USER_COPY_HIGH))) || (count > (((uintptr_t)USER_COPY_HIGH) - src)))) {
 #line 233 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1269 = 0;
-        return __llpl_ret1269;
+        bool __llpl_ret1288 = 0;
+        return __llpl_ret1288;
     }
 #line 235 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t pgdir = ((uintptr_t)HAL_read_cr3());
@@ -29436,15 +29542,15 @@ bool copy_from_user(void* dest, uintptr_t src, uint64_t size) {
         uintptr_t paddr;
 #line 241 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 241 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_destruct_1269 = user_v2p(pgdir, user_addr, 0);
+        __LLPL_Tuple2_bool_uint __llpl_destruct_1288 = user_v2p(pgdir, user_addr, 0);
 #line 241 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool ret = __llpl_destruct_1269._0;
+        bool ret = __llpl_destruct_1288._0;
 #line 241 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        uintptr_t paddr__shadow1 = __llpl_destruct_1269._1;
+        uintptr_t paddr__shadow1 = __llpl_destruct_1288._1;
         if (!ret) {
 #line 242 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            bool __llpl_ret1271 = 0;
-            return __llpl_ret1271;
+            bool __llpl_ret1290 = 0;
+            return __llpl_ret1290;
         }
 #line 244 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
         uintptr_t page_left = (((uintptr_t)MM_PAGE_SIZE) - (user_addr & ((uintptr_t)(MM_PAGE_SIZE - 1))));
@@ -29457,39 +29563,39 @@ bool copy_from_user(void* dest, uintptr_t src, uint64_t size) {
         }
         if (((paddr__shadow1 + chunk) > MM_max_phys_addr)) {
 #line 251 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            bool __llpl_ret1272 = 0;
-            return __llpl_ret1272;
+            bool __llpl_ret1291 = 0;
+            return __llpl_ret1291;
         }
         memcpy(((void*)(((uintptr_t)dest) + copied)), ((void*)MM_p2v(paddr__shadow1)), chunk);
         copied = (copied + chunk);
     }
-    bool __llpl_ret1273 = 1;
-    return __llpl_ret1273;
+    bool __llpl_ret1292 = 1;
+    return __llpl_ret1292;
 }
 
 #line 260 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 bool copy_to_user(uintptr_t dest, void* src, uint64_t size) {
     if ((size == ((uint64_t)0))) {
 #line 261 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1274 = 1;
-        return __llpl_ret1274;
+        bool __llpl_ret1293 = 1;
+        return __llpl_ret1293;
     }
     if ((src == ((void*)0))) {
 #line 262 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1275 = 0;
-        return __llpl_ret1275;
+        bool __llpl_ret1294 = 0;
+        return __llpl_ret1294;
     }
 #line 264 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t count = ((uintptr_t)size);
     if ((((uint64_t)count) != size)) {
 #line 265 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1276 = 0;
-        return __llpl_ret1276;
+        bool __llpl_ret1295 = 0;
+        return __llpl_ret1295;
     }
     if ((((dest < ((uintptr_t)USER_COPY_LOW)) || (dest >= ((uintptr_t)USER_COPY_HIGH))) || (count > (((uintptr_t)USER_COPY_HIGH) - dest)))) {
 #line 266 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool __llpl_ret1277 = 0;
-        return __llpl_ret1277;
+        bool __llpl_ret1296 = 0;
+        return __llpl_ret1296;
     }
 #line 268 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     uintptr_t pgdir = ((uintptr_t)HAL_read_cr3());
@@ -29502,24 +29608,24 @@ bool copy_to_user(uintptr_t dest, void* src, uint64_t size) {
         uintptr_t paddr;
 #line 274 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 274 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_destruct_1277 = user_v2p(pgdir, user_addr, 1);
+        __LLPL_Tuple2_bool_uint __llpl_destruct_1296 = user_v2p(pgdir, user_addr, 1);
 #line 274 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        bool ret = __llpl_destruct_1277._0;
+        bool ret = __llpl_destruct_1296._0;
 #line 274 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        uintptr_t paddr__shadow1 = __llpl_destruct_1277._1;
+        uintptr_t paddr__shadow1 = __llpl_destruct_1296._1;
         if (!ret) {
 #line 276 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc = syscall_process();
             if (((proc == ((void*)0)) || !Kern_resolve_user_page_fault(proc, user_addr, ((uintptr_t)7)))) {
 #line 277 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                bool __llpl_ret1279 = 0;
-                return __llpl_ret1279;
+                bool __llpl_ret1298 = 0;
+                return __llpl_ret1298;
             }
             (__LLPL_Tuple2_bool_uint){ ._0 = ret, ._1 = paddr__shadow1 } = user_v2p(pgdir, user_addr, 1);
             if (!ret) {
 #line 280 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                bool __llpl_ret1280 = 0;
-                return __llpl_ret1280;
+                bool __llpl_ret1299 = 0;
+                return __llpl_ret1299;
             }
         }
 #line 283 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29533,22 +29639,22 @@ bool copy_to_user(uintptr_t dest, void* src, uint64_t size) {
         }
         if (((paddr__shadow1 + chunk) > MM_max_phys_addr)) {
 #line 290 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            bool __llpl_ret1281 = 0;
-            return __llpl_ret1281;
+            bool __llpl_ret1300 = 0;
+            return __llpl_ret1300;
         }
         memcpy(((void*)MM_p2v(paddr__shadow1)), ((void*)(((uintptr_t)src) + copied)), chunk);
         copied = (copied + chunk);
     }
-    bool __llpl_ret1282 = 1;
-    return __llpl_ret1282;
+    bool __llpl_ret1301 = 1;
+    return __llpl_ret1301;
 }
 
 #line 299 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 String* copy_user_string(uintptr_t address, uintptr_t maximum) {
     if (((address < ((uintptr_t)USER_COPY_LOW)) || (address >= ((uintptr_t)USER_COPY_HIGH)))) {
 #line 300 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        String* __llpl_ret1283 = ((void*)0);
-        return __llpl_ret1283;
+        String* __llpl_ret1302 = ((void*)0);
+        return __llpl_ret1302;
     }
 #line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     char* buffer = MM_malloc_char((maximum + ((uintptr_t)1)));
@@ -29558,23 +29664,23 @@ String* copy_user_string(uintptr_t address, uintptr_t maximum) {
         if (!copy_from_user(((void*)&buffer[length]), (address + length), ((uint64_t)1))) {
             MM_free(buffer);
 #line 306 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            String* __llpl_ret1284 = ((void*)0);
-            return __llpl_ret1284;
+            String* __llpl_ret1303 = ((void*)0);
+            return __llpl_ret1303;
         }
         if ((buffer[length] == ((char)0))) {
 #line 309 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* result = String_new(buffer);
             MM_free(buffer);
 #line 311 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            String* __llpl_ret1285 = result;
-            return __llpl_ret1285;
+            String* __llpl_ret1304 = result;
+            return __llpl_ret1304;
         }
         (length = (length + ((uintptr_t)1)));
     }
     MM_free(buffer);
 #line 316 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    String* __llpl_ret1286 = ((void*)0);
-    return __llpl_ret1286;
+    String* __llpl_ret1305 = ((void*)0);
+    return __llpl_ret1305;
 }
 
 #line 319 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29584,39 +29690,39 @@ Kern_Process* syscall_process() {
     if (thread) rc_retain((char*)thread);
     if ((thread == ((void*)0))) {
 #line 322 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-        Kern_Process* __llpl_ret1287 = ((void*)0);
+        Kern_Process* __llpl_ret1306 = ((void*)0);
         if (thread) rc_release(thread, Kern_Thread_destroy);
-        return __llpl_ret1287;
+        return __llpl_ret1306;
     }
 #line 324 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    Kern_Process* __llpl_ret1288 = thread->proc;
+    Kern_Process* __llpl_ret1307 = thread->proc;
     if (thread) rc_release(thread, Kern_Thread_destroy);
-    return __llpl_ret1288;
+    return __llpl_ret1307;
     if (thread) rc_release(thread, Kern_Thread_destroy);
 }
 
 #line 331 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 HAL_IDT_Context* syscall_handler(HAL_IDT_Context* ctx) {
 #line 332 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-    HAL_IDT_Context* __llpl_ret1289 = Kern_maybe_deliver_apc(syscall_handler_inner(ctx), ((uintptr_t)SYS_APC_RETURN));
-    return __llpl_ret1289;
+    HAL_IDT_Context* __llpl_ret1308 = Kern_maybe_deliver_apc(syscall_handler_inner(ctx), ((uintptr_t)SYS_APC_RETURN));
+    return __llpl_ret1308;
 }
 
 #line 335 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
 #line 336 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
     {
-        uint64_t __match1290 = ctx->rax;
-        if ((__match1290 == 0)) {
+        uint64_t __match1309 = ctx->rax;
+        if ((__match1309 == 0)) {
             ctx->rax = ((uint64_t)0);
-        } else if ((__match1290 == 1)) {
+        } else if ((__match1309 == 1)) {
 #line 341 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             uintptr_t len = ((uintptr_t)ctx->rdi);
             if ((len > ((uintptr_t)USER_IO_MAX))) {
                 ctx->rax = ((uint64_t)EINVAL);
 #line 344 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                HAL_IDT_Context* __llpl_ret1291 = ctx;
-                return __llpl_ret1291;
+                HAL_IDT_Context* __llpl_ret1310 = ctx;
+                return __llpl_ret1310;
             }
 #line 346 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             char* buf = MM_malloc_char((len + ((uintptr_t)1)));
@@ -29626,8 +29732,8 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 MM_free(buf);
                 ctx->rax = ((uint64_t)EINVAL);
 #line 351 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                HAL_IDT_Context* __llpl_ret1292 = ctx;
-                return __llpl_ret1292;
+                HAL_IDT_Context* __llpl_ret1311 = ctx;
+                return __llpl_ret1311;
             }
             buf[len] = ((char)0);
 #line 355 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29647,24 +29753,24 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             rc_release(stdout_fd, Kern_FileDescriptor_destroy);
             ctx->rax = ((uint64_t)1);
             MM_free(buf);
-        } else if ((__match1290 == 2)) {
+        } else if ((__match1309 == 2)) {
 #line 378 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            HAL_IDT_Context* __llpl_ret1293 = Kern_exit_current_process_from_syscall(ctx, ((uintptr_t)ctx->rdi));
-            return __llpl_ret1293;
-        } else if ((__match1290 == 3)) {
+            HAL_IDT_Context* __llpl_ret1312 = Kern_exit_current_process_from_syscall(ctx, ((uintptr_t)ctx->rdi));
+            return __llpl_ret1312;
+        } else if ((__match1309 == 3)) {
 #line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            __LLPL_Tuple2_int_uint __llpl_destruct_1293 = Kern_map_user_anonymous(HAL_current()->thread->proc, ((uintptr_t)ctx->rdi), ((uintptr_t)ctx->rsi));
+            __LLPL_Tuple2_int_uint __llpl_destruct_1312 = Kern_map_user_anonymous(HAL_current()->thread->proc, ((uintptr_t)ctx->rdi), ((uintptr_t)ctx->rsi));
 #line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            intptr_t rc = __llpl_destruct_1293._0;
+            intptr_t rc = __llpl_destruct_1312._0;
 #line 381 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            uintptr_t addr = __llpl_destruct_1293._1;
+            uintptr_t addr = __llpl_destruct_1312._1;
             if ((rc < 0)) {
                 ctx->rax = ((uint64_t)rc);
             } else {
                 ctx->rax = addr;
             }
-        } else if ((__match1290 == SYS_OPEN)) {
+        } else if ((__match1309 == SYS_OPEN)) {
 #line 389 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow1 = syscall_process();
 #line 390 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29698,7 +29804,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     }
                 }
             }
-        } else if ((__match1290 == SYS_FD_READ)) {
+        } else if ((__match1309 == SYS_FD_READ)) {
 #line 418 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow2 = syscall_process();
 #line 419 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29725,7 +29831,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     rc_release(descriptor, Kern_FileDescriptor_destroy);
                 }
             }
-        } else if ((__match1290 == SYS_FD_WRITE)) {
+        } else if ((__match1309 == SYS_FD_WRITE)) {
 #line 442 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow3 = syscall_process();
 #line 443 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29751,7 +29857,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     rc_release(descriptor__shadow5, Kern_FileDescriptor_destroy);
                 }
             }
-        } else if ((__match1290 == SYS_CLOSE)) {
+        } else if ((__match1309 == SYS_CLOSE)) {
 #line 466 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow7 = syscall_process();
             if ((proc__shadow7 == ((void*)0))) {
@@ -29759,7 +29865,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_close(proc__shadow7->fds, ((uintptr_t)ctx->rdi)));
             }
-        } else if ((__match1290 == SYS_SEEK)) {
+        } else if ((__match1309 == SYS_SEEK)) {
 #line 474 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow8 = syscall_process();
             if ((proc__shadow8 == ((void*)0))) {
@@ -29775,11 +29881,11 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     rc_release(descriptor__shadow9, Kern_FileDescriptor_destroy);
                 }
             }
-        } else if ((__match1290 == 9)) {
+        } else if ((__match1309 == 9)) {
             ctx->rax = Kern_process_id(syscall_process());
-        } else if ((__match1290 == 10)) {
+        } else if ((__match1309 == 10)) {
             ctx->rax = ((uint64_t)Kern_unmap_user(syscall_process(), ((uintptr_t)ctx->rdi), ((uintptr_t)ctx->rsi)));
-        } else if ((__match1290 == SYS_MMAP_FILE)) {
+        } else if ((__match1309 == SYS_MMAP_FILE)) {
 #line 496 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow10 = syscall_process();
 #line 497 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29794,11 +29900,11 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
 #line 503 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 503 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                __LLPL_Tuple2_int_uint __llpl_destruct_1294 = Kern_map_user_file(proc__shadow10, descriptor__shadow11, ((uintptr_t)0), ((uintptr_t)ctx->rsi), ((uintptr_t)0), ((options & ((uintptr_t)1)) != ((uintptr_t)0)), ((options & ((uintptr_t)2)) != ((uintptr_t)0)));
+                __LLPL_Tuple2_int_uint __llpl_destruct_1313 = Kern_map_user_file(proc__shadow10, descriptor__shadow11, ((uintptr_t)0), ((uintptr_t)ctx->rsi), ((uintptr_t)0), ((options & ((uintptr_t)1)) != ((uintptr_t)0)), ((options & ((uintptr_t)2)) != ((uintptr_t)0)));
 #line 503 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                intptr_t rc__shadow12 = __llpl_destruct_1294._0;
+                intptr_t rc__shadow12 = __llpl_destruct_1313._0;
 #line 503 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                uintptr_t addr__shadow13 = __llpl_destruct_1294._1;
+                uintptr_t addr__shadow13 = __llpl_destruct_1313._1;
                 if ((rc__shadow12 < 0)) {
                     ctx->rax = ((uint64_t)rc__shadow12);
                 }
@@ -29808,7 +29914,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 511 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow11, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_MSYNC)) {
+        } else if ((__match1309 == SYS_MSYNC)) {
 #line 514 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow14 = syscall_process();
 #line 515 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29820,7 +29926,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)Kern_sync_user_file_mappings(proc__shadow14, start, (start + length)));
             }
-        } else if ((__match1290 == SYS_SPAWN)) {
+        } else if ((__match1309 == SYS_SPAWN)) {
 #line 524 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* path__shadow15 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
 #line 525 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29836,7 +29942,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             if (((path__shadow15 != ((void*)0)) && (proc__shadow16 != ((void*)0)))) {
                 ctx->rax = ((uint64_t)Kern_spawn_user_process(path__shadow15, proc__shadow16, command_line));
             }
-        } else if ((__match1290 == SYS_EXEC)) {
+        } else if ((__match1309 == SYS_EXEC)) {
 #line 534 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* path__shadow17 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
 #line 535 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29863,12 +29969,12 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     }
                     if ((waited >= 0)) {
 #line 549 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                        HAL_IDT_Context* __llpl_ret1296 = Kern_exit_current_process_from_syscall(ctx, status);
-                        return __llpl_ret1296;
+                        HAL_IDT_Context* __llpl_ret1315 = Kern_exit_current_process_from_syscall(ctx, status);
+                        return __llpl_ret1315;
                     }
                 }
             }
-        } else if ((__match1290 == SYS_WAITPID)) {
+        } else if ((__match1309 == SYS_WAITPID)) {
 #line 555 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow20 = syscall_process();
 #line 556 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29884,13 +29990,13 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     ctx->rax = ((uint64_t)pid__shadow22);
                 }
             }
-        } else if ((__match1290 == SYS_THREAD_CREATE)) {
+        } else if ((__match1309 == SYS_THREAD_CREATE)) {
             ctx->rax = ((uint64_t)Kern_create_user_thread(syscall_process(), ((uintptr_t)ctx->rdi), ((uintptr_t)ctx->rsi), ((uintptr_t)ctx->rdx)));
-        } else if ((__match1290 == SYS_THREAD_EXIT)) {
+        } else if ((__match1309 == SYS_THREAD_EXIT)) {
 #line 573 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            HAL_IDT_Context* __llpl_ret1297 = Kern_exit_current_thread_from_syscall(ctx, ((uintptr_t)ctx->rdi));
-            return __llpl_ret1297;
-        } else if ((__match1290 == SYS_THREAD_JOIN)) {
+            HAL_IDT_Context* __llpl_ret1316 = Kern_exit_current_thread_from_syscall(ctx, ((uintptr_t)ctx->rdi));
+            return __llpl_ret1316;
+        } else if ((__match1309 == SYS_THREAD_JOIN)) {
 #line 576 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Thread* thread = Kern_find_process_thread(syscall_process(), ((uintptr_t)ctx->rdi));
 #line 577 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29904,7 +30010,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     ctx->rax = ((uint64_t)EOK);
                 }
             }
-        } else if ((__match1290 == SYS_THREAD_DETACH)) {
+        } else if ((__match1309 == SYS_THREAD_DETACH)) {
 #line 587 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Thread* thread__shadow23 = Kern_find_process_thread(syscall_process(), ((uintptr_t)ctx->rdi));
 #line 588 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29915,7 +30021,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             if (!detached) {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_GET_TLS)) {
+        } else if ((__match1309 == SYS_GET_TLS)) {
 #line 593 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Thread* thread__shadow24 = HAL_current()->thread;
             if ((thread__shadow24 != ((void*)0))) {
@@ -29924,7 +30030,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             if ((thread__shadow24 == ((void*)0))) {
                 ctx->rax = ((uint64_t)0);
             }
-        } else if ((__match1290 == SYS_PIPE)) {
+        } else if ((__match1309 == SYS_PIPE)) {
 #line 598 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow25 = syscall_process();
 #line 599 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -29942,7 +30048,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     ctx->rax = ((uint64_t)rc__shadow26);
                 }
             }
-        } else if ((__match1290 == SYS_DUP)) {
+        } else if ((__match1309 == SYS_DUP)) {
 #line 614 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow27 = syscall_process();
             if ((proc__shadow27 == ((void*)0))) {
@@ -29951,7 +30057,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             if ((proc__shadow27 != ((void*)0))) {
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_duplicate(proc__shadow27->fds, ((uintptr_t)ctx->rdi), ((uintptr_t)Kern_FIRST_USER_FD)));
             }
-        } else if ((__match1290 == SYS_DUP2)) {
+        } else if ((__match1309 == SYS_DUP2)) {
 #line 621 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow28 = syscall_process();
             if ((proc__shadow28 == ((void*)0))) {
@@ -29960,7 +30066,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             if ((proc__shadow28 != ((void*)0))) {
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_duplicate_to(proc__shadow28->fds, ((uintptr_t)ctx->rdi), ((uintptr_t)ctx->rsi)));
             }
-        } else if ((__match1290 == SYS_CLOEXEC)) {
+        } else if ((__match1309 == SYS_CLOEXEC)) {
 #line 628 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow29 = syscall_process();
             if ((proc__shadow29 == ((void*)0))) {
@@ -29969,35 +30075,35 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             if ((proc__shadow29 != ((void*)0))) {
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_set_close_exec(proc__shadow29->fds, ((uintptr_t)ctx->rdi), (ctx->rsi != ((uint64_t)0))));
             }
-        } else if ((__match1290 == SYS_BRK)) {
+        } else if ((__match1309 == SYS_BRK)) {
 #line 635 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 635 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            __LLPL_Tuple2_int_uint __llpl_destruct_1297 = Kern_process_brk(syscall_process(), ((uintptr_t)ctx->rdi));
+            __LLPL_Tuple2_int_uint __llpl_destruct_1316 = Kern_process_brk(syscall_process(), ((uintptr_t)ctx->rdi));
 #line 635 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            intptr_t rc__shadow30 = __llpl_destruct_1297._0;
+            intptr_t rc__shadow30 = __llpl_destruct_1316._0;
 #line 635 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            uintptr_t value__shadow31 = __llpl_destruct_1297._1;
+            uintptr_t value__shadow31 = __llpl_destruct_1316._1;
             if ((rc__shadow30 < 0)) {
                 ctx->rax = ((uint64_t)rc__shadow30);
             }
             if ((rc__shadow30 >= 0)) {
                 ctx->rax = value__shadow31;
             }
-        } else if ((__match1290 == SYS_SBRK)) {
+        } else if ((__match1309 == SYS_SBRK)) {
 #line 640 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 640 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            __LLPL_Tuple2_int_uint __llpl_destruct_1298 = Kern_process_sbrk(syscall_process(), ((intptr_t)ctx->rdi));
+            __LLPL_Tuple2_int_uint __llpl_destruct_1317 = Kern_process_sbrk(syscall_process(), ((intptr_t)ctx->rdi));
 #line 640 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            intptr_t rc__shadow32 = __llpl_destruct_1298._0;
+            intptr_t rc__shadow32 = __llpl_destruct_1317._0;
 #line 640 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            uintptr_t old = __llpl_destruct_1298._1;
+            uintptr_t old = __llpl_destruct_1317._1;
             if ((rc__shadow32 < 0)) {
                 ctx->rax = ((uint64_t)rc__shadow32);
             }
             if ((rc__shadow32 >= 0)) {
                 ctx->rax = old;
             }
-        } else if ((__match1290 == SYS_SHM_CREATE)) {
+        } else if ((__match1309 == SYS_SHM_CREATE)) {
 #line 645 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow33 = syscall_process();
 #line 646 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30007,11 +30113,11 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
 #line 650 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 650 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                __LLPL_Tuple2_int_uint __llpl_destruct_1299 = Kern_shm_create(proc__shadow33, name, ((uintptr_t)ctx->rsi));
+                __LLPL_Tuple2_int_uint __llpl_destruct_1318 = Kern_shm_create(proc__shadow33, name, ((uintptr_t)ctx->rsi));
 #line 650 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                intptr_t rc__shadow34 = __llpl_destruct_1299._0;
+                intptr_t rc__shadow34 = __llpl_destruct_1318._0;
 #line 650 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                uintptr_t addr__shadow35 = __llpl_destruct_1299._1;
+                uintptr_t addr__shadow35 = __llpl_destruct_1318._1;
                 if ((rc__shadow34 < 0)) {
                     ctx->rax = ((uint64_t)rc__shadow34);
                 }
@@ -30019,7 +30125,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     ctx->rax = addr__shadow35;
                 }
             }
-        } else if ((__match1290 == SYS_SHM_OPEN)) {
+        } else if ((__match1309 == SYS_SHM_OPEN)) {
 #line 656 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow36 = syscall_process();
 #line 657 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30029,11 +30135,11 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
 #line 661 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
 #line 661 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                __LLPL_Tuple2_int_uint __llpl_destruct_1300 = Kern_shm_open(proc__shadow36, name__shadow37);
+                __LLPL_Tuple2_int_uint __llpl_destruct_1319 = Kern_shm_open(proc__shadow36, name__shadow37);
 #line 661 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                intptr_t rc__shadow38 = __llpl_destruct_1300._0;
+                intptr_t rc__shadow38 = __llpl_destruct_1319._0;
 #line 661 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-                uintptr_t addr__shadow39 = __llpl_destruct_1300._1;
+                uintptr_t addr__shadow39 = __llpl_destruct_1319._1;
                 if ((rc__shadow38 < 0)) {
                     ctx->rax = ((uint64_t)rc__shadow38);
                 }
@@ -30041,7 +30147,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     ctx->rax = addr__shadow39;
                 }
             }
-        } else if ((__match1290 == SYS_SHM_UNLINK)) {
+        } else if ((__match1309 == SYS_SHM_UNLINK)) {
 #line 667 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* name__shadow40 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
             if ((name__shadow40 == ((void*)0))) {
@@ -30049,7 +30155,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)Kern_shm_unlink(name__shadow40));
             }
-        } else if ((__match1290 == SYS_TERMINATE)) {
+        } else if ((__match1309 == SYS_TERMINATE)) {
 #line 675 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* target = Kern_find_process(((uintptr_t)ctx->rdi));
             if ((target == ((void*)0))) {
@@ -30057,13 +30163,13 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)Kern_terminate_process(target, ((uintptr_t)ctx->rsi)));
             }
-        } else if ((__match1290 == SYS_SET_FOREGROUND)) {
+        } else if ((__match1309 == SYS_SET_FOREGROUND)) {
             if (Kern_set_foreground_process(((uintptr_t)ctx->rdi))) {
                 ctx->rax = ((uint64_t)EOK);
             } else {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_DHCP_CONFIGURE)) {
+        } else if ((__match1309 == SYS_DHCP_CONFIGURE)) {
 #line 687 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_NetworkConfig config;
             if ((Kern_dhcp_configure(&config) && copy_to_user(ctx->rdi, ((void*)&config), sizeof(Kern_NetworkConfig)))) {
@@ -30071,7 +30177,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_ICMP_PROBE)) {
+        } else if ((__match1309 == SYS_ICMP_PROBE)) {
 #line 696 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_ProbeResult result__shadow41;
             if ((Kern_icmp_probe(((uint32_t)ctx->rdi), ((uint8_t)ctx->rsi), ((uint16_t)ctx->rdx), &result__shadow41) && copy_to_user(ctx->r10, ((void*)&result__shadow41), sizeof(Kern_ProbeResult)))) {
@@ -30079,7 +30185,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_DNS_RESOLVE)) {
+        } else if ((__match1309 == SYS_DNS_RESOLVE)) {
 #line 705 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* hostname = copy_user_string(ctx->rdi, ((uintptr_t)253));
 #line 706 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30089,13 +30195,13 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_TCP_CONNECT)) {
+        } else if ((__match1309 == SYS_TCP_CONNECT)) {
             if (Kern_tcp_connect(((uint32_t)ctx->rdi), ((uint16_t)ctx->rsi))) {
                 ctx->rax = ((uint64_t)EOK);
             } else {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_TCP_SEND)) {
+        } else if ((__match1309 == SYS_TCP_SEND)) {
 #line 719 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             uintptr_t length__shadow42 = ((uintptr_t)ctx->rsi);
             if (((length__shadow42 == ((uintptr_t)0)) || (length__shadow42 > ((uintptr_t)1400)))) {
@@ -30110,7 +30216,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 }
                 MM_free(data);
             }
-        } else if ((__match1290 == SYS_TCP_RECEIVE)) {
+        } else if ((__match1309 == SYS_TCP_RECEIVE)) {
 #line 730 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             uintptr_t capacity = ((uintptr_t)ctx->rsi);
             if (((capacity == ((uintptr_t)0)) || (capacity > ((uintptr_t)1400)))) {
@@ -30127,10 +30233,10 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 }
                 MM_free(data__shadow43);
             }
-        } else if ((__match1290 == SYS_TCP_CLOSE)) {
+        } else if ((__match1309 == SYS_TCP_CLOSE)) {
             Kern_tcp_close();
             ctx->rax = ((uint64_t)EOK);
-        } else if ((__match1290 == SYS_RAND_BYTES)) {
+        } else if ((__match1309 == SYS_RAND_BYTES)) {
 #line 746 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             uintptr_t capacity__shadow44 = ((uintptr_t)ctx->rsi);
             if (((capacity__shadow44 == ((uintptr_t)0)) || (capacity__shadow44 > ((uintptr_t)USER_RAND_MAX)))) {
@@ -30146,11 +30252,11 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 }
                 MM_free(data__shadow45);
             }
-        } else if ((__match1290 == SYS_GET_TIME)) {
+        } else if ((__match1309 == SYS_GET_TIME)) {
             ctx->rax = HAL_RTC_epoch_seconds();
-        } else if ((__match1290 == SYS_MONOTONIC_MS)) {
+        } else if ((__match1309 == SYS_MONOTONIC_MS)) {
             ctx->rax = (((uint64_t)Timer_current_tick()) * ((uint64_t)10));
-        } else if ((__match1290 == SYS_FB_INFO)) {
+        } else if ((__match1309 == SYS_FB_INFO)) {
 #line 763 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             FramebufferInfo info = (FramebufferInfo){ .width = ((uint64_t)Terminal_width()), .height = ((uint64_t)Terminal_height()), .pitch = ((uint64_t)(Terminal_width() * ((uintptr_t)4))), .format = ((uint64_t)1) };
             if (((info.width != ((uint64_t)0)) && copy_to_user(ctx->rdi, ((void*)&info), sizeof(FramebufferInfo)))) {
@@ -30158,7 +30264,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_FB_PRESENT)) {
+        } else if ((__match1309 == SYS_FB_PRESENT)) {
 #line 774 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             uintptr_t width = ((uintptr_t)ctx->rsi);
 #line 775 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30190,23 +30296,23 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     ctx->rax = ((uint64_t)EINVAL);
                 }
             }
-        } else if ((__match1290 == SYS_MQ_CREATE)) {
+        } else if ((__match1309 == SYS_MQ_CREATE)) {
 #line 798 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow46 = syscall_process();
 #line 799 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* name__shadow47 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
             ctx->rax = ((uint64_t)Kern_message_queue_create(proc__shadow46, name__shadow47, ((uintptr_t)ctx->rsi)));
-        } else if ((__match1290 == SYS_MQ_OPEN)) {
+        } else if ((__match1309 == SYS_MQ_OPEN)) {
 #line 803 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow48 = syscall_process();
 #line 804 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* name__shadow49 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
             ctx->rax = ((uint64_t)Kern_message_queue_open(proc__shadow48, name__shadow49));
-        } else if ((__match1290 == SYS_MQ_UNLINK)) {
+        } else if ((__match1309 == SYS_MQ_UNLINK)) {
 #line 808 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* name__shadow50 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
             ctx->rax = ((uint64_t)Kern_message_queue_unlink(name__shadow50));
-        } else if ((__match1290 == SYS_MQ_SEND)) {
+        } else if ((__match1309 == SYS_MQ_SEND)) {
 #line 812 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow51 = syscall_process();
 #line 813 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30230,7 +30336,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 830 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow52, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_MQ_RECEIVE)) {
+        } else if ((__match1309 == SYS_MQ_RECEIVE)) {
 #line 833 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow55 = syscall_process();
 #line 834 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30258,7 +30364,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 854 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow56, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_QUEUE_APC)) {
+        } else if ((__match1309 == SYS_QUEUE_APC)) {
 #line 857 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* target__shadow60 = Kern_find_process(((uintptr_t)ctx->rdi));
 #line 858 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30282,7 +30388,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 SpinLock_release(&(target_thread->apc_lock));
                 ctx->rax = ((uint64_t)EOK);
             }
-        } else if ((__match1290 == SYS_APC_RETURN)) {
+        } else if ((__match1309 == SYS_APC_RETURN)) {
 #line 889 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             void* thread__shadow61 = ((void*)Kern_current_thread());
             if (((thread__shadow61 != ((void*)0)) && (((Kern_Thread*)thread__shadow61))->in_apc)) {
@@ -30291,14 +30397,14 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)EINVAL);
             }
-        } else if ((__match1290 == SYS_GETTID)) {
+        } else if ((__match1309 == SYS_GETTID)) {
 #line 898 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             void* thread__shadow62 = ((void*)Kern_current_thread());
             ctx->rax = ((uint64_t)0);
             if ((thread__shadow62 != ((void*)0))) {
                 ctx->rax = (((Kern_Thread*)thread__shadow62))->tid;
             }
-        } else if ((__match1290 == SYS_SET_EXCEPTION_HANDLER)) {
+        } else if ((__match1309 == SYS_SET_EXCEPTION_HANDLER)) {
 #line 903 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow63 = syscall_process();
             if ((proc__shadow63 == ((void*)0))) {
@@ -30307,16 +30413,16 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 proc__shadow63->exception_handler = ctx->rdi;
                 ctx->rax = ((uint64_t)EOK);
             }
-        } else if ((__match1290 == SYS_EXCEPTION_RETURN)) {
+        } else if ((__match1309 == SYS_EXCEPTION_RETURN)) {
 #line 914 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             void* thread__shadow64 = ((void*)Kern_current_thread());
             if ((thread__shadow64 != ((void*)0))) {
                 (((Kern_Thread*)thread__shadow64))->in_exception = 0;
             }
 #line 918 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
-            HAL_IDT_Context* __llpl_ret1308 = Kern_exit_current_process_from_syscall(ctx, ((uintptr_t)-14));
-            return __llpl_ret1308;
-        } else if ((__match1290 == SYS_CREATE_EVENT)) {
+            HAL_IDT_Context* __llpl_ret1327 = Kern_exit_current_process_from_syscall(ctx, ((uintptr_t)-14));
+            return __llpl_ret1327;
+        } else if ((__match1309 == SYS_CREATE_EVENT)) {
 #line 921 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow65 = syscall_process();
             if ((proc__shadow65 == ((void*)0))) {
@@ -30326,7 +30432,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 Kern_KernelEvent* event = Kern_KernelEvent_new((ctx->rdi != ((uint64_t)0)), (ctx->rsi != ((uint64_t)0)));
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_install_waitable(proc__shadow65->fds, ((Kern_Waitable*)event)));
             }
-        } else if ((__match1290 == SYS_SET_EVENT)) {
+        } else if ((__match1309 == SYS_SET_EVENT)) {
 #line 930 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow66 = syscall_process();
 #line 931 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30342,7 +30448,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 940 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow67, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_RESET_EVENT)) {
+        } else if ((__match1309 == SYS_RESET_EVENT)) {
 #line 943 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow68 = syscall_process();
 #line 944 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30358,7 +30464,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 953 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow69, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_WAIT_HANDLE)) {
+        } else if ((__match1309 == SYS_WAIT_HANDLE)) {
 #line 956 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow70 = syscall_process();
 #line 957 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30373,7 +30479,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 965 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow71, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_OPEN_PROCESS)) {
+        } else if ((__match1309 == SYS_OPEN_PROCESS)) {
 #line 968 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow72 = syscall_process();
 #line 969 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30385,7 +30491,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 Kern_ProcessWaitable* waitable = Kern_ProcessWaitable_new(target__shadow73);
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_install_waitable(proc__shadow72->fds, ((Kern_Waitable*)waitable)));
             }
-        } else if ((__match1290 == SYS_OPEN_THREAD)) {
+        } else if ((__match1309 == SYS_OPEN_THREAD)) {
 #line 978 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow74 = syscall_process();
 #line 979 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30402,7 +30508,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 Kern_ThreadWaitable* waitable__shadow76 = Kern_ThreadWaitable_new(target_thread__shadow75);
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_install_waitable(proc__shadow74->fds, ((Kern_Waitable*)waitable__shadow76)));
             }
-        } else if ((__match1290 == SYS_CREATE_IOCP)) {
+        } else if ((__match1309 == SYS_CREATE_IOCP)) {
 #line 990 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow77 = syscall_process();
             if ((proc__shadow77 == ((void*)0))) {
@@ -30412,7 +30518,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 Kern_IoCompletionPort* iocp = Kern_IoCompletionPort_new();
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_install_waitable(proc__shadow77->fds, ((Kern_Waitable*)iocp)));
             }
-        } else if ((__match1290 == SYS_GET_QUEUED_COMPLETION)) {
+        } else if ((__match1309 == SYS_GET_QUEUED_COMPLETION)) {
 #line 999 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow78 = syscall_process();
 #line 1000 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30447,7 +30553,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 1025 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow79, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_READ_ASYNC)) {
+        } else if ((__match1309 == SYS_READ_ASYNC)) {
 #line 1028 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow83 = syscall_process();
 #line 1029 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30485,7 +30591,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 1053 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow84, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_WRITE_ASYNC)) {
+        } else if ((__match1309 == SYS_WRITE_ASYNC)) {
 #line 1056 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow87 = syscall_process();
 #line 1057 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30523,7 +30629,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 1078 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow88, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_CREATE_MUTEX)) {
+        } else if ((__match1309 == SYS_CREATE_MUTEX)) {
 #line 1081 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow93 = syscall_process();
             if ((proc__shadow93 == ((void*)0))) {
@@ -30536,7 +30642,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 }
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_install_waitable(proc__shadow93->fds, ((Kern_Waitable*)mutex)));
             }
-        } else if ((__match1290 == SYS_RELEASE_MUTEX)) {
+        } else if ((__match1309 == SYS_RELEASE_MUTEX)) {
 #line 1091 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow94 = syscall_process();
 #line 1092 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30558,7 +30664,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 1102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow95, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_CREATE_SEMAPHORE)) {
+        } else if ((__match1309 == SYS_CREATE_SEMAPHORE)) {
 #line 1105 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow96 = syscall_process();
             if ((proc__shadow96 == ((void*)0))) {
@@ -30568,7 +30674,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 Kern_Semaphore* sem = Kern_Semaphore_new(((uintptr_t)ctx->rdi));
                 ctx->rax = ((uint64_t)Kern_DescriptorTable_install_waitable(proc__shadow96->fds, ((Kern_Waitable*)sem)));
             }
-        } else if ((__match1290 == SYS_RELEASE_SEMAPHORE)) {
+        } else if ((__match1309 == SYS_RELEASE_SEMAPHORE)) {
 #line 1114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow97 = syscall_process();
 #line 1115 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30590,7 +30696,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             }
 #line 1125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             rc_release(descriptor__shadow98, Kern_FileDescriptor_destroy);
-        } else if ((__match1290 == SYS_GET_COMMAND_LINE)) {
+        } else if ((__match1309 == SYS_GET_COMMAND_LINE)) {
 #line 1128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Process* proc__shadow99 = syscall_process();
             if ((proc__shadow99 == ((void*)0))) {
@@ -30613,7 +30719,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     }
                 }
             }
-        } else if ((__match1290 == SYS_PROCESS_SNAPSHOT)) {
+        } else if ((__match1309 == SYS_PROCESS_SNAPSHOT)) {
 #line 1145 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             uintptr_t capacity__shadow100 = ((uintptr_t)ctx->rsi);
             if (((capacity__shadow100 == ((uintptr_t)0)) || (capacity__shadow100 > ((uintptr_t)256)))) {
@@ -30630,7 +30736,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 }
                 MM_free(entries);
             }
-        } else if ((__match1290 == SYS_LIST_DIRECTORY)) {
+        } else if ((__match1309 == SYS_LIST_DIRECTORY)) {
 #line 1160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* path__shadow101 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
 #line 1161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30662,7 +30768,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                     MM_free(buffer__shadow104);
                 }
             }
-        } else if ((__match1290 == SYS_UNLINK)) {
+        } else if ((__match1309 == SYS_UNLINK)) {
 #line 1186 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* path__shadow105 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
             if ((path__shadow105 == ((void*)0))) {
@@ -30670,7 +30776,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)VFS_remove(path__shadow105));
             }
-        } else if ((__match1290 == SYS_MKDIR)) {
+        } else if ((__match1309 == SYS_MKDIR)) {
 #line 1191 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* path__shadow106 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
             if ((path__shadow106 == ((void*)0))) {
@@ -30678,7 +30784,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)VFS_mkdir(path__shadow106));
             }
-        } else if ((__match1290 == SYS_TOUCH)) {
+        } else if ((__match1309 == SYS_TOUCH)) {
 #line 1196 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             String* path__shadow107 = copy_user_string(ctx->rdi, ((uintptr_t)USER_PATH_MAX));
             if ((path__shadow107 == ((void*)0))) {
@@ -30686,7 +30792,7 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
             } else {
                 ctx->rax = ((uint64_t)VFS_touch(path__shadow107));
             }
-        } else if ((__match1290 == SYS_CHDIR)) {
+        } else if ((__match1309 == SYS_CHDIR)) {
 #line 1201 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Thread* thread__shadow108 = Kern_current_thread();
 #line 1202 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30698,14 +30804,14 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                 intptr_t result__shadow110 = EOK;
 #line 1207 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
                 {
-                    intptr_t __llpl_try_err243;
-                    __LLPL_EH_Frame __llpl_eh_frame243;
-                    __llpl_eh_frame243.kind = LLPL_EH_FRAME_CATCH;
-                    __llpl_eh_frame243.type_id = "int";
-                    __llpl_eh_frame243.error_slot = &__llpl_try_err243;
-                    __llpl_eh_frame243.error_size = sizeof(intptr_t);
-                    llpl_eh_push(&__llpl_eh_frame243);
-                    if (llpl_eh_setjmp(&__llpl_eh_frame243.env) == 0) {
+                    intptr_t __llpl_try_err245;
+                    __LLPL_EH_Frame __llpl_eh_frame245;
+                    __llpl_eh_frame245.kind = LLPL_EH_FRAME_CATCH;
+                    __llpl_eh_frame245.type_id = "int";
+                    __llpl_eh_frame245.error_slot = &__llpl_try_err245;
+                    __llpl_eh_frame245.error_size = sizeof(intptr_t);
+                    llpl_eh_push(&__llpl_eh_frame245);
+                    if (llpl_eh_setjmp(&__llpl_eh_frame245.env) == 0) {
 #line 1208 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
                     String* canonical = VFS_canonicalize(path__shadow109);
 #line 1209 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30719,20 +30825,20 @@ HAL_IDT_Context* syscall_handler_inner(HAL_IDT_Context* ctx) {
                         }
                         ({ String* __llpl_assign_tmp187 = canonical; rc_retain((char*)__llpl_assign_tmp187); thread__shadow108->curdir = __llpl_assign_tmp187; thread__shadow108->curdir; });
                     }
-                        llpl_eh_pop(&__llpl_eh_frame243);
-                        goto __try_done_243;
+                        llpl_eh_pop(&__llpl_eh_frame245);
+                        goto __try_done_245;
                     } else {
-__catch_243: ;
+__catch_245: ;
                         {
-                            intptr_t e = __llpl_try_err243;
+                            intptr_t e = __llpl_try_err245;
                             result__shadow110 = e;
                         }
                     }
-__try_done_243: ;
+__try_done_245: ;
                 }
                 ctx->rax = ((uint64_t)result__shadow110);
             }
-        } else if ((__match1290 == SYS_GETCWD)) {
+        } else if ((__match1309 == SYS_GETCWD)) {
 #line 1223 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
             Kern_Thread* thread__shadow111 = Kern_current_thread();
 #line 1224 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/syscall.llpl"
@@ -30773,8 +30879,8 @@ __try_done_243: ;
             ctx->rax = ((uint64_t)-38);
         }
     }
-    HAL_IDT_Context* __llpl_ret1312 = ctx;
-    return __llpl_ret1312;
+    HAL_IDT_Context* __llpl_ret1331 = ctx;
+    return __llpl_ret1331;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl
@@ -30806,26 +30912,26 @@ void Kern_BlockDevice__destroy_impl(void* ptr) {
 
 String* Kern_BlockDevice_name(Kern_BlockDevice* self) {
 #line 19 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-    String* __llpl_ret1313 = ((void*)0);
-    return __llpl_ret1313;
+    String* __llpl_ret1332 = ((void*)0);
+    return __llpl_ret1332;
 }
 
 uint64_t Kern_BlockDevice_sector_size(Kern_BlockDevice* self) {
 #line 23 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-    uint64_t __llpl_ret1314 = ((uint64_t)512);
-    return __llpl_ret1314;
+    uint64_t __llpl_ret1333 = ((uint64_t)512);
+    return __llpl_ret1333;
 }
 
 uint64_t Kern_BlockDevice_sector_count(Kern_BlockDevice* self) {
 #line 27 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-    uint64_t __llpl_ret1315 = ((uint64_t)0);
-    return __llpl_ret1315;
+    uint64_t __llpl_ret1334 = ((uint64_t)0);
+    return __llpl_ret1334;
 }
 
 bool Kern_BlockDevice_read_sectors(Kern_BlockDevice* self, uint64_t lba, uint64_t count, void* buf) {
 #line 31 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-    bool __llpl_ret1316 = 0;
-    return __llpl_ret1316;
+    bool __llpl_ret1335 = 0;
+    return __llpl_ret1335;
 }
 
 
@@ -30838,21 +30944,21 @@ void Kern_blockdevice_init() {
 bool Kern_register_block_device(Kern_BlockDevice* dev) {
     if ((dev == ((void*)0))) {
 #line 41 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-        bool __llpl_ret1317 = 0;
-        return __llpl_ret1317;
+        bool __llpl_ret1336 = 0;
+        return __llpl_ret1336;
     }
     std_collections_DoublyLinkedList_Kern_BlockDevice_push_back(Kern_block_devices, dev);
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-    bool __llpl_ret1318 = 1;
-    return __llpl_ret1318;
+    bool __llpl_ret1337 = 1;
+    return __llpl_ret1337;
 }
 
 #line 47 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
 Kern_BlockDevice* Kern_find_block_device(String* name) {
     if ((name == ((void*)0))) {
 #line 49 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-        Kern_BlockDevice* __llpl_ret1319 = ((void*)0);
-        return __llpl_ret1319;
+        Kern_BlockDevice* __llpl_ret1338 = ((void*)0);
+        return __llpl_ret1338;
     }
 #line 51 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
     std_collections_DListNode_Kern_BlockDevice* node = Kern_block_devices->head;
@@ -30861,14 +30967,14 @@ Kern_BlockDevice* Kern_find_block_device(String* name) {
         Kern_BlockDevice* dev = (*node).value;
         if (((dev != ((void*)0)) && String_op_eq__ov_String(((Object_VTable*)(dev)->__vtable)->name((Object*)(dev)), name))) {
 #line 55 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-            Kern_BlockDevice* __llpl_ret1320 = dev;
-            return __llpl_ret1320;
+            Kern_BlockDevice* __llpl_ret1339 = dev;
+            return __llpl_ret1339;
         }
         node = (*node).next;
     }
 #line 59 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/blockdevice.llpl"
-    Kern_BlockDevice* __llpl_ret1321 = ((void*)0);
-    return __llpl_ret1321;
+    Kern_BlockDevice* __llpl_ret1340 = ((void*)0);
+    return __llpl_ret1340;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/rng.llpl
@@ -30896,8 +31002,8 @@ uint64_t HAL_RNG_fallback_next() {
     z = ((z ^ (z >> ((uint64_t)27))) * ((uint64_t)-7723592293110705685));
     z = (z ^ (z >> ((uint64_t)31)));
 #line 34 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/rng.llpl"
-    uint64_t __llpl_ret1322 = (z ^ HAL_rdtsc());
-    return __llpl_ret1322;
+    uint64_t __llpl_ret1341 = (z ^ HAL_rdtsc());
+    return __llpl_ret1341;
 }
 
 #line 37 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/rng.llpl"
@@ -30914,11 +31020,11 @@ void HAL_RNG_fill(uint8_t* buf, uintptr_t len) {
         if (hardware) {
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/rng.llpl"
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/rng.llpl"
-            __LLPL_Tuple2_bool_u64 __llpl_destruct_1322 = HAL_rdrand64();
+            __LLPL_Tuple2_bool_u64 __llpl_destruct_1341 = HAL_rdrand64();
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/rng.llpl"
-            bool ok = __llpl_destruct_1322._0;
+            bool ok = __llpl_destruct_1341._0;
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/rng.llpl"
-            uint64_t v = __llpl_destruct_1322._1;
+            uint64_t v = __llpl_destruct_1341._1;
             if (ok) {
                 value = v;
                 have_value = 1;
@@ -31003,20 +31109,20 @@ void Kern_IoCompletionPort__destroy_impl(void* ptr) {
 }
 
 void Kern_IoCompletionPort_post(Kern_IoCompletionPort* self, uintptr_t key, uintptr_t context, uintptr_t bytes_transferred, intptr_t status) {
-    __LLPL_EH_Frame __llpl_defer_frame243;
-    int __llpl_defer_active244 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame245;
+    int __llpl_defer_active246 = 0;
 #line 38 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
     Kern_CompletionPacket* packet = Kern_CompletionPacket_new(key, context, bytes_transferred, status);
     {
         SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame243.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame243.type_id = ((void*)0);
-        __llpl_defer_frame243.error_slot = ((void*)0);
-        __llpl_defer_frame243.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame243);
-        __llpl_defer_active244 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame243.env) != 0) {
-            __llpl_defer_active244 = 0;
+        __llpl_defer_frame245.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame245.type_id = ((void*)0);
+        __llpl_defer_frame245.error_slot = ((void*)0);
+        __llpl_defer_frame245.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame245);
+        __llpl_defer_active246 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame245.env) != 0) {
+            __llpl_defer_active246 = 0;
         SpinLock_release(&(self->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -31028,16 +31134,16 @@ void Kern_IoCompletionPort_post(Kern_IoCompletionPort* self, uintptr_t key, uint
             ({ Kern_CompletionPacket* __llpl_assign_tmp193 = packet; rc_retain((char*)__llpl_assign_tmp193); self->tail->next = __llpl_assign_tmp193; self->tail->next; });
             ({ Kern_CompletionPacket* __llpl_assign_tmp194 = packet; rc_retain((char*)__llpl_assign_tmp194); self->tail = __llpl_assign_tmp194; self->tail; });
         }
-        if (__llpl_defer_active244) {
-            __llpl_defer_active244 = 0;
-            llpl_eh_pop(&__llpl_defer_frame243);
+        if (__llpl_defer_active246) {
+            __llpl_defer_active246 = 0;
+            llpl_eh_pop(&__llpl_defer_frame245);
         SpinLock_release(&(self->lock));
         }
     }
     Kern_wake_all(self->waiters);
-    if (__llpl_defer_active244) {
-        __llpl_defer_active244 = 0;
-        llpl_eh_pop(&__llpl_defer_frame243);
+    if (__llpl_defer_active246) {
+        __llpl_defer_active246 = 0;
+        llpl_eh_pop(&__llpl_defer_frame245);
         SpinLock_release(&(self->lock));
     }
     if (packet) rc_release(packet, Kern_CompletionPacket_destroy);
@@ -31045,81 +31151,15 @@ void Kern_IoCompletionPort_post(Kern_IoCompletionPort* self, uintptr_t key, uint
 
 bool Kern_IoCompletionPort_is_signaled(Kern_IoCompletionPort* self) {
 #line 52 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-    bool __llpl_ret1324 = (self->head != ((void*)0));
-    return __llpl_ret1324;
+    bool __llpl_ret1343 = (self->head != ((void*)0));
+    return __llpl_ret1343;
 }
 
 bool Kern_IoCompletionPort_wait(Kern_IoCompletionPort* self) {
-    __LLPL_EH_Frame __llpl_defer_frame245;
-    int __llpl_defer_active246 = 0;
-    while (1) {
-#line 57 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-        bool prepared = 0;
-        {
-            SpinLock_acquire(&(self->lock));
-            __llpl_defer_frame245.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame245.type_id = ((void*)0);
-            __llpl_defer_frame245.error_slot = ((void*)0);
-            __llpl_defer_frame245.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame245);
-            __llpl_defer_active246 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame245.env) != 0) {
-                __llpl_defer_active246 = 0;
-            SpinLock_release(&(self->lock));
-                llpl_eh_resume();
-                __builtin_unreachable();
-            }
-            if ((self->head != ((void*)0))) {
-#line 59 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-                bool __llpl_ret1325 = 1;
-                if (__llpl_defer_active246) {
-                    __llpl_defer_active246 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame245);
-            SpinLock_release(&(self->lock));
-                }
-                return __llpl_ret1325;
-            }
-            prepared = Kern_prepare_block_current(self->waiters);
-            if (__llpl_defer_active246) {
-                __llpl_defer_active246 = 0;
-                llpl_eh_pop(&__llpl_defer_frame245);
-            SpinLock_release(&(self->lock));
-            }
-        }
-        if (!prepared) {
-#line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-            bool __llpl_ret1326 = 0;
-            if (__llpl_defer_active246) {
-                __llpl_defer_active246 = 0;
-                llpl_eh_pop(&__llpl_defer_frame245);
-            SpinLock_release(&(self->lock));
-            }
-            return __llpl_ret1326;
-        }
-        Kern_scheduler_yield();
-    }
-#line 65 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-    bool __llpl_ret1327 = 0;
-    if (__llpl_defer_active246) {
-        __llpl_defer_active246 = 0;
-        llpl_eh_pop(&__llpl_defer_frame245);
-            SpinLock_release(&(self->lock));
-    }
-    return __llpl_ret1327;
-    if (__llpl_defer_active246) {
-        __llpl_defer_active246 = 0;
-        llpl_eh_pop(&__llpl_defer_frame245);
-            SpinLock_release(&(self->lock));
-    }
-}
-
-bool Kern_IoCompletionPort_get_queued(Kern_IoCompletionPort* self, uintptr_t* key_out, uintptr_t* context_out, uintptr_t* bytes_out, intptr_t* status_out) {
     __LLPL_EH_Frame __llpl_defer_frame247;
     int __llpl_defer_active248 = 0;
     while (1) {
-#line 70 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-        Kern_CompletionPacket* packet = ((void*)0);
-#line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
+#line 57 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
         bool prepared = 0;
         {
             SpinLock_acquire(&(self->lock));
@@ -31136,6 +31176,72 @@ bool Kern_IoCompletionPort_get_queued(Kern_IoCompletionPort* self, uintptr_t* ke
                 __builtin_unreachable();
             }
             if ((self->head != ((void*)0))) {
+#line 59 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
+                bool __llpl_ret1344 = 1;
+                if (__llpl_defer_active248) {
+                    __llpl_defer_active248 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame247);
+            SpinLock_release(&(self->lock));
+                }
+                return __llpl_ret1344;
+            }
+            prepared = Kern_prepare_block_current(self->waiters);
+            if (__llpl_defer_active248) {
+                __llpl_defer_active248 = 0;
+                llpl_eh_pop(&__llpl_defer_frame247);
+            SpinLock_release(&(self->lock));
+            }
+        }
+        if (!prepared) {
+#line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
+            bool __llpl_ret1345 = 0;
+            if (__llpl_defer_active248) {
+                __llpl_defer_active248 = 0;
+                llpl_eh_pop(&__llpl_defer_frame247);
+            SpinLock_release(&(self->lock));
+            }
+            return __llpl_ret1345;
+        }
+        Kern_scheduler_yield();
+    }
+#line 65 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
+    bool __llpl_ret1346 = 0;
+    if (__llpl_defer_active248) {
+        __llpl_defer_active248 = 0;
+        llpl_eh_pop(&__llpl_defer_frame247);
+            SpinLock_release(&(self->lock));
+    }
+    return __llpl_ret1346;
+    if (__llpl_defer_active248) {
+        __llpl_defer_active248 = 0;
+        llpl_eh_pop(&__llpl_defer_frame247);
+            SpinLock_release(&(self->lock));
+    }
+}
+
+bool Kern_IoCompletionPort_get_queued(Kern_IoCompletionPort* self, uintptr_t* key_out, uintptr_t* context_out, uintptr_t* bytes_out, intptr_t* status_out) {
+    __LLPL_EH_Frame __llpl_defer_frame249;
+    int __llpl_defer_active250 = 0;
+    while (1) {
+#line 70 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
+        Kern_CompletionPacket* packet = ((void*)0);
+#line 71 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
+        bool prepared = 0;
+        {
+            SpinLock_acquire(&(self->lock));
+            __llpl_defer_frame249.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame249.type_id = ((void*)0);
+            __llpl_defer_frame249.error_slot = ((void*)0);
+            __llpl_defer_frame249.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame249);
+            __llpl_defer_active250 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame249.env) != 0) {
+                __llpl_defer_active250 = 0;
+            SpinLock_release(&(self->lock));
+                llpl_eh_resume();
+                __builtin_unreachable();
+            }
+            if ((self->head != ((void*)0))) {
                 packet = self->head;
                 ({ Kern_CompletionPacket* __llpl_assign_tmp195 = packet->next; rc_retain((char*)__llpl_assign_tmp195); self->head = __llpl_assign_tmp195; self->head; });
                 if ((self->head == ((void*)0))) {
@@ -31144,9 +31250,9 @@ bool Kern_IoCompletionPort_get_queued(Kern_IoCompletionPort* self, uintptr_t* ke
             } else {
                 prepared = Kern_prepare_block_current(self->waiters);
             }
-            if (__llpl_defer_active248) {
-                __llpl_defer_active248 = 0;
-                llpl_eh_pop(&__llpl_defer_frame247);
+            if (__llpl_defer_active250) {
+                __llpl_defer_active250 = 0;
+                llpl_eh_pop(&__llpl_defer_frame249);
             SpinLock_release(&(self->lock));
             }
         }
@@ -31158,37 +31264,37 @@ bool Kern_IoCompletionPort_get_queued(Kern_IoCompletionPort* self, uintptr_t* ke
 #line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
             rc_release(packet, Kern_CompletionPacket_destroy);
 #line 87 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-            bool __llpl_ret1328 = 1;
-            if (__llpl_defer_active248) {
-                __llpl_defer_active248 = 0;
-                llpl_eh_pop(&__llpl_defer_frame247);
+            bool __llpl_ret1347 = 1;
+            if (__llpl_defer_active250) {
+                __llpl_defer_active250 = 0;
+                llpl_eh_pop(&__llpl_defer_frame249);
             SpinLock_release(&(self->lock));
             }
-            return __llpl_ret1328;
+            return __llpl_ret1347;
         }
         if (!prepared) {
 #line 89 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-            bool __llpl_ret1329 = 0;
-            if (__llpl_defer_active248) {
-                __llpl_defer_active248 = 0;
-                llpl_eh_pop(&__llpl_defer_frame247);
+            bool __llpl_ret1348 = 0;
+            if (__llpl_defer_active250) {
+                __llpl_defer_active250 = 0;
+                llpl_eh_pop(&__llpl_defer_frame249);
             SpinLock_release(&(self->lock));
             }
-            return __llpl_ret1329;
+            return __llpl_ret1348;
         }
         Kern_scheduler_yield();
     }
 #line 92 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-    bool __llpl_ret1330 = 0;
-    if (__llpl_defer_active248) {
-        __llpl_defer_active248 = 0;
-        llpl_eh_pop(&__llpl_defer_frame247);
+    bool __llpl_ret1349 = 0;
+    if (__llpl_defer_active250) {
+        __llpl_defer_active250 = 0;
+        llpl_eh_pop(&__llpl_defer_frame249);
             SpinLock_release(&(self->lock));
     }
-    return __llpl_ret1330;
-    if (__llpl_defer_active248) {
-        __llpl_defer_active248 = 0;
-        llpl_eh_pop(&__llpl_defer_frame247);
+    return __llpl_ret1349;
+    if (__llpl_defer_active250) {
+        __llpl_defer_active250 = 0;
+        llpl_eh_pop(&__llpl_defer_frame249);
             SpinLock_release(&(self->lock));
     }
 }
@@ -31272,20 +31378,20 @@ void Kern_async_io_worker(void* arg) {
 bool Kern_spawn_async_io(Kern_Process* proc, Kern_FileDescriptor* descriptor, uintptr_t buf, uintptr_t size, bool is_write, Kern_IoCompletionPort* iocp, uintptr_t key, uintptr_t context) {
     if ((((proc == ((void*)0)) || (descriptor == ((void*)0))) || (iocp == ((void*)0)))) {
 #line 167 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-        bool __llpl_ret1331 = 0;
-        return __llpl_ret1331;
+        bool __llpl_ret1350 = 0;
+        return __llpl_ret1350;
     }
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
     Kern_AsyncIoRequest* req = Kern_AsyncIoRequest_new(descriptor, buf, size, is_write, iocp, key, context);
     rc_retain(((char*)req));
 #line 183 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-    Kern_Thread* thread = Kern_Thread_new(proc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure17, .env = ((void*)0) }), ((void*)req), String_new("async-io"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4)));
+    Kern_Thread* thread = Kern_Thread_new(proc, ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure18, .env = ((void*)0) }), ((void*)req), String_new("async-io"), ((uintptr_t)THREAD_KERNEL), ((uintptr_t)16), ((uint64_t)(MM_PAGE_SIZE * 4)));
     Kern_mark_thread_ready(thread);
 #line 185 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/asyncio.llpl"
-    bool __llpl_ret1332 = 1;
+    bool __llpl_ret1351 = 1;
     if (thread) rc_release(thread, Kern_Thread_destroy);
     if (req) rc_release(req, Kern_AsyncIoRequest_destroy);
-    return __llpl_ret1332;
+    return __llpl_ret1351;
     if (thread) rc_release(thread, Kern_Thread_destroy);
     if (req) rc_release(req, Kern_AsyncIoRequest_destroy);
 }
@@ -31360,40 +31466,41 @@ void HAL_PIT_timer_handler(void* arg) {
     }
     HAL_PIT_run_timer_list();
     if (((HAL_PIT_ticks % HAL_PIT_TIMER_FREQ) == 0)) {
-        Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure18, .env = ((void*)0) }), ((void*)0));
+        Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure19, .env = ((void*)0) }), ((void*)0));
     }
     if (((HAL_PIT_ticks % 3) == 0)) {
         if (Kern_mu_demo_active) {
-            Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure19, .env = ((void*)0) }), ((void*)0));
+            Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure5, .env = ((void*)0) }), ((void*)0));
+        } else {
+            Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure6, .env = ((void*)0) }), ((void*)0));
         }
-        Kern_Deferred_queue(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure5, .env = ((void*)0) }), ((void*)0));
     }
     HAL_PIT_schedule_requested = 1;
 }
 
-#line 84 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
+#line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
 bool HAL_PIT_take_schedule_request() {
-#line 85 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
+#line 84 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
     bool requested = HAL_PIT_schedule_requested;
     HAL_PIT_schedule_requested = 0;
-#line 87 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
-    bool __llpl_ret1333 = requested;
-    return __llpl_ret1333;
+#line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
+    bool __llpl_ret1352 = requested;
+    return __llpl_ret1352;
 }
 
-#line 90 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
+#line 89 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
 void HAL_PIT_run_timer_list() {
 }
 
-#line 94 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
+#line 93 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
 void HAL_PIT_init() {
-#line 95 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
+#line 94 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
     intptr_t cnt = (HAL_PIT_PIT_CLOCK / HAL_PIT_TIMER_FREQ);
     HAL_outb(((uint64_t)HAL_PIT_TMR_CTRL), ((uint8_t)((HAL_PIT_TMR_CH0 + HAL_PIT_TMR_BOTH) + HAL_PIT_TMR_MD3)));
     HAL_outb(((uint64_t)HAL_PIT_TMR_CNT0), ((uint8_t)(cnt & 255)));
     HAL_outb(((uint64_t)HAL_PIT_TMR_CNT0), ((uint8_t)(cnt >> 8)));
     ({ HAL_Interrupt* __llpl_assign_tmp199 = HAL_Interrupt_new(); if (HAL_PIT_timer_interrupt) rc_release(HAL_PIT_timer_interrupt, ((void*)0)); HAL_PIT_timer_interrupt = __llpl_assign_tmp199; HAL_PIT_timer_interrupt; });
-#line 101 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
+#line 100 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/pit.llpl"
     __LLPL_Closure handler = ((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure20, .env = ((void*)0) });
     HAL_Interrupt_register(HAL_PIT_timer_interrupt, 32, handler, ((void*)0));
     HAL_PIC_enable_irq(((uintptr_t)0));
@@ -31434,40 +31541,40 @@ const intptr_t HAL_MTRR_CR4_PGE = 128;
 bool HAL_MTRR_supported() {
 #line 20 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
 #line 20 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1333 = HAL_cpuid(((uint32_t)1));
+    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1352 = HAL_cpuid(((uint32_t)1));
 #line 20 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-    uint32_t edx = __llpl_destruct_1333._3;
-    bool __llpl_ret1335 = ((edx & ((uint32_t)(1 << 12))) != ((uint32_t)0));
-    return __llpl_ret1335;
+    uint32_t edx = __llpl_destruct_1352._3;
+    bool __llpl_ret1354 = ((edx & ((uint32_t)(1 << 12))) != ((uint32_t)0));
+    return __llpl_ret1354;
 }
 
 #line 24 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
 uint32_t HAL_MTRR_physical_address_bits() {
 #line 25 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
 #line 25 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1335 = HAL_cpuid(((uint32_t)2147483648));
+    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1354 = HAL_cpuid(((uint32_t)2147483648));
 #line 25 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-    uint32_t max_ext = __llpl_destruct_1335._0;
+    uint32_t max_ext = __llpl_destruct_1354._0;
     if ((max_ext < ((uint32_t)2147483656))) {
 #line 27 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-        uint32_t __llpl_ret1337 = ((uint32_t)36);
-        return __llpl_ret1337;
+        uint32_t __llpl_ret1356 = ((uint32_t)36);
+        return __llpl_ret1356;
     }
 #line 29 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
 #line 29 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1337 = HAL_cpuid(((uint32_t)2147483656));
+    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1356 = HAL_cpuid(((uint32_t)2147483656));
 #line 29 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-    uint32_t eax = __llpl_destruct_1337._0;
-    uint32_t __llpl_ret1339 = (eax & ((uint32_t)255));
-    return __llpl_ret1339;
+    uint32_t eax = __llpl_destruct_1356._0;
+    uint32_t __llpl_ret1358 = (eax & ((uint32_t)255));
+    return __llpl_ret1358;
 }
 
 #line 39 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
 bool HAL_MTRR_set_write_combining(uintptr_t phys_base, uintptr_t size) {
     if (!HAL_MTRR_supported()) {
 #line 40 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-        bool __llpl_ret1340 = 0;
-        return __llpl_ret1340;
+        bool __llpl_ret1359 = 0;
+        return __llpl_ret1359;
     }
 #line 42 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
     uintptr_t aligned_size = ((uintptr_t)4096);
@@ -31476,8 +31583,8 @@ bool HAL_MTRR_set_write_combining(uintptr_t phys_base, uintptr_t size) {
     }
     if (((phys_base & (aligned_size - ((uintptr_t)1))) != ((uintptr_t)0))) {
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-        bool __llpl_ret1341 = 0;
-        return __llpl_ret1341;
+        bool __llpl_ret1360 = 0;
+        return __llpl_ret1360;
     }
 #line 46 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
     uintptr_t cap = HAL_read_msr(((uint32_t)HAL_MTRR_IA32_MTRRCAP));
@@ -31487,9 +31594,9 @@ bool HAL_MTRR_set_write_combining(uintptr_t phys_base, uintptr_t size) {
     uintptr_t slot = ((uintptr_t)4294967295);
 #line 50 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
     {
-        intptr_t __range_end1342 = vcnt;
+        intptr_t __range_end1361 = vcnt;
         intptr_t i = 0;
-        for (; i < __range_end1342; i = i + 1) {
+        for (; i < __range_end1361; i = i + 1) {
 #line 51 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
             uintptr_t mask = HAL_read_msr(((uint32_t)(HAL_MTRR_IA32_MTRR_PHYSMASK0 + (2 * i))));
             if (((mask & ((uintptr_t)HAL_MTRR_PHYSMASK_VALID)) == ((uintptr_t)0))) {
@@ -31501,8 +31608,8 @@ bool HAL_MTRR_set_write_combining(uintptr_t phys_base, uintptr_t size) {
     }
     if ((slot == ((uintptr_t)4294967295))) {
 #line 57 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
-        bool __llpl_ret1343 = 0;
-        return __llpl_ret1343;
+        bool __llpl_ret1362 = 0;
+        return __llpl_ret1362;
     }
 #line 59 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/mtrr.llpl"
     uint32_t phys_bits = HAL_MTRR_physical_address_bits();
@@ -31529,8 +31636,8 @@ bool HAL_MTRR_set_write_combining(uintptr_t phys_base, uintptr_t size) {
     HAL_write_cr0(saved_cr0);
     HAL_write_cr4(saved_cr4);
     HAL_interrupt_restore(irq_was_enabled);
-    bool __llpl_ret1344 = 1;
-    return __llpl_ret1344;
+    bool __llpl_ret1363 = 1;
+    return __llpl_ret1363;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl
@@ -32320,20 +32427,20 @@ HAL_Interrupt* HAL_Interrupt_new() {
 }
 
 void HAL_Interrupt_register(HAL_Interrupt* self, intptr_t vector, __LLPL_Closure f, void* arg) {
-    __LLPL_EH_Frame __llpl_defer_frame249;
-    int __llpl_defer_active250 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame251;
+    int __llpl_defer_active252 = 0;
 #line 792 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
     if (!((vector < HAL_NUM_VECTORS))) llpl_panic("assertion failed at /home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl:792");
     {
         SpinLock_acquire(&(HAL_lock));
-        __llpl_defer_frame249.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame249.type_id = ((void*)0);
-        __llpl_defer_frame249.error_slot = ((void*)0);
-        __llpl_defer_frame249.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame249);
-        __llpl_defer_active250 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame249.env) != 0) {
-            __llpl_defer_active250 = 0;
+        __llpl_defer_frame251.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame251.type_id = ((void*)0);
+        __llpl_defer_frame251.error_slot = ((void*)0);
+        __llpl_defer_frame251.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame251);
+        __llpl_defer_active252 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame251.env) != 0) {
+            __llpl_defer_active252 = 0;
         SpinLock_release(&(HAL_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -32348,36 +32455,36 @@ void HAL_Interrupt_register(HAL_Interrupt* self, intptr_t vector, __LLPL_Closure
             __llpl_with0->next = (*(HAL_Interrupt**)__llpl_check_index(HAL_interrupts, vector, 256, sizeof(HAL_Interrupt*), "idt.llpl", 800));
         }
         (*(HAL_Interrupt**)__llpl_check_index(HAL_interrupts, vector, 256, sizeof(HAL_Interrupt*), "idt.llpl", 802)) = self;
-        if (__llpl_defer_active250) {
-            __llpl_defer_active250 = 0;
-            llpl_eh_pop(&__llpl_defer_frame249);
+        if (__llpl_defer_active252) {
+            __llpl_defer_active252 = 0;
+            llpl_eh_pop(&__llpl_defer_frame251);
         SpinLock_release(&(HAL_lock));
         }
     }
-    if (__llpl_defer_active250) {
-        __llpl_defer_active250 = 0;
-        llpl_eh_pop(&__llpl_defer_frame249);
+    if (__llpl_defer_active252) {
+        __llpl_defer_active252 = 0;
+        llpl_eh_pop(&__llpl_defer_frame251);
         SpinLock_release(&(HAL_lock));
     }
 }
 
 void HAL_Interrupt_unregister(HAL_Interrupt* self) {
-    __LLPL_EH_Frame __llpl_defer_frame251;
-    int __llpl_defer_active252 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame253;
+    int __llpl_defer_active254 = 0;
 #line 807 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
     intptr_t vector = self->intrno;
 #line 808 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
     if (!((vector < HAL_NUM_VECTORS))) llpl_panic("assertion failed at /home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl:808");
     {
         SpinLock_acquire(&(HAL_lock));
-        __llpl_defer_frame251.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame251.type_id = ((void*)0);
-        __llpl_defer_frame251.error_slot = ((void*)0);
-        __llpl_defer_frame251.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame251);
-        __llpl_defer_active252 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame251.env) != 0) {
-            __llpl_defer_active252 = 0;
+        __llpl_defer_frame253.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame253.type_id = ((void*)0);
+        __llpl_defer_frame253.error_slot = ((void*)0);
+        __llpl_defer_frame253.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame253);
+        __llpl_defer_active254 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame253.env) != 0) {
+            __llpl_defer_active254 = 0;
         SpinLock_release(&(HAL_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -32394,9 +32501,9 @@ void HAL_Interrupt_unregister(HAL_Interrupt* self) {
                     prev->next = curr->next;
                 }
 #line 821 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-                if (__llpl_defer_active252) {
-                    __llpl_defer_active252 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame251);
+                if (__llpl_defer_active254) {
+                    __llpl_defer_active254 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame253);
         SpinLock_release(&(HAL_lock));
                 }
                 return;
@@ -32404,15 +32511,15 @@ void HAL_Interrupt_unregister(HAL_Interrupt* self) {
             prev = curr;
             curr = curr->next;
         }
-        if (__llpl_defer_active252) {
-            __llpl_defer_active252 = 0;
-            llpl_eh_pop(&__llpl_defer_frame251);
+        if (__llpl_defer_active254) {
+            __llpl_defer_active254 = 0;
+            llpl_eh_pop(&__llpl_defer_frame253);
         SpinLock_release(&(HAL_lock));
         }
     }
-    if (__llpl_defer_active252) {
-        __llpl_defer_active252 = 0;
-        llpl_eh_pop(&__llpl_defer_frame251);
+    if (__llpl_defer_active254) {
+        __llpl_defer_active254 = 0;
+        llpl_eh_pop(&__llpl_defer_frame253);
         SpinLock_release(&(HAL_lock));
     }
 }
@@ -32725,16 +32832,16 @@ void HAL_IDT_init() {
 #line 1946 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
 HAL_IDT_Context* isr_handler(HAL_IDT_Context* ctx) {
 #line 1947 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-    HAL_IDT_Context* __llpl_ret1345 = Kern_maybe_deliver_apc(isr_handler_inner(ctx), ((uintptr_t)SYS_APC_RETURN));
-    return __llpl_ret1345;
+    HAL_IDT_Context* __llpl_ret1364 = Kern_maybe_deliver_apc(isr_handler_inner(ctx), ((uintptr_t)SYS_APC_RETURN));
+    return __llpl_ret1364;
 }
 
 #line 1950 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
 HAL_IDT_Context* isr_handler_inner(HAL_IDT_Context* ctx) {
     if ((ctx->vector == ((uint64_t)128))) {
 #line 1952 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        HAL_IDT_Context* __llpl_ret1346 = Kern_schedule_from_interrupt(ctx);
-        return __llpl_ret1346;
+        HAL_IDT_Context* __llpl_ret1365 = Kern_schedule_from_interrupt(ctx);
+        return __llpl_ret1365;
     }
     if (((ctx->vector >= ((uint64_t)32)) && (ctx->vector < ((uint64_t)48)))) {
         llpl_irq_enter();
@@ -32755,8 +32862,8 @@ HAL_IDT_Context* isr_handler_inner(HAL_IDT_Context* ctx) {
             HAL_PIC_eoi(irq);
             llpl_irq_exit();
 #line 1973 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            HAL_IDT_Context* __llpl_ret1347 = Kern_schedule_from_interrupt(ctx);
-            return __llpl_ret1347;
+            HAL_IDT_Context* __llpl_ret1366 = Kern_schedule_from_interrupt(ctx);
+            return __llpl_ret1366;
         }
 #line 1976 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
         uintptr_t interrupted_pid = Kern_take_keyboard_interrupt_pid();
@@ -32769,16 +32876,16 @@ HAL_IDT_Context* isr_handler_inner(HAL_IDT_Context* ctx) {
             Kern_Thread* running = Kern_current_thread();
             if ((((target != ((void*)0)) && (running != ((void*)0))) && (running->proc == target))) {
 #line 1983 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-                HAL_IDT_Context* __llpl_ret1348 = Kern_kill_current_process_from_interrupt(ctx, ((uintptr_t)130));
-                return __llpl_ret1348;
+                HAL_IDT_Context* __llpl_ret1367 = Kern_kill_current_process_from_interrupt(ctx, ((uintptr_t)130));
+                return __llpl_ret1367;
             }
             if ((target != ((void*)0))) {
                 Kern_terminate_process(target, ((uintptr_t)130));
             }
         }
 #line 1987 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        HAL_IDT_Context* __llpl_ret1349 = ctx;
-        return __llpl_ret1349;
+        HAL_IDT_Context* __llpl_ret1368 = ctx;
+        return __llpl_ret1368;
     }
     if (((ctx->vector >= ((uint64_t)80)) && (ctx->vector < ((uint64_t)96)))) {
         llpl_irq_enter();
@@ -32791,30 +32898,30 @@ HAL_IDT_Context* isr_handler_inner(HAL_IDT_Context* ctx) {
         HAL_LAPIC_eoi();
         llpl_irq_exit();
 #line 2007 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        HAL_IDT_Context* __llpl_ret1350 = ctx;
-        return __llpl_ret1350;
+        HAL_IDT_Context* __llpl_ret1369 = ctx;
+        return __llpl_ret1369;
     }
 #line 2010 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
     {
-        uint64_t __match1351 = ctx->vector;
-        if ((__match1351 == 0)) {
+        uint64_t __match1370 = ctx->vector;
+        if ((__match1370 == 0)) {
             HAL_Serial_write(({ ksnprintf(__llpl_interp22, 256, "\033[1;31mDIVIDE BY ZERO:\033[0m rip=0x%x rsp=0x%x\n", ((long long)(ctx->rip)), ((long long)(ctx->rsp))); (char*)__llpl_interp22; }));
-        } else if ((__match1351 == 6)) {
+        } else if ((__match1370 == 6)) {
             HAL_Serial_write(({ ksnprintf(__llpl_interp23, 256, "\033[1;31mINVALID OPCODE:\033[0m rip=0x%x rsp=0x%x\n", ((long long)(ctx->rip)), ((long long)(ctx->rsp))); (char*)__llpl_interp23; }));
-        } else if ((__match1351 == 13)) {
+        } else if ((__match1370 == 13)) {
             HAL_Serial_write(({ ksnprintf(__llpl_interp24, 256, "\033[1;31mGENERAL PROTECTION FAULT:\033[0m rip=0x%x rsp=0x%x\n", ((long long)(ctx->rip)), ((long long)(ctx->rsp))); (char*)__llpl_interp24; }));
-        } else if ((__match1351 == 14)) {
+        } else if ((__match1370 == 14)) {
 #line 2015 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
             HAL_IDT_Context* next_ctx = page_fault_handler(ctx);
             if ((next_ctx == ((void*)0))) {
 #line 2017 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-                HAL_IDT_Context* __llpl_ret1352 = ctx;
-                return __llpl_ret1352;
+                HAL_IDT_Context* __llpl_ret1371 = ctx;
+                return __llpl_ret1371;
             }
             if ((next_ctx != ctx)) {
 #line 2020 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-                HAL_IDT_Context* __llpl_ret1353 = next_ctx;
-                return __llpl_ret1353;
+                HAL_IDT_Context* __llpl_ret1372 = next_ctx;
+                return __llpl_ret1372;
             }
         } else if (1) {
             HAL_Serial_write(({ ksnprintf(__llpl_interp25, 256, "\033[1;31mEXCEPTION:\033[0m vector=0x%x err=0x%x rip=0x%x rsp=0x%x\n", ((long long)(ctx->vector)), ((long long)(ctx->err)), ((long long)(ctx->rip)), ((long long)(ctx->rsp))); (char*)__llpl_interp25; }));
@@ -32830,8 +32937,8 @@ HAL_IDT_Context* isr_handler_inner(HAL_IDT_Context* ctx) {
         HAL_IDT_Context* handled = Kern_handle_user_exception(ctx, ((uintptr_t)0), ((uintptr_t)SYS_EXCEPTION_RETURN));
         if ((handled != ((void*)0))) {
 #line 2042 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            HAL_IDT_Context* __llpl_ret1354 = handled;
-            return __llpl_ret1354;
+            HAL_IDT_Context* __llpl_ret1373 = handled;
+            return __llpl_ret1373;
         }
     }
     llpl_panic_backtrace_from_frame(ctx->rbp);
@@ -32839,87 +32946,87 @@ HAL_IDT_Context* isr_handler_inner(HAL_IDT_Context* ctx) {
         HAL_halt();
     }
 #line 2054 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-    HAL_IDT_Context* __llpl_ret1355 = ctx;
-    return __llpl_ret1355;
+    HAL_IDT_Context* __llpl_ret1374 = ctx;
+    return __llpl_ret1374;
 }
 
 #line 2057 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
 char* page_fault_bit(uint64_t err, uint64_t bit) {
     if (((err & (((uint64_t)1) << bit)) != ((uint64_t)0))) {
 #line 2058 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        char* __llpl_ret1356 = "1";
-        return __llpl_ret1356;
+        char* __llpl_ret1375 = "1";
+        return __llpl_ret1375;
     }
 #line 2059 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-    char* __llpl_ret1357 = "0";
-    return __llpl_ret1357;
+    char* __llpl_ret1376 = "0";
+    return __llpl_ret1376;
 }
 
 #line 2062 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
 char* page_fault_reason(uint64_t err) {
     if (((err & ((uint64_t)1)) != ((uint64_t)0))) {
 #line 2063 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        char* __llpl_ret1358 = "protection violation";
-        return __llpl_ret1358;
+        char* __llpl_ret1377 = "protection violation";
+        return __llpl_ret1377;
     }
 #line 2064 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-    char* __llpl_ret1359 = "non-present page";
-    return __llpl_ret1359;
+    char* __llpl_ret1378 = "non-present page";
+    return __llpl_ret1378;
 }
 
 #line 2067 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
 char* page_fault_access(uint64_t err) {
     if (((err & ((uint64_t)2)) != ((uint64_t)0))) {
 #line 2068 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        char* __llpl_ret1360 = "write";
-        return __llpl_ret1360;
+        char* __llpl_ret1379 = "write";
+        return __llpl_ret1379;
     }
 #line 2069 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-    char* __llpl_ret1361 = "read";
-    return __llpl_ret1361;
+    char* __llpl_ret1380 = "read";
+    return __llpl_ret1380;
 }
 
 #line 2072 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
 char* page_fault_mode(uint64_t err) {
     if (((err & ((uint64_t)4)) != ((uint64_t)0))) {
 #line 2073 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        char* __llpl_ret1362 = "user";
-        return __llpl_ret1362;
+        char* __llpl_ret1381 = "user";
+        return __llpl_ret1381;
     }
 #line 2074 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-    char* __llpl_ret1363 = "supervisor";
-    return __llpl_ret1363;
+    char* __llpl_ret1382 = "supervisor";
+    return __llpl_ret1382;
 }
 
 #line 2077 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
 char* thread_state_name(uintptr_t state) {
 #line 2078 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
     {
-        uintptr_t __match1364 = state;
-        if ((__match1364 == ThreadState_New)) {
+        uintptr_t __match1383 = state;
+        if ((__match1383 == ThreadState_New)) {
 #line 2079 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            char* __llpl_ret1365 = "new";
-            return __llpl_ret1365;
-        } else if ((__match1364 == ThreadState_Ready)) {
+            char* __llpl_ret1384 = "new";
+            return __llpl_ret1384;
+        } else if ((__match1383 == ThreadState_Ready)) {
 #line 2080 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            char* __llpl_ret1366 = "ready";
-            return __llpl_ret1366;
-        } else if ((__match1364 == ThreadState_Running)) {
+            char* __llpl_ret1385 = "ready";
+            return __llpl_ret1385;
+        } else if ((__match1383 == ThreadState_Running)) {
 #line 2081 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            char* __llpl_ret1367 = "running";
-            return __llpl_ret1367;
-        } else if ((__match1364 == ThreadState_Sleeping)) {
+            char* __llpl_ret1386 = "running";
+            return __llpl_ret1386;
+        } else if ((__match1383 == ThreadState_Sleeping)) {
 #line 2082 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            char* __llpl_ret1368 = "sleeping";
-            return __llpl_ret1368;
-        } else if ((__match1364 == ThreadState_Zombie)) {
+            char* __llpl_ret1387 = "sleeping";
+            return __llpl_ret1387;
+        } else if ((__match1383 == ThreadState_Zombie)) {
 #line 2083 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            char* __llpl_ret1369 = "zombie";
-            return __llpl_ret1369;
+            char* __llpl_ret1388 = "zombie";
+            return __llpl_ret1388;
         } else if (1) {
 #line 2084 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            char* __llpl_ret1370 = "unknown";
-            return __llpl_ret1370;
+            char* __llpl_ret1389 = "unknown";
+            return __llpl_ret1389;
         }
     }
 }
@@ -32976,8 +33083,8 @@ HAL_IDT_Context* page_fault_handler(HAL_IDT_Context* ctx) {
         void* thread = ((void*)HAL_current()->thread);
         if (((thread != ((void*)0)) && Kern_resolve_user_page_fault((((Kern_Thread*)thread))->proc, fault_addr, ctx->err))) {
 #line 2146 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-            HAL_IDT_Context* __llpl_ret1371 = ((void*)0);
-            return __llpl_ret1371;
+            HAL_IDT_Context* __llpl_ret1390 = ((void*)0);
+            return __llpl_ret1390;
         }
     }
     HAL_Serial_write(({ ksnprintf(__llpl_interp30, 256, "\033[1;31mPAGE FAULT:\033[0m %s during %s in %s mode\n", page_fault_reason(ctx->err), page_fault_access(ctx->err), page_fault_mode(ctx->err)); (char*)__llpl_interp30; }));
@@ -32988,12 +33095,12 @@ HAL_IDT_Context* page_fault_handler(HAL_IDT_Context* ctx) {
     if ((((ctx->err & ((uint64_t)4)) != ((uint64_t)0)) || ((ctx->cs & ((uint64_t)3)) == ((uint64_t)3)))) {
         HAL_Serial_write("  action=kill-user-thread-or-handle\n");
 #line 2158 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-        HAL_IDT_Context* __llpl_ret1372 = Kern_handle_user_exception(ctx, fault_addr, ((uintptr_t)SYS_EXCEPTION_RETURN));
-        return __llpl_ret1372;
+        HAL_IDT_Context* __llpl_ret1391 = Kern_handle_user_exception(ctx, fault_addr, ((uintptr_t)SYS_EXCEPTION_RETURN));
+        return __llpl_ret1391;
     }
 #line 2161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
-    HAL_IDT_Context* __llpl_ret1373 = ctx;
-    return __llpl_ret1373;
+    HAL_IDT_Context* __llpl_ret1392 = ctx;
+    return __llpl_ret1392;
 }
 
 #line 2164 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/idt.llpl"
@@ -33116,26 +33223,26 @@ void Kern_AhciDevice__destroy_impl(void* ptr) {
 
 String* Kern_AhciDevice_name(Kern_AhciDevice* self) {
 #line 44 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    String* __llpl_ret1374 = self->device_name;
-    return __llpl_ret1374;
+    String* __llpl_ret1393 = self->device_name;
+    return __llpl_ret1393;
 }
 
 uint64_t Kern_AhciDevice_sector_size(Kern_AhciDevice* self) {
 #line 48 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    uint64_t __llpl_ret1375 = ((uint64_t)512);
-    return __llpl_ret1375;
+    uint64_t __llpl_ret1394 = ((uint64_t)512);
+    return __llpl_ret1394;
 }
 
 uint64_t Kern_AhciDevice_sector_count(Kern_AhciDevice* self) {
 #line 52 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    uint64_t __llpl_ret1376 = self->drive_sectors;
-    return __llpl_ret1376;
+    uint64_t __llpl_ret1395 = self->drive_sectors;
+    return __llpl_ret1395;
 }
 
 bool Kern_AhciDevice_read_sectors(Kern_AhciDevice* self, uint64_t lba, uint64_t count, void* buf) {
 #line 56 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    bool __llpl_ret1377 = Kern_ahci_issue_command(self, ((uint8_t)HAL_AHCI_ATA_CMD_READ_DMA_EXT), lba, count, buf, (count * ((uint64_t)512)), 0);
-    return __llpl_ret1377;
+    bool __llpl_ret1396 = Kern_ahci_issue_command(self, ((uint8_t)HAL_AHCI_ATA_CMD_READ_DMA_EXT), lba, count, buf, (count * ((uint64_t)512)), 0);
+    return __llpl_ret1396;
 }
 
 
@@ -33144,24 +33251,24 @@ HAL_AHCI_PortRegs* Kern_ahci_port_regs(HAL_AHCI_HbaRegs* hba, uintptr_t port_ind
 #line 62 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
     uintptr_t addr = ((((uintptr_t)hba) + ((uintptr_t)HAL_AHCI_PORT_REGS_OFFSET)) + (port_index * ((uintptr_t)HAL_AHCI_PORT_REGS_SIZE)));
 #line 64 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    HAL_AHCI_PortRegs* __llpl_ret1378 = ((HAL_AHCI_PortRegs*)addr);
-    return __llpl_ret1378;
+    HAL_AHCI_PortRegs* __llpl_ret1397 = ((HAL_AHCI_PortRegs*)addr);
+    return __llpl_ret1397;
 }
 
 #line 76 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
 bool Kern_ahci_issue_command(Kern_AhciDevice* dev, uint8_t command, uint64_t lba, uint64_t sector_count, void* buf, uint64_t byte_size, bool use_polling) {
-    __LLPL_EH_Frame __llpl_defer_frame253;
-    int __llpl_defer_active254 = 0;
     __LLPL_EH_Frame __llpl_defer_frame255;
     int __llpl_defer_active256 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame257;
+    int __llpl_defer_active258 = 0;
 #line 78 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
     uint64_t busy_spins = ((uint64_t)0);
     while (((dev->port->tfd & ((uint32_t)136)) != ((uint32_t)0))) {
         (busy_spins = (busy_spins + ((uint64_t)1)));
         if ((busy_spins >= ((uint64_t)Kern_AHCI_POLL_LIMIT))) {
 #line 81 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-            bool __llpl_ret1379 = 0;
-            return __llpl_ret1379;
+            bool __llpl_ret1398 = 0;
+            return __llpl_ret1398;
         }
     }
 #line 84 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
@@ -33207,175 +33314,175 @@ bool Kern_ahci_issue_command(Kern_AhciDevice* dev, uint8_t command, uint64_t lba
         while (((dev->port->ci & ((uint32_t)1)) != ((uint32_t)0))) {
             if (((dev->port->is_ & ((uint32_t)HAL_AHCI_PXIS_TFES)) != ((uint32_t)0))) {
 #line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-                bool __llpl_ret1380 = 0;
-                return __llpl_ret1380;
+                bool __llpl_ret1399 = 0;
+                return __llpl_ret1399;
             }
             (wait_spins = (wait_spins + ((uint64_t)1)));
             if ((wait_spins >= ((uint64_t)Kern_AHCI_POLL_LIMIT))) {
 #line 123 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-                bool __llpl_ret1381 = 0;
-                return __llpl_ret1381;
+                bool __llpl_ret1400 = 0;
+                return __llpl_ret1400;
             }
         }
 #line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-        bool __llpl_ret1382 = 1;
-        return __llpl_ret1382;
+        bool __llpl_ret1401 = 1;
+        return __llpl_ret1401;
     }
 #line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
     bool prepared = 0;
     {
         SpinLock_acquire(&(dev->lock));
-        __llpl_defer_frame253.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame253.type_id = ((void*)0);
-        __llpl_defer_frame253.error_slot = ((void*)0);
-        __llpl_defer_frame253.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame253);
-        __llpl_defer_active254 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame253.env) != 0) {
-            __llpl_defer_active254 = 0;
+        __llpl_defer_frame255.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame255.type_id = ((void*)0);
+        __llpl_defer_frame255.error_slot = ((void*)0);
+        __llpl_defer_frame255.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame255);
+        __llpl_defer_active256 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame255.env) != 0) {
+            __llpl_defer_active256 = 0;
         SpinLock_release(&(dev->lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         dev->port->ci = (dev->port->ci | ((uint32_t)1));
         prepared = Kern_prepare_block_current(dev->waiters);
-        if (__llpl_defer_active254) {
-            __llpl_defer_active254 = 0;
-            llpl_eh_pop(&__llpl_defer_frame253);
+        if (__llpl_defer_active256) {
+            __llpl_defer_active256 = 0;
+            llpl_eh_pop(&__llpl_defer_frame255);
         SpinLock_release(&(dev->lock));
         }
     }
     if (!prepared) {
 #line 133 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-        bool __llpl_ret1383 = 0;
-        if (__llpl_defer_active254) {
-            __llpl_defer_active254 = 0;
-            llpl_eh_pop(&__llpl_defer_frame253);
+        bool __llpl_ret1402 = 0;
+        if (__llpl_defer_active256) {
+            __llpl_defer_active256 = 0;
+            llpl_eh_pop(&__llpl_defer_frame255);
         SpinLock_release(&(dev->lock));
         }
-        return __llpl_ret1383;
+        return __llpl_ret1402;
     }
     Kern_scheduler_yield();
     while (((dev->port->ci & ((uint32_t)1)) != ((uint32_t)0))) {
         if (((dev->port->is_ & ((uint32_t)HAL_AHCI_PXIS_TFES)) != ((uint32_t)0))) {
 #line 138 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-            bool __llpl_ret1384 = 0;
-            if (__llpl_defer_active254) {
-                __llpl_defer_active254 = 0;
-                llpl_eh_pop(&__llpl_defer_frame253);
+            bool __llpl_ret1403 = 0;
+            if (__llpl_defer_active256) {
+                __llpl_defer_active256 = 0;
+                llpl_eh_pop(&__llpl_defer_frame255);
         SpinLock_release(&(dev->lock));
             }
-            return __llpl_ret1384;
+            return __llpl_ret1403;
         }
 #line 140 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
         bool prepared2 = 0;
         {
             SpinLock_acquire(&(dev->lock));
-            __llpl_defer_frame255.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame255.type_id = ((void*)0);
-            __llpl_defer_frame255.error_slot = ((void*)0);
-            __llpl_defer_frame255.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame255);
-            __llpl_defer_active256 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame255.env) != 0) {
-                __llpl_defer_active256 = 0;
+            __llpl_defer_frame257.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame257.type_id = ((void*)0);
+            __llpl_defer_frame257.error_slot = ((void*)0);
+            __llpl_defer_frame257.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame257);
+            __llpl_defer_active258 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame257.env) != 0) {
+                __llpl_defer_active258 = 0;
             SpinLock_release(&(dev->lock));
                 llpl_eh_resume();
                 __builtin_unreachable();
             }
             if (((dev->port->ci & ((uint32_t)1)) == ((uint32_t)0))) {
 #line 143 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-                bool __llpl_ret1385 = 1;
+                bool __llpl_ret1404 = 1;
+                if (__llpl_defer_active258) {
+                    __llpl_defer_active258 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame257);
+            SpinLock_release(&(dev->lock));
+                }
                 if (__llpl_defer_active256) {
                     __llpl_defer_active256 = 0;
                     llpl_eh_pop(&__llpl_defer_frame255);
-            SpinLock_release(&(dev->lock));
-                }
-                if (__llpl_defer_active254) {
-                    __llpl_defer_active254 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame253);
         SpinLock_release(&(dev->lock));
                 }
-                return __llpl_ret1385;
+                return __llpl_ret1404;
             }
             prepared2 = Kern_prepare_block_current(dev->waiters);
-            if (__llpl_defer_active256) {
-                __llpl_defer_active256 = 0;
-                llpl_eh_pop(&__llpl_defer_frame255);
+            if (__llpl_defer_active258) {
+                __llpl_defer_active258 = 0;
+                llpl_eh_pop(&__llpl_defer_frame257);
             SpinLock_release(&(dev->lock));
             }
         }
         if (!prepared2) {
 #line 147 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-            bool __llpl_ret1386 = 0;
+            bool __llpl_ret1405 = 0;
+            if (__llpl_defer_active258) {
+                __llpl_defer_active258 = 0;
+                llpl_eh_pop(&__llpl_defer_frame257);
+            SpinLock_release(&(dev->lock));
+            }
             if (__llpl_defer_active256) {
                 __llpl_defer_active256 = 0;
                 llpl_eh_pop(&__llpl_defer_frame255);
-            SpinLock_release(&(dev->lock));
-            }
-            if (__llpl_defer_active254) {
-                __llpl_defer_active254 = 0;
-                llpl_eh_pop(&__llpl_defer_frame253);
         SpinLock_release(&(dev->lock));
             }
-            return __llpl_ret1386;
+            return __llpl_ret1405;
         }
         Kern_scheduler_yield();
     }
 #line 150 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    bool __llpl_ret1387 = 1;
+    bool __llpl_ret1406 = 1;
+    if (__llpl_defer_active258) {
+        __llpl_defer_active258 = 0;
+        llpl_eh_pop(&__llpl_defer_frame257);
+            SpinLock_release(&(dev->lock));
+    }
     if (__llpl_defer_active256) {
         __llpl_defer_active256 = 0;
         llpl_eh_pop(&__llpl_defer_frame255);
-            SpinLock_release(&(dev->lock));
-    }
-    if (__llpl_defer_active254) {
-        __llpl_defer_active254 = 0;
-        llpl_eh_pop(&__llpl_defer_frame253);
         SpinLock_release(&(dev->lock));
     }
-    return __llpl_ret1387;
+    return __llpl_ret1406;
+    if (__llpl_defer_active258) {
+        __llpl_defer_active258 = 0;
+        llpl_eh_pop(&__llpl_defer_frame257);
+            SpinLock_release(&(dev->lock));
+    }
     if (__llpl_defer_active256) {
         __llpl_defer_active256 = 0;
         llpl_eh_pop(&__llpl_defer_frame255);
-            SpinLock_release(&(dev->lock));
-    }
-    if (__llpl_defer_active254) {
-        __llpl_defer_active254 = 0;
-        llpl_eh_pop(&__llpl_defer_frame253);
         SpinLock_release(&(dev->lock));
     }
 }
 
 #line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
 void Kern_ahci_irq_wake_port(Kern_AhciDevice* dev) {
-    __LLPL_EH_Frame __llpl_defer_frame257;
-    int __llpl_defer_active258 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame259;
+    int __llpl_defer_active260 = 0;
     {
         SpinLock_acquire(&(dev->lock));
-        __llpl_defer_frame257.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame257.type_id = ((void*)0);
-        __llpl_defer_frame257.error_slot = ((void*)0);
-        __llpl_defer_frame257.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame257);
-        __llpl_defer_active258 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame257.env) != 0) {
-            __llpl_defer_active258 = 0;
+        __llpl_defer_frame259.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame259.type_id = ((void*)0);
+        __llpl_defer_frame259.error_slot = ((void*)0);
+        __llpl_defer_frame259.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame259);
+        __llpl_defer_active260 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame259.env) != 0) {
+            __llpl_defer_active260 = 0;
         SpinLock_release(&(dev->lock));
             llpl_eh_resume();
             __builtin_unreachable();
         }
         dev->port->is_ = ((uint32_t)4294967295);
-        if (__llpl_defer_active258) {
-            __llpl_defer_active258 = 0;
-            llpl_eh_pop(&__llpl_defer_frame257);
+        if (__llpl_defer_active260) {
+            __llpl_defer_active260 = 0;
+            llpl_eh_pop(&__llpl_defer_frame259);
         SpinLock_release(&(dev->lock));
         }
     }
     Kern_wake_all(dev->waiters);
-    if (__llpl_defer_active258) {
-        __llpl_defer_active258 = 0;
-        llpl_eh_pop(&__llpl_defer_frame257);
+    if (__llpl_defer_active260) {
+        __llpl_defer_active260 = 0;
+        llpl_eh_pop(&__llpl_defer_frame259);
         SpinLock_release(&(dev->lock));
     }
 }
@@ -33415,13 +33522,13 @@ bool Kern_ahci_stop_port(HAL_AHCI_PortRegs* port) {
         (spins = (spins + ((uint64_t)1)));
         if ((spins >= ((uint64_t)Kern_AHCI_POLL_LIMIT))) {
 #line 196 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-            bool __llpl_ret1388 = 0;
-            return __llpl_ret1388;
+            bool __llpl_ret1407 = 0;
+            return __llpl_ret1407;
         }
     }
 #line 198 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    bool __llpl_ret1389 = 1;
-    return __llpl_ret1389;
+    bool __llpl_ret1408 = 1;
+    return __llpl_ret1408;
 }
 
 #line 201 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
@@ -33432,15 +33539,15 @@ bool Kern_ahci_start_port(HAL_AHCI_PortRegs* port) {
         (spins = (spins + ((uint64_t)1)));
         if ((spins >= ((uint64_t)Kern_AHCI_POLL_LIMIT))) {
 #line 205 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-            bool __llpl_ret1390 = 0;
-            return __llpl_ret1390;
+            bool __llpl_ret1409 = 0;
+            return __llpl_ret1409;
         }
     }
     port->cmd = (port->cmd | ((uint32_t)HAL_AHCI_PXCMD_FRE));
     port->cmd = (port->cmd | ((uint32_t)HAL_AHCI_PXCMD_ST));
 #line 209 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    bool __llpl_ret1391 = 1;
-    return __llpl_ret1391;
+    bool __llpl_ret1410 = 1;
+    return __llpl_ret1410;
 }
 
 #line 215 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
@@ -33465,8 +33572,8 @@ bool Kern_ahci_identify(Kern_AhciDevice* dev) {
     }
     MM_PageFrame_release(buf_pf);
 #line 233 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    bool __llpl_ret1392 = ok;
-    return __llpl_ret1392;
+    bool __llpl_ret1411 = ok;
+    return __llpl_ret1411;
 }
 
 #line 236 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
@@ -33541,11 +33648,11 @@ void Kern_ahci_init_port(HAL_AHCI_HbaRegs* hba, uintptr_t port_index) {
 void Kern_ahci_init() {
 #line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
 #line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    __LLPL_Tuple2_bool_HAL_PCI_PciDevice __llpl_destruct_1392 = HAL_PCI_find_device(((uint8_t)1), ((uint8_t)6), ((uint8_t)1));
+    __LLPL_Tuple2_bool_HAL_PCI_PciDevice __llpl_destruct_1411 = HAL_PCI_find_device(((uint8_t)1), ((uint8_t)6), ((uint8_t)1));
 #line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    bool found = __llpl_destruct_1392._0;
+    bool found = __llpl_destruct_1411._0;
 #line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
-    HAL_PCI_PciDevice pci_dev = __llpl_destruct_1392._1;
+    HAL_PCI_PciDevice pci_dev = __llpl_destruct_1411._1;
     if (!found) {
         HAL_Serial_write("AHCI: no controller found\n");
 #line 304 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/ahci.llpl"
@@ -33630,8 +33737,8 @@ uint8_t HAL_inb(uint64_t port) {
         : "=a"(value)
         : "Nd"(port)
     );
-    uint8_t __llpl_ret1394 = value;
-    return __llpl_ret1394;
+    uint8_t __llpl_ret1413 = value;
+    return __llpl_ret1413;
 }
 
 #line 14 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33654,8 +33761,8 @@ uint32_t HAL_inl(uint64_t port) {
         : "=a"(value)
         : "Nd"(port)
     );
-    uint32_t __llpl_ret1395 = value;
-    return __llpl_ret1395;
+    uint32_t __llpl_ret1414 = value;
+    return __llpl_ret1414;
 }
 
 #line 24 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33692,8 +33799,8 @@ bool HAL_interrupts_enabled() {
         : "=r"(flags)
     );
 #line 39 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    bool __llpl_ret1396 = ((flags & ((uint64_t)(1 << 9))) != ((uint64_t)0));
-    return __llpl_ret1396;
+    bool __llpl_ret1415 = ((flags & ((uint64_t)(1 << 9))) != ((uint64_t)0));
+    return __llpl_ret1415;
 }
 
 #line 42 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33702,8 +33809,8 @@ bool HAL_interrupt_save() {
     bool enabled = HAL_interrupts_enabled();
     HAL_disable_interrupts();
 #line 45 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    bool __llpl_ret1397 = enabled;
-    return __llpl_ret1397;
+    bool __llpl_ret1416 = enabled;
+    return __llpl_ret1416;
 }
 
 #line 48 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33722,8 +33829,8 @@ uint64_t HAL_read_cr3() {
         "mov %%cr3, %0\n\t"
         : "=r"(cr3)
     );
-    uint64_t __llpl_ret1398 = cr3;
-    return __llpl_ret1398;
+    uint64_t __llpl_ret1417 = cr3;
+    return __llpl_ret1417;
 }
 
 #line 60 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33735,8 +33842,8 @@ uint64_t HAL_read_cr2() {
         "mov %%cr2, %0\n\t"
         : "=r"(cr2)
     );
-    uint64_t __llpl_ret1399 = cr2;
-    return __llpl_ret1399;
+    uint64_t __llpl_ret1418 = cr2;
+    return __llpl_ret1418;
 }
 
 #line 66 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33759,8 +33866,8 @@ uint64_t HAL_read_cr0() {
         "mov %%cr0, %0\n\t"
         : "=r"(cr0)
     );
-    uint64_t __llpl_ret1400 = cr0;
-    return __llpl_ret1400;
+    uint64_t __llpl_ret1419 = cr0;
+    return __llpl_ret1419;
 }
 
 #line 76 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33783,8 +33890,8 @@ uint64_t HAL_read_cr4() {
         "mov %%cr4, %0\n\t"
         : "=r"(cr4)
     );
-    uint64_t __llpl_ret1401 = cr4;
-    return __llpl_ret1401;
+    uint64_t __llpl_ret1420 = cr4;
+    return __llpl_ret1420;
 }
 
 #line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33824,26 +33931,26 @@ __LLPL_Tuple4_u32_u32_u32_u32 HAL_cpuid(uint32_t leaf) {
         "cpuid\n\t"
         : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
     );
-    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_ret1402 = (__LLPL_Tuple4_u32_u32_u32_u32){ ._0 = eax, ._1 = ebx, ._2 = ecx, ._3 = edx };
-    return __llpl_ret1402;
+    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_ret1421 = (__LLPL_Tuple4_u32_u32_u32_u32){ ._0 = eax, ._1 = ebx, ._2 = ecx, ._3 = edx };
+    return __llpl_ret1421;
 }
 
 #line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
 bool HAL_has_rdrand() {
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1402 = HAL_cpuid(((uint32_t)1));
+    __LLPL_Tuple4_u32_u32_u32_u32 __llpl_destruct_1421 = HAL_cpuid(((uint32_t)1));
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    uint32_t eax = __llpl_destruct_1402._0;
+    uint32_t eax = __llpl_destruct_1421._0;
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    uint32_t ebx = __llpl_destruct_1402._1;
+    uint32_t ebx = __llpl_destruct_1421._1;
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    uint32_t ecx = __llpl_destruct_1402._2;
+    uint32_t ecx = __llpl_destruct_1421._2;
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    uint32_t edx = __llpl_destruct_1402._3;
+    uint32_t edx = __llpl_destruct_1421._3;
 #line 112 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    bool __llpl_ret1404 = ((ecx & ((uint32_t)(1 << 30))) != ((uint32_t)0));
-    return __llpl_ret1404;
+    bool __llpl_ret1423 = ((ecx & ((uint32_t)(1 << 30))) != ((uint32_t)0));
+    return __llpl_ret1423;
 }
 
 #line 118 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33862,14 +33969,14 @@ __LLPL_Tuple2_bool_u64 HAL_rdrand64() {
         );
         if ((ok != ((uint8_t)0))) {
 #line 130 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-            __LLPL_Tuple2_bool_u64 __llpl_ret1405 = (__LLPL_Tuple2_bool_u64){ ._0 = 1, ._1 = value };
-            return __llpl_ret1405;
+            __LLPL_Tuple2_bool_u64 __llpl_ret1424 = (__LLPL_Tuple2_bool_u64){ ._0 = 1, ._1 = value };
+            return __llpl_ret1424;
         }
         (attempt = (attempt + ((uintptr_t)1)));
     }
 #line 134 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    __LLPL_Tuple2_bool_u64 __llpl_ret1406 = (__LLPL_Tuple2_bool_u64){ ._0 = 0, ._1 = 0 };
-    return __llpl_ret1406;
+    __LLPL_Tuple2_bool_u64 __llpl_ret1425 = (__LLPL_Tuple2_bool_u64){ ._0 = 0, ._1 = 0 };
+    return __llpl_ret1425;
 }
 
 #line 137 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33884,8 +33991,8 @@ uint64_t HAL_rdtsc() {
         : "=a"(lo), "=d"(hi)
     );
 #line 141 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
-    uint64_t __llpl_ret1407 = ((((uint64_t)hi) << ((uint64_t)32)) | ((uint64_t)lo));
-    return __llpl_ret1407;
+    uint64_t __llpl_ret1426 = ((((uint64_t)hi) << ((uint64_t)32)) | ((uint64_t)lo));
+    return __llpl_ret1426;
 }
 
 #line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33914,8 +34021,8 @@ uintptr_t HAL_read_msr(uint32_t msr) {
         : "=a"(low), "=d"(high)
         : "c"(msr)
     );
-    uintptr_t __llpl_ret1408 = ((((uintptr_t)high) << ((uintptr_t)32)) | ((uintptr_t)low));
-    return __llpl_ret1408;
+    uintptr_t __llpl_ret1427 = ((((uintptr_t)high) << ((uintptr_t)32)) | ((uintptr_t)low));
+    return __llpl_ret1427;
 }
 
 #line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33931,8 +34038,8 @@ uintptr_t HAL_cpu_id() {
         : 
         : "ecx", "edx"
     );
-    uintptr_t __llpl_ret1409 = ((uintptr_t)(ebx >> ((uint32_t)24)));
-    return __llpl_ret1409;
+    uintptr_t __llpl_ret1428 = ((uintptr_t)(ebx >> ((uint32_t)24)));
+    return __llpl_ret1428;
 }
 
 #line 173 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33951,8 +34058,8 @@ uintptr_t HAL_cpuid_num() {
         : 
         : "eax", "ecx", "edx"
     );
-    uintptr_t __llpl_ret1410 = ((uintptr_t)(ebx >> ((uint32_t)24)));
-    return __llpl_ret1410;
+    uintptr_t __llpl_ret1429 = ((uintptr_t)(ebx >> ((uint32_t)24)));
+    return __llpl_ret1429;
 }
 
 #line 187 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33962,8 +34069,8 @@ void HAL_set_gs_base(uintptr_t base) {
 
 #line 191 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
 uintptr_t HAL_read_gs_base() {
-    uintptr_t __llpl_ret1411 = HAL_read_msr(((uint32_t)3221225729));
-    return __llpl_ret1411;
+    uintptr_t __llpl_ret1430 = HAL_read_msr(((uint32_t)3221225729));
+    return __llpl_ret1430;
 }
 
 #line 195 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/cpu.llpl"
@@ -33984,8 +34091,8 @@ HAL_PerCpu* HAL_current() {
         "mov %%gs:0, %0\n\t"
         : "=r"(base)
     );
-    HAL_PerCpu* __llpl_ret1412 = ((HAL_PerCpu*)base);
-    return __llpl_ret1412;
+    HAL_PerCpu* __llpl_ret1431 = ((HAL_PerCpu*)base);
+    return __llpl_ret1431;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl
@@ -34000,8 +34107,8 @@ uintptr_t MM_buckets_landmark = 0;
 
 #line 172 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
 void MM_free(void* ptr) {
-    __LLPL_EH_Frame __llpl_defer_frame259;
-    int __llpl_defer_active260 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame261;
+    int __llpl_defer_active262 = 0;
     if ((ptr == ((void*)0))) {
 #line 174 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
         return;
@@ -34010,14 +34117,14 @@ void MM_free(void* ptr) {
     MM_PageFrame* pf = MM_v2pf(ptr);
     {
         SpinLock_acquire(&(MM_lock));
-        __llpl_defer_frame259.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame259.type_id = ((void*)0);
-        __llpl_defer_frame259.error_slot = ((void*)0);
-        __llpl_defer_frame259.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame259);
-        __llpl_defer_active260 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame259.env) != 0) {
-            __llpl_defer_active260 = 0;
+        __llpl_defer_frame261.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame261.type_id = ((void*)0);
+        __llpl_defer_frame261.error_slot = ((void*)0);
+        __llpl_defer_frame261.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame261);
+        __llpl_defer_active262 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame261.env) != 0) {
+            __llpl_defer_active262 = 0;
         SpinLock_release(&(MM_lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -34046,15 +34153,15 @@ void MM_free(void* ptr) {
                 llpl_panic_at("Invalid pointer in kfree", "mm/heap.llpl", 196);
             }
         }
-        if (__llpl_defer_active260) {
-            __llpl_defer_active260 = 0;
-            llpl_eh_pop(&__llpl_defer_frame259);
+        if (__llpl_defer_active262) {
+            __llpl_defer_active262 = 0;
+            llpl_eh_pop(&__llpl_defer_frame261);
         SpinLock_release(&(MM_lock));
         }
     }
-    if (__llpl_defer_active260) {
-        __llpl_defer_active260 = 0;
-        llpl_eh_pop(&__llpl_defer_frame259);
+    if (__llpl_defer_active262) {
+        __llpl_defer_active262 = 0;
+        llpl_eh_pop(&__llpl_defer_frame261);
         SpinLock_release(&(MM_lock));
     }
 }
@@ -34085,8 +34192,8 @@ uintptr_t HAL_LAPIC_base() {
 #line 37 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
     uintptr_t phys_base = (msr_value & ((uintptr_t)~4095));
 #line 38 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
-    uintptr_t __llpl_ret1413 = MM_p2v(phys_base);
-    return __llpl_ret1413;
+    uintptr_t __llpl_ret1432 = MM_p2v(phys_base);
+    return __llpl_ret1432;
 }
 
 #line 41 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
@@ -34094,8 +34201,8 @@ uint32_t* HAL_LAPIC_reg(uintptr_t offset) {
 #line 42 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
     uintptr_t addr = (HAL_LAPIC_base() + offset);
 #line 43 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
-    uint32_t* __llpl_ret1414 = ((uint32_t*)addr);
-    return __llpl_ret1414;
+    uint32_t* __llpl_ret1433 = ((uint32_t*)addr);
+    return __llpl_ret1433;
 }
 
 #line 46 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
@@ -34136,19 +34243,19 @@ const intptr_t HAL_IOAPIC_REDTBL_MASKED = 65536;
 uintptr_t HAL_IOAPIC_base() {
 #line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
 #line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
-    __LLPL_Tuple2_bool_uint __llpl_destruct_1414 = HAL_ACPI_find_ioapic();
+    __LLPL_Tuple2_bool_uint __llpl_destruct_1433 = HAL_ACPI_find_ioapic();
 #line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
-    bool found = __llpl_destruct_1414._0;
+    bool found = __llpl_destruct_1433._0;
 #line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
-    uintptr_t paddr = __llpl_destruct_1414._1;
+    uintptr_t paddr = __llpl_destruct_1433._1;
     if (found) {
 #line 74 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
-        uintptr_t __llpl_ret1416 = MM_p2v(paddr);
-        return __llpl_ret1416;
+        uintptr_t __llpl_ret1435 = MM_p2v(paddr);
+        return __llpl_ret1435;
     }
 #line 76 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
-    uintptr_t __llpl_ret1417 = MM_p2v(((uintptr_t)HAL_IOAPIC_MMIO_BASE));
-    return __llpl_ret1417;
+    uintptr_t __llpl_ret1436 = MM_p2v(((uintptr_t)HAL_IOAPIC_MMIO_BASE));
+    return __llpl_ret1436;
 }
 
 #line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/apic.llpl"
@@ -34201,19 +34308,19 @@ MM_AddressSpace* MM_kas;
 bool MM_page_table_empty(MM_Pte* table) {
 #line 21 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
     {
-        intptr_t __range_end1418 = 512;
+        intptr_t __range_end1437 = 512;
         intptr_t i = 0;
-        for (; i < __range_end1418; i = i + 1) {
+        for (; i < __range_end1437; i = i + 1) {
             if (table[i].pte.present) {
 #line 22 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                bool __llpl_ret1419 = 0;
-                return __llpl_ret1419;
+                bool __llpl_ret1438 = 0;
+                return __llpl_ret1438;
             }
         }
     }
 #line 24 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-    bool __llpl_ret1420 = 1;
-    return __llpl_ret1420;
+    bool __llpl_ret1439 = 1;
+    return __llpl_ret1439;
 }
 
 #line 27 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
@@ -34360,8 +34467,8 @@ void MM_AddressSpace__destroy_impl(void* ptr) {
 }
 
 void MM_AddressSpace_destroy_user_memory(MM_AddressSpace* self) {
-    __LLPL_EH_Frame __llpl_defer_frame261;
-    int __llpl_defer_active262 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame263;
+    int __llpl_defer_active264 = 0;
     if ((self->pml4 == ((uintptr_t)0))) {
 #line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
         return;
@@ -34370,40 +34477,6 @@ void MM_AddressSpace_destroy_user_memory(MM_AddressSpace* self) {
     if (!(((HAL_read_cr3() & ((uint64_t)MM_PADDR_4K_MASK)) != (self->pml4 & ((uintptr_t)MM_PADDR_4K_MASK))))) llpl_panic("cannot destroy the active address space");
 #line 146 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
     void* detached_root = ((void*)0);
-    {
-        SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame261.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame261.type_id = ((void*)0);
-        __llpl_defer_frame261.error_slot = ((void*)0);
-        __llpl_defer_frame261.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame261);
-        __llpl_defer_active262 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame261.env) != 0) {
-            __llpl_defer_active262 = 0;
-        SpinLock_release(&(self->lock));
-            llpl_eh_resume();
-            __builtin_unreachable();
-        }
-        detached_root = ((void*)self->root);
-        self->root = ((void*)0);
-        self->num_areas = ((uintptr_t)0);
-        if (__llpl_defer_active262) {
-            __llpl_defer_active262 = 0;
-            llpl_eh_pop(&__llpl_defer_frame261);
-        SpinLock_release(&(self->lock));
-        }
-    }
-    MM_destroy_vma_tree(detached_root, self->pml4);
-    if (__llpl_defer_active262) {
-        __llpl_defer_active262 = 0;
-        llpl_eh_pop(&__llpl_defer_frame261);
-        SpinLock_release(&(self->lock));
-    }
-}
-
-MM_VmArea* MM_AddressSpace_find(MM_AddressSpace* self, uintptr_t addr) {
-    __LLPL_EH_Frame __llpl_defer_frame263;
-    int __llpl_defer_active264 = 0;
     {
         SpinLock_acquire(&(self->lock));
         __llpl_defer_frame263.kind = LLPL_EH_FRAME_CLEANUP;
@@ -34418,18 +34491,52 @@ MM_VmArea* MM_AddressSpace_find(MM_AddressSpace* self, uintptr_t addr) {
             llpl_eh_resume();
             __builtin_unreachable();
         }
+        detached_root = ((void*)self->root);
+        self->root = ((void*)0);
+        self->num_areas = ((uintptr_t)0);
+        if (__llpl_defer_active264) {
+            __llpl_defer_active264 = 0;
+            llpl_eh_pop(&__llpl_defer_frame263);
+        SpinLock_release(&(self->lock));
+        }
+    }
+    MM_destroy_vma_tree(detached_root, self->pml4);
+    if (__llpl_defer_active264) {
+        __llpl_defer_active264 = 0;
+        llpl_eh_pop(&__llpl_defer_frame263);
+        SpinLock_release(&(self->lock));
+    }
+}
+
+MM_VmArea* MM_AddressSpace_find(MM_AddressSpace* self, uintptr_t addr) {
+    __LLPL_EH_Frame __llpl_defer_frame265;
+    int __llpl_defer_active266 = 0;
+    {
+        SpinLock_acquire(&(self->lock));
+        __llpl_defer_frame265.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame265.type_id = ((void*)0);
+        __llpl_defer_frame265.error_slot = ((void*)0);
+        __llpl_defer_frame265.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame265);
+        __llpl_defer_active266 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame265.env) != 0) {
+            __llpl_defer_active266 = 0;
+        SpinLock_release(&(self->lock));
+            llpl_eh_resume();
+            __builtin_unreachable();
+        }
 #line 157 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
         MM_VmArea* curr = self->root;
         while ((curr != ((void*)0))) {
             if (((addr >= curr->start) && (addr < curr->end))) {
 #line 161 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                MM_VmArea* __llpl_ret1421 = curr;
-                if (__llpl_defer_active264) {
-                    __llpl_defer_active264 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame263);
+                MM_VmArea* __llpl_ret1440 = curr;
+                if (__llpl_defer_active266) {
+                    __llpl_defer_active266 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame265);
         SpinLock_release(&(self->lock));
                 }
-                return __llpl_ret1421;
+                return __llpl_ret1440;
             }
             if ((addr < curr->start)) {
                 curr = curr->left;
@@ -34438,22 +34545,22 @@ MM_VmArea* MM_AddressSpace_find(MM_AddressSpace* self, uintptr_t addr) {
             }
         }
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        MM_VmArea* __llpl_ret1422 = ((void*)0);
-        if (__llpl_defer_active264) {
-            __llpl_defer_active264 = 0;
-            llpl_eh_pop(&__llpl_defer_frame263);
+        MM_VmArea* __llpl_ret1441 = ((void*)0);
+        if (__llpl_defer_active266) {
+            __llpl_defer_active266 = 0;
+            llpl_eh_pop(&__llpl_defer_frame265);
         SpinLock_release(&(self->lock));
         }
-        return __llpl_ret1422;
-        if (__llpl_defer_active264) {
-            __llpl_defer_active264 = 0;
-            llpl_eh_pop(&__llpl_defer_frame263);
+        return __llpl_ret1441;
+        if (__llpl_defer_active266) {
+            __llpl_defer_active266 = 0;
+            llpl_eh_pop(&__llpl_defer_frame265);
         SpinLock_release(&(self->lock));
         }
     }
-    if (__llpl_defer_active264) {
-        __llpl_defer_active264 = 0;
-        llpl_eh_pop(&__llpl_defer_frame263);
+    if (__llpl_defer_active266) {
+        __llpl_defer_active266 = 0;
+        llpl_eh_pop(&__llpl_defer_frame265);
         SpinLock_release(&(self->lock));
     }
 }
@@ -34464,8 +34571,8 @@ bool MM_AddressSpace_overlaps(MM_AddressSpace* self, uintptr_t start, uintptr_t 
     while ((curr != ((void*)0))) {
         if (!((end <= curr->start) || (start >= curr->end))) {
 #line 178 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-            bool __llpl_ret1423 = 1;
-            return __llpl_ret1423;
+            bool __llpl_ret1442 = 1;
+            return __llpl_ret1442;
         }
         if ((start < curr->start)) {
             curr = curr->left;
@@ -34474,8 +34581,8 @@ bool MM_AddressSpace_overlaps(MM_AddressSpace* self, uintptr_t start, uintptr_t 
         }
     }
 #line 186 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-    bool __llpl_ret1424 = 0;
-    return __llpl_ret1424;
+    bool __llpl_ret1443 = 0;
+    return __llpl_ret1443;
 }
 
 uintptr_t MM_AddressSpace_find_free(MM_AddressSpace* self, uintptr_t length) {
@@ -34485,16 +34592,16 @@ uintptr_t MM_AddressSpace_find_free(MM_AddressSpace* self, uintptr_t length) {
     MM_VmArea* curr = self->root;
     if ((curr == ((void*)0))) {
 #line 193 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        uintptr_t __llpl_ret1425 = addr;
-        return __llpl_ret1425;
+        uintptr_t __llpl_ret1444 = addr;
+        return __llpl_ret1444;
     }
     while (curr->left) {
         curr = curr->left;
     }
     if (((curr->start - self->start) >= length)) {
 #line 202 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        uintptr_t __llpl_ret1426 = self->start;
-        return __llpl_ret1426;
+        uintptr_t __llpl_ret1445 = self->start;
+        return __llpl_ret1445;
     }
     while ((curr != ((void*)0))) {
 #line 207 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
@@ -34516,31 +34623,31 @@ uintptr_t MM_AddressSpace_find_free(MM_AddressSpace* self, uintptr_t length) {
         if (!next) {
             if (((self->end - curr->end) >= length)) {
 #line 227 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                uintptr_t __llpl_ret1427 = curr->end;
-                return __llpl_ret1427;
+                uintptr_t __llpl_ret1446 = curr->end;
+                return __llpl_ret1446;
             }
 #line 229 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
             break;
         }
         if (((next->start - curr->end) >= length)) {
 #line 233 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-            uintptr_t __llpl_ret1428 = curr->end;
-            return __llpl_ret1428;
+            uintptr_t __llpl_ret1447 = curr->end;
+            return __llpl_ret1447;
         }
         curr = next;
     }
 #line 240 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-    uintptr_t __llpl_ret1429 = ((uintptr_t)0);
-    return __llpl_ret1429;
+    uintptr_t __llpl_ret1448 = ((uintptr_t)0);
+    return __llpl_ret1448;
 }
 
 uintptr_t MM_AddressSpace_map(MM_AddressSpace* self, uintptr_t addr, uintptr_t length, String* name, uintptr_t flags) {
-    __LLPL_EH_Frame __llpl_defer_frame266;
-    int __llpl_defer_active267 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame268;
+    int __llpl_defer_active269 = 0;
     if (!length) {
 #line 245 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        intptr_t __llpl_throw_value265 = EINVAL;
-        llpl_eh_throw("int", &__llpl_throw_value265, sizeof(intptr_t), "aspace.llpl", 245);
+        intptr_t __llpl_throw_value267 = EINVAL;
+        llpl_eh_throw("int", &__llpl_throw_value267, sizeof(intptr_t), "aspace.llpl", 245);
         __builtin_unreachable();
     }
 #line 248 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
@@ -34550,14 +34657,14 @@ uintptr_t MM_AddressSpace_map(MM_AddressSpace* self, uintptr_t addr, uintptr_t l
     length = ((length + ((uintptr_t)4095)) & ((uintptr_t)~4095));
     {
         SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame266.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame266.type_id = ((void*)0);
-        __llpl_defer_frame266.error_slot = ((void*)0);
-        __llpl_defer_frame266.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame266);
-        __llpl_defer_active267 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame266.env) != 0) {
-            __llpl_defer_active267 = 0;
+        __llpl_defer_frame268.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame268.type_id = ((void*)0);
+        __llpl_defer_frame268.error_slot = ((void*)0);
+        __llpl_defer_frame268.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame268);
+        __llpl_defer_active269 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame268.env) != 0) {
+            __llpl_defer_active269 = 0;
         SpinLock_release(&(self->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -34566,14 +34673,14 @@ uintptr_t MM_AddressSpace_map(MM_AddressSpace* self, uintptr_t addr, uintptr_t l
             start = addr;
             if (((start < self->start) || ((start + length) > self->end))) {
 #line 258 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                intptr_t __llpl_throw_value268 = EINVAL;
-                llpl_eh_throw("int", &__llpl_throw_value268, sizeof(intptr_t), "aspace.llpl", 258);
+                intptr_t __llpl_throw_value270 = EINVAL;
+                llpl_eh_throw("int", &__llpl_throw_value270, sizeof(intptr_t), "aspace.llpl", 258);
                 __builtin_unreachable();
             }
             if (MM_AddressSpace_overlaps(self, start, (start + length))) {
 #line 261 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                intptr_t __llpl_throw_value269 = EEXIST;
-                llpl_eh_throw("int", &__llpl_throw_value269, sizeof(intptr_t), "aspace.llpl", 261);
+                intptr_t __llpl_throw_value271 = EEXIST;
+                llpl_eh_throw("int", &__llpl_throw_value271, sizeof(intptr_t), "aspace.llpl", 261);
                 __builtin_unreachable();
             }
         } else {
@@ -34584,16 +34691,16 @@ uintptr_t MM_AddressSpace_map(MM_AddressSpace* self, uintptr_t addr, uintptr_t l
                 }
                 if ((start == ((uintptr_t)0))) {
 #line 269 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                    intptr_t __llpl_throw_value270 = ENOMEM;
-                    llpl_eh_throw("int", &__llpl_throw_value270, sizeof(intptr_t), "aspace.llpl", 269);
+                    intptr_t __llpl_throw_value272 = ENOMEM;
+                    llpl_eh_throw("int", &__llpl_throw_value272, sizeof(intptr_t), "aspace.llpl", 269);
                     __builtin_unreachable();
                 }
             } else {
                 start = MM_AddressSpace_find_free(self, length);
                 if ((start == ((uintptr_t)0))) {
 #line 274 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                    intptr_t __llpl_throw_value271 = ENOMEM;
-                    llpl_eh_throw("int", &__llpl_throw_value271, sizeof(intptr_t), "aspace.llpl", 274);
+                    intptr_t __llpl_throw_value273 = ENOMEM;
+                    llpl_eh_throw("int", &__llpl_throw_value273, sizeof(intptr_t), "aspace.llpl", 274);
                     __builtin_unreachable();
                 }
             }
@@ -34606,37 +34713,37 @@ uintptr_t MM_AddressSpace_map(MM_AddressSpace* self, uintptr_t addr, uintptr_t l
         }
         MM_rb_insert(self, vma);
 #line 291 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        uintptr_t __llpl_ret1430 = start;
-        if (__llpl_defer_active267) {
-            __llpl_defer_active267 = 0;
-            llpl_eh_pop(&__llpl_defer_frame266);
+        uintptr_t __llpl_ret1449 = start;
+        if (__llpl_defer_active269) {
+            __llpl_defer_active269 = 0;
+            llpl_eh_pop(&__llpl_defer_frame268);
         SpinLock_release(&(self->lock));
         }
-        return __llpl_ret1430;
-        if (__llpl_defer_active267) {
-            __llpl_defer_active267 = 0;
-            llpl_eh_pop(&__llpl_defer_frame266);
+        return __llpl_ret1449;
+        if (__llpl_defer_active269) {
+            __llpl_defer_active269 = 0;
+            llpl_eh_pop(&__llpl_defer_frame268);
         SpinLock_release(&(self->lock));
         }
     }
-    if (__llpl_defer_active267) {
-        __llpl_defer_active267 = 0;
-        llpl_eh_pop(&__llpl_defer_frame266);
+    if (__llpl_defer_active269) {
+        __llpl_defer_active269 = 0;
+        llpl_eh_pop(&__llpl_defer_frame268);
         SpinLock_release(&(self->lock));
     }
 }
 
 intptr_t MM_AddressSpace_unmap(MM_AddressSpace* self, uintptr_t addr, uintptr_t length) {
-    __LLPL_EH_Frame __llpl_defer_frame272;
-    int __llpl_defer_active273 = 0;
     __LLPL_EH_Frame __llpl_defer_frame274;
     int __llpl_defer_active275 = 0;
     __LLPL_EH_Frame __llpl_defer_frame276;
     int __llpl_defer_active277 = 0;
+    __LLPL_EH_Frame __llpl_defer_frame278;
+    int __llpl_defer_active279 = 0;
     if (!length) {
 #line 297 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        intptr_t __llpl_ret1431 = EINVAL;
-        return __llpl_ret1431;
+        intptr_t __llpl_ret1450 = EINVAL;
+        return __llpl_ret1450;
     }
     length = ((length + ((uintptr_t)4095)) & ((uintptr_t)~4095));
 #line 301 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
@@ -34652,18 +34759,6 @@ intptr_t MM_AddressSpace_unmap(MM_AddressSpace* self, uintptr_t addr, uintptr_t 
     if (((stack == ((void*)0)) || (to_process == ((void*)0)))) {
         llpl_panic_at("[VM] unmap: out of memory", "mm/aspace.llpl", 309);
     }
-    __llpl_defer_frame272.kind = LLPL_EH_FRAME_CLEANUP;
-    __llpl_defer_frame272.type_id = ((void*)0);
-    __llpl_defer_frame272.error_slot = ((void*)0);
-    __llpl_defer_frame272.error_size = 0;
-    llpl_eh_push(&__llpl_defer_frame272);
-    __llpl_defer_active273 = 1;
-    if (llpl_eh_setjmp(&__llpl_defer_frame272.env) != 0) {
-        __llpl_defer_active273 = 0;
-    MM_free(((void*)stack));
-        llpl_eh_resume();
-        __builtin_unreachable();
-    }
     __llpl_defer_frame274.kind = LLPL_EH_FRAME_CLEANUP;
     __llpl_defer_frame274.type_id = ((void*)0);
     __llpl_defer_frame274.error_slot = ((void*)0);
@@ -34672,6 +34767,18 @@ intptr_t MM_AddressSpace_unmap(MM_AddressSpace* self, uintptr_t addr, uintptr_t 
     __llpl_defer_active275 = 1;
     if (llpl_eh_setjmp(&__llpl_defer_frame274.env) != 0) {
         __llpl_defer_active275 = 0;
+    MM_free(((void*)stack));
+        llpl_eh_resume();
+        __builtin_unreachable();
+    }
+    __llpl_defer_frame276.kind = LLPL_EH_FRAME_CLEANUP;
+    __llpl_defer_frame276.type_id = ((void*)0);
+    __llpl_defer_frame276.error_slot = ((void*)0);
+    __llpl_defer_frame276.error_size = 0;
+    llpl_eh_push(&__llpl_defer_frame276);
+    __llpl_defer_active277 = 1;
+    if (llpl_eh_setjmp(&__llpl_defer_frame276.env) != 0) {
+        __llpl_defer_active277 = 0;
     MM_free(((void*)to_process));
         llpl_eh_resume();
         __builtin_unreachable();
@@ -34686,14 +34793,14 @@ intptr_t MM_AddressSpace_unmap(MM_AddressSpace* self, uintptr_t addr, uintptr_t 
     MM_VmArea* curr = self->root;
     {
         SpinLock_acquire(&(self->lock));
-        __llpl_defer_frame276.kind = LLPL_EH_FRAME_CLEANUP;
-        __llpl_defer_frame276.type_id = ((void*)0);
-        __llpl_defer_frame276.error_slot = ((void*)0);
-        __llpl_defer_frame276.error_size = 0;
-        llpl_eh_push(&__llpl_defer_frame276);
-        __llpl_defer_active277 = 1;
-        if (llpl_eh_setjmp(&__llpl_defer_frame276.env) != 0) {
-            __llpl_defer_active277 = 0;
+        __llpl_defer_frame278.kind = LLPL_EH_FRAME_CLEANUP;
+        __llpl_defer_frame278.type_id = ((void*)0);
+        __llpl_defer_frame278.error_slot = ((void*)0);
+        __llpl_defer_frame278.error_size = 0;
+        llpl_eh_push(&__llpl_defer_frame278);
+        __llpl_defer_active279 = 1;
+        if (llpl_eh_setjmp(&__llpl_defer_frame278.env) != 0) {
+            __llpl_defer_active279 = 0;
         SpinLock_release(&(self->lock));
             llpl_eh_resume();
             __builtin_unreachable();
@@ -34728,29 +34835,29 @@ intptr_t MM_AddressSpace_unmap(MM_AddressSpace* self, uintptr_t addr, uintptr_t 
         }
         if (!process_count) {
 #line 356 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-            intptr_t __llpl_ret1435 = ENOENT;
+            intptr_t __llpl_ret1454 = ENOENT;
+            if (__llpl_defer_active279) {
+                __llpl_defer_active279 = 0;
+                llpl_eh_pop(&__llpl_defer_frame278);
+        SpinLock_release(&(self->lock));
+            }
             if (__llpl_defer_active277) {
                 __llpl_defer_active277 = 0;
                 llpl_eh_pop(&__llpl_defer_frame276);
-        SpinLock_release(&(self->lock));
+    MM_free(((void*)to_process));
             }
             if (__llpl_defer_active275) {
                 __llpl_defer_active275 = 0;
                 llpl_eh_pop(&__llpl_defer_frame274);
-    MM_free(((void*)to_process));
-            }
-            if (__llpl_defer_active273) {
-                __llpl_defer_active273 = 0;
-                llpl_eh_pop(&__llpl_defer_frame272);
     MM_free(((void*)stack));
             }
-            return __llpl_ret1435;
+            return __llpl_ret1454;
         }
 #line 359 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
         {
-            intptr_t __range_end1436 = process_count;
+            intptr_t __range_end1455 = process_count;
             intptr_t i = 0;
-            for (; i < __range_end1436; i = i + 1) {
+            for (; i < __range_end1455; i = i + 1) {
 #line 360 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
                 MM_VmArea* vma = to_process[i];
                 if (((unmap_start <= vma->start) && (unmap_end >= vma->end))) {
@@ -34763,23 +34870,23 @@ intptr_t MM_AddressSpace_unmap(MM_AddressSpace* self, uintptr_t addr, uintptr_t 
                         MM_VmArea* right_vma = MM_VmArea_new(unmap_end, vma->end);
                         if (!right_vma) {
 #line 368 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-                            intptr_t __llpl_ret1437 = ENOMEM;
+                            intptr_t __llpl_ret1456 = ENOMEM;
+                            if (__llpl_defer_active279) {
+                                __llpl_defer_active279 = 0;
+                                llpl_eh_pop(&__llpl_defer_frame278);
+        SpinLock_release(&(self->lock));
+                            }
                             if (__llpl_defer_active277) {
                                 __llpl_defer_active277 = 0;
                                 llpl_eh_pop(&__llpl_defer_frame276);
-        SpinLock_release(&(self->lock));
+    MM_free(((void*)to_process));
                             }
                             if (__llpl_defer_active275) {
                                 __llpl_defer_active275 = 0;
                                 llpl_eh_pop(&__llpl_defer_frame274);
-    MM_free(((void*)to_process));
-                            }
-                            if (__llpl_defer_active273) {
-                                __llpl_defer_active273 = 0;
-                                llpl_eh_pop(&__llpl_defer_frame272);
     MM_free(((void*)stack));
                             }
-                            return __llpl_ret1437;
+                            return __llpl_ret1456;
                         }
                         ({ String* __llpl_assign_tmp205 = ((void*)0); right_vma->name = __llpl_assign_tmp205; right_vma->name; });
                         right_vma->flags = vma->flags;
@@ -34809,44 +34916,44 @@ intptr_t MM_AddressSpace_unmap(MM_AddressSpace* self, uintptr_t addr, uintptr_t 
                 }
             }
         }
-        if (__llpl_defer_active277) {
-            __llpl_defer_active277 = 0;
-            llpl_eh_pop(&__llpl_defer_frame276);
+        if (__llpl_defer_active279) {
+            __llpl_defer_active279 = 0;
+            llpl_eh_pop(&__llpl_defer_frame278);
         SpinLock_release(&(self->lock));
         }
     }
     MM_vm_drop_memory(self->pml4, addr, (addr + length));
 #line 399 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-    intptr_t __llpl_ret1438 = EOK;
+    intptr_t __llpl_ret1457 = EOK;
+    if (__llpl_defer_active279) {
+        __llpl_defer_active279 = 0;
+        llpl_eh_pop(&__llpl_defer_frame278);
+        SpinLock_release(&(self->lock));
+    }
     if (__llpl_defer_active277) {
         __llpl_defer_active277 = 0;
         llpl_eh_pop(&__llpl_defer_frame276);
-        SpinLock_release(&(self->lock));
+    MM_free(((void*)to_process));
     }
     if (__llpl_defer_active275) {
         __llpl_defer_active275 = 0;
         llpl_eh_pop(&__llpl_defer_frame274);
-    MM_free(((void*)to_process));
-    }
-    if (__llpl_defer_active273) {
-        __llpl_defer_active273 = 0;
-        llpl_eh_pop(&__llpl_defer_frame272);
     MM_free(((void*)stack));
     }
-    return __llpl_ret1438;
+    return __llpl_ret1457;
+    if (__llpl_defer_active279) {
+        __llpl_defer_active279 = 0;
+        llpl_eh_pop(&__llpl_defer_frame278);
+        SpinLock_release(&(self->lock));
+    }
     if (__llpl_defer_active277) {
         __llpl_defer_active277 = 0;
         llpl_eh_pop(&__llpl_defer_frame276);
-        SpinLock_release(&(self->lock));
+    MM_free(((void*)to_process));
     }
     if (__llpl_defer_active275) {
         __llpl_defer_active275 = 0;
         llpl_eh_pop(&__llpl_defer_frame274);
-    MM_free(((void*)to_process));
-    }
-    if (__llpl_defer_active273) {
-        __llpl_defer_active273 = 0;
-        llpl_eh_pop(&__llpl_defer_frame272);
     MM_free(((void*)stack));
     }
 }
@@ -34935,12 +35042,12 @@ void MM_clone_vma_tree(void* raw_area, uintptr_t source_pgdir, MM_AddressSpace* 
 MM_VmArea* MM_rb_grandparent(MM_VmArea* area) {
     if (((area != ((void*)0)) && (area->parent != ((void*)0)))) {
 #line 462 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        MM_VmArea* __llpl_ret1439 = area->parent->parent;
-        return __llpl_ret1439;
+        MM_VmArea* __llpl_ret1458 = area->parent->parent;
+        return __llpl_ret1458;
     }
 #line 465 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-    MM_VmArea* __llpl_ret1440 = ((void*)0);
-    return __llpl_ret1440;
+    MM_VmArea* __llpl_ret1459 = ((void*)0);
+    return __llpl_ret1459;
 }
 
 #line 468 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
@@ -34949,17 +35056,17 @@ MM_VmArea* MM_rb_uncle(MM_VmArea* area) {
     MM_VmArea* g = MM_rb_grandparent(area);
     if (!g) {
 #line 472 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        MM_VmArea* __llpl_ret1441 = ((void*)0);
-        return __llpl_ret1441;
+        MM_VmArea* __llpl_ret1460 = ((void*)0);
+        return __llpl_ret1460;
     }
     if ((area->parent == g->left)) {
 #line 476 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-        MM_VmArea* __llpl_ret1442 = g->right;
-        return __llpl_ret1442;
+        MM_VmArea* __llpl_ret1461 = g->right;
+        return __llpl_ret1461;
     }
 #line 479 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-    MM_VmArea* __llpl_ret1443 = g->left;
-    return __llpl_ret1443;
+    MM_VmArea* __llpl_ret1462 = g->left;
+    return __llpl_ret1462;
 }
 
 #line 482 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
@@ -35077,8 +35184,8 @@ MM_VmArea* MM_rb_minimum(MM_VmArea* n) {
         n = n->left;
     }
 #line 594 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
-    MM_VmArea* __llpl_ret1444 = n;
-    return __llpl_ret1444;
+    MM_VmArea* __llpl_ret1463 = n;
+    return __llpl_ret1463;
 }
 
 #line 597 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/aspace.llpl"
@@ -35240,8 +35347,8 @@ void HAL_ACPI_init(uintptr_t rsdp_vaddr) {
 #line 82 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
 uintptr_t HAL_ACPI_rsdp_vaddr() {
 #line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-    uintptr_t __llpl_ret1445 = (*(uintptr_t*)__llpl_check_index(HAL_ACPI_rsdp_vaddr_cache, 0, 1, sizeof(uintptr_t), "acpi.llpl", 83));
-    return __llpl_ret1445;
+    uintptr_t __llpl_ret1464 = (*(uintptr_t*)__llpl_check_index(HAL_ACPI_rsdp_vaddr_cache, 0, 1, sizeof(uintptr_t), "acpi.llpl", 83));
+    return __llpl_ret1464;
 }
 
 #line 86 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
@@ -35258,8 +35365,8 @@ bool HAL_ACPI_checksum_ok(uintptr_t addr, uintptr_t len) {
         }
     }
 #line 92 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-    bool __llpl_ret1446 = (sum == ((uint8_t)0));
-    return __llpl_ret1446;
+    bool __llpl_ret1465 = (sum == ((uint8_t)0));
+    return __llpl_ret1465;
 }
 
 #line 95 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
@@ -35272,14 +35379,14 @@ bool HAL_ACPI_signature_matches(HAL_ACPI_SdtHeader* table, char* signature) {
         for (; (i < ((uintptr_t)4)); (i = (i + ((uintptr_t)1)))) {
             if (((*(uint8_t*)__llpl_check_index(table->signature, i, 4, sizeof(uint8_t), "acpi.llpl", 98)) != sig_bytes[i])) {
 #line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-                bool __llpl_ret1447 = 0;
-                return __llpl_ret1447;
+                bool __llpl_ret1466 = 0;
+                return __llpl_ret1466;
             }
         }
     }
 #line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-    bool __llpl_ret1448 = 1;
-    return __llpl_ret1448;
+    bool __llpl_ret1467 = 1;
+    return __llpl_ret1467;
 }
 
 #line 109 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
@@ -35288,15 +35395,15 @@ void* HAL_ACPI_find_acpi_table(char* signature) {
     uintptr_t vaddr = HAL_ACPI_rsdp_vaddr();
     if ((vaddr == ((uintptr_t)0))) {
 #line 111 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-        void* __llpl_ret1449 = ((void*)0);
-        return __llpl_ret1449;
+        void* __llpl_ret1468 = ((void*)0);
+        return __llpl_ret1468;
     }
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
     HAL_ACPI_Rsdp* rsdp = ((HAL_ACPI_Rsdp*)vaddr);
     if (!HAL_ACPI_checksum_ok(((uintptr_t)rsdp), ((uintptr_t)20))) {
 #line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-        void* __llpl_ret1450 = ((void*)0);
-        return __llpl_ret1450;
+        void* __llpl_ret1469 = ((void*)0);
+        return __llpl_ret1469;
     }
 #line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
     bool use_xsdt = (rsdp->revision >= ((uint8_t)2));
@@ -35310,15 +35417,15 @@ void* HAL_ACPI_find_acpi_table(char* signature) {
     }
     if ((sdt_phys == ((uintptr_t)0))) {
 #line 123 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-        void* __llpl_ret1451 = ((void*)0);
-        return __llpl_ret1451;
+        void* __llpl_ret1470 = ((void*)0);
+        return __llpl_ret1470;
     }
 #line 125 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
     HAL_ACPI_SdtHeader* sdt = ((HAL_ACPI_SdtHeader*)MM_p2v(sdt_phys));
     if (!HAL_ACPI_checksum_ok(((uintptr_t)sdt), ((uintptr_t)sdt->length))) {
 #line 126 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-        void* __llpl_ret1452 = ((void*)0);
-        return __llpl_ret1452;
+        void* __llpl_ret1471 = ((void*)0);
+        return __llpl_ret1471;
     }
 #line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
     uint64_t entries_start = (((uintptr_t)sdt) + sizeof(HAL_ACPI_SdtHeader));
@@ -35339,14 +35446,14 @@ void* HAL_ACPI_find_acpi_table(char* signature) {
             HAL_ACPI_SdtHeader* table = ((HAL_ACPI_SdtHeader*)MM_p2v(table_phys));
             if (HAL_ACPI_signature_matches(table, signature)) {
 #line 140 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-                void* __llpl_ret1453 = ((void*)table);
-                return __llpl_ret1453;
+                void* __llpl_ret1472 = ((void*)table);
+                return __llpl_ret1472;
             }
         }
     }
 #line 143 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-    void* __llpl_ret1454 = ((void*)0);
-    return __llpl_ret1454;
+    void* __llpl_ret1473 = ((void*)0);
+    return __llpl_ret1473;
 }
 
 #line 149 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
@@ -35355,8 +35462,8 @@ __LLPL_Tuple2_bool_uint HAL_ACPI_find_ioapic() {
     HAL_ACPI_SdtHeader* madt = ((HAL_ACPI_SdtHeader*)HAL_ACPI_find_acpi_table("APIC"));
     if ((madt == ((void*)0))) {
 #line 151 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-        __LLPL_Tuple2_bool_uint __llpl_ret1455 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-        return __llpl_ret1455;
+        __LLPL_Tuple2_bool_uint __llpl_ret1474 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+        return __llpl_ret1474;
     }
 #line 155 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
     uint64_t entries_start = ((((uintptr_t)madt) + sizeof(HAL_ACPI_SdtHeader)) + ((uint64_t)8));
@@ -35371,21 +35478,21 @@ __LLPL_Tuple2_bool_uint HAL_ACPI_find_ioapic() {
         uintptr_t entry_len = ((uintptr_t)*((uint8_t*)(p + ((uint64_t)1))));
         if ((entry_len == ((uintptr_t)0))) {
 #line 162 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-            __LLPL_Tuple2_bool_uint __llpl_ret1456 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-            return __llpl_ret1456;
+            __LLPL_Tuple2_bool_uint __llpl_ret1475 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+            return __llpl_ret1475;
         }
         if ((entry_type == ((uint8_t)HAL_ACPI_MADT_TYPE_IO_APIC))) {
 #line 164 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
             HAL_ACPI_MadtIoApicEntry* entry = ((HAL_ACPI_MadtIoApicEntry*)p);
 #line 165 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-            __LLPL_Tuple2_bool_uint __llpl_ret1457 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = ((uintptr_t)entry->address) };
-            return __llpl_ret1457;
+            __LLPL_Tuple2_bool_uint __llpl_ret1476 = (__LLPL_Tuple2_bool_uint){ ._0 = 1, ._1 = ((uintptr_t)entry->address) };
+            return __llpl_ret1476;
         }
         p = (p + entry_len);
     }
 #line 169 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-    __LLPL_Tuple2_bool_uint __llpl_ret1458 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
-    return __llpl_ret1458;
+    __LLPL_Tuple2_bool_uint __llpl_ret1477 = (__LLPL_Tuple2_bool_uint){ ._0 = 0, ._1 = 0 };
+    return __llpl_ret1477;
 }
 
 #line 177 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
@@ -35394,8 +35501,8 @@ uintptr_t HAL_ACPI_legacy_irq_to_gsi(uintptr_t irq) {
     HAL_ACPI_SdtHeader* madt = ((HAL_ACPI_SdtHeader*)HAL_ACPI_find_acpi_table("APIC"));
     if ((madt == ((void*)0))) {
 #line 179 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-        uintptr_t __llpl_ret1459 = irq;
-        return __llpl_ret1459;
+        uintptr_t __llpl_ret1478 = irq;
+        return __llpl_ret1478;
     }
 #line 181 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
     uint64_t entries_start = ((((uintptr_t)madt) + sizeof(HAL_ACPI_SdtHeader)) + ((uint64_t)8));
@@ -35410,23 +35517,23 @@ uintptr_t HAL_ACPI_legacy_irq_to_gsi(uintptr_t irq) {
         uintptr_t entry_len = ((uintptr_t)*((uint8_t*)(p + ((uint64_t)1))));
         if ((entry_len == ((uintptr_t)0))) {
 #line 188 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-            uintptr_t __llpl_ret1460 = irq;
-            return __llpl_ret1460;
+            uintptr_t __llpl_ret1479 = irq;
+            return __llpl_ret1479;
         }
         if ((entry_type == ((uint8_t)HAL_ACPI_MADT_TYPE_INTERRUPT_SOURCE_OVERRIDE))) {
 #line 190 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
             HAL_ACPI_MadtIsoEntry* entry = ((HAL_ACPI_MadtIsoEntry*)p);
             if ((((uintptr_t)entry->irq_source) == irq)) {
 #line 192 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-                uintptr_t __llpl_ret1461 = ((uintptr_t)entry->gsi);
-                return __llpl_ret1461;
+                uintptr_t __llpl_ret1480 = ((uintptr_t)entry->gsi);
+                return __llpl_ret1480;
             }
         }
         p = (p + entry_len);
     }
 #line 197 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/hal/acpi.llpl"
-    uintptr_t __llpl_ret1462 = irq;
-    return __llpl_ret1462;
+    uintptr_t __llpl_ret1481 = irq;
+    return __llpl_ret1481;
 }
 
 // Module: /home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl
@@ -35467,44 +35574,44 @@ __attribute__((section(".limine_requests_end"), used)) uint64_t limine_requests_
 LimineFramebuffer* limine_get_framebuffer() {
     if ((framebuffer_request.response == 0)) {
 #line 72 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-        LimineFramebuffer* __llpl_ret1463 = ((void*)0);
-        return __llpl_ret1463;
+        LimineFramebuffer* __llpl_ret1482 = ((void*)0);
+        return __llpl_ret1482;
     }
 #line 74 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
     LimineFramebufferResponse* response = framebuffer_request.response;
 #line 75 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
     uint64_t* framebuffers = response->framebuffers;
 #line 76 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    LimineFramebuffer* __llpl_ret1464 = ((LimineFramebuffer*)framebuffers[0]);
-    return __llpl_ret1464;
+    LimineFramebuffer* __llpl_ret1483 = ((LimineFramebuffer*)framebuffers[0]);
+    return __llpl_ret1483;
 }
 
 #line 79 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
 LimineMemmapResponse* limine_get_memmap() {
 #line 80 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    LimineMemmapResponse* __llpl_ret1465 = memmap_request.response;
-    return __llpl_ret1465;
+    LimineMemmapResponse* __llpl_ret1484 = memmap_request.response;
+    return __llpl_ret1484;
 }
 
 #line 83 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
 LimineHhdmResponse* limine_get_hhdm() {
 #line 84 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    LimineHhdmResponse* __llpl_ret1466 = hhdm_request.response;
-    return __llpl_ret1466;
+    LimineHhdmResponse* __llpl_ret1485 = hhdm_request.response;
+    return __llpl_ret1485;
 }
 
 #line 87 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
 LimineModuleResponse* limine_get_modules() {
 #line 88 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    LimineModuleResponse* __llpl_ret1467 = module_request.response;
-    return __llpl_ret1467;
+    LimineModuleResponse* __llpl_ret1486 = module_request.response;
+    return __llpl_ret1486;
 }
 
 #line 91 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
 LimineRsdpResponse* limine_get_rsdp() {
 #line 92 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    LimineRsdpResponse* __llpl_ret1468 = rsdp_request.response;
-    return __llpl_ret1468;
+    LimineRsdpResponse* __llpl_ret1487 = rsdp_request.response;
+    return __llpl_ret1487;
 }
 
 
@@ -35530,22 +35637,22 @@ uintptr_t wallpaper_height = 0;
 bool draw_wallpaper(char* path) {
 #line 271 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
 #line 271 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1468 = VFS_read_binary(String_new(path));
+    __LLPL_Tuple2_char_ptr_u64 __llpl_destruct_1487 = VFS_read_binary(String_new(path));
 #line 271 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    char* data = __llpl_destruct_1468._0;
+    char* data = __llpl_destruct_1487._0;
 #line 271 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    uint64_t size = __llpl_destruct_1468._1;
+    uint64_t size = __llpl_destruct_1487._1;
     if (((data == ((void*)0)) || (size < ((uint64_t)12)))) {
 #line 273 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-        bool __llpl_ret1470 = 0;
-        return __llpl_ret1470;
+        bool __llpl_ret1489 = 0;
+        return __llpl_ret1489;
     }
 #line 275 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
     uint32_t* header = ((uint32_t*)data);
     if ((header[0] != WALLPAPER_MAGIC)) {
 #line 277 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-        bool __llpl_ret1471 = 0;
-        return __llpl_ret1471;
+        bool __llpl_ret1490 = 0;
+        return __llpl_ret1490;
     }
 #line 279 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
     uint32_t width = header[1];
@@ -35555,8 +35662,8 @@ bool draw_wallpaper(char* path) {
     uint64_t expected = (((uint64_t)12) + ((((uint64_t)width) * ((uint64_t)height)) * ((uint64_t)4)));
     if ((size < expected)) {
 #line 283 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-        bool __llpl_ret1472 = 0;
-        return __llpl_ret1472;
+        bool __llpl_ret1491 = 0;
+        return __llpl_ret1491;
     }
     wallpaper_pixels = ((uint32_t*)(data + 12));
     wallpaper_width = width;
@@ -35566,8 +35673,8 @@ bool draw_wallpaper(char* path) {
     Terminal_set_wallpaper_repaint_hook(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure23, .env = ((void*)0) }));
     Terminal_set_row_fill_hook(((__LLPL_Closure){ .fn = (void*)__llpl_fn_closure24, .env = ((void*)0) }));
 #line 298 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    bool __llpl_ret1473 = 1;
-    return __llpl_ret1473;
+    bool __llpl_ret1492 = 1;
+    return __llpl_ret1492;
 }
 
 #line 306 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
@@ -35645,11 +35752,11 @@ void kernel_main() {
     HAL_IOAPIC_init();
 #line 384 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
 #line 384 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    __LLPL_Tuple2_bool_uint __llpl_destruct_1473 = HAL_ACPI_find_ioapic();
+    __LLPL_Tuple2_bool_uint __llpl_destruct_1492 = HAL_ACPI_find_ioapic();
 #line 384 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    bool ioapic_found = __llpl_destruct_1473._0;
+    bool ioapic_found = __llpl_destruct_1492._0;
 #line 384 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kernel.llpl"
-    uintptr_t ioapic_paddr = __llpl_destruct_1473._1;
+    uintptr_t ioapic_paddr = __llpl_destruct_1492._1;
     if (ioapic_found) {
         HAL_Serial_write(({ ksnprintf(__llpl_interp42, 256, "ACPI: IOAPIC found at 0x%x\n", ((long long)(ioapic_paddr))); (char*)__llpl_interp42; }));
     } else {
@@ -36113,115 +36220,6 @@ char* MM_malloc_char(intptr_t size) {
         }
 }
 MM_VmArea** MM_malloc_MM_VmArea_ptr(intptr_t size) {
-        __LLPL_EH_Frame __llpl_defer_frame60;
-        int __llpl_defer_active61 = 0;
-        {
-            SpinLock_acquire(&(MM_lock));
-            __llpl_defer_frame60.kind = LLPL_EH_FRAME_CLEANUP;
-            __llpl_defer_frame60.type_id = ((void*)0);
-            __llpl_defer_frame60.error_slot = ((void*)0);
-            __llpl_defer_frame60.error_size = 0;
-            llpl_eh_push(&__llpl_defer_frame60);
-            __llpl_defer_active61 = 1;
-            if (llpl_eh_setjmp(&__llpl_defer_frame60.env) != 0) {
-                __llpl_defer_active61 = 0;
-            SpinLock_release(&(MM_lock));
-                llpl_eh_resume();
-                __builtin_unreachable();
-            }
-            if ((size > (MM_PAGE_SIZE / 2))) {
-#line 96 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                uintptr_t pages = MM_pages_num(((uintptr_t)size));
-#line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                uintptr_t length = (pages << ((uintptr_t)MM_PAGE_SHIFT));
-#line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                uintptr_t vaddr = MM_AddressSpace_map(MM_kas, ((uintptr_t)0), length, ((void*)0), ((uintptr_t)0));
-                {
-#line 101 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                    intptr_t i = 0;
-                    for (; (((uintptr_t)i) < pages); (i = (i + 1))) {
-#line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                        MM_PageFrame* pf = MM_alloc_pageframe(MM_FrameType_HugeMalloc);
-                        pf->tag = MM_FrameType_HugeMalloc;
-                        pf->size = pages;
-                        MM_map_page(MM_kernel_pml4, (vaddr + ((uintptr_t)(i << MM_PAGE_SHIFT))), MM_pf2p(pf), ((uintptr_t)((MM_PG_PRESENT | MM_PG_WRITABLE) | MM_PG_USER)));
-                    }
-                }
-#line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                MM_VmArea** __llpl_ret753 = ((MM_VmArea**)vaddr);
-                if (__llpl_defer_active61) {
-                    __llpl_defer_active61 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame60);
-            SpinLock_release(&(MM_lock));
-                }
-                return __llpl_ret753;
-            }
-#line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-            intptr_t addr = 0;
-            if ((size == 0)) {
-#line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                MM_VmArea** __llpl_ret754 = ((MM_VmArea**)0);
-                if (__llpl_defer_active61) {
-                    __llpl_defer_active61 = 0;
-                    llpl_eh_pop(&__llpl_defer_frame60);
-            SpinLock_release(&(MM_lock));
-                }
-                return __llpl_ret754;
-            }
-#line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-            intptr_t bucket = (*(intptr_t*)__llpl_check_index(MM_bucketLog2, (size - 1), 2048, sizeof(intptr_t), "heap.llpl", 116));
-#line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-            MM_Bucket* b = &(*(MM_Bucket*)__llpl_check_index(MM_buckets, bucket, 12, sizeof(MM_Bucket), "heap.llpl", 117));
-            if ((b->mem == ((void*)0))) {
-#line 120 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                MM_PageFrame* pf__shadow1 = MM_alloc_pageframe(MM_FrameType_Kernel);
-#line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                {
-                    MM_PageFrame* __llpl_with0 = pf__shadow1;
-                    __llpl_with0->tag = MM_FrameType_Malloc;
-                    __llpl_with0->size = ((uintptr_t)bucket);
-                }
-                b->size = ((uintptr_t)(1 << bucket));
-#line 127 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                void* p = ((void*)MM_pf2v(pf__shadow1));
-                {
-#line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                    intptr_t i__shadow2 = 0;
-                    for (; (i__shadow2 < MM_PAGE_SIZE); i__shadow2 = (((uintptr_t)i__shadow2) + b->size)) {
-                        *((void**)(p + i__shadow2)) = b->mem;
-                        b->mem = ((uintptr_t)(p + i__shadow2));
-                    }
-                }
-                (b->pages = (b->pages + ((uintptr_t)1)));
-            }
-            if (((b->mem != ((uintptr_t)0)) && ((b->mem >> ((uintptr_t)48)) != ((uintptr_t)65535)))) {
-                HAL_Serial_write(({ ksnprintf(__llpl_interp13, 256, "malloc: corrupt bucket size=%d bucket=%d head=0x%x\n", ((long long)(size)), ((long long)(bucket)), ((long long)(b->mem))); (char*)__llpl_interp13; }));
-                llpl_panic_at("malloc: corrupt bucket free list", "mm/heap.llpl", 137);
-            }
-            addr = b->mem;
-            b->mem = ((uintptr_t)*((void**)b->mem));
-            memset(((void*)addr), 0, b->size);
-#line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-            MM_VmArea** __llpl_ret755 = ((MM_VmArea**)addr);
-            if (__llpl_defer_active61) {
-                __llpl_defer_active61 = 0;
-                llpl_eh_pop(&__llpl_defer_frame60);
-            SpinLock_release(&(MM_lock));
-            }
-            return __llpl_ret755;
-            if (__llpl_defer_active61) {
-                __llpl_defer_active61 = 0;
-                llpl_eh_pop(&__llpl_defer_frame60);
-            SpinLock_release(&(MM_lock));
-            }
-        }
-        if (__llpl_defer_active61) {
-            __llpl_defer_active61 = 0;
-            llpl_eh_pop(&__llpl_defer_frame60);
-            SpinLock_release(&(MM_lock));
-        }
-}
-uintptr_t* MM_malloc_uint(intptr_t size) {
         __LLPL_EH_Frame __llpl_defer_frame62;
         int __llpl_defer_active63 = 0;
         {
@@ -36257,25 +36255,134 @@ uintptr_t* MM_malloc_uint(intptr_t size) {
                     }
                 }
 #line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                uintptr_t* __llpl_ret777 = ((uintptr_t*)vaddr);
+                MM_VmArea** __llpl_ret772 = ((MM_VmArea**)vaddr);
                 if (__llpl_defer_active63) {
                     __llpl_defer_active63 = 0;
                     llpl_eh_pop(&__llpl_defer_frame62);
             SpinLock_release(&(MM_lock));
                 }
-                return __llpl_ret777;
+                return __llpl_ret772;
             }
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
             intptr_t addr = 0;
             if ((size == 0)) {
 #line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                uintptr_t* __llpl_ret778 = ((uintptr_t*)0);
+                MM_VmArea** __llpl_ret773 = ((MM_VmArea**)0);
                 if (__llpl_defer_active63) {
                     __llpl_defer_active63 = 0;
                     llpl_eh_pop(&__llpl_defer_frame62);
             SpinLock_release(&(MM_lock));
                 }
-                return __llpl_ret778;
+                return __llpl_ret773;
+            }
+#line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+            intptr_t bucket = (*(intptr_t*)__llpl_check_index(MM_bucketLog2, (size - 1), 2048, sizeof(intptr_t), "heap.llpl", 116));
+#line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+            MM_Bucket* b = &(*(MM_Bucket*)__llpl_check_index(MM_buckets, bucket, 12, sizeof(MM_Bucket), "heap.llpl", 117));
+            if ((b->mem == ((void*)0))) {
+#line 120 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                MM_PageFrame* pf__shadow1 = MM_alloc_pageframe(MM_FrameType_Kernel);
+#line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                {
+                    MM_PageFrame* __llpl_with0 = pf__shadow1;
+                    __llpl_with0->tag = MM_FrameType_Malloc;
+                    __llpl_with0->size = ((uintptr_t)bucket);
+                }
+                b->size = ((uintptr_t)(1 << bucket));
+#line 127 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                void* p = ((void*)MM_pf2v(pf__shadow1));
+                {
+#line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                    intptr_t i__shadow2 = 0;
+                    for (; (i__shadow2 < MM_PAGE_SIZE); i__shadow2 = (((uintptr_t)i__shadow2) + b->size)) {
+                        *((void**)(p + i__shadow2)) = b->mem;
+                        b->mem = ((uintptr_t)(p + i__shadow2));
+                    }
+                }
+                (b->pages = (b->pages + ((uintptr_t)1)));
+            }
+            if (((b->mem != ((uintptr_t)0)) && ((b->mem >> ((uintptr_t)48)) != ((uintptr_t)65535)))) {
+                HAL_Serial_write(({ ksnprintf(__llpl_interp13, 256, "malloc: corrupt bucket size=%d bucket=%d head=0x%x\n", ((long long)(size)), ((long long)(bucket)), ((long long)(b->mem))); (char*)__llpl_interp13; }));
+                llpl_panic_at("malloc: corrupt bucket free list", "mm/heap.llpl", 137);
+            }
+            addr = b->mem;
+            b->mem = ((uintptr_t)*((void**)b->mem));
+            memset(((void*)addr), 0, b->size);
+#line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+            MM_VmArea** __llpl_ret774 = ((MM_VmArea**)addr);
+            if (__llpl_defer_active63) {
+                __llpl_defer_active63 = 0;
+                llpl_eh_pop(&__llpl_defer_frame62);
+            SpinLock_release(&(MM_lock));
+            }
+            return __llpl_ret774;
+            if (__llpl_defer_active63) {
+                __llpl_defer_active63 = 0;
+                llpl_eh_pop(&__llpl_defer_frame62);
+            SpinLock_release(&(MM_lock));
+            }
+        }
+        if (__llpl_defer_active63) {
+            __llpl_defer_active63 = 0;
+            llpl_eh_pop(&__llpl_defer_frame62);
+            SpinLock_release(&(MM_lock));
+        }
+}
+uintptr_t* MM_malloc_uint(intptr_t size) {
+        __LLPL_EH_Frame __llpl_defer_frame64;
+        int __llpl_defer_active65 = 0;
+        {
+            SpinLock_acquire(&(MM_lock));
+            __llpl_defer_frame64.kind = LLPL_EH_FRAME_CLEANUP;
+            __llpl_defer_frame64.type_id = ((void*)0);
+            __llpl_defer_frame64.error_slot = ((void*)0);
+            __llpl_defer_frame64.error_size = 0;
+            llpl_eh_push(&__llpl_defer_frame64);
+            __llpl_defer_active65 = 1;
+            if (llpl_eh_setjmp(&__llpl_defer_frame64.env) != 0) {
+                __llpl_defer_active65 = 0;
+            SpinLock_release(&(MM_lock));
+                llpl_eh_resume();
+                __builtin_unreachable();
+            }
+            if ((size > (MM_PAGE_SIZE / 2))) {
+#line 96 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                uintptr_t pages = MM_pages_num(((uintptr_t)size));
+#line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                uintptr_t length = (pages << ((uintptr_t)MM_PAGE_SHIFT));
+#line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                uintptr_t vaddr = MM_AddressSpace_map(MM_kas, ((uintptr_t)0), length, ((void*)0), ((uintptr_t)0));
+                {
+#line 101 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                    intptr_t i = 0;
+                    for (; (((uintptr_t)i) < pages); (i = (i + 1))) {
+#line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                        MM_PageFrame* pf = MM_alloc_pageframe(MM_FrameType_HugeMalloc);
+                        pf->tag = MM_FrameType_HugeMalloc;
+                        pf->size = pages;
+                        MM_map_page(MM_kernel_pml4, (vaddr + ((uintptr_t)(i << MM_PAGE_SHIFT))), MM_pf2p(pf), ((uintptr_t)((MM_PG_PRESENT | MM_PG_WRITABLE) | MM_PG_USER)));
+                    }
+                }
+#line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                uintptr_t* __llpl_ret796 = ((uintptr_t*)vaddr);
+                if (__llpl_defer_active65) {
+                    __llpl_defer_active65 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame64);
+            SpinLock_release(&(MM_lock));
+                }
+                return __llpl_ret796;
+            }
+#line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+            intptr_t addr = 0;
+            if ((size == 0)) {
+#line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                uintptr_t* __llpl_ret797 = ((uintptr_t*)0);
+                if (__llpl_defer_active65) {
+                    __llpl_defer_active65 = 0;
+                    llpl_eh_pop(&__llpl_defer_frame64);
+            SpinLock_release(&(MM_lock));
+                }
+                return __llpl_ret797;
             }
 #line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
             intptr_t bucket = (*(intptr_t*)__llpl_check_index(MM_bucketLog2, (size - 1), 2048, sizeof(intptr_t), "heap.llpl", 116));
@@ -36311,145 +36418,36 @@ uintptr_t* MM_malloc_uint(intptr_t size) {
             b->mem = ((uintptr_t)*((void**)b->mem));
             memset(((void*)addr), 0, b->size);
 #line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-            uintptr_t* __llpl_ret779 = ((uintptr_t*)addr);
-            if (__llpl_defer_active63) {
-                __llpl_defer_active63 = 0;
-                llpl_eh_pop(&__llpl_defer_frame62);
+            uintptr_t* __llpl_ret798 = ((uintptr_t*)addr);
+            if (__llpl_defer_active65) {
+                __llpl_defer_active65 = 0;
+                llpl_eh_pop(&__llpl_defer_frame64);
             SpinLock_release(&(MM_lock));
             }
-            return __llpl_ret779;
-            if (__llpl_defer_active63) {
-                __llpl_defer_active63 = 0;
-                llpl_eh_pop(&__llpl_defer_frame62);
+            return __llpl_ret798;
+            if (__llpl_defer_active65) {
+                __llpl_defer_active65 = 0;
+                llpl_eh_pop(&__llpl_defer_frame64);
             SpinLock_release(&(MM_lock));
             }
         }
-        if (__llpl_defer_active63) {
-            __llpl_defer_active63 = 0;
-            llpl_eh_pop(&__llpl_defer_frame62);
+        if (__llpl_defer_active65) {
+            __llpl_defer_active65 = 0;
+            llpl_eh_pop(&__llpl_defer_frame64);
             SpinLock_release(&(MM_lock));
         }
 }
 String* vfs_driver_label_VFS_MemFilesystem(VFS_MemFilesystem* fs) {
 #line 13 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            String* __llpl_ret1055 = VFS_MemFilesystem_driver_name(fs);
-            return __llpl_ret1055;
+            String* __llpl_ret1074 = VFS_MemFilesystem_driver_name(fs);
+            return __llpl_ret1074;
 }
 String* vfs_driver_label_VFS_BootFilesystem(VFS_BootFilesystem* fs) {
 #line 13 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/kern/vfs.llpl"
-            String* __llpl_ret1056 = VFS_BootFilesystem_driver_name(fs);
-            return __llpl_ret1056;
+            String* __llpl_ret1075 = VFS_BootFilesystem_driver_name(fs);
+            return __llpl_ret1075;
 }
 uint8_t* MM_malloc_u8(intptr_t size) {
-                    __LLPL_EH_Frame __llpl_defer_frame236;
-                    int __llpl_defer_active237 = 0;
-                    {
-                        SpinLock_acquire(&(MM_lock));
-                        __llpl_defer_frame236.kind = LLPL_EH_FRAME_CLEANUP;
-                        __llpl_defer_frame236.type_id = ((void*)0);
-                        __llpl_defer_frame236.error_slot = ((void*)0);
-                        __llpl_defer_frame236.error_size = 0;
-                        llpl_eh_push(&__llpl_defer_frame236);
-                        __llpl_defer_active237 = 1;
-                        if (llpl_eh_setjmp(&__llpl_defer_frame236.env) != 0) {
-                            __llpl_defer_active237 = 0;
-                        SpinLock_release(&(MM_lock));
-                            llpl_eh_resume();
-                            __builtin_unreachable();
-                        }
-                        if ((size > (MM_PAGE_SIZE / 2))) {
-#line 96 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            uintptr_t pages = MM_pages_num(((uintptr_t)size));
-#line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            uintptr_t length = (pages << ((uintptr_t)MM_PAGE_SHIFT));
-#line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            uintptr_t vaddr = MM_AddressSpace_map(MM_kas, ((uintptr_t)0), length, ((void*)0), ((uintptr_t)0));
-                            {
-#line 101 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                                intptr_t i = 0;
-                                for (; (((uintptr_t)i) < pages); (i = (i + 1))) {
-#line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                                    MM_PageFrame* pf = MM_alloc_pageframe(MM_FrameType_HugeMalloc);
-                                    pf->tag = MM_FrameType_HugeMalloc;
-                                    pf->size = pages;
-                                    MM_map_page(MM_kernel_pml4, (vaddr + ((uintptr_t)(i << MM_PAGE_SHIFT))), MM_pf2p(pf), ((uintptr_t)((MM_PG_PRESENT | MM_PG_WRITABLE) | MM_PG_USER)));
-                                }
-                            }
-#line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            uint8_t* __llpl_ret1302 = ((uint8_t*)vaddr);
-                            if (__llpl_defer_active237) {
-                                __llpl_defer_active237 = 0;
-                                llpl_eh_pop(&__llpl_defer_frame236);
-                        SpinLock_release(&(MM_lock));
-                            }
-                            return __llpl_ret1302;
-                        }
-#line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                        intptr_t addr = 0;
-                        if ((size == 0)) {
-#line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            uint8_t* __llpl_ret1303 = ((uint8_t*)0);
-                            if (__llpl_defer_active237) {
-                                __llpl_defer_active237 = 0;
-                                llpl_eh_pop(&__llpl_defer_frame236);
-                        SpinLock_release(&(MM_lock));
-                            }
-                            return __llpl_ret1303;
-                        }
-#line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                        intptr_t bucket = (*(intptr_t*)__llpl_check_index(MM_bucketLog2, (size - 1), 2048, sizeof(intptr_t), "heap.llpl", 116));
-#line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                        MM_Bucket* b = &(*(MM_Bucket*)__llpl_check_index(MM_buckets, bucket, 12, sizeof(MM_Bucket), "heap.llpl", 117));
-                        if ((b->mem == ((void*)0))) {
-#line 120 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            MM_PageFrame* pf__shadow1 = MM_alloc_pageframe(MM_FrameType_Kernel);
-#line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            {
-                                MM_PageFrame* __llpl_with0 = pf__shadow1;
-                                __llpl_with0->tag = MM_FrameType_Malloc;
-                                __llpl_with0->size = ((uintptr_t)bucket);
-                            }
-                            b->size = ((uintptr_t)(1 << bucket));
-#line 127 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            void* p = ((void*)MM_pf2v(pf__shadow1));
-                            {
-#line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                                intptr_t i__shadow2 = 0;
-                                for (; (i__shadow2 < MM_PAGE_SIZE); i__shadow2 = (((uintptr_t)i__shadow2) + b->size)) {
-                                    *((void**)(p + i__shadow2)) = b->mem;
-                                    b->mem = ((uintptr_t)(p + i__shadow2));
-                                }
-                            }
-                            (b->pages = (b->pages + ((uintptr_t)1)));
-                        }
-                        if (((b->mem != ((uintptr_t)0)) && ((b->mem >> ((uintptr_t)48)) != ((uintptr_t)65535)))) {
-                            HAL_Serial_write(({ ksnprintf(__llpl_interp18, 256, "malloc: corrupt bucket size=%d bucket=%d head=0x%x\n", ((long long)(size)), ((long long)(bucket)), ((long long)(b->mem))); (char*)__llpl_interp18; }));
-                            llpl_panic_at("malloc: corrupt bucket free list", "mm/heap.llpl", 137);
-                        }
-                        addr = b->mem;
-                        b->mem = ((uintptr_t)*((void**)b->mem));
-                        memset(((void*)addr), 0, b->size);
-#line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                        uint8_t* __llpl_ret1304 = ((uint8_t*)addr);
-                        if (__llpl_defer_active237) {
-                            __llpl_defer_active237 = 0;
-                            llpl_eh_pop(&__llpl_defer_frame236);
-                        SpinLock_release(&(MM_lock));
-                        }
-                        return __llpl_ret1304;
-                        if (__llpl_defer_active237) {
-                            __llpl_defer_active237 = 0;
-                            llpl_eh_pop(&__llpl_defer_frame236);
-                        SpinLock_release(&(MM_lock));
-                        }
-                    }
-                    if (__llpl_defer_active237) {
-                        __llpl_defer_active237 = 0;
-                        llpl_eh_pop(&__llpl_defer_frame236);
-                        SpinLock_release(&(MM_lock));
-                    }
-}
-uint32_t* MM_malloc_u32(intptr_t size) {
                     __LLPL_EH_Frame __llpl_defer_frame238;
                     int __llpl_defer_active239 = 0;
                     {
@@ -36485,25 +36483,25 @@ uint32_t* MM_malloc_u32(intptr_t size) {
                                 }
                             }
 #line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            uint32_t* __llpl_ret1305 = ((uint32_t*)vaddr);
+                            uint8_t* __llpl_ret1321 = ((uint8_t*)vaddr);
                             if (__llpl_defer_active239) {
                                 __llpl_defer_active239 = 0;
                                 llpl_eh_pop(&__llpl_defer_frame238);
                         SpinLock_release(&(MM_lock));
                             }
-                            return __llpl_ret1305;
+                            return __llpl_ret1321;
                         }
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
                         intptr_t addr = 0;
                         if ((size == 0)) {
 #line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            uint32_t* __llpl_ret1306 = ((uint32_t*)0);
+                            uint8_t* __llpl_ret1322 = ((uint8_t*)0);
                             if (__llpl_defer_active239) {
                                 __llpl_defer_active239 = 0;
                                 llpl_eh_pop(&__llpl_defer_frame238);
                         SpinLock_release(&(MM_lock));
                             }
-                            return __llpl_ret1306;
+                            return __llpl_ret1322;
                         }
 #line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
                         intptr_t bucket = (*(intptr_t*)__llpl_check_index(MM_bucketLog2, (size - 1), 2048, sizeof(intptr_t), "heap.llpl", 116));
@@ -36532,20 +36530,20 @@ uint32_t* MM_malloc_u32(intptr_t size) {
                             (b->pages = (b->pages + ((uintptr_t)1)));
                         }
                         if (((b->mem != ((uintptr_t)0)) && ((b->mem >> ((uintptr_t)48)) != ((uintptr_t)65535)))) {
-                            HAL_Serial_write(({ ksnprintf(__llpl_interp19, 256, "malloc: corrupt bucket size=%d bucket=%d head=0x%x\n", ((long long)(size)), ((long long)(bucket)), ((long long)(b->mem))); (char*)__llpl_interp19; }));
+                            HAL_Serial_write(({ ksnprintf(__llpl_interp18, 256, "malloc: corrupt bucket size=%d bucket=%d head=0x%x\n", ((long long)(size)), ((long long)(bucket)), ((long long)(b->mem))); (char*)__llpl_interp18; }));
                             llpl_panic_at("malloc: corrupt bucket free list", "mm/heap.llpl", 137);
                         }
                         addr = b->mem;
                         b->mem = ((uintptr_t)*((void**)b->mem));
                         memset(((void*)addr), 0, b->size);
 #line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                        uint32_t* __llpl_ret1307 = ((uint32_t*)addr);
+                        uint8_t* __llpl_ret1323 = ((uint8_t*)addr);
                         if (__llpl_defer_active239) {
                             __llpl_defer_active239 = 0;
                             llpl_eh_pop(&__llpl_defer_frame238);
                         SpinLock_release(&(MM_lock));
                         }
-                        return __llpl_ret1307;
+                        return __llpl_ret1323;
                         if (__llpl_defer_active239) {
                             __llpl_defer_active239 = 0;
                             llpl_eh_pop(&__llpl_defer_frame238);
@@ -36558,7 +36556,7 @@ uint32_t* MM_malloc_u32(intptr_t size) {
                         SpinLock_release(&(MM_lock));
                     }
 }
-Kern_ProcessInfo* MM_malloc_Kern_ProcessInfo(intptr_t size) {
+uint32_t* MM_malloc_u32(intptr_t size) {
                     __LLPL_EH_Frame __llpl_defer_frame240;
                     int __llpl_defer_active241 = 0;
                     {
@@ -36594,25 +36592,134 @@ Kern_ProcessInfo* MM_malloc_Kern_ProcessInfo(intptr_t size) {
                                 }
                             }
 #line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            Kern_ProcessInfo* __llpl_ret1309 = ((Kern_ProcessInfo*)vaddr);
+                            uint32_t* __llpl_ret1324 = ((uint32_t*)vaddr);
                             if (__llpl_defer_active241) {
                                 __llpl_defer_active241 = 0;
                                 llpl_eh_pop(&__llpl_defer_frame240);
                         SpinLock_release(&(MM_lock));
                             }
-                            return __llpl_ret1309;
+                            return __llpl_ret1324;
                         }
 #line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
                         intptr_t addr = 0;
                         if ((size == 0)) {
 #line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            Kern_ProcessInfo* __llpl_ret1310 = ((Kern_ProcessInfo*)0);
+                            uint32_t* __llpl_ret1325 = ((uint32_t*)0);
                             if (__llpl_defer_active241) {
                                 __llpl_defer_active241 = 0;
                                 llpl_eh_pop(&__llpl_defer_frame240);
                         SpinLock_release(&(MM_lock));
                             }
-                            return __llpl_ret1310;
+                            return __llpl_ret1325;
+                        }
+#line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                        intptr_t bucket = (*(intptr_t*)__llpl_check_index(MM_bucketLog2, (size - 1), 2048, sizeof(intptr_t), "heap.llpl", 116));
+#line 117 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                        MM_Bucket* b = &(*(MM_Bucket*)__llpl_check_index(MM_buckets, bucket, 12, sizeof(MM_Bucket), "heap.llpl", 117));
+                        if ((b->mem == ((void*)0))) {
+#line 120 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            MM_PageFrame* pf__shadow1 = MM_alloc_pageframe(MM_FrameType_Kernel);
+#line 121 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            {
+                                MM_PageFrame* __llpl_with0 = pf__shadow1;
+                                __llpl_with0->tag = MM_FrameType_Malloc;
+                                __llpl_with0->size = ((uintptr_t)bucket);
+                            }
+                            b->size = ((uintptr_t)(1 << bucket));
+#line 127 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            void* p = ((void*)MM_pf2v(pf__shadow1));
+                            {
+#line 128 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                                intptr_t i__shadow2 = 0;
+                                for (; (i__shadow2 < MM_PAGE_SIZE); i__shadow2 = (((uintptr_t)i__shadow2) + b->size)) {
+                                    *((void**)(p + i__shadow2)) = b->mem;
+                                    b->mem = ((uintptr_t)(p + i__shadow2));
+                                }
+                            }
+                            (b->pages = (b->pages + ((uintptr_t)1)));
+                        }
+                        if (((b->mem != ((uintptr_t)0)) && ((b->mem >> ((uintptr_t)48)) != ((uintptr_t)65535)))) {
+                            HAL_Serial_write(({ ksnprintf(__llpl_interp19, 256, "malloc: corrupt bucket size=%d bucket=%d head=0x%x\n", ((long long)(size)), ((long long)(bucket)), ((long long)(b->mem))); (char*)__llpl_interp19; }));
+                            llpl_panic_at("malloc: corrupt bucket free list", "mm/heap.llpl", 137);
+                        }
+                        addr = b->mem;
+                        b->mem = ((uintptr_t)*((void**)b->mem));
+                        memset(((void*)addr), 0, b->size);
+#line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                        uint32_t* __llpl_ret1326 = ((uint32_t*)addr);
+                        if (__llpl_defer_active241) {
+                            __llpl_defer_active241 = 0;
+                            llpl_eh_pop(&__llpl_defer_frame240);
+                        SpinLock_release(&(MM_lock));
+                        }
+                        return __llpl_ret1326;
+                        if (__llpl_defer_active241) {
+                            __llpl_defer_active241 = 0;
+                            llpl_eh_pop(&__llpl_defer_frame240);
+                        SpinLock_release(&(MM_lock));
+                        }
+                    }
+                    if (__llpl_defer_active241) {
+                        __llpl_defer_active241 = 0;
+                        llpl_eh_pop(&__llpl_defer_frame240);
+                        SpinLock_release(&(MM_lock));
+                    }
+}
+Kern_ProcessInfo* MM_malloc_Kern_ProcessInfo(intptr_t size) {
+                    __LLPL_EH_Frame __llpl_defer_frame242;
+                    int __llpl_defer_active243 = 0;
+                    {
+                        SpinLock_acquire(&(MM_lock));
+                        __llpl_defer_frame242.kind = LLPL_EH_FRAME_CLEANUP;
+                        __llpl_defer_frame242.type_id = ((void*)0);
+                        __llpl_defer_frame242.error_slot = ((void*)0);
+                        __llpl_defer_frame242.error_size = 0;
+                        llpl_eh_push(&__llpl_defer_frame242);
+                        __llpl_defer_active243 = 1;
+                        if (llpl_eh_setjmp(&__llpl_defer_frame242.env) != 0) {
+                            __llpl_defer_active243 = 0;
+                        SpinLock_release(&(MM_lock));
+                            llpl_eh_resume();
+                            __builtin_unreachable();
+                        }
+                        if ((size > (MM_PAGE_SIZE / 2))) {
+#line 96 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            uintptr_t pages = MM_pages_num(((uintptr_t)size));
+#line 97 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            uintptr_t length = (pages << ((uintptr_t)MM_PAGE_SHIFT));
+#line 99 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            uintptr_t vaddr = MM_AddressSpace_map(MM_kas, ((uintptr_t)0), length, ((void*)0), ((uintptr_t)0));
+                            {
+#line 101 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                                intptr_t i = 0;
+                                for (; (((uintptr_t)i) < pages); (i = (i + 1))) {
+#line 102 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                                    MM_PageFrame* pf = MM_alloc_pageframe(MM_FrameType_HugeMalloc);
+                                    pf->tag = MM_FrameType_HugeMalloc;
+                                    pf->size = pages;
+                                    MM_map_page(MM_kernel_pml4, (vaddr + ((uintptr_t)(i << MM_PAGE_SHIFT))), MM_pf2p(pf), ((uintptr_t)((MM_PG_PRESENT | MM_PG_WRITABLE) | MM_PG_USER)));
+                                }
+                            }
+#line 110 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            Kern_ProcessInfo* __llpl_ret1328 = ((Kern_ProcessInfo*)vaddr);
+                            if (__llpl_defer_active243) {
+                                __llpl_defer_active243 = 0;
+                                llpl_eh_pop(&__llpl_defer_frame242);
+                        SpinLock_release(&(MM_lock));
+                            }
+                            return __llpl_ret1328;
+                        }
+#line 113 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                        intptr_t addr = 0;
+                        if ((size == 0)) {
+#line 114 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
+                            Kern_ProcessInfo* __llpl_ret1329 = ((Kern_ProcessInfo*)0);
+                            if (__llpl_defer_active243) {
+                                __llpl_defer_active243 = 0;
+                                llpl_eh_pop(&__llpl_defer_frame242);
+                        SpinLock_release(&(MM_lock));
+                            }
+                            return __llpl_ret1329;
                         }
 #line 116 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
                         intptr_t bucket = (*(intptr_t*)__llpl_check_index(MM_bucketLog2, (size - 1), 2048, sizeof(intptr_t), "heap.llpl", 116));
@@ -36648,30 +36755,30 @@ Kern_ProcessInfo* MM_malloc_Kern_ProcessInfo(intptr_t size) {
                         b->mem = ((uintptr_t)*((void**)b->mem));
                         memset(((void*)addr), 0, b->size);
 #line 144 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                        Kern_ProcessInfo* __llpl_ret1311 = ((Kern_ProcessInfo*)addr);
-                        if (__llpl_defer_active241) {
-                            __llpl_defer_active241 = 0;
-                            llpl_eh_pop(&__llpl_defer_frame240);
+                        Kern_ProcessInfo* __llpl_ret1330 = ((Kern_ProcessInfo*)addr);
+                        if (__llpl_defer_active243) {
+                            __llpl_defer_active243 = 0;
+                            llpl_eh_pop(&__llpl_defer_frame242);
                         SpinLock_release(&(MM_lock));
                         }
-                        return __llpl_ret1311;
-                        if (__llpl_defer_active241) {
-                            __llpl_defer_active241 = 0;
-                            llpl_eh_pop(&__llpl_defer_frame240);
+                        return __llpl_ret1330;
+                        if (__llpl_defer_active243) {
+                            __llpl_defer_active243 = 0;
+                            llpl_eh_pop(&__llpl_defer_frame242);
                         SpinLock_release(&(MM_lock));
                         }
                     }
-                    if (__llpl_defer_active241) {
-                        __llpl_defer_active241 = 0;
-                        llpl_eh_pop(&__llpl_defer_frame240);
+                    if (__llpl_defer_active243) {
+                        __llpl_defer_active243 = 0;
+                        llpl_eh_pop(&__llpl_defer_frame242);
                         SpinLock_release(&(MM_lock));
                     }
 }
 MM_VmArea** MM_realloc_MM_VmArea_ptr(void* p, intptr_t new_size) {
                         if ((p == ((void*)0))) {
 #line 150 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            MM_VmArea** __llpl_ret1432 = MM_malloc_MM_VmArea_ptr(new_size);
-                            return __llpl_ret1432;
+                            MM_VmArea** __llpl_ret1451 = MM_malloc_MM_VmArea_ptr(new_size);
+                            return __llpl_ret1451;
                         }
 #line 153 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
                         MM_PageFrame* pf = MM_v2pf(p);
@@ -36680,16 +36787,16 @@ MM_VmArea** MM_realloc_MM_VmArea_ptr(void* p, intptr_t new_size) {
                             uintptr_t old_size = (((uintptr_t)1) << pf->size);
                             if ((((uintptr_t)new_size) <= old_size)) {
 #line 157 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                                MM_VmArea** __llpl_ret1433 = ((MM_VmArea**)p);
-                                return __llpl_ret1433;
+                                MM_VmArea** __llpl_ret1452 = ((MM_VmArea**)p);
+                                return __llpl_ret1452;
                             }
 #line 160 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
                             MM_VmArea** new_p = MM_malloc_MM_VmArea_ptr(new_size);
                             memcpy(((void*)new_p), ((void*)p), old_size);
                             MM_free(p);
 #line 164 "/home/nix/Code/LLPL/examples/limine_baremetal_demo/mm/heap.llpl"
-                            MM_VmArea** __llpl_ret1434 = new_p;
-                            return __llpl_ret1434;
+                            MM_VmArea** __llpl_ret1453 = new_p;
+                            return __llpl_ret1453;
                         } else {
                             if ((pf->tag == MM_FrameType_HugeMalloc)) {
                                 llpl_panic_at("krealloc: huge malloc not supported yet", "mm/heap.llpl", 166);
@@ -36727,77 +36834,77 @@ void __llpl_fn_closure4(void* __env, void* __arg0) {
 
 void __llpl_fn_closure5(void* __env, void* __arg0) {
     (void)__env;
-    Kern_compose_frame_work(__arg0);
+    Kern_compose_desktop(__arg0);
 }
 
 void __llpl_fn_closure6(void* __env, void* __arg0) {
     (void)__env;
-    Kern_mouse_pre_scroll(__arg0);
+    Kern_compose_frame_work(__arg0);
 }
 
 void __llpl_fn_closure7(void* __env, void* __arg0) {
     (void)__env;
-    Kern_mouse_post_scroll(__arg0);
+    Kern_mouse_pre_scroll(__arg0);
 }
 
 void __llpl_fn_closure8(void* __env, void* __arg0) {
     (void)__env;
-    Kern_mouse_irq_handler(__arg0);
+    Kern_mouse_post_scroll(__arg0);
 }
 
 void __llpl_fn_closure9(void* __env, void* __arg0) {
     (void)__env;
-    Kern_mu_gl_spawn_thread(__arg0);
+    Kern_mouse_irq_handler(__arg0);
 }
 
 void __llpl_fn_closure10(void* __env, void* __arg0) {
     (void)__env;
-    Kern_mu_term_spawn_shell_thread(__arg0);
+    Kern_mu_gl_spawn_thread(__arg0);
 }
 
 void __llpl_fn_closure11(void* __env, void* __arg0) {
     (void)__env;
-    Kern_sync_test_holder(__arg0);
+    Kern_mu_term_spawn_shell_thread(__arg0);
 }
 
 void __llpl_fn_closure12(void* __env, void* __arg0) {
     (void)__env;
-    Kern_sync_test_contender(__arg0);
+    Kern_sync_test_holder(__arg0);
 }
 
 void __llpl_fn_closure13(void* __env, void* __arg0) {
     (void)__env;
-    Kern_sync_test_report(__arg0);
+    Kern_sync_test_contender(__arg0);
 }
 
 void __llpl_fn_closure14(void* __env, void* __arg0) {
     (void)__env;
-    Kern_sync_test_detached(__arg0);
+    Kern_sync_test_report(__arg0);
 }
 
 void __llpl_fn_closure15(void* __env, void* __arg0) {
     (void)__env;
-    Kern_reaper_main(__arg0);
+    Kern_sync_test_detached(__arg0);
 }
 
 void __llpl_fn_closure16(void* __env, void* __arg0) {
     (void)__env;
-    Kern_idle_main(__arg0);
+    Kern_reaper_main(__arg0);
 }
 
 void __llpl_fn_closure17(void* __env, void* __arg0) {
     (void)__env;
-    Kern_async_io_worker(__arg0);
+    Kern_idle_main(__arg0);
 }
 
 void __llpl_fn_closure18(void* __env, void* __arg0) {
     (void)__env;
-    HAL_PIT_deferred_tick_report(__arg0);
+    Kern_async_io_worker(__arg0);
 }
 
 void __llpl_fn_closure19(void* __env, void* __arg0) {
     (void)__env;
-    Kern_run_window_ticks(__arg0);
+    HAL_PIT_deferred_tick_report(__arg0);
 }
 
 void __llpl_fn_closure20(void* __env, void* __arg0) {
@@ -36828,32 +36935,31 @@ void __llpl_fn_closure24(void* __env, uintptr_t __arg0) {
 
 // Symbol table for symbolized panic backtraces
 LLPL_Symbol llpl_symbol_table[] = {
-    { "Terminal_write", (void*)Terminal_write, "terminal.llpl", 820, "Terminal.write" },
+    { "Terminal_write", (void*)Terminal_write, "terminal.llpl", 838, "Terminal.write" },
     { "Kern_spawn_elf", (void*)Kern_spawn_elf, "elf.llpl", 283, "Kern.spawn_elf" },
     { "HAL_write_cr3", (void*)HAL_write_cr3, "cpu.llpl", 66, "HAL.write_cr3" },
     { "HAL_IDT_set_gate", (void*)HAL_IDT_set_gate, "idt.llpl", 878, "HAL.IDT.set_gate" },
     { "Kern_map_user_anonymous", (void*)Kern_map_user_anonymous, "process.llpl", 289, "Kern.map_user_anonymous" },
-    { "Kern_mouse_write", (void*)Kern_mouse_write, "mouse.llpl", 547, "Kern.mouse_write" },
+    { "Kern_mouse_write", (void*)Kern_mouse_write, "mouse.llpl", 836, "Kern.mouse_write" },
     { "Mu_check_clip", (void*)Mu_check_clip, "microui.llpl", 581, "Mu.check_clip" },
     { "Mu_get_current_container", (void*)Mu_get_current_container, "microui.llpl", 713, "Mu.get_current_container" },
     { "Kern_write_apc_trampoline", (void*)Kern_write_apc_trampoline, "thread.llpl", 1056, "Kern.write_apc_trampoline" },
-    { "Kern_mu_term_push_key", (void*)Kern_mu_term_push_key, "mu_term.llpl", 355, "Kern.mu_term_push_key" },
+    { "Kern_mu_term_push_key", (void*)Kern_mu_term_push_key, "mu_term.llpl", 331, "Kern.mu_term_push_key" },
     { "HAL_FPU_copy_initial", (void*)HAL_FPU_copy_initial, "fpu.llpl", 26, "HAL.FPU.copy_initial" },
     { "HAL_PCI_write_config32", (void*)HAL_PCI_write_config32, "pci.llpl", 33, "HAL.PCI.write_config32" },
     { "Kern_ethernet_header", (void*)Kern_ethernet_header, "ipv4.llpl", 86, "Kern.ethernet_header" },
     { "VFS_BootFilesystem_driver_name", (void*)VFS_BootFilesystem_driver_name, "?", 1086, "VFS_BootFilesystem_driver_name" },
-    { "Kern_compute_input_target", (void*)Kern_compute_input_target, "mouse.llpl", 395, "Kern.compute_input_target" },
+    { "Kern_compute_input_target", (void*)Kern_compute_input_target, "mouse.llpl", 420, "Kern.compute_input_target" },
     { "HAL_RNG_fill", (void*)HAL_RNG_fill, "rng.llpl", 37, "HAL.RNG.fill" },
     { "page_fault_access", (void*)page_fault_access, "idt.llpl", 2067, "page_fault_access" },
     { "Mu_find_or_make_container", (void*)Mu_find_or_make_container, "microui.llpl", 742, "Mu.find_or_make_container" },
     { "Kern_join_thread", (void*)Kern_join_thread, "thread.llpl", 345, "Kern.join_thread" },
     { "Mu_rect_overlaps_vec2", (void*)Mu_rect_overlaps_vec2, "microui.llpl", 338, "Mu.rect_overlaps_vec2" },
     { "Mu_draw_icon", (void*)Mu_draw_icon, "microui.llpl", 884, "Mu.draw_icon" },
-    { "Kern_mouse_wait_output_full", (void*)Kern_mouse_wait_output_full, "mouse.llpl", 530, "Kern.mouse_wait_output_full" },
+    { "Kern_mouse_wait_output_full", (void*)Kern_mouse_wait_output_full, "mouse.llpl", 819, "Kern.mouse_wait_output_full" },
     { "ClosureAllocator_allocate", (void*)ClosureAllocator_allocate, "?", 734, "ClosureAllocator_allocate" },
     { "u64_equals", (void*)u64_equals, "?", 2163, "u64_equals" },
     { "HAL_RTC_epoch_seconds", (void*)HAL_RTC_epoch_seconds, "rtc.llpl", 76, "HAL.RTC.epoch_seconds" },
-    { "Kern_mu_gl_capture_new_background", (void*)Kern_mu_gl_capture_new_background, "mu_gl.llpl", 134, "Kern.mu_gl_capture_new_background" },
     { "Kern_mu_term_spawn_shell", (void*)Kern_mu_term_spawn_shell, "mu_term.llpl", 245, "Kern.mu_term_spawn_shell" },
     { "Kern_donate_blocked_mutex", (void*)Kern_donate_blocked_mutex, "sync.llpl", 214, "Kern.donate_blocked_mutex" },
     { "Kern_map_key", (void*)Kern_map_key, "keyboard.llpl", 32, "Kern.map_key" },
@@ -36871,7 +36977,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Kern_tcp_receive", (void*)Kern_tcp_receive, "ipv4.llpl", 471, "Kern.tcp_receive" },
     { "Kern_sleep_remove_locked", (void*)Kern_sleep_remove_locked, "wait.llpl", 218, "Kern.sleep_remove_locked" },
     { "Kern_find_process_thread", (void*)Kern_find_process_thread, "thread.llpl", 702, "Kern.find_process_thread" },
-    { "Terminal_height", (void*)Terminal_height, "terminal.llpl", 869, "Terminal.height" },
+    { "Terminal_height", (void*)Terminal_height, "terminal.llpl", 887, "Terminal.height" },
     { "read_u32_be", (void*)read_u32_be, "ttf.llpl", 79, "read_u32_be" },
     { "fill_wallpaper_row", (void*)fill_wallpaper_row, "kernel.llpl", 321, "fill_wallpaper_row" },
     { "Kern_wake_all", (void*)Kern_wake_all, "wait.llpl", 174, "Kern.wake_all" },
@@ -36879,7 +36985,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "limine_get_memmap", (void*)limine_get_memmap, "kernel.llpl", 79, "limine_get_memmap" },
     { "Timer_on_pit_tick", (void*)Timer_on_pit_tick, "timer.llpl", 37, "Timer.on_pit_tick" },
     { "VFS_init", (void*)VFS_init, "vfs.llpl", 1007, "VFS.init" },
-    { "Kern_mu_term_spawn_shell_thread", (void*)Kern_mu_term_spawn_shell_thread, "mu_term.llpl", 370, "Kern.mu_term_spawn_shell_thread" },
+    { "Kern_mu_term_spawn_shell_thread", (void*)Kern_mu_term_spawn_shell_thread, "mu_term.llpl", 346, "Kern.mu_term_spawn_shell_thread" },
     { "HAL_PIC_init", (void*)HAL_PIC_init, "pic.llpl", 75, "HAL.PIC.init" },
     { "Kern_clone_process_address_space", (void*)Kern_clone_process_address_space, "process.llpl", 546, "Kern.clone_process_address_space" },
     { "Kern_write_user_bytes", (void*)Kern_write_user_bytes, "elf.llpl", 136, "Kern.write_user_bytes" },
@@ -36889,9 +36995,9 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_Serial_ready", (void*)HAL_Serial_ready, "serial.llpl", 14, "HAL.Serial.ready" },
     { "VFS_mount", (void*)VFS_mount, "vfs.llpl", 861, "VFS.mount" },
     { "Kern_switch_thread_fpu", (void*)Kern_switch_thread_fpu, "thread.llpl", 696, "Kern.switch_thread_fpu" },
-    { "Kern_mu_term_pump_io", (void*)Kern_mu_term_pump_io, "mu_term.llpl", 320, "Kern.mu_term_pump_io" },
+    { "Kern_mu_term_pump_io", (void*)Kern_mu_term_pump_io, "mu_term.llpl", 296, "Kern.mu_term_pump_io" },
     { "VFS_MemFilesystem_driver_name", (void*)VFS_MemFilesystem_driver_name, "?", 1076, "VFS_MemFilesystem_driver_name" },
-    { "Terminal_get_pixel", (void*)Terminal_get_pixel, "terminal.llpl", 838, "Terminal.get_pixel" },
+    { "Terminal_get_pixel", (void*)Terminal_get_pixel, "terminal.llpl", 856, "Terminal.get_pixel" },
     { "Mu_draw_control_frame", (void*)Mu_draw_control_frame, "microui.llpl", 943, "Mu.draw_control_frame" },
     { "Kern_ahci_stop_port", (void*)Kern_ahci_stop_port, "ahci.llpl", 191, "Kern.ahci_stop_port" },
     { "Kern_find_device", (void*)Kern_find_device, "device.llpl", 69, "Kern.find_device" },
@@ -36901,7 +37007,8 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_IDT_init", (void*)HAL_IDT_init, "idt.llpl", 899, "HAL.IDT.init" },
     { "Kern_finish_block_current_timeout", (void*)Kern_finish_block_current_timeout, "wait.llpl", 269, "Kern.finish_block_current_timeout" },
     { "Kern_shm_create", (void*)Kern_shm_create, "shm.llpl", 91, "Kern.shm_create" },
-    { "Kern_mouse_init", (void*)Kern_mouse_init, "mouse.llpl", 734, "Kern.mouse_init" },
+    { "Kern_window_rect_y", (void*)Kern_window_rect_y, "mouse.llpl", 319, "Kern.window_rect_y" },
+    { "Kern_mouse_init", (void*)Kern_mouse_init, "mouse.llpl", 1025, "Kern.mouse_init" },
     { "Kern_device_init", (void*)Kern_device_init, "device.llpl", 57, "Kern.device_init" },
     { "Mu_parse_int", (void*)Mu_parse_int, "microui.llpl", 1104, "Mu.parse_int" },
     { "Kern_set_thread_effective_priority", (void*)Kern_set_thread_effective_priority, "thread.llpl", 862, "Kern.set_thread_effective_priority" },
@@ -36915,6 +37022,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Kern_message_queue_init", (void*)Kern_message_queue_init, "ipc.llpl", 155, "Kern.message_queue_init" },
     { "Mu_blend_target_pixel", (void*)Mu_blend_target_pixel, "microui.llpl", 1528, "Mu.blend_target_pixel" },
     { "HAL_cpuid", (void*)HAL_cpuid, "cpu.llpl", 97, "HAL.cpuid" },
+    { "Kern_draw_window_shadow", (void*)Kern_draw_window_shadow, "mouse.llpl", 546, "Kern.draw_window_shadow" },
     { "MM_malloc_MM_VmArea_ptr", (void*)MM_malloc_MM_VmArea_ptr, "?", 93, "MM_malloc_MM_VmArea_ptr" },
     { "Kern_message_queue_unlink", (void*)Kern_message_queue_unlink, "ipc.llpl", 193, "Kern.message_queue_unlink" },
     { "Timer_current_tick", (void*)Timer_current_tick, "timer.llpl", 43, "Timer.current_tick" },
@@ -36925,7 +37033,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_PCI_vendor_id", (void*)HAL_PCI_vendor_id, "pci.llpl", 40, "HAL.PCI.vendor_id" },
     { "HAL_PCI_probe_function", (void*)HAL_PCI_probe_function, "pci.llpl", 47, "HAL.PCI.probe_function" },
     { "Mu_draw_control_text", (void*)Mu_draw_control_text, "microui.llpl", 949, "Mu.draw_control_text" },
-    { "Kern_bring_window_to_front", (void*)Kern_bring_window_to_front, "mouse.llpl", 315, "Kern.bring_window_to_front" },
+    { "Kern_bring_window_to_front", (void*)Kern_bring_window_to_front, "mouse.llpl", 340, "Kern.bring_window_to_front" },
     { "Kern_shm_unlink", (void*)Kern_shm_unlink, "shm.llpl", 225, "Kern.shm_unlink" },
     { "Kern_dhcp_configure", (void*)Kern_dhcp_configure, "ipv4.llpl", 236, "Kern.dhcp_configure" },
     { "HAL_ACPI_signature_matches", (void*)HAL_ACPI_signature_matches, "acpi.llpl", 95, "HAL.ACPI.signature_matches" },
@@ -36933,10 +37041,12 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_LAPIC_base", (void*)HAL_LAPIC_base, "apic.llpl", 35, "HAL.LAPIC.base" },
     { "Kern_thread_cr3", (void*)Kern_thread_cr3, "thread.llpl", 680, "Kern.thread_cr3" },
     { "Kern_current_thread", (void*)Kern_current_thread, "thread.llpl", 1189, "Kern.current_thread" },
+    { "Kern_draw_cursor_into_desktop", (void*)Kern_draw_cursor_into_desktop, "mouse.llpl", 580, "Kern.draw_cursor_into_desktop" },
     { "Kern_dhcp_option", (void*)Kern_dhcp_option, "ipv4.llpl", 146, "Kern.dhcp_option" },
     { "Kern_message_queue_open", (void*)Kern_message_queue_open, "ipc.llpl", 178, "Kern.message_queue_open" },
     { "HAL_cpu_id", (void*)HAL_cpu_id, "cpu.llpl", 160, "HAL.cpu_id" },
     { "Kern_dns_resolve", (void*)Kern_dns_resolve, "ipv4.llpl", 266, "Kern.dns_resolve" },
+    { "Kern_window_is_drawn", (void*)Kern_window_is_drawn, "mouse.llpl", 309, "Kern.window_is_drawn" },
     { "HAL_RNG_fallback_seed", (void*)HAL_RNG_fallback_seed, "rng.llpl", 22, "HAL.RNG.fallback_seed" },
     { "HAL_FPU_save", (void*)HAL_FPU_save, "fpu.llpl", 30, "HAL.FPU.save" },
     { "HAL_IOAPIC_write_reg", (void*)HAL_IOAPIC_write_reg, "apic.llpl", 79, "HAL.IOAPIC.write_reg" },
@@ -36955,13 +37065,11 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "ttf_render_glyph", (void*)ttf_render_glyph, "ttf.llpl", 347, "ttf_render_glyph" },
     { "HAL_halt", (void*)HAL_halt, "cpu.llpl", 24, "HAL.halt" },
     { "Kern_process_sbrk", (void*)Kern_process_sbrk, "process.llpl", 603, "Kern.process_sbrk" },
-    { "Kern_mu_gl_flush_move", (void*)Kern_mu_gl_flush_move, "mu_gl.llpl", 163, "Kern.mu_gl_flush_move" },
     { "Kern_init_scancode_tables", (void*)Kern_init_scancode_tables, "keyboard.llpl", 37, "Kern.init_scancode_tables" },
-    { "Kern_mu_demo_tick", (void*)Kern_mu_demo_tick, "mu_demo.llpl", 177, "Kern.mu_demo_tick" },
+    { "Kern_mu_demo_tick", (void*)Kern_mu_demo_tick, "mu_demo.llpl", 153, "Kern.mu_demo_tick" },
     { "HAL_RTC_read_reg", (void*)HAL_RTC_read_reg, "rtc.llpl", 21, "HAL.RTC.read_reg" },
     { "Mu_layout_begin_column", (void*)Mu_layout_begin_column, "microui.llpl", 692, "Mu.layout_begin_column" },
     { "Kern_set_foreground_process", (void*)Kern_set_foreground_process, "keyboard.llpl", 179, "Kern.set_foreground_process" },
-    { "Kern_mu_gl_move_fits", (void*)Kern_mu_gl_move_fits, "mu_gl.llpl", 111, "Kern.mu_gl_move_fits" },
     { "Kern_be16", (void*)Kern_be16, "ipv4.llpl", 40, "Kern.be16" },
     { "Kern_tcp_send", (void*)Kern_tcp_send, "ipv4.llpl", 464, "Kern.tcp_send" },
     { "u8_equals", (void*)u8_equals, "?", 2172, "u8_equals" },
@@ -36972,7 +37080,8 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Mu_get_id_ptr", (void*)Mu_get_id_ptr, "microui.llpl", 550, "Mu.get_id_ptr" },
     { "ttf_get_glyph_offset", (void*)ttf_get_glyph_offset, "ttf.llpl", 190, "ttf_get_glyph_offset" },
     { "page_fault_handler", (void*)page_fault_handler, "idt.llpl", 2133, "page_fault_handler" },
-    { "Kern_window_contains", (void*)Kern_window_contains, "mouse.llpl", 337, "Kern.window_contains" },
+    { "Kern_compose_desktop", (void*)Kern_compose_desktop, "mouse.llpl", 626, "Kern.compose_desktop" },
+    { "Kern_window_contains", (void*)Kern_window_contains, "mouse.llpl", 362, "Kern.window_contains" },
     { "Kern_ahci_issue_command", (void*)Kern_ahci_issue_command, "ahci.llpl", 76, "Kern.ahci_issue_command" },
     { "HAL_FPU_init", (void*)HAL_FPU_init, "fpu.llpl", 10, "HAL.FPU.init" },
     { "Kern_mu_term_put_char", (void*)Kern_mu_term_put_char, "mu_term.llpl", 185, "Kern.mu_term_put_char" },
@@ -36981,7 +37090,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "MM_p2v", (void*)MM_p2v, "vmm.llpl", 215, "MM.p2v" },
     { "Kern_proc_init", (void*)Kern_proc_init, "process.llpl", 120, "Kern.proc_init" },
     { "Kern_mutex_remove_owner_locked", (void*)Kern_mutex_remove_owner_locked, "sync.llpl", 165, "Kern.mutex_remove_owner_locked" },
-    { "HAL_PIT_run_timer_list", (void*)HAL_PIT_run_timer_list, "pit.llpl", 90, "HAL.PIT.run_timer_list" },
+    { "HAL_PIT_run_timer_list", (void*)HAL_PIT_run_timer_list, "pit.llpl", 89, "HAL.PIT.run_timer_list" },
     { "HAL_read_cr3", (void*)HAL_read_cr3, "cpu.llpl", 54, "HAL.read_cr3" },
     { "Kern_mutex_assign_owner_locked", (void*)Kern_mutex_assign_owner_locked, "sync.llpl", 159, "Kern.mutex_assign_owner_locked" },
     { "Kern_keyboard_irq_handler", (void*)Kern_keyboard_irq_handler, "keyboard.llpl", 191, "Kern.keyboard_irq_handler" },
@@ -36994,18 +37103,17 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_inb", (void*)HAL_inb, "cpu.llpl", 8, "HAL.inb" },
     { "HAL_write_cr0", (void*)HAL_write_cr0, "cpu.llpl", 76, "HAL.write_cr0" },
     { "Mu_input_mouseup", (void*)Mu_input_mouseup, "microui.llpl", 809, "Mu.input_mouseup" },
-    { "Kern_timeout_waiter_locked", (void*)Kern_timeout_waiter_locked, "wait.llpl", 334, "Kern.timeout_waiter_locked" },
+    { "Kern_timeout_waiter_locked", (void*)Kern_timeout_waiter_locked, "wait.llpl", 336, "Kern.timeout_waiter_locked" },
     { "HAL_PIT_timer_handler", (void*)HAL_PIT_timer_handler, "pit.llpl", 36, "HAL.PIT.timer_handler" },
     { "HAL_GDT_reload_segments", (void*)HAL_GDT_reload_segments, "gdt.llpl", 136, "HAL.GDT.reload_segments" },
     { "Kern_ahci_start_port", (void*)Kern_ahci_start_port, "ahci.llpl", 201, "Kern.ahci_start_port" },
     { "Kern_process_brk", (void*)Kern_process_brk, "process.llpl", 582, "Kern.process_brk" },
-    { "Kern_mu_gl_restore_rect", (void*)Kern_mu_gl_restore_rect, "mu_gl.llpl", 101, "Kern.mu_gl_restore_rect" },
     { "Mu_input_mousemove", (void*)Mu_input_mousemove, "microui.llpl", 799, "Mu.input_mousemove" },
     { "VFS_tar_align", (void*)VFS_tar_align, "vfs.llpl", 703, "VFS.tar_align" },
     { "Mu_bring_to_front", (void*)Mu_bring_to_front, "microui.llpl", 438, "Mu.bring_to_front" },
     { "Mu_button", (void*)Mu_button, "microui.llpl", 1023, "Mu.button" },
     { "user_v2p", (void*)user_v2p, "syscall.llpl", 135, "user_v2p" },
-    { "Terminal_present_row", (void*)Terminal_present_row, "terminal.llpl", 876, "Terminal.present_row" },
+    { "Terminal_present_row", (void*)Terminal_present_row, "terminal.llpl", 894, "Terminal.present_row" },
     { "read_u16_be", (void*)read_u16_be, "ttf.llpl", 66, "read_u16_be" },
     { "VFS_tar_entry_path", (void*)VFS_tar_entry_path, "vfs.llpl", 716, "VFS.tar_entry_path" },
     { "Kern_init_user_pml4", (void*)Kern_init_user_pml4, "thread.llpl", 657, "Kern.init_user_pml4" },
@@ -37022,7 +37130,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "VFS_mount_relative_path", (void*)VFS_mount_relative_path, "vfs.llpl", 765, "VFS.mount_relative_path" },
     { "limine_get_modules", (void*)limine_get_modules, "kernel.llpl", 87, "limine_get_modules" },
     { "HAL_RTC_updating", (void*)HAL_RTC_updating, "rtc.llpl", 26, "HAL.RTC.updating" },
-    { "HAL_PIT_init", (void*)HAL_PIT_init, "pit.llpl", 94, "HAL.PIT.init" },
+    { "HAL_PIT_init", (void*)HAL_PIT_init, "pit.llpl", 93, "HAL.PIT.init" },
     { "device_name_for_path", (void*)device_name_for_path, "syscall.llpl", 112, "device_name_for_path" },
     { "Terminal_set_scroll_hooks", (void*)Terminal_set_scroll_hooks, "terminal.llpl", 90, "Terminal.set_scroll_hooks" },
     { "console_tag_length", (void*)console_tag_length, "terminal.llpl", 17, "console_tag_length" },
@@ -37031,12 +37139,11 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Terminal_enable_text_buffer", (void*)Terminal_enable_text_buffer, "terminal.llpl", 128, "Terminal.enable_text_buffer" },
     { "HAL_outl", (void*)HAL_outl, "cpu.llpl", 14, "HAL.outl" },
     { "VFS_mount_matches", (void*)VFS_mount_matches, "vfs.llpl", 748, "VFS.mount_matches" },
-    { "tw", (void*)tw, "?", 820, "Terminal.write" },
+    { "tw", (void*)tw, "?", 838, "Terminal.write" },
     { "Kern_load_cursor_sprite", (void*)Kern_load_cursor_sprite, "mouse.llpl", 91, "Kern.load_cursor_sprite" },
     { "limine_get_rsdp", (void*)limine_get_rsdp, "kernel.llpl", 91, "limine_get_rsdp" },
     { "u8_hash", (void*)u8_hash, "?", 2169, "u8_hash" },
     { "Mu_pool_init", (void*)Mu_pool_init, "microui.llpl", 717, "Mu.pool_init" },
-    { "Kern_mu_demo_restore_rect", (void*)Kern_mu_demo_restore_rect, "mu_demo.llpl", 104, "Kern.mu_demo_restore_rect" },
     { "Mu_push_container_body", (void*)Mu_push_container_body, "microui.llpl", 1326, "Mu.push_container_body" },
     { "MM_boot_alloc", (void*)MM_boot_alloc, "vmm.llpl", 225, "MM.boot_alloc" },
     { "Mu_draw_box", (void*)Mu_draw_box, "microui.llpl", 863, "Mu.draw_box" },
@@ -37050,19 +37157,21 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "MM_pages_num", (void*)MM_pages_num, "vmm.llpl", 140, "MM.pages_num" },
     { "Kern_maybe_deliver_apc", (void*)Kern_maybe_deliver_apc, "thread.llpl", 1091, "Kern.maybe_deliver_apc" },
     { "Kern_register_device", (void*)Kern_register_device, "device.llpl", 61, "Kern.register_device" },
-    { "Kern_mouse_pre_scroll", (void*)Kern_mouse_pre_scroll, "mouse.llpl", 658, "Kern.mouse_pre_scroll" },
+    { "Kern_mouse_pre_scroll", (void*)Kern_mouse_pre_scroll, "mouse.llpl", 947, "Kern.mouse_pre_scroll" },
     { "Kern_internet_checksum", (void*)Kern_internet_checksum, "ipv4.llpl", 61, "Kern.internet_checksum" },
     { "MM_free_pageframe", (void*)MM_free_pageframe, "vmm.llpl", 284, "MM.free_pageframe" },
-    { "Kern_e1000_init", (void*)Kern_e1000_init, "e1000.llpl", 166, "Kern.e1000_init" },
+    { "Kern_blit_into_desktop", (void*)Kern_blit_into_desktop, "mouse.llpl", 566, "Kern.blit_into_desktop" },
     { "Kern_kill_current_process_from_interrupt", (void*)Kern_kill_current_process_from_interrupt, "thread.llpl", 1036, "Kern.kill_current_process_from_interrupt" },
     { "Kern_refresh_mutex_donation", (void*)Kern_refresh_mutex_donation, "sync.llpl", 220, "Kern.refresh_mutex_donation" },
+    { "Kern_e1000_init", (void*)Kern_e1000_init, "e1000.llpl", 166, "Kern.e1000_init" },
     { "Kern_mu_term_color_from_sgr", (void*)Kern_mu_term_color_from_sgr, "mu_term.llpl", 149, "Kern.mu_term_color_from_sgr" },
-    { "Kern_mouse_irq_handler", (void*)Kern_mouse_irq_handler, "mouse.llpl", 691, "Kern.mouse_irq_handler" },
+    { "Kern_mouse_irq_handler", (void*)Kern_mouse_irq_handler, "mouse.llpl", 978, "Kern.mouse_irq_handler" },
     { "Mu_point_in_rect", (void*)Mu_point_in_rect, "microui.llpl", 1487, "Mu.point_in_rect" },
     { "HAL_ACPI_init", (void*)HAL_ACPI_init, "acpi.llpl", 78, "HAL.ACPI.init" },
     { "MM_kmalloc_wrapper", (void*)MM_kmalloc_wrapper, "vmm.llpl", 368, "MM.kmalloc_wrapper" },
     { "MM_rb_grandparent", (void*)MM_rb_grandparent, "aspace.llpl", 460, "MM.rb_grandparent" },
     { "i64_hash", (void*)i64_hash, "?", 2151, "i64_hash" },
+    { "Kern_window_rect_x", (void*)Kern_window_rect_x, "mouse.llpl", 314, "Kern.window_rect_x" },
     { "Kern_process_id", (void*)Kern_process_id, "process.llpl", 153, "Kern.process_id" },
     { "i64_equals", (void*)i64_equals, "?", 2154, "i64_equals" },
     { "Kern_sleep_insert_locked", (void*)Kern_sleep_insert_locked, "wait.llpl", 201, "Kern.sleep_insert_locked" },
@@ -37072,24 +37181,26 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Kern_dns_skip_name", (void*)Kern_dns_skip_name, "ipv4.llpl", 246, "Kern.dns_skip_name" },
     { "Kern_mu_term_scroll_up", (void*)Kern_mu_term_scroll_up, "mu_term.llpl", 117, "Kern.mu_term_scroll_up" },
     { "Kern_reaper_main", (void*)Kern_reaper_main, "thread.llpl", 301, "Kern.reaper_main" },
-    { "Terminal_blit_rect", (void*)Terminal_blit_rect, "terminal.llpl", 856, "Terminal.blit_rect" },
+    { "Terminal_blit_rect", (void*)Terminal_blit_rect, "terminal.llpl", 874, "Terminal.blit_rect" },
     { "Kern_resolve_user_page_fault", (void*)Kern_resolve_user_page_fault, "process.llpl", 345, "Kern.resolve_user_page_fault" },
     { "VFS_stat", (void*)VFS_stat, "vfs.llpl", 911, "VFS.stat" },
+    { "Kern_ensure_desktop_compose", (void*)Kern_ensure_desktop_compose, "mouse.llpl", 510, "Kern.ensure_desktop_compose" },
+    { "Terminal_force_repaint", (void*)Terminal_force_repaint, "terminal.llpl", 141, "Terminal.force_repaint" },
     { "copy_user_string", (void*)copy_user_string, "syscall.llpl", 299, "copy_user_string" },
     { "Kern_put32", (void*)Kern_put32, "ipv4.llpl", 54, "Kern.put32" },
     { "Mu_plot_clipped", (void*)Mu_plot_clipped, "microui.llpl", 1551, "Mu.plot_clipped" },
     { "Kern_mu_term_apply_sgr", (void*)Kern_mu_term_apply_sgr, "mu_term.llpl", 171, "Kern.mu_term_apply_sgr" },
     { "MM_v2pf", (void*)MM_v2pf, "vmm.llpl", 198, "MM.v2pf" },
-    { "HAL_PIT_take_schedule_request", (void*)HAL_PIT_take_schedule_request, "pit.llpl", 84, "HAL.PIT.take_schedule_request" },
+    { "HAL_PIT_take_schedule_request", (void*)HAL_PIT_take_schedule_request, "pit.llpl", 83, "HAL.PIT.take_schedule_request" },
     { "Kern_map_user_zero_page", (void*)Kern_map_user_zero_page, "thread.llpl", 666, "Kern.map_user_zero_page" },
     { "page_fault_print_context", (void*)page_fault_print_context, "idt.llpl", 2088, "page_fault_print_context" },
     { "HAL_cpuid_num", (void*)HAL_cpuid_num, "cpu.llpl", 175, "HAL.cpuid_num" },
-    { "HAL_write_cr4", (void*)HAL_write_cr4, "cpu.llpl", 86, "HAL.write_cr4" },
     { "Mu_text_height", (void*)Mu_text_height, "microui.llpl", 386, "Mu.text_height" },
     { "MM_alloc_pageframe", (void*)MM_alloc_pageframe, "vmm.llpl", 271, "MM.alloc_pageframe" },
+    { "HAL_write_cr4", (void*)HAL_write_cr4, "cpu.llpl", 86, "HAL.write_cr4" },
     { "u64_hash", (void*)u64_hash, "?", 2160, "u64_hash" },
-    { "MM_malloc_uint", (void*)MM_malloc_uint, "?", 93, "MM_malloc_uint" },
     { "Kern_mu_term_clear", (void*)Kern_mu_term_clear, "mu_term.llpl", 108, "Kern.mu_term_clear" },
+    { "MM_malloc_uint", (void*)MM_malloc_uint, "?", 93, "MM_malloc_uint" },
     { "MM_rb_rotate_right", (void*)MM_rb_rotate_right, "aspace.llpl", 503, "MM.rb_rotate_right" },
     { "HAL_ACPI_legacy_irq_to_gsi", (void*)HAL_ACPI_legacy_irq_to_gsi, "acpi.llpl", 177, "HAL.ACPI.legacy_irq_to_gsi" },
     { "HAL_RTC_bcd", (void*)HAL_RTC_bcd, "rtc.llpl", 57, "HAL.RTC.bcd" },
@@ -37113,6 +37224,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Kern_cursor_blend_into_compose", (void*)Kern_cursor_blend_into_compose, "mouse.llpl", 191, "Kern.cursor_blend_into_compose" },
     { "Mu_expand_rect", (void*)Mu_expand_rect, "microui.llpl", 324, "Mu.expand_rect" },
     { "Mu_begin_window_ex", (void*)Mu_begin_window_ex, "microui.llpl", 1356, "Mu.begin_window_ex" },
+    { "Kern_window_rect_w", (void*)Kern_window_rect_w, "mouse.llpl", 324, "Kern.window_rect_w" },
     { "VFS_MemFilesystem_driver_mount", (void*)VFS_MemFilesystem_driver_mount, "?", 1080, "VFS_MemFilesystem_driver_mount" },
     { "syscall_process", (void*)syscall_process, "syscall.llpl", 319, "syscall_process" },
     { "Kern_elf_valid", (void*)Kern_elf_valid, "elf.llpl", 50, "Kern.elf_valid" },
@@ -37126,7 +37238,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_interrupts_enabled", (void*)HAL_interrupts_enabled, "cpu.llpl", 36, "HAL.interrupts_enabled" },
     { "HAL_Serial_write", (void*)HAL_Serial_write, "serial.llpl", 23, "HAL.Serial.write" },
     { "VFS_canonicalize", (void*)VFS_canonicalize, "vfs.llpl", 776, "VFS.canonicalize" },
-    { "Kern_run_window_ticks", (void*)Kern_run_window_ticks, "mouse.llpl", 419, "Kern.run_window_ticks" },
+    { "Kern_run_window_ticks", (void*)Kern_run_window_ticks, "mouse.llpl", 448, "Kern.run_window_ticks" },
     { "MM_kfree_wrapper", (void*)MM_kfree_wrapper, "vmm.llpl", 384, "MM.kfree_wrapper" },
     { "Mu_draw_frame", (void*)Mu_draw_frame, "microui.llpl", 896, "Mu.draw_frame" },
     { "kernel_main", (void*)kernel_main, "kernel.llpl", 332, "kernel_main" },
@@ -37145,7 +37257,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "VFS_tar_header_empty", (void*)VFS_tar_header_empty, "vfs.llpl", 679, "VFS.tar_header_empty" },
     { "Kern_send_dhcp", (void*)Kern_send_dhcp, "ipv4.llpl", 166, "Kern.send_dhcp" },
     { "Kern_keyboard_init", (void*)Kern_keyboard_init, "keyboard.llpl", 279, "Kern.keyboard_init" },
-    { "Kern_mu_term_tick", (void*)Kern_mu_term_tick, "mu_term.llpl", 374, "Kern.mu_term_tick" },
+    { "Kern_mu_term_tick", (void*)Kern_mu_term_tick, "mu_term.llpl", 350, "Kern.mu_term_tick" },
     { "copy_from_user", (void*)copy_from_user, "syscall.llpl", 227, "copy_from_user" },
     { "Mu_layout_row1", (void*)Mu_layout_row1, "microui.llpl", 632, "Mu.layout_row1" },
     { "Kern_account_current_runtime_tick", (void*)Kern_account_current_runtime_tick, "thread.llpl", 800, "Kern.account_current_runtime_tick" },
@@ -37163,6 +37275,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_ACPI_find_ioapic", (void*)HAL_ACPI_find_ioapic, "acpi.llpl", 149, "HAL.ACPI.find_ioapic" },
     { "read_i16_be", (void*)read_i16_be, "ttf.llpl", 73, "read_i16_be" },
     { "HAL_ACPI_find_acpi_table", (void*)HAL_ACPI_find_acpi_table, "acpi.llpl", 109, "HAL.ACPI.find_acpi_table" },
+    { "Kern_desktop_blend_pixel", (void*)Kern_desktop_blend_pixel, "mouse.llpl", 527, "Kern.desktop_blend_pixel" },
     { "HAL_read_cr2", (void*)HAL_read_cr2, "cpu.llpl", 60, "HAL.read_cr2" },
     { "Kern_thread_exit", (void*)Kern_thread_exit, "thread.llpl", 334, "Kern.thread_exit" },
     { "Kern_terminate_process_threads", (void*)Kern_terminate_process_threads, "thread.llpl", 723, "Kern.terminate_process_threads" },
@@ -37184,17 +37297,17 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_read_gs_base", (void*)HAL_read_gs_base, "cpu.llpl", 191, "HAL.read_gs_base" },
     { "HAL_PCI_find_vendor_device", (void*)HAL_PCI_find_vendor_device, "pci.llpl", 69, "HAL.PCI.find_vendor_device" },
     { "Mu_clear_render_target", (void*)Mu_clear_render_target, "microui.llpl", 1520, "Mu.clear_render_target" },
-    { "Kern_init_window_z_order", (void*)Kern_init_window_z_order, "mouse.llpl", 309, "Kern.init_window_z_order" },
+    { "Kern_init_window_z_order", (void*)Kern_init_window_z_order, "mouse.llpl", 334, "Kern.init_window_z_order" },
     { "HAL_GDT_set_entry", (void*)HAL_GDT_set_entry, "gdt.llpl", 63, "HAL.GDT.set_entry" },
     { "Kern_install_console_fds", (void*)Kern_install_console_fds, "process.llpl", 145, "Kern.install_console_fds" },
-    { "Kern_mouse_read_ack", (void*)Kern_mouse_read_ack, "mouse.llpl", 555, "Kern.mouse_read_ack" },
-    { "Kern_topmost_window_at", (void*)Kern_topmost_window_at, "mouse.llpl", 355, "Kern.topmost_window_at" },
+    { "Kern_mouse_read_ack", (void*)Kern_mouse_read_ack, "mouse.llpl", 844, "Kern.mouse_read_ack" },
+    { "Kern_topmost_window_at", (void*)Kern_topmost_window_at, "mouse.llpl", 380, "Kern.topmost_window_at" },
     { "HAL_LAPIC_init", (void*)HAL_LAPIC_init, "apic.llpl", 46, "HAL.LAPIC.init" },
     { "String_hash", (void*)String_hash, "?", 2201, "String_hash" },
     { "Mu_number_textbox", (void*)Mu_number_textbox, "microui.llpl", 1116, "Mu.number_textbox" },
     { "Kern_scheduler_yield", (void*)Kern_scheduler_yield, "thread.llpl", 792, "Kern.scheduler_yield" },
     { "HAL_interrupt_restore", (void*)HAL_interrupt_restore, "cpu.llpl", 48, "HAL.interrupt_restore" },
-    { "Kern_mu_gl_tick", (void*)Kern_mu_gl_tick, "mu_gl.llpl", 262, "Kern.mu_gl_tick" },
+    { "Kern_mu_gl_tick", (void*)Kern_mu_gl_tick, "mu_gl.llpl", 138, "Kern.mu_gl_tick" },
     { "VFS_BootFilesystem_driver_mount", (void*)VFS_BootFilesystem_driver_mount, "?", 1090, "VFS_BootFilesystem_driver_mount" },
     { "ttf_rasterize_edges", (void*)ttf_rasterize_edges, "ttf.llpl", 281, "ttf_rasterize_edges" },
     { "int_compare", (void*)int_compare, "?", 2234, "int_compare" },
@@ -37208,14 +37321,14 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "double_fault_handler", (void*)double_fault_handler, "idt.llpl", 2164, "double_fault_handler" },
     { "HAL_rdtsc", (void*)HAL_rdtsc, "cpu.llpl", 137, "HAL.rdtsc" },
     { "Mu_end", (void*)Mu_end, "microui.llpl", 443, "Mu.end" },
-    { "Kern_mu_term_wants_key", (void*)Kern_mu_term_wants_key, "mu_term.llpl", 349, "Kern.mu_term_wants_key" },
+    { "Kern_mu_term_wants_key", (void*)Kern_mu_term_wants_key, "mu_term.llpl", 325, "Kern.mu_term_wants_key" },
     { "Kern_register_network_device", (void*)Kern_register_network_device, "network.llpl", 15, "Kern.register_network_device" },
     { "HAL_PCI_find_device", (void*)HAL_PCI_find_device, "pci.llpl", 97, "HAL.PCI.find_device" },
     { "HAL_read_msr", (void*)HAL_read_msr, "cpu.llpl", 150, "HAL.read_msr" },
     { "isr_handler", (void*)isr_handler, "idt.llpl", 1946, "isr_handler" },
     { "Mu_draw_text", (void*)Mu_draw_text, "microui.llpl", 870, "Mu.draw_text" },
-    { "Kern_wake_sleepers", (void*)Kern_wake_sleepers, "wait.llpl", 353, "Kern.wake_sleepers" },
-    { "Terminal_blend_pixel", (void*)Terminal_blend_pixel, "terminal.llpl", 850, "Terminal.blend_pixel" },
+    { "Kern_wake_sleepers", (void*)Kern_wake_sleepers, "wait.llpl", 355, "Kern.wake_sleepers" },
+    { "Terminal_blend_pixel", (void*)Terminal_blend_pixel, "terminal.llpl", 868, "Terminal.blend_pixel" },
     { "Kern_init_cursor_shape", (void*)Kern_init_cursor_shape, "mouse.llpl", 62, "Kern.init_cursor_shape" },
     { "MM_rb_insert", (void*)MM_rb_insert, "aspace.llpl", 558, "MM.rb_insert" },
     { "draw_wallpaper", (void*)draw_wallpaper, "kernel.llpl", 270, "draw_wallpaper" },
@@ -37239,12 +37352,13 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Kern_poll_frame", (void*)Kern_poll_frame, "ipv4.llpl", 109, "Kern.poll_frame" },
     { "Kern_take_keyboard_interrupt_pid", (void*)Kern_take_keyboard_interrupt_pid, "keyboard.llpl", 185, "Kern.take_keyboard_interrupt_pid" },
     { "limine_get_hhdm", (void*)limine_get_hhdm, "kernel.llpl", 83, "limine_get_hhdm" },
-    { "Terminal_width", (void*)Terminal_width, "terminal.llpl", 862, "Terminal.width" },
+    { "Terminal_width", (void*)Terminal_width, "terminal.llpl", 880, "Terminal.width" },
     { "Mu_union_rects", (void*)Mu_union_rects, "microui.llpl", 496, "Mu.union_rects" },
     { "HAL_outb", (void*)HAL_outb, "cpu.llpl", 4, "HAL.outb" },
     { "Kern_remove_ready_locked", (void*)Kern_remove_ready_locked, "thread.llpl", 829, "Kern.remove_ready_locked" },
+    { "Kern_window_backbuffer", (void*)Kern_window_backbuffer, "mouse.llpl", 521, "Kern.window_backbuffer" },
     { "Kern_map_elf_segment", (void*)Kern_map_elf_segment, "elf.llpl", 77, "Kern.map_elf_segment" },
-    { "Kern_mu_gl_spawn_thread", (void*)Kern_mu_gl_spawn_thread, "mu_gl.llpl", 82, "Kern.mu_gl_spawn_thread" },
+    { "Kern_mu_gl_spawn_thread", (void*)Kern_mu_gl_spawn_thread, "mu_gl.llpl", 73, "Kern.mu_gl_spawn_thread" },
     { "Kern_ahci_start_self_test", (void*)Kern_ahci_start_self_test, "ahci.llpl", 362, "Kern.ahci_start_self_test" },
     { "ttf_get_glyph_metrics", (void*)ttf_get_glyph_metrics, "ttf.llpl", 210, "ttf_get_glyph_metrics" },
     { "Mu_begin_root_container", (void*)Mu_begin_root_container, "microui.llpl", 1333, "Mu.begin_root_container" },
@@ -37265,19 +37379,19 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "ttf_get_glyph_index", (void*)ttf_get_glyph_index, "ttf.llpl", 134, "ttf_get_glyph_index" },
     { "Kern_prepare_block_current_timeout_ticks", (void*)Kern_prepare_block_current_timeout_ticks, "wait.llpl", 241, "Kern.prepare_block_current_timeout_ticks" },
     { "Kern_sleep_ticks", (void*)Kern_sleep_ticks, "wait.llpl", 297, "Kern.sleep_ticks" },
-    { "Kern_sleep_ms", (void*)Kern_sleep_ms, "wait.llpl", 324, "Kern.sleep_ms" },
+    { "Kern_sleep_ms", (void*)Kern_sleep_ms, "wait.llpl", 326, "Kern.sleep_ms" },
     { "HAL_PIT_deferred_tick_report", (void*)HAL_PIT_deferred_tick_report, "pit.llpl", 32, "HAL.PIT.deferred_tick_report" },
     { "HAL_RTC_read_raw", (void*)HAL_RTC_read_raw, "rtc.llpl", 40, "HAL.RTC.read_raw" },
     { "Kern_donate_mutex_priority_locked", (void*)Kern_donate_mutex_priority_locked, "sync.llpl", 199, "Kern.donate_mutex_priority_locked" },
     { "Timer_deadline_after_ticks", (void*)Timer_deadline_after_ticks, "timer.llpl", 47, "Timer.deadline_after_ticks" },
-    { "Kern_compose_frame_work", (void*)Kern_compose_frame_work, "mouse.llpl", 578, "Kern.compose_frame_work" },
+    { "Kern_compose_frame_work", (void*)Kern_compose_frame_work, "mouse.llpl", 867, "Kern.compose_frame_work" },
     { "Kern_thread_trampoline", (void*)Kern_thread_trampoline, "thread.llpl", 752, "Kern.thread_trampoline" },
     { "Mu_get_next_hover_root", (void*)Mu_get_next_hover_root, "microui.llpl", 235, "Mu.get_next_hover_root" },
     { "i64_compare", (void*)i64_compare, "?", 2226, "i64_compare" },
     { "Mu_imax", (void*)Mu_imax, "microui.llpl", 292, "Mu.imax" },
     { "Kern_wait_best_priority", (void*)Kern_wait_best_priority, "wait.llpl", 131, "Kern.wait_best_priority" },
     { "Kern_sync_test_contender", (void*)Kern_sync_test_contender, "thread.llpl", 426, "Kern.sync_test_contender" },
-    { "Kern_mu_gl_pump_frame", (void*)Kern_mu_gl_pump_frame, "mu_gl.llpl", 242, "Kern.mu_gl_pump_frame" },
+    { "Kern_mu_gl_pump_frame", (void*)Kern_mu_gl_pump_frame, "mu_gl.llpl", 102, "Kern.mu_gl_pump_frame" },
     { "Kern_Deferred_init", (void*)Kern_Deferred_init, "deferred.llpl", 103, "Kern.Deferred.init" },
     { "Kern_exit_current_thread_from_syscall", (void*)Kern_exit_current_thread_from_syscall, "thread.llpl", 985, "Kern.exit_current_thread_from_syscall" },
     { "Mu_default_style", (void*)Mu_default_style, "microui.llpl", 342, "Mu.default_style" },
@@ -37298,7 +37412,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "HAL_PIC_set_intr_mask", (void*)HAL_PIC_set_intr_mask, "pic.llpl", 52, "HAL.PIC.set_intr_mask" },
     { "current_thread", (void*)current_thread, "thread.llpl", 30, "current_thread" },
     { "Mu_text", (void*)Mu_text, "microui.llpl", 965, "Mu.text" },
-    { "Kern_mouse_post_scroll", (void*)Kern_mouse_post_scroll, "mouse.llpl", 684, "Kern.mouse_post_scroll" },
+    { "Kern_mouse_post_scroll", (void*)Kern_mouse_post_scroll, "mouse.llpl", 970, "Kern.mouse_post_scroll" },
     { "HAL_MTRR_set_write_combining", (void*)HAL_MTRR_set_write_combining, "mtrr.llpl", 39, "HAL.MTRR.set_write_combining" },
     { "HAL_read_cr0", (void*)HAL_read_cr0, "cpu.llpl", 70, "HAL.read_cr0" },
     { "MM_rb_delete", (void*)MM_rb_delete, "aspace.llpl", 683, "MM.rb_delete" },
@@ -37309,11 +37423,10 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Kern_register_block_device", (void*)Kern_register_block_device, "blockdevice.llpl", 39, "Kern.register_block_device" },
     { "llpl_panic_putc", (void*)llpl_panic_putc, "kernel.llpl", 17, "llpl_panic_putc" },
     { "MM_v2p", (void*)MM_v2p, "vmm.llpl", 144, "MM.v2p" },
-    { "Kern_mu_demo_toggle", (void*)Kern_mu_demo_toggle, "mu_demo.llpl", 114, "Kern.mu_demo_toggle" },
+    { "Kern_mu_demo_toggle", (void*)Kern_mu_demo_toggle, "mu_demo.llpl", 83, "Kern.mu_demo_toggle" },
     { "llpl_panic_halt", (void*)llpl_panic_halt, "kernel.llpl", 21, "llpl_panic_halt" },
     { "HAL_RTC_days_from_civil", (void*)HAL_RTC_days_from_civil, "rtc.llpl", 64, "HAL.RTC.days_from_civil" },
     { "HAL_GDT_init_tss", (void*)HAL_GDT_init_tss, "gdt.llpl", 93, "HAL.GDT.init_tss" },
-    { "Kern_mu_term_save_rect", (void*)Kern_mu_term_save_rect, "mu_term.llpl", 266, "Kern.mu_term_save_rect" },
     { "HAL_Serial_init", (void*)HAL_Serial_init, "serial.llpl", 4, "HAL.Serial.init" },
     { "Kern_wake_one", (void*)Kern_wake_one, "wait.llpl", 150, "Kern.wake_one" },
     { "VFS_resolve", (void*)VFS_resolve, "vfs.llpl", 882, "VFS.resolve" },
@@ -37325,7 +37438,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "Kern_Deferred_queue", (void*)Kern_Deferred_queue, "deferred.llpl", 28, "Kern.Deferred.queue" },
     { "Mu_init", (void*)Mu_init, "microui.llpl", 393, "Mu.init" },
     { "Kern_tcp_connect", (void*)Kern_tcp_connect, "ipv4.llpl", 444, "Kern.tcp_connect" },
-    { "Kern_mu_demo_build", (void*)Kern_mu_demo_build, "mu_demo.llpl", 123, "Kern.mu_demo_build" },
+    { "Kern_mu_demo_build", (void*)Kern_mu_demo_build, "mu_demo.llpl", 99, "Kern.mu_demo_build" },
     { "Mu_get_id_bytes", (void*)Mu_get_id_bytes, "microui.llpl", 535, "Mu.get_id_bytes" },
     { "HAL_rdrand64", (void*)HAL_rdrand64, "cpu.llpl", 118, "HAL.rdrand64" },
     { "VFS_open", (void*)VFS_open, "vfs.llpl", 975, "VFS.open" },
@@ -37334,9 +37447,9 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "MM_mark_range_free", (void*)MM_mark_range_free, "vmm.llpl", 252, "MM.mark_range_free" },
     { "Kern_snapshot_processes", (void*)Kern_snapshot_processes, "process.llpl", 166, "Kern.snapshot_processes" },
     { "Kern_mu_term_newline", (void*)Kern_mu_term_newline, "mu_term.llpl", 130, "Kern.mu_term_newline" },
-    { "Terminal_put_pixel", (void*)Terminal_put_pixel, "terminal.llpl", 832, "Terminal.put_pixel" },
+    { "Terminal_put_pixel", (void*)Terminal_put_pixel, "terminal.llpl", 850, "Terminal.put_pixel" },
     { "Kern_setup_user_args", (void*)Kern_setup_user_args, "elf.llpl", 161, "Kern.setup_user_args" },
-    { "Kern_mu_gl_build", (void*)Kern_mu_gl_build, "mu_gl.llpl", 220, "Kern.mu_gl_build" },
+    { "Kern_mu_gl_build", (void*)Kern_mu_gl_build, "mu_gl.llpl", 80, "Kern.mu_gl_build" },
     { "Mu_mouse_over", (void*)Mu_mouse_over, "microui.llpl", 916, "Mu.mouse_over" },
     { "ttf_add_edge", (void*)ttf_add_edge, "ttf.llpl", 247, "ttf_add_edge" },
     { "Kern_tcp_wait", (void*)Kern_tcp_wait, "ipv4.llpl", 380, "Kern.tcp_wait" },
@@ -37345,7 +37458,7 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "char_ptr_equals", (void*)char_ptr_equals, "?", 2193, "char_ptr_equals" },
     { "Kern_put16", (void*)Kern_put16, "ipv4.llpl", 49, "Kern.put16" },
     { "Mu_iabs", (void*)Mu_iabs, "microui.llpl", 1485, "Mu.iabs" },
-    { "Terminal_init", (void*)Terminal_init, "terminal.llpl", 804, "Terminal.init" },
+    { "Terminal_init", (void*)Terminal_init, "terminal.llpl", 823, "Terminal.init" },
     { "MM_map_page", (void*)MM_map_page, "vmm.llpl", 307, "MM.map_page" },
     { "Kern_tcp_transmit", (void*)Kern_tcp_transmit, "ipv4.llpl", 359, "Kern.tcp_transmit" },
     { "syscall_handler_inner", (void*)syscall_handler_inner, "syscall.llpl", 335, "syscall_handler_inner" },
@@ -37356,20 +37469,18 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "VFS_remove", (void*)VFS_remove, "vfs.llpl", 935, "VFS.remove" },
     { "ttf_measure_text", (void*)ttf_measure_text, "ttf.llpl", 515, "ttf_measure_text" },
     { "ttf_scale_coord", (void*)ttf_scale_coord, "ttf.llpl", 258, "ttf_scale_coord" },
+    { "Kern_window_rect_h", (void*)Kern_window_rect_h, "mouse.llpl", 329, "Kern.window_rect_h" },
     { "Kern_take_reap_thread", (void*)Kern_take_reap_thread, "thread.llpl", 265, "Kern.take_reap_thread" },
     { "timeout_ms", (void*)timeout_ms, "prelude.llpl", 159, "timeout_ms" },
-    { "Kern_mu_term_build", (void*)Kern_mu_term_build, "mu_term.llpl", 286, "Kern.mu_term_build" },
-    { "Kern_mu_term_draw_grid", (void*)Kern_mu_term_draw_grid, "mu_term.llpl", 299, "Kern.mu_term_draw_grid" },
-    { "Kern_mu_gl_save_rect", (void*)Kern_mu_gl_save_rect, "mu_gl.llpl", 89, "Kern.mu_gl_save_rect" },
+    { "Kern_mu_term_build", (void*)Kern_mu_term_build, "mu_term.llpl", 262, "Kern.mu_term_build" },
+    { "Kern_mu_term_draw_grid", (void*)Kern_mu_term_draw_grid, "mu_term.llpl", 275, "Kern.mu_term_draw_grid" },
     { "VFS_read_text", (void*)VFS_read_text, "vfs.llpl", 951, "VFS.read_text" },
     { "Kern_tcp_close", (void*)Kern_tcp_close, "ipv4.llpl", 479, "Kern.tcp_close" },
-    { "Kern_mu_demo_save_rect", (void*)Kern_mu_demo_save_rect, "mu_demo.llpl", 92, "Kern.mu_demo_save_rect" },
     { "HAL_Syscall_init", (void*)HAL_Syscall_init, "syscall.llpl", 214, "HAL.Syscall.init" },
-    { "Kern_mouse_wait_input_clear", (void*)Kern_mouse_wait_input_clear, "mouse.llpl", 537, "Kern.mouse_wait_input_clear" },
+    { "Kern_mouse_wait_input_clear", (void*)Kern_mouse_wait_input_clear, "mouse.llpl", 826, "Kern.mouse_wait_input_clear" },
     { "console_tag_code", (void*)console_tag_code, "terminal.llpl", 40, "console_tag_code" },
     { "Mu_render", (void*)Mu_render, "microui.llpl", 1702, "Mu.render" },
     { "Kern_exit_current_process_from_syscall", (void*)Kern_exit_current_process_from_syscall, "thread.llpl", 1006, "Kern.exit_current_process_from_syscall" },
-    { "Kern_mu_term_restore_rect", (void*)Kern_mu_term_restore_rect, "mu_term.llpl", 278, "Kern.mu_term_restore_rect" },
     { "Mu_end_root_container", (void*)Mu_end_root_container, "microui.llpl", 1351, "Mu.end_root_container" },
     { "HAL_GDT_set_tss_descriptor", (void*)HAL_GDT_set_tss_descriptor, "gdt.llpl", 76, "HAL.GDT.set_tss_descriptor" },
     { "HAL_PIC_remap", (void*)HAL_PIC_remap, "pic.llpl", 26, "HAL.PIC.remap" },
@@ -37490,10 +37601,10 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "AtomicU64_exchange", (void*)AtomicU64_exchange, "prelude.llpl", 451, "AtomicU64.exchange" },
     { "AtomicU64_fetch_add", (void*)AtomicU64_fetch_add, "prelude.llpl", 455, "AtomicU64.fetch_add" },
     { "AtomicU64_compare_exchange", (void*)AtomicU64_compare_exchange, "prelude.llpl", 459, "AtomicU64.compare_exchange" },
-    { "Terminal_Console_new", (void*)Terminal_Console_new, "terminal.llpl", 135, "Terminal.Console.new" },
-    { "Terminal_Console_scroll", (void*)Terminal_Console_scroll, "terminal.llpl", 142, "Terminal.Console.scroll" },
-    { "Terminal_Console_set_cursor", (void*)Terminal_Console_set_cursor, "terminal.llpl", 143, "Terminal.Console.set_cursor" },
-    { "Terminal_Console_puts", (void*)Terminal_Console_puts, "terminal.llpl", 144, "Terminal.Console.puts" },
+    { "Terminal_Console_new", (void*)Terminal_Console_new, "terminal.llpl", 147, "Terminal.Console.new" },
+    { "Terminal_Console_scroll", (void*)Terminal_Console_scroll, "terminal.llpl", 154, "Terminal.Console.scroll" },
+    { "Terminal_Console_set_cursor", (void*)Terminal_Console_set_cursor, "terminal.llpl", 155, "Terminal.Console.set_cursor" },
+    { "Terminal_Console_puts", (void*)Terminal_Console_puts, "terminal.llpl", 156, "Terminal.Console.puts" },
     { "VFS_Filesystem_new", (void*)VFS_Filesystem_new, "vfs.llpl", 69, "VFS.Filesystem.new" },
     { "VFS_Filesystem_name", (void*)VFS_Filesystem_name, "vfs.llpl", 73, "VFS.Filesystem.name" },
     { "VFS_Filesystem_mount", (void*)VFS_Filesystem_mount, "vfs.llpl", 77, "VFS.Filesystem.mount" },
@@ -37763,10 +37874,10 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "RegexMatch_group", (void*)RegexMatch_group, "prelude.llpl", 844, "RegexMatch.group" },
     { "RegexMatch_expand", (void*)RegexMatch_expand, "prelude.llpl", 854, "RegexMatch.expand" },
     { "RegexMatch_to_string", (void*)RegexMatch_to_string, "prelude.llpl", 895, "RegexMatch.to_string" },
-    { "Kern_MouseDevice_new", (void*)Kern_MouseDevice_new, "mouse.llpl", 447, "Kern.MouseDevice.new" },
-    { "Kern_MouseDevice_name", (void*)Kern_MouseDevice_name, "mouse.llpl", 459, "Kern.MouseDevice.name" },
-    { "Kern_MouseDevice_push3", (void*)Kern_MouseDevice_push3, "mouse.llpl", 465, "Kern.MouseDevice.push3" },
-    { "Kern_MouseDevice_read", (void*)Kern_MouseDevice_read, "mouse.llpl", 480, "Kern.MouseDevice.read" },
+    { "Kern_MouseDevice_new", (void*)Kern_MouseDevice_new, "mouse.llpl", 736, "Kern.MouseDevice.new" },
+    { "Kern_MouseDevice_name", (void*)Kern_MouseDevice_name, "mouse.llpl", 748, "Kern.MouseDevice.name" },
+    { "Kern_MouseDevice_push3", (void*)Kern_MouseDevice_push3, "mouse.llpl", 754, "Kern.MouseDevice.push3" },
+    { "Kern_MouseDevice_read", (void*)Kern_MouseDevice_read, "mouse.llpl", 769, "Kern.MouseDevice.read" },
     { "Kern_ApcEntry_new", (void*)Kern_ApcEntry_new, "thread.llpl", 54, "Kern.ApcEntry.new" },
     { "Kern_ConsoleDevice_new", (void*)Kern_ConsoleDevice_new, "device.llpl", 38, "Kern.ConsoleDevice.new" },
     { "Kern_ConsoleDevice_name", (void*)Kern_ConsoleDevice_name, "device.llpl", 46, "Kern.ConsoleDevice.name" },
@@ -37843,27 +37954,28 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "MM_AddressSpace_find_free", (void*)MM_AddressSpace_find_free, "aspace.llpl", 189, "MM.AddressSpace.find_free" },
     { "MM_AddressSpace_map", (void*)MM_AddressSpace_map, "aspace.llpl", 243, "MM.AddressSpace.map" },
     { "MM_AddressSpace_unmap", (void*)MM_AddressSpace_unmap, "aspace.llpl", 295, "MM.AddressSpace.unmap" },
-    { "Terminal_LimineFramebufferConsole_new", (void*)Terminal_LimineFramebufferConsole_new, "terminal.llpl", 212, "Terminal.LimineFramebufferConsole.new" },
-    { "Terminal_LimineFramebufferConsole_enable_text_buffer", (void*)Terminal_LimineFramebufferConsole_enable_text_buffer, "terminal.llpl", 248, "Terminal.LimineFramebufferConsole.enable_text_buffer" },
-    { "Terminal_LimineFramebufferConsole_begin_row_paint", (void*)Terminal_LimineFramebufferConsole_begin_row_paint, "terminal.llpl", 283, "Terminal.LimineFramebufferConsole.begin_row_paint" },
-    { "Terminal_LimineFramebufferConsole_end_row_paint", (void*)Terminal_LimineFramebufferConsole_end_row_paint, "terminal.llpl", 315, "Terminal.LimineFramebufferConsole.end_row_paint" },
-    { "Terminal_LimineFramebufferConsole_grid_append", (void*)Terminal_LimineFramebufferConsole_grid_append, "terminal.llpl", 335, "Terminal.LimineFramebufferConsole.grid_append" },
-    { "Terminal_LimineFramebufferConsole_grid_clear_row", (void*)Terminal_LimineFramebufferConsole_grid_clear_row, "terminal.llpl", 355, "Terminal.LimineFramebufferConsole.grid_clear_row" },
-    { "Terminal_LimineFramebufferConsole_scroll_grid_and_repaint", (void*)Terminal_LimineFramebufferConsole_scroll_grid_and_repaint, "terminal.llpl", 371, "Terminal.LimineFramebufferConsole.scroll_grid_and_repaint" },
-    { "Terminal_LimineFramebufferConsole_color_from_sgr", (void*)Terminal_LimineFramebufferConsole_color_from_sgr, "terminal.llpl", 441, "Terminal.LimineFramebufferConsole.color_from_sgr" },
-    { "Terminal_LimineFramebufferConsole_apply_sgr", (void*)Terminal_LimineFramebufferConsole_apply_sgr, "terminal.llpl", 463, "Terminal.LimineFramebufferConsole.apply_sgr" },
-    { "Terminal_LimineFramebufferConsole_put_pixel", (void*)Terminal_LimineFramebufferConsole_put_pixel, "terminal.llpl", 482, "Terminal.LimineFramebufferConsole.put_pixel" },
-    { "Terminal_LimineFramebufferConsole_get_pixel", (void*)Terminal_LimineFramebufferConsole_get_pixel, "terminal.llpl", 488, "Terminal.LimineFramebufferConsole.get_pixel" },
-    { "Terminal_LimineFramebufferConsole_blit_rect", (void*)Terminal_LimineFramebufferConsole_blit_rect, "terminal.llpl", 503, "Terminal.LimineFramebufferConsole.blit_rect" },
-    { "Terminal_LimineFramebufferConsole_blend_pixel", (void*)Terminal_LimineFramebufferConsole_blend_pixel, "terminal.llpl", 519, "Terminal.LimineFramebufferConsole.blend_pixel" },
-    { "Terminal_LimineFramebufferConsole_draw_glyph", (void*)Terminal_LimineFramebufferConsole_draw_glyph, "terminal.llpl", 534, "Terminal.LimineFramebufferConsole.draw_glyph" },
-    { "Terminal_LimineFramebufferConsole_scroll", (void*)Terminal_LimineFramebufferConsole_scroll, "terminal.llpl", 588, "Terminal.LimineFramebufferConsole.scroll" },
-    { "Terminal_LimineFramebufferConsole_newline", (void*)Terminal_LimineFramebufferConsole_newline, "terminal.llpl", 626, "Terminal.LimineFramebufferConsole.newline" },
-    { "Terminal_LimineFramebufferConsole_backspace", (void*)Terminal_LimineFramebufferConsole_backspace, "terminal.llpl", 636, "Terminal.LimineFramebufferConsole.backspace" },
-    { "Terminal_LimineFramebufferConsole_erase_line", (void*)Terminal_LimineFramebufferConsole_erase_line, "terminal.llpl", 653, "Terminal.LimineFramebufferConsole.erase_line" },
-    { "Terminal_LimineFramebufferConsole_clear_screen", (void*)Terminal_LimineFramebufferConsole_clear_screen, "terminal.llpl", 671, "Terminal.LimineFramebufferConsole.clear_screen" },
-    { "Terminal_LimineFramebufferConsole_set_cursor_cell", (void*)Terminal_LimineFramebufferConsole_set_cursor_cell, "terminal.llpl", 695, "Terminal.LimineFramebufferConsole.set_cursor_cell" },
-    { "Terminal_LimineFramebufferConsole_render", (void*)Terminal_LimineFramebufferConsole_render, "terminal.llpl", 709, "Terminal.LimineFramebufferConsole.render" },
+    { "Terminal_LimineFramebufferConsole_new", (void*)Terminal_LimineFramebufferConsole_new, "terminal.llpl", 224, "Terminal.LimineFramebufferConsole.new" },
+    { "Terminal_LimineFramebufferConsole_enable_text_buffer", (void*)Terminal_LimineFramebufferConsole_enable_text_buffer, "terminal.llpl", 260, "Terminal.LimineFramebufferConsole.enable_text_buffer" },
+    { "Terminal_LimineFramebufferConsole_begin_row_paint", (void*)Terminal_LimineFramebufferConsole_begin_row_paint, "terminal.llpl", 295, "Terminal.LimineFramebufferConsole.begin_row_paint" },
+    { "Terminal_LimineFramebufferConsole_end_row_paint", (void*)Terminal_LimineFramebufferConsole_end_row_paint, "terminal.llpl", 327, "Terminal.LimineFramebufferConsole.end_row_paint" },
+    { "Terminal_LimineFramebufferConsole_grid_append", (void*)Terminal_LimineFramebufferConsole_grid_append, "terminal.llpl", 347, "Terminal.LimineFramebufferConsole.grid_append" },
+    { "Terminal_LimineFramebufferConsole_grid_clear_row", (void*)Terminal_LimineFramebufferConsole_grid_clear_row, "terminal.llpl", 367, "Terminal.LimineFramebufferConsole.grid_clear_row" },
+    { "Terminal_LimineFramebufferConsole_scroll_grid_and_repaint", (void*)Terminal_LimineFramebufferConsole_scroll_grid_and_repaint, "terminal.llpl", 383, "Terminal.LimineFramebufferConsole.scroll_grid_and_repaint" },
+    { "Terminal_LimineFramebufferConsole_repaint_from_grid", (void*)Terminal_LimineFramebufferConsole_repaint_from_grid, "terminal.llpl", 421, "Terminal.LimineFramebufferConsole.repaint_from_grid" },
+    { "Terminal_LimineFramebufferConsole_color_from_sgr", (void*)Terminal_LimineFramebufferConsole_color_from_sgr, "terminal.llpl", 460, "Terminal.LimineFramebufferConsole.color_from_sgr" },
+    { "Terminal_LimineFramebufferConsole_apply_sgr", (void*)Terminal_LimineFramebufferConsole_apply_sgr, "terminal.llpl", 482, "Terminal.LimineFramebufferConsole.apply_sgr" },
+    { "Terminal_LimineFramebufferConsole_put_pixel", (void*)Terminal_LimineFramebufferConsole_put_pixel, "terminal.llpl", 501, "Terminal.LimineFramebufferConsole.put_pixel" },
+    { "Terminal_LimineFramebufferConsole_get_pixel", (void*)Terminal_LimineFramebufferConsole_get_pixel, "terminal.llpl", 507, "Terminal.LimineFramebufferConsole.get_pixel" },
+    { "Terminal_LimineFramebufferConsole_blit_rect", (void*)Terminal_LimineFramebufferConsole_blit_rect, "terminal.llpl", 522, "Terminal.LimineFramebufferConsole.blit_rect" },
+    { "Terminal_LimineFramebufferConsole_blend_pixel", (void*)Terminal_LimineFramebufferConsole_blend_pixel, "terminal.llpl", 538, "Terminal.LimineFramebufferConsole.blend_pixel" },
+    { "Terminal_LimineFramebufferConsole_draw_glyph", (void*)Terminal_LimineFramebufferConsole_draw_glyph, "terminal.llpl", 553, "Terminal.LimineFramebufferConsole.draw_glyph" },
+    { "Terminal_LimineFramebufferConsole_scroll", (void*)Terminal_LimineFramebufferConsole_scroll, "terminal.llpl", 607, "Terminal.LimineFramebufferConsole.scroll" },
+    { "Terminal_LimineFramebufferConsole_newline", (void*)Terminal_LimineFramebufferConsole_newline, "terminal.llpl", 645, "Terminal.LimineFramebufferConsole.newline" },
+    { "Terminal_LimineFramebufferConsole_backspace", (void*)Terminal_LimineFramebufferConsole_backspace, "terminal.llpl", 655, "Terminal.LimineFramebufferConsole.backspace" },
+    { "Terminal_LimineFramebufferConsole_erase_line", (void*)Terminal_LimineFramebufferConsole_erase_line, "terminal.llpl", 672, "Terminal.LimineFramebufferConsole.erase_line" },
+    { "Terminal_LimineFramebufferConsole_clear_screen", (void*)Terminal_LimineFramebufferConsole_clear_screen, "terminal.llpl", 690, "Terminal.LimineFramebufferConsole.clear_screen" },
+    { "Terminal_LimineFramebufferConsole_set_cursor_cell", (void*)Terminal_LimineFramebufferConsole_set_cursor_cell, "terminal.llpl", 714, "Terminal.LimineFramebufferConsole.set_cursor_cell" },
+    { "Terminal_LimineFramebufferConsole_render", (void*)Terminal_LimineFramebufferConsole_render, "terminal.llpl", 728, "Terminal.LimineFramebufferConsole.render" },
     { "Kern_IoCompletionPort_new", (void*)Kern_IoCompletionPort_new, "asyncio.llpl", 33, "Kern.IoCompletionPort.new" },
     { "Kern_IoCompletionPort_post", (void*)Kern_IoCompletionPort_post, "asyncio.llpl", 37, "Kern.IoCompletionPort.post" },
     { "Kern_IoCompletionPort_is_signaled", (void*)Kern_IoCompletionPort_is_signaled, "asyncio.llpl", 51, "Kern.IoCompletionPort.is_signaled" },
@@ -37974,5 +38086,5 @@ LLPL_Symbol llpl_symbol_table[] = {
     { "TaskLocalU64_set", (void*)TaskLocalU64_set, "prelude.llpl", 603, "TaskLocalU64.set" },
     { "TaskLocalU64_get", (void*)TaskLocalU64_get, "prelude.llpl", 607, "TaskLocalU64.get" },
 };
-uint64_t llpl_symbol_table_count = 1145;
+uint64_t llpl_symbol_table_count = 1150;
 

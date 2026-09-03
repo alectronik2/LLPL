@@ -3,3 +3,4 @@ sizeof(i64) = 8
 f.sizeof = 8
 p.sizeof = 16
 sizeof(Pair) = 16
+text.sizeof = 5

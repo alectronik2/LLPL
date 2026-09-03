@@ -306,6 +306,31 @@ namespace Kern {
     // compute_input_target for why this exists.
     let window_wants_input: bool = false
 
+    func window_is_drawn(id: u8) -> bool {
+        if id == WINDOW_DEMO { return mu_demo_drawn }
+        else if id == WINDOW_TERM { return mu_term_drawn }
+        else { return mu_gl_drawn }
+    }
+    func window_rect_x(id: u8) -> uint {
+        if id == WINDOW_DEMO { return mu_demo_drawn_x }
+        else if id == WINDOW_TERM { return mu_term_drawn_x }
+        else { return mu_gl_drawn_x }
+    }
+    func window_rect_y(id: u8) -> uint {
+        if id == WINDOW_DEMO { return mu_demo_drawn_y }
+        else if id == WINDOW_TERM { return mu_term_drawn_y }
+        else { return mu_gl_drawn_y }
+    }
+    func window_rect_w(id: u8) -> uint {
+        if id == WINDOW_DEMO { return mu_demo_drawn_w }
+        else if id == WINDOW_TERM { return mu_term_drawn_w }
+        else { return mu_gl_drawn_w }
+    }
+    func window_rect_h(id: u8) -> uint {
+        if id == WINDOW_DEMO { return mu_demo_drawn_h }
+        else if id == WINDOW_TERM { return mu_term_drawn_h }
+        else { return mu_gl_drawn_h }
+    }
     func init_window_z_order() {
         window_z_order[0] = WINDOW_DEMO
         window_z_order[1] = WINDOW_TERM
@@ -416,23 +441,287 @@ namespace Kern {
     // mu_gl_tick directly (hal/pit.llpl, mouse_post_scroll below) so
     // there is exactly one place deciding paint order *and* input
     // routing.
+    // Updates every window's content (input + Mu render into its own
+    // backbuffer + drawn bounds) in the current z-order. Doesn't touch the
+    // real screen at all - compose_desktop below does that, once, after
+    // calling this.
     func run_window_ticks(arg: void*) {
         let target = compute_input_target()
         let i: uint = 0
         while i < 3 {
             let id = window_z_order[i]
+            window_wants_input = target == id
             if id == WINDOW_DEMO {
-                window_wants_input = target == WINDOW_DEMO
                 mu_demo_tick(null)
             } else if id == WINDOW_TERM {
-                window_wants_input = target == WINDOW_TERM
                 mu_term_tick(null)
             } else {
-                window_wants_input = target == WINDOW_GL
                 mu_gl_tick(null)
             }
             i = i + 1
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Desktop compositor: the sole place that ever writes the framebuffer
+    // while mu_demo_active is true. Every tick, this rebuilds the entire
+    // screen from scratch into desktop_compose - wallpaper, then each
+    // window's own backbuffer (already rendered by run_window_ticks
+    // above) blitted on top back-to-front with a drop shadow, then the
+    // cursor - and flushes it with exactly one blit_rect() call.
+    //
+    // This is what finally makes z-order and flicker both simply correct
+    // by construction, instead of chasing them with diff-checks and
+    // damage propagation: nothing here ever decides "did I change" before
+    // writing, so there's no way for a static window's stale idea of "I
+    // haven't changed" to leave an animating window's fresher paint
+    // incorrectly on top of it, and nothing here ever writes the real
+    // screen more than once per tick, so there's no window where a
+    // display's scanout can catch a half-composed frame. The cost is
+    // redrawing the whole screen every tick this runs (~33Hz) rather than
+    // only the parts that changed - a deliberate simplicity-and-
+    // correctness trade, and cheap relative to what a modern CPU can push
+    // through a ~straight run of memcpy calls at that rate.
+    // ------------------------------------------------------------------
+    let desktop_compose: u32* = null
+    // What the real screen was last actually given, full-screen - lets
+    // compose_desktop blit only the rectangle that actually changed
+    // instead of the whole screen every tick. Composing into
+    // desktop_compose above always redraws everything (that's what makes
+    // z-order simply correct), but flushing all of it to real VRAM every
+    // time was wide enough a write (768 rows) for the display's own
+    // scanout to occasionally catch it mid-copy and show a torn frame -
+    // most visible on TinyGL specifically, since its content is the one
+    // thing that's *always* different frame to frame, so it's the one
+    // region a full-screen blit could never avoid re-touching regardless.
+    // Shrinking the blit to just what changed keeps a static desktop
+    // completely untouched and, when only TinyGL is animating, limits the
+    // write (and the tear-prone window) to roughly its own 336x280 rect
+    // instead of the full screen. This diff never touches the display -
+    // it's pure RAM comparison against desktop_last_compose - so it can't
+    // introduce a new place for the same problem to happen.
+    let desktop_last_compose: u32* = null
+    let desktop_first_flush: bool = true
+    let desktop_compose_w: uint = 0
+    let desktop_compose_h: uint = 0
+    const SHADOW_OFFSET = 8
+    const SHADOW_ALPHA = 100
+
+    func ensure_desktop_compose() -> bool {
+        if desktop_compose != null { return true }
+        desktop_compose_w = Terminal.width()
+        desktop_compose_h = Terminal.height()
+        if desktop_compose_w == 0 || desktop_compose_h == 0 { return false }
+        let bytes = (desktop_compose_w as u64) * (desktop_compose_h as u64) * 4
+        desktop_compose = llpl_alloc(bytes) as u32*
+        desktop_last_compose = llpl_alloc(bytes) as u32*
+        return desktop_compose != null && desktop_last_compose != null
+    }
+
+    func window_backbuffer(id: u8) -> u32* {
+        if id == WINDOW_DEMO { return mu_demo_backbuffer as u32* }
+        else if id == WINDOW_TERM { return mu_term_backbuffer as u32* }
+        else { return mu_gl_backbuffer as u32* }
+    }
+
+    func desktop_blend_pixel(idx: uint, color: u32, alpha: u32) {
+        if alpha == 0 { return }
+        if alpha >= 255 {
+            desktop_compose[idx] = color
+            return
+        }
+        let under = desktop_compose[idx]
+        let inv = 255 - alpha
+        let r = ((((color >> 16) & 255) * alpha) + (((under >> 16) & 255) * inv) + 127) / 255
+        let g = ((((color >> 8) & 255) * alpha) + (((under >> 8) & 255) * inv) + 127) / 255
+        let b = (((color & 255) * alpha) + ((under & 255) * inv) + 127) / 255
+        desktop_compose[idx] = (r << 16) | (g << 8) | b
+    }
+
+    // A soft, uniform semi-transparent-black rectangle offset down-right
+    // from the window itself, drawn *before* the window's own content so
+    // the window's real pixels always win where the two overlap - just
+    // enough depth cue to make z-order visually obvious, not a proper
+    // soft-edged/blurred shadow.
+    func draw_window_shadow(x: uint, y: uint, w: uint, h: uint) {
+        let sx = x + SHADOW_OFFSET
+        let sy = y + SHADOW_OFFSET
+        let row: uint = 0
+        while row < h {
+            let py = sy + row
+            if py < desktop_compose_h {
+                let col: uint = 0
+                while col < w {
+                    let px = sx + col
+                    if px < desktop_compose_w {
+                        desktop_blend_pixel((py * desktop_compose_w) + px, 0, SHADOW_ALPHA)
+                    }
+                    col = col + 1
+                }
+            }
+            row = row + 1
+        }
+    }
+
+    func blit_into_desktop(x: uint, y: uint, w: uint, h: uint, src: u32*, src_stride: uint) {
+        let row: uint = 0
+        while row < h {
+            let py = y + row
+            if py < desktop_compose_h && x < desktop_compose_w {
+                let copy_w = w
+                if x + copy_w > desktop_compose_w { copy_w = desktop_compose_w - x }
+                memcpy((desktop_compose + (py * desktop_compose_w) + x) as void*,
+                    (src + (row * src_stride)) as void*, (copy_w * 4) as uint)
+            }
+            row = row + 1
+        }
+    }
+
+    func draw_cursor_into_desktop() {
+        let cx = cursor_x as uint
+        let cy = cursor_y as uint
+        if cursor_pixels != null {
+            let row: uint = 0
+            while row < CURSOR_H {
+                let py = cy + row
+                if py < desktop_compose_h {
+                    let col: uint = 0
+                    while col < CURSOR_W {
+                        let px = cx + col
+                        if px < desktop_compose_w {
+                            let p = cursor_pixels[(row * CURSOR_W) + col]
+                            let a = (p >> 24) & 0xFF
+                            if a != 0 {
+                                desktop_blend_pixel((py * desktop_compose_w) + px, p & 0x00FF_FFFF, a)
+                            }
+                        }
+                        col = col + 1
+                    }
+                }
+                row = row + 1
+            }
+        } else {
+            let row: uint = 0
+            while row < CURSOR_H {
+                let py = cy + row
+                if py < desktop_compose_h {
+                    let bits = cursor_shape[row]
+                    let col: uint = 0
+                    while col < CURSOR_W {
+                        let px = cx + col
+                        if px < desktop_compose_w && (bits & (0x80 as u8 >> col)) != 0 {
+                            desktop_compose[(py * desktop_compose_w) + px] = CURSOR_COLOR
+                        }
+                        col = col + 1
+                    }
+                }
+                row = row + 1
+            }
+        }
+    }
+
+    // Registered nowhere as a hook - called directly (hal/pit.llpl,
+    // mouse_irq_handler, mouse_post_scroll below) instead of
+    // compose_frame_work whenever mu_demo_active is true.
+    func compose_desktop(arg: void*) {
+      holding gui_lock {
+        if !ensure_desktop_compose() { return }
+
+        run_window_ticks(null)
+
+        // 1. Background: the wallpaper image (kernel.llpl), fixed and
+        // never shifted - same image used by lib/terminal.llpl's own
+        // scroll-repaint, but composed here independently since this
+        // covers the *whole* screen every tick regardless of whether the
+        // console has scrolled at all. Falls back to a flat color if no
+        // wallpaper is loaded, rather than trying to preserve whatever
+        // console text happens to be underneath - once the desktop is
+        // active it owns the whole screen, the same way a real windowing
+        // system's desktop does over a text console.
+        if wallpaper_pixels != null {
+            let h = wallpaper_height
+            if h > desktop_compose_h { h = desktop_compose_h }
+            let w = wallpaper_width
+            if w > desktop_compose_w { w = desktop_compose_w }
+            let row: uint = 0
+            while row < h {
+                memcpy((desktop_compose + (row * desktop_compose_w)) as void*,
+                    (wallpaper_pixels + (row * wallpaper_width)) as void*, (w * 4) as uint)
+                row = row + 1
+            }
+        } else {
+            let i: uint = 0
+            let total = desktop_compose_w * desktop_compose_h
+            while i < total {
+                desktop_compose[i] = 0x000B0F14
+                i = i + 1
+            }
+        }
+
+        // 2. Windows, back-to-front, each with a drop shadow first.
+        let i: uint = 0
+        while i < 3 {
+            let id = window_z_order[i]
+            if window_is_drawn(id) {
+                let x = window_rect_x(id)
+                let y = window_rect_y(id)
+                let w = window_rect_w(id)
+                let h = window_rect_h(id)
+                draw_window_shadow(x, y, w, h)
+                blit_into_desktop(x, y, w, h, window_backbuffer(id), w)
+            }
+            i = i + 1
+        }
+
+        // 3. Cursor, always on top.
+        draw_cursor_into_desktop()
+
+        // 4. Diff against what's actually on screen and flush only the
+        // rectangle that changed - see desktop_last_compose's comment for
+        // why. The first ever flush has nothing to diff against, so it
+        // covers the whole screen unconditionally.
+        if desktop_first_flush {
+            Terminal.blit_rect(0, 0, desktop_compose_w, desktop_compose_h, desktop_compose, desktop_compose_w)
+            desktop_first_flush = false
+        } else {
+            let dirty_x0 = desktop_compose_w
+            let dirty_y0 = desktop_compose_h
+            let dirty_x1: uint = 0
+            let dirty_y1: uint = 0
+            let row: uint = 0
+            while row < desktop_compose_h {
+                let row_off = row * desktop_compose_w
+                let row_dirty = false
+                let col: uint = 0
+                while col < desktop_compose_w {
+                    if desktop_compose[row_off + col] != desktop_last_compose[row_off + col] {
+                        row_dirty = true
+                        if col < dirty_x0 { dirty_x0 = col }
+                        if col + 1 > dirty_x1 { dirty_x1 = col + 1 }
+                    }
+                    col = col + 1
+                }
+                if row_dirty {
+                    if row < dirty_y0 { dirty_y0 = row }
+                    if row + 1 > dirty_y1 { dirty_y1 = row + 1 }
+                }
+                row = row + 1
+            }
+
+            if dirty_x1 > dirty_x0 && dirty_y1 > dirty_y0 {
+                let dirty_w = dirty_x1 - dirty_x0
+                let dirty_h = dirty_y1 - dirty_y0
+                Terminal.blit_rect(dirty_x0, dirty_y0, dirty_w, dirty_h,
+                    desktop_compose + (dirty_y0 * desktop_compose_w) + dirty_x0, desktop_compose_w)
+            }
+        }
+        memcpy(desktop_last_compose as void*, desktop_compose as void*,
+            ((desktop_compose_w as u64) * (desktop_compose_h as u64) * 4) as uint)
+
+        cursor_drawn = true
+        cursor_drawn_x = cursor_x as uint
+        cursor_drawn_y = cursor_y as uint
+      }
     }
 
     class MouseDevice : Device {
@@ -657,17 +946,14 @@ namespace Kern {
     // just treats it as needing a fresh draw.
     func mouse_pre_scroll(arg: void*) {
       holding gui_lock {
-        // The microui overlays (kern/mu_demo.llpl, kern/mu_term.llpl,
-        // kern/mu_gl.llpl) are just as exposed to this shift as the
-        // cursor sprite below - they're drawn to this same framebuffer
-        // at a fixed logical (x, y) they have no way to know just moved.
-        // Erase them back to their saved backgrounds the same way, and
-        // leave them marked not-drawn so the next active tick treats
-        // each as a fresh window instead of a ghost.
-        mu_demo_restore_rect()
-        mu_term_restore_rect()
-        mu_gl_restore_rect()
-        if cursor_drawn {
+        // Only relevant to compose_frame_work's cursor-only path: it
+        // erases/restores incrementally against the *current* screen
+        // content, which a scroll is about to invalidate. compose_desktop
+        // needs no such thing - it rebuilds the whole screen from
+        // scratch every time it runs regardless of what a scroll just
+        // did, wallpaper and all, so there's nothing to preserve here
+        // while mu_demo_active.
+        if !mu_demo_active && cursor_drawn {
             for row in 0..CURSOR_H {
                 for col in 0..CURSOR_W {
                     Terminal.put_pixel(cursor_drawn_x + col, cursor_drawn_y + row, cursor_saved[row * CURSOR_W + col])
@@ -679,13 +965,14 @@ namespace Kern {
     }
 
     // Registered as Terminal's post-scroll hook - runs immediately after
-    // the shift, while nothing is drawn (mouse_pre_scroll just erased
-    // everything), so this is just an ordinary fresh-draw pass.
+    // the shift, while nothing is drawn (mouse_pre_scroll just erased the
+    // cursor, if relevant), so this is just an ordinary fresh-draw pass.
     func mouse_post_scroll(arg: void*) {
         if mu_demo_active {
-            run_window_ticks(null)
+            compose_desktop(null)
+        } else {
+            compose_frame_work(null)
         }
-        compose_frame_work(null)
     }
 
     func mouse_irq_handler(arg: void*) {
@@ -727,7 +1014,11 @@ namespace Kern {
 
             left_button_down = (flags & 0x01 as u8) != 0
 
-            Deferred.queue(compose_frame_work)
+            if mu_demo_active {
+                Deferred.queue(compose_desktop)
+            } else {
+                Deferred.queue(compose_frame_work)
+            }
         }
     }
 

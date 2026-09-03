@@ -1,0 +1,122 @@
+import toolkit
+import std.sdl.sdl
+import std.sdl.sdl_ttf
+
+using namespace std.sdl
+
+namespace gui {
+namespace sdl {
+
+// SDL implementation of the abstract drawing surface.
+class SDLCanvas : Canvas {
+    renderer: Renderer
+    font: TTF_Font*
+
+    constructor(renderer: Renderer) {
+        self.renderer = renderer
+        TTF_Init()
+        self.font = TTF_OpenFont("../limine_baremetal_demo/lib/console.ttf", 14.0)
+        if self.font == null {
+            self.font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14.0)
+        }
+    }
+
+    destructor() {
+        if self.font != null { TTF_CloseFont(self.font) }
+        TTF_Quit()
+    }
+
+    func set_color(color: Color) {
+        self.renderer.set_draw_color(color.r, color.g, color.b, color.a)
+    }
+
+    func begin_frame(color: Color) {
+        self.set_color(color)
+        self.renderer.clear()
+    }
+
+    func fill_rect(rect: Rect, color: Color) {
+        self.set_color(color)
+        self.renderer.fill_rect(new SDL_Rect(rect.x, rect.y, rect.w, rect.h))
+    }
+
+    func stroke_rect(rect: Rect, color: Color) {
+        self.set_color(color)
+        self.renderer.draw_rect(new SDL_Rect(rect.x, rect.y, rect.w, rect.h))
+    }
+
+    func draw_text(x: i32, y: i32, text: String, color: Color) {
+        if self.font == null { return }
+        let width: i32 = 0
+        let height: i32 = 0
+        if !TTF_GetStringSize(self.font, text.c_str(), text.byte_len() as u64,
+                &width, &height) { return }
+        let ink = new SDL_Color(color.r as char, color.g as char,
+            color.b as char, color.a as char)
+        let surface = TTF_RenderText_Blended(self.font, text.c_str(),
+            text.byte_len() as u64, ink)
+        if surface == null { return }
+        let texture = SDL_CreateTextureFromSurface(self.renderer.get_handle(), surface)
+        SDL_DestroySurface(surface)
+        if texture == null { return }
+        let destination = new SDL_FRect(x as float, y as float,
+            width as float, height as float)
+        SDL_RenderTexture(self.renderer.get_handle(), texture, null, &destination)
+        SDL_DestroyTexture(texture)
+    }
+
+    func end_frame() { self.renderer.present() }
+}
+
+class SDLPlatform : Platform {
+    window: std.sdl.Window
+    renderer: Renderer
+    output: SDLCanvas
+    events: EventHandler
+
+    constructor(width: int, height: int, title: String) {
+        SDL.init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)
+        self.window = new std.sdl.Window(title, width, height,
+            SDL_WINDOW_RESIZABLE as uint)
+        self.renderer = new Renderer(self.window)
+        self.output = new SDLCanvas(self.renderer)
+        self.events = new EventHandler()
+    }
+
+    destructor() { SDL.quit() }
+
+    func canvas() -> Canvas { return self.output }
+    func delay(milliseconds: u32) { SDL.delay(milliseconds) }
+
+    func poll(event: Event*) -> bool {
+        if !self.events.poll() { return false }
+        (*event).kind = EVENT_NONE
+        if self.events.is_quit() { (*event).kind = EVENT_QUIT }
+        if self.events.is_mouse_motion() {
+            let motion = self.events.get_mouse_motion_event()
+            (*event).kind = EVENT_POINTER_MOVE
+            (*event).x = (*motion).x as i32
+            (*event).y = (*motion).y as i32
+        }
+        if self.events.is_mouse_button_down() {
+            let button = self.events.get_mouse_button_event()
+            (*event).kind = EVENT_POINTER_DOWN
+            (*event).x = (*button).x as i32
+            (*event).y = (*button).y as i32
+            (*event).button = (*button).button as i32
+        }
+        if self.events.is_mouse_button_up() {
+            let button = self.events.get_mouse_button_event()
+            (*event).kind = EVENT_POINTER_UP
+            (*event).x = (*button).x as i32
+            (*event).y = (*button).y as i32
+            (*event).button = (*button).button as i32
+        }
+        return true
+}
+
+}
+
+}
+
+}
